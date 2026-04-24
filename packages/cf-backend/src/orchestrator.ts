@@ -48,7 +48,7 @@ import {
   forkAgentStorage, readForkLineage,
   nanoid,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
-  type SessionWriter, type SessionMessage,
+  type SessionWriter, type SessionMessage, type SqlExecutor,
 } from "@proteus/core";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
@@ -180,6 +180,23 @@ export class OrchestratorAgent extends Think<Env> {
   // Set in beforeTurn, cleared in onChatResponse (after durable persist;
   // evolution is fire-and-forget and does not extend the busy window).
   private _inFlight = false;
+
+  // ── Bound SQL executor ────────────────────────────────────────────────
+  // `this.sql` is a plain method on the Agent base class — it needs `this`
+  // bound to reach `this.ctx.storage.sql`. Passing `this.sql` as a bare
+  // function reference to any helper (readForkLineage, forkAgentStorage)
+  // loses the binding and fails with `Cannot read properties of undefined
+  // (reading 'ctx')`. This closure captures `this` once and can be safely
+  // passed by reference.
+  private _boundSql: SqlExecutor | null = null;
+  private get boundSql(): SqlExecutor {
+    if (!this._boundSql) {
+      this._boundSql = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+        (this.sql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown[])(strings, ...values)
+      ) as SqlExecutor;
+    }
+    return this._boundSql;
+  }
 
   private logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
@@ -546,6 +563,31 @@ export class OrchestratorAgent extends Think<Env> {
       .map(p => (p as { type: "text"; text: string }).text)
       .join("") ?? "";
 
+    // Persist the completed turn into the `messages` table (session_id='default')
+    // so the fork feature has a durable row to cut against. AIChatAgent's
+    // in-memory this.messages is the chat UI's source of truth, but only
+    // session_id='default' rows are copied on fork. This mirror is cheap
+    // (two rows per turn) and idempotent (INSERT OR IGNORE on id).
+    try {
+      if (lastUserMsg?.id) {
+        const userCreatedAt = (() => {
+          const ts = (lastUserMsg as { createdAt?: string | number | Date }).createdAt;
+          if (typeof ts === "number") return ts;
+          if (typeof ts === "string") { const p = Date.parse(ts); if (!Number.isNaN(p)) return p; }
+          if (ts instanceof Date) return ts.getTime();
+          return this._turnStartedAt || Date.now();
+        })();
+        this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+                 VALUES (${lastUserMsg.id}, ${'default'}, ${null}, ${'user'}, ${userText}, ${userCreatedAt})`;
+      }
+      if (result.message.id) {
+        this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+                 VALUES (${result.message.id}, ${'default'}, ${lastUserMsg?.id ?? null}, ${'assistant'}, ${assistantText}, ${Date.now()})`;
+      }
+    } catch (err) {
+      console.warn("[proteus] mirror-to-messages failed:", err);
+    }
+
     const turn: CompletedTurn = {
       userMessage: userText,
       assistantResponse: assistantText,
@@ -695,9 +737,18 @@ export class OrchestratorAgent extends Think<Env> {
         SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
       const searchNodes = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
       const craftedTools = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
-      const messageCount = this.messages.length;
+      // Message count reflects the persisted `messages` table, which is the
+      // authoritative turn history used for fork cut-points. For non-fork
+      // agents this table is populated by onChatResponse's mirror; for forks
+      // it's populated by forkAgentStorage's copy. Falling back to the
+      // in-memory AIChatAgent array keeps behavior sane before the first
+      // turn has been mirrored.
+      const tableCount = this.sql<{ c: number }>`
+        SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'
+      `;
+      const messageCount = tableCount[0]?.c ?? this.messages.length;
       // Fork lineage — null for non-forked agents.
-      const forkLineage = readForkLineage(this.sql);
+      const forkLineage = readForkLineage(this.boundSql);
       return {
         id: identity[0]?.id ?? this.ctx.id.toString(),
         name: identity[0]?.name ?? this.name,
@@ -1061,9 +1112,10 @@ export class OrchestratorAgent extends Think<Env> {
     // have cross-DO SQL queries — the payload IS the materialized source view.
     const srcSql = buildSqlFromPayload(payload);
 
-    // Copy atomically.
+    // Copy atomically. `this.boundSql` is a stable closure over `this.sql`
+    // that preserves the `this`-binding the Agent base class needs.
     this.ctx.storage.transactionSync(() => {
-      forkAgentStorage(srcSql, this.sql, {
+      forkAgentStorage(srcSql, this.boundSql, {
         untilMessageId: payload.lineage.forkOriginMessageId,
         targetAgentId: this.ctx.id.toString(),
         targetAgentName: payload.forkName,
@@ -1077,7 +1129,7 @@ export class OrchestratorAgent extends Think<Env> {
   /** Expose the single-row fork_lineage for the UI lineage chip. */
   @callable()
   async getForkLineage() {
-    return readForkLineage(this.sql);
+    return readForkLineage(this.boundSql);
   }
 
   /**
