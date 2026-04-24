@@ -44,6 +44,9 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS,
   ACTIVE_TOOLS,
   migrateCraftedToolDuplicates,
+  // Fork feature
+  forkAgentStorage, readForkLineage,
+  nanoid,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage,
 } from "@proteus/core";
@@ -58,6 +61,93 @@ const AVAILABLE_MODELS = [
   { id: "@cf/moonshotai/kimi-k2.6", name: "Kimi K2.6", description: "Advanced reasoning model with extended thinking" },
   { id: "@cf/meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", description: "General-purpose instruction model" },
 ] as const;
+
+// ── Fork payload types ────────────────────────────────────────────
+// The source DO assembles this and sends it to the fork DO's rawCopyFromFork.
+// Everything is JSON-serializable (strings, numbers, null, base64 if ever
+// needed for binary VFS content — currently all VFS memory is text).
+
+interface ForkPayload {
+  forkName: string;
+  lineage: {
+    forkOriginAgentId: string;
+    forkOriginAgentName: string;
+    forkOriginMessageId: string;
+    forkOriginCreatedAt: number;
+    forkedAt: number;
+  };
+  soul: { purpose: string; created_at: number };
+  messages: Array<{
+    id: string; session_id: string; parent_id: string | null;
+    role: string; content: string; created_at: number;
+  }>;
+  conversationHistory: Array<{
+    session_id: string; role: string; message: string; created_at: number;
+  }>;
+  vfsFiles: Array<{
+    path: string; chunk_index: number; parent_path: string;
+    data: unknown; is_dir: number; size: number; mtime: number;
+  }>;
+  memoryChunks: Array<{
+    id: string; path: string; start_line: number; end_line: number;
+    hash: string; text: string; updated_at: number;
+  }>;
+  craftedTools: Array<{
+    name: string; description: string; params: string | null; code: string;
+    scope: string; created_at: number; updated_at: number;
+  }>;
+  agentConfig: Array<{ key: string; value: string }>;
+}
+
+/**
+ * Build an ephemeral SqlExecutor that answers the queries forkAgentStorage
+ * makes against the source DB, using the serialized payload as the source
+ * of truth. Only the exact SELECT shapes that forkAgentStorage issues are
+ * supported — this is a minimal shim, not a general SQL engine.
+ */
+function buildSqlFromPayload(payload: ForkPayload) {
+  const rawSql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown[] =
+    (strings, ...values) => {
+      const query = strings.join("?").replace(/\s+/g, " ").trim();
+      // Route the small known set of read queries the helper issues.
+      if (query.startsWith("SELECT created_at FROM messages WHERE id =")) {
+        const wantedId = values[0] as string;
+        const hit = payload.messages.find(m => m.id === wantedId);
+        return hit ? [{ created_at: hit.created_at }] : [];
+      }
+      if (query.startsWith("SELECT purpose, created_at FROM agent_soul")) {
+        return [payload.soul];
+      }
+      if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM messages")) {
+        const cutoff = values[0] as number;
+        return payload.messages
+          .filter(m => m.created_at <= cutoff && m.session_id === "default")
+          .sort((a, b) => a.created_at - b.created_at);
+      }
+      if (query.startsWith("SELECT session_id, role, message, created_at FROM conversation_history")) {
+        const cutoff = values[0] as number;
+        return payload.conversationHistory
+          .filter(c => c.created_at <= cutoff && c.session_id === "default");
+      }
+      if (query.startsWith("SELECT path, chunk_index, parent_path, data, is_dir, size, mtime FROM vfs_files")) {
+        return payload.vfsFiles;
+      }
+      if (query.startsWith("SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks")) {
+        return payload.memoryChunks;
+      }
+      if (query.startsWith("SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools")) {
+        return payload.craftedTools;
+      }
+      if (query.startsWith("SELECT key, value FROM agent_config")) {
+        return payload.agentConfig;
+      }
+      if (query.startsWith("SELECT id, name FROM agent_identity")) {
+        return [{ id: payload.lineage.forkOriginAgentId, name: payload.lineage.forkOriginAgentName }];
+      }
+      return [];
+    };
+  return rawSql as never;
+}
 
 export class OrchestratorAgent extends Think<Env> {
   override maxSteps = resolveMaxSteps();
@@ -85,6 +175,11 @@ export class OrchestratorAgent extends Think<Env> {
   // ── Activity logging: persisted + broadcast to Logs pane ──
   private _turnT0 = 0;
   private _firstChunkReceived = false;
+
+  // Per-turn in-flight flag — forkAgent rejects with "agent busy" while set.
+  // Set in beforeTurn, cleared in onChatResponse (after durable persist;
+  // evolution is fire-and-forget and does not extend the busy window).
+  private _inFlight = false;
 
   private logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
@@ -351,6 +446,7 @@ export class OrchestratorAgent extends Think<Env> {
     this._turnStartedAt = Date.now();
     this._turnHadError = false;
     this._firstChunkReceived = false;
+    this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     return { activeTools: [...ACTIVE_TOOLS] };
   }
@@ -432,6 +528,10 @@ export class OrchestratorAgent extends Think<Env> {
 
   async onChatResponse(result: ChatResponseResult) {
     this.logActivity("response_complete", result.status);
+    // Clear the in-flight flag once the turn is durably completed — forkAgent
+    // is allowed again from here forward. Evolution (engine.onTurnCompleteAsync)
+    // runs fire-and-forget below and does NOT extend the busy window.
+    this._inFlight = false;
     if (result.status !== "completed") return;
 
     const userMessages = this.messages.filter(m => m.role === "user");
@@ -596,6 +696,8 @@ export class OrchestratorAgent extends Think<Env> {
       const searchNodes = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
       const craftedTools = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
       const messageCount = this.messages.length;
+      // Fork lineage — null for non-forked agents.
+      const forkLineage = readForkLineage(this.sql);
       return {
         id: identity[0]?.id ?? this.ctx.id.toString(),
         name: identity[0]?.name ?? this.name,
@@ -607,10 +709,12 @@ export class OrchestratorAgent extends Think<Env> {
         craftedToolCount: craftedTools[0]?.c ?? 0,
         messageCount,
         model: this.getStoredModelId(),
+        forkLineage,
       };
     } catch {
       return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", createdAt: 0,
-        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0, model: DEFAULT_MODEL };
+        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0, model: DEFAULT_MODEL,
+        forkLineage: null };
     }
   }
 
@@ -851,6 +955,189 @@ export class OrchestratorAgent extends Think<Env> {
         SELECT id, event, detail, elapsed_ms, created_at FROM activity_log
         ORDER BY created_at DESC LIMIT ${limit}`;
     } catch { return []; }
+  }
+
+  // ── Fork RPCs ──────────────────────────────────────────────────
+
+  /**
+   * Fork this agent at a specific message, producing a new agent DO with:
+   *   - soul copied, messages 0..N copied, crafted tools snapshotted,
+   *     memory copied, agent_config copied (display_name overwritten)
+   *   - search tree, evolution events, scaffold, craft_scores RESET
+   *
+   * See docs/THINK-UPGRADE-AND-FORKING.md §6 for the full spec.
+   */
+  @callable()
+  async forkAgent(
+    untilMessageId: string,
+    opts?: { name?: string },
+  ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
+    // 1. Busy check — reject during an in-flight turn.
+    if (this._inFlight) {
+      throw new Error("agent busy, retry when current turn finishes");
+    }
+
+    // 2. Resolve the fork point here (early) so we can reject with a useful
+    //    error before paying the cost of spinning up a new DO.
+    const hit = this.sql<{ created_at: number }>`
+      SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
+    `;
+    if (hit.length === 0) {
+      throw new Error(`fork point not found: message id "${untilMessageId}"`);
+    }
+
+    // 3. Generate / validate the fork's name.
+    const requestedName = opts?.name?.trim();
+    const forkName = requestedName && requestedName.length > 0
+      ? requestedName
+      : `${this.name}-fork-${nanoid(6)}`;
+    if (!/^[A-Za-z0-9_-]+$/.test(forkName)) {
+      throw new Error(`invalid agent name: "${forkName}" — allowed: A-Z, a-z, 0-9, _ and -`);
+    }
+
+    // 4. Validate name uniqueness by checking if a DO at that name already
+    //    has identity data. Fresh DOs return an empty agent_identity query.
+    const env = this.env as unknown as {
+      OrchestratorAgent: {
+        idFromName(name: string): DurableObjectId;
+        get(id: DurableObjectId): DurableObjectStub<OrchestratorAgent>;
+      };
+    };
+    const forkStubForPrecheck = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
+    let existingIdentity: { id: string; name: string } | null = null;
+    try {
+      // A bare getAgentStatus call on a fresh DO returns an empty agent_soul
+      // (purpose: "") and an agent_identity row with the default-bootstrap
+      // name matching the DO's runtime name. We detect "already used" by
+      // asking for messageCount — a fresh DO has 0 messages AND a fresh
+      // agent_soul (purpose == ""). Any agent with prior state has either.
+      const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; purpose: string; name: string }> }).getAgentStatus();
+      if (status.messageCount > 0 || status.purpose.length > 0) {
+        existingIdentity = { id: "", name: status.name };
+      }
+    } catch {
+      // If the pre-check RPC fails for transient reasons, let the copy path
+      // surface the error. Don't block on a brittle signal.
+    }
+    if (existingIdentity && requestedName) {
+      throw new Error(`agent name already exists: "${forkName}"`);
+    }
+
+    // 5. Build the snapshot payload.
+    const payload = this.buildForkPayload(untilMessageId, forkName);
+
+    // 6. Send it to the fork DO via the rawCopyFromFork RPC.
+    const forkStub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
+    const copyResult = await (forkStub as unknown as {
+      rawCopyFromFork(p: ForkPayload): Promise<{ ok: true; agentId: string }>;
+    }).rawCopyFromFork(payload);
+
+    return {
+      id: copyResult.agentId,
+      name: forkName,
+      url: `/agent/${forkName}`,
+      forkPointMs: hit[0]!.created_at,
+    };
+  }
+
+  /**
+   * Receive a fork payload from a source agent. INTERNAL — called only by
+   * the source DO's forkAgent RPC via cross-DO stub. Exposed as @callable
+   * because that's how cross-DO RPC reaches us; there's no hostile client
+   * risk here because the fork DO is freshly-provisioned at call time.
+   */
+  @callable()
+  async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
+    // Ensure the full schema is applied. onStart runs on first access, but if
+    // this RPC is somehow invoked before onStart completes, we want it to be
+    // idempotent w.r.t. DDL.
+    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
+    initAllTables(execRaw);
+    // agent_config is a runtime-created table on the orchestrator side; make
+    // sure the fork has it before forkAgentStorage tries to copy rows.
+    execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+
+    // Build an ephemeral SqlExecutor over the source's row payload. We don't
+    // have cross-DO SQL queries — the payload IS the materialized source view.
+    const srcSql = buildSqlFromPayload(payload);
+
+    // Copy atomically.
+    this.ctx.storage.transactionSync(() => {
+      forkAgentStorage(srcSql, this.sql, {
+        untilMessageId: payload.lineage.forkOriginMessageId,
+        targetAgentId: this.ctx.id.toString(),
+        targetAgentName: payload.forkName,
+        now: payload.lineage.forkedAt,
+      });
+    });
+
+    return { ok: true, agentId: this.ctx.id.toString() };
+  }
+
+  /** Expose the single-row fork_lineage for the UI lineage chip. */
+  @callable()
+  async getForkLineage() {
+    return readForkLineage(this.sql);
+  }
+
+  /**
+   * Snapshot every row the fork helper will need into a JSON-serializable
+   * payload. Runs inside the source DO where `this.sql` has direct SQL access.
+   */
+  private buildForkPayload(untilMessageId: string, forkName: string): ForkPayload {
+    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM agent_identity LIMIT 1`;
+    const soul = this.sql<{ purpose: string; created_at: number }>`SELECT purpose, created_at FROM agent_soul LIMIT 1`;
+    const hit = this.sql<{ created_at: number }>`
+      SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
+    `;
+    const forkPointMs = hit[0]!.created_at;
+    const messages = this.sql<ForkPayload["messages"][number]>`
+      SELECT id, session_id, parent_id, role, content, created_at
+      FROM messages
+      WHERE created_at <= ${forkPointMs} AND session_id = 'default'
+      ORDER BY created_at ASC
+    `;
+    const conv = this.sql<ForkPayload["conversationHistory"][number]>`
+      SELECT session_id, role, message, created_at
+      FROM conversation_history
+      WHERE created_at <= ${forkPointMs} AND session_id = 'default'
+      ORDER BY id ASC
+    `;
+    const vfs = this.sql<ForkPayload["vfsFiles"][number]>`
+      SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
+      FROM vfs_files WHERE path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
+    `;
+    let memChunks: ForkPayload["memoryChunks"] = [];
+    try {
+      memChunks = this.sql<ForkPayload["memoryChunks"][number]>`
+        SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
+      `;
+    } catch { /* table may not exist yet */ }
+    const tools = this.sql<ForkPayload["craftedTools"][number]>`
+      SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
+    `;
+    let agentConfig: ForkPayload["agentConfig"] = [];
+    try {
+      agentConfig = this.sql<ForkPayload["agentConfig"][number]>`SELECT key, value FROM agent_config`;
+    } catch { /* agent_config may not exist yet */ }
+
+    return {
+      forkName,
+      lineage: {
+        forkOriginAgentId: identity[0]?.id ?? this.ctx.id.toString(),
+        forkOriginAgentName: identity[0]?.name ?? this.name,
+        forkOriginMessageId: untilMessageId,
+        forkOriginCreatedAt: forkPointMs,
+        forkedAt: Date.now(),
+      },
+      soul: soul[0] ?? { purpose: "", created_at: Date.now() },
+      messages,
+      conversationHistory: conv,
+      vfsFiles: vfs,
+      memoryChunks: memChunks,
+      craftedTools: tools,
+      agentConfig,
+    };
   }
 
   @callable()
