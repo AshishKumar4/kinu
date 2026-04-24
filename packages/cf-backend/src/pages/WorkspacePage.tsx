@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useParams, useLocation, Link } from "react-router-dom";
+import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Badge, Empty, InputArea, Loader } from "@cloudflare/kumo";
 import { Code } from "@cloudflare/kumo/components/code";
@@ -147,15 +147,35 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   );
 }
 
-function MessageView({ message, isLast, isStreaming }: { message: UIMessage; isLast: boolean; isStreaming: boolean }) {
+function MessageView({
+  message, isLast, isStreaming, onFork,
+}: {
+  message: UIMessage;
+  isLast: boolean;
+  isStreaming: boolean;
+  /** Called with the message id when user clicks "Fork from here". */
+  onFork?: (messageId: string) => void;
+}) {
   const isUser = message.role === "user";
   const isLive = isLast && isStreaming && !isUser;
+  // Fork button disabled on the mid-stream last assistant — that message
+  // isn't durably persisted yet.
+  const canFork = !isLive && !!onFork && !!message.id;
 
   if (isUser) {
     return (
-      <div className="flex flex-col items-end animate-fade-in">
-        <div className="max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
+      <div className="flex flex-col items-end animate-fade-in group">
+        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
           {getMessageText(message)}
+          {canFork && (
+            <button
+              onClick={() => onFork!(message.id)}
+              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+              title="Fork from here"
+            >
+              <GitBranchIcon size={12} />
+            </button>
+          )}
         </div>
         <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />
       </div>
@@ -182,7 +202,16 @@ function MessageView({ message, isLast, isStreaming }: { message: UIMessage; isL
   }
 
   return (
-    <div className="max-w-[85%] space-y-1 animate-fade-in">
+    <div className="group relative max-w-[85%] space-y-1 animate-fade-in">
+      {canFork && (
+        <button
+          onClick={() => onFork!(message.id)}
+          className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+          title="Fork from here"
+        >
+          <GitBranchIcon size={12} />
+        </button>
+      )}
       {message.parts.map((part, i) => {
         if (part.type === "reasoning") {
           const t = (part as { text?: string }).text;
@@ -211,6 +240,87 @@ function MessageView({ message, isLast, isStreaming }: { message: UIMessage; isL
         return null;
       })}
       {!isLive && <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />}
+    </div>
+  );
+}
+
+/* ── Fork modal ───────────────────────────────────────────────── */
+
+function ForkModal({
+  sourceName, messagesUpToHere, craftedToolsCount, onCancel, onSubmit,
+}: {
+  sourceName: string;
+  messagesUpToHere: number;
+  craftedToolsCount: number;
+  onCancel: () => void;
+  /** Throws on RPC error so the modal can display it. */
+  onSubmit: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onSubmit(name.trim());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }, [name, busy, onSubmit]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.5)" }}
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-xl border p-border p-elevated p-5 space-y-4 animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2">
+          <GitBranchIcon size={18} className="p-accent" />
+          <h3 className="text-base font-semibold p-text">Fork from here</h3>
+        </div>
+        <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
+          <p>Create a new agent that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+          <ul className="list-disc list-inside space-y-0.5 p-text-3">
+            <li>Copies: soul, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
+            <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
+            <li>Source agent is unaffected</li>
+          </ul>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-[11px] p-text-3 block">Fork name (optional)</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={`${sourceName}-fork-<6-char-id>`}
+            disabled={busy}
+            className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
+          />
+          <p className="text-[10px] p-text-3">Allowed: A-Z, a-z, 0-9, _, -</p>
+        </div>
+
+        {err && (
+          <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
+            {err}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button size="sm" variant="primary" onClick={submit} disabled={busy}>
+            {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -647,10 +757,12 @@ function LogsTab({ logs, connectionStatus }: { logs: LogEntry[]; connectionStatu
 export default function WorkspacePage() {
   const { agentId } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const state = useProteus(agentId);
   const [activeTab, setActiveTab] = useState<Tab>("Identity");
   const [chatInput, setChatInput] = useState("");
   const [memorySearch, setMemorySearch] = useState("");
+  const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialPromptSent = useRef(false);
 
@@ -698,6 +810,16 @@ export default function WorkspacePage() {
                 <ConnectionIndicator status={state.connectionStatus} />
                 <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || agentId}</span>
                 {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+                {as?.forkLineage && (
+                  <Link
+                    to={`/agent/${as.forkLineage.sourceAgentName}`}
+                    className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
+                    title={`Forked from ${as.forkLineage.sourceAgentName} at message ${as.forkLineage.sourceMessageId} on ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
+                  >
+                    <GitBranchIcon size={10} />
+                    <span className="font-mono">{as.forkLineage.sourceAgentName}</span>
+                  </Link>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <ModelSelector current={as?.model ?? MODELS[0]!.id} onChange={state.setModel} />
@@ -721,7 +843,15 @@ export default function WorkspacePage() {
                   <p className="text-sm p-text-3">Send a message to start</p>
                 </div>
               )}
-              {state.messages.map((msg, i) => <MessageView key={msg.id} message={msg} isLast={i === state.messages.length - 1} isStreaming={state.isStreaming} />)}
+              {state.messages.map((msg, i) => (
+                <MessageView
+                  key={msg.id}
+                  message={msg}
+                  isLast={i === state.messages.length - 1}
+                  isStreaming={state.isStreaming}
+                  onFork={(mid) => setForkFor(mid)}
+                />
+              ))}
               <div ref={messagesEndRef} />
             </div>
 
@@ -871,6 +1001,25 @@ export default function WorkspacePage() {
           </div>
         </Panel>
       </PanelGroup>
+
+      {forkFor && (
+        <ForkModal
+          sourceName={as?.displayName || agentId || ""}
+          messagesUpToHere={state.messages.findIndex(m => m.id === forkFor) + 1}
+          craftedToolsCount={as?.craftedToolCount ?? 0}
+          onCancel={() => setForkFor(null)}
+          onSubmit={async (name) => {
+            try {
+              const result = await state.forkAgent(forkFor, name ? { name } : undefined);
+              setForkFor(null);
+              navigate(result.url);
+            } catch (err) {
+              // Surface the error inside the modal — return string rejects.
+              throw err instanceof Error ? err : new Error(String(err));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -427,6 +427,15 @@ export function useProteus(agentId?: string) {
     executors,
     executorOutputs,
     executeInExecutor,
+    /**
+     * Fork this agent at a message. Returns the new agent's navigation URL
+     * on success, or throws on error ('agent busy', 'fork point not found',
+     * 'agent name already exists', etc.).
+     */
+    forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
+      agent.call("forkAgent", [untilMessageId, opts ?? {}]) as Promise<{
+        id: string; name: string; url: string; forkPointMs: number;
+      }>,
     rpc: agent.call.bind(agent),
     rawAgent: agent,
   };
