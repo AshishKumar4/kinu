@@ -171,6 +171,18 @@ const DDL = [
     elapsed_ms INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+
+  // ── Fork lineage — single-row table populated when this agent is a fork ─
+  // Empty for non-forked agents. Written once by forkAgentStorage and read
+  // by the getForkLineage RPC for the UI lineage chip.
+  `CREATE TABLE IF NOT EXISTS fork_lineage (
+    id                        INTEGER PRIMARY KEY,
+    source_agent_id           TEXT    NOT NULL,
+    source_agent_name         TEXT    NOT NULL,
+    source_message_id         TEXT    NOT NULL,
+    source_message_created_at INTEGER NOT NULL,
+    forked_at                 INTEGER NOT NULL
+  )`,
 ];
 
 /** Initialize all agent tables. Idempotent — safe to call on every startup. */

@@ -5,6 +5,7 @@ export { initAllTables } from './identity/schema.js';
 export { readSoul, writeSoul } from './identity/soul.js';
 export { createAgent, wrapDatabase, type AgentBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/open.js';
+export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
 
 // Evolution engine (3-timescale auto-evolution)
 export { EvolutionEngine } from './evolution/engine.js';
