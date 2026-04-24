@@ -245,21 +245,45 @@ export function forkAgentStorage(
     (1, ${srcId}, ${srcName}, ${opts.untilMessageId}, ${forkPointMs}, ${now})
   `;
 
-  // 12. Synthetic system-role row at conversation_history to notify the LLM
-  //     of the fork. Keeps model behavior coherent after fork despite the
-  //     clean-slate MCTS/evolution state.
-  const syntheticMessage = JSON.stringify({
-    role: 'system',
-    content:
-      `You were forked from agent "${srcName}" at message ${opts.untilMessageId} on ` +
-      `${new Date(now).toISOString()}. The conversation above happened before the fork. ` +
-      `Your current tool set and memory are authoritative; ignore any tools or context ` +
-      `referenced before the fork that you don't see in your active tool list.`,
-  });
+  // 12. Synthetic system-role message inserted at the fork point. Served
+  //     two purposes:
+  //     (a) LLM coherence — written to conversation_history so the next
+  //         model turn sees the fork context and knows to ignore tools/
+  //         state that existed before the fork and no longer exist.
+  //     (b) UI surface — also written to assistant_messages so the chat
+  //         pane shows a visible "Forked from …" marker between the
+  //         copied history and the fork's own future turns.
+  const syntheticText =
+    `You were forked from agent "${srcName}" at message ${opts.untilMessageId} on ` +
+    `${new Date(now).toISOString()}. The conversation above happened before the fork. ` +
+    `Your current tool set and memory are authoritative; ignore any tools or context ` +
+    `referenced before the fork that you don't see in your active tool list.`;
+
   target`
     INSERT INTO conversation_history (session_id, role, message, created_at)
-    VALUES ('default', 'system', ${syntheticMessage}, ${forkPointMs + 1})
+    VALUES ('default', 'system', ${JSON.stringify({ role: 'system', content: syntheticText })}, ${forkPointMs + 1})
   `;
+
+  // Mirror into assistant_messages as a system-role UIMessage so the chat
+  // UI renders it. We parent this on the cut-point message so getHistory()'s
+  // recursive CTE walks from "fork marker" → …copied history → root.
+  // This table may not exist if the source never had any Session rows — we
+  // created it idempotently in step 6b, so the INSERT is safe here.
+  try {
+    const syntheticId = `fork-marker-${opts.targetAgentId.slice(0, 8)}-${now}`;
+    const syntheticContent = JSON.stringify({
+      id: syntheticId,
+      role: 'system',
+      parts: [{ type: 'text', text: syntheticText }],
+    });
+    // ISO8601 with ms, one ms after the cut point — guaranteed to be the
+    // latest leaf in the fork's session tree.
+    const syntheticCreatedAt = new Date(forkPointMs + 1).toISOString().replace('T', ' ').replace('Z', '');
+    target`
+      INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${syntheticId}, ${''}, ${opts.untilMessageId}, ${'system'}, ${syntheticContent}, ${syntheticCreatedAt})
+    `;
+  } catch { /* assistant_messages was already guarded above — non-fatal */ }
 
   return {
     forkPointMs,

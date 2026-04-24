@@ -404,16 +404,17 @@ describe('forkAgentStorage', () => {
       targetAgentId: 'T', targetAgentName: 'forked',
     });
 
-    const rows = tgt.sql<{ id: string; role: string; content: string; parent_id: string | null }>`
-      SELECT id, role, content, parent_id FROM assistant_messages ORDER BY id
+    // Only m1 (at second=1, strftime returns 1s → 1000ms ≤ 1100ms) is copied.
+    // m2 is at second=2 → 2000ms > 1100ms, excluded by the cut point.
+    // Step 12 also writes a system-role synthetic marker — we assert on the
+    // copied user-role row here; test 16 covers the synthetic marker.
+    const userRows = tgt.sql<{ id: string; role: string; content: string; parent_id: string | null }>`
+      SELECT id, role, content, parent_id FROM assistant_messages WHERE role = 'user'
     `;
-    // Only m1 (at second=1, strftime returns 1s → 1000ms ≤ 1100ms).
-    // m2 is at second=2 → 2000ms > 1100ms, excluded.
-    expect(rows.length).toBe(1);
-    expect(rows[0]!.id).toBe('m1');
-    expect(rows[0]!.parent_id).toBeNull();
-    expect(rows[0]!.role).toBe('user');
-    expect(rows[0]!.content).toContain('hello');
+    expect(userRows.length).toBe(1);
+    expect(userRows[0]!.id).toBe('m1');
+    expect(userRows[0]!.parent_id).toBeNull();
+    expect(userRows[0]!.content).toContain('hello');
   });
 
   test('15. assistant_messages copy is no-op when source has no such table', () => {
@@ -429,5 +430,30 @@ describe('forkAgentStorage', () => {
     expect(() => forkAgentStorage(src.sql, tgt.sql, {
       untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'forked',
     })).not.toThrow();
+  });
+
+  test('16. synthetic fork marker written to assistant_messages for UI visibility', () => {
+    const src = fresh();
+    const tgt = fresh();
+    seedTargetBootstrap(tgt);
+    seedSource(src, {
+      identity: { id: 'SRC', name: 'alpha' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
+    });
+    forkAgentStorage(src.sql, tgt.sql, {
+      untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'beta',
+    });
+
+    // The synthetic marker should land in assistant_messages with role=system,
+    // parented on the cut-point message, content referencing the source.
+    const rows = tgt.sql<{ id: string; role: string; content: string; parent_id: string | null }>`
+      SELECT id, role, content, parent_id FROM assistant_messages WHERE role = 'system'
+    `;
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.role).toBe('system');
+    expect(rows[0]!.parent_id).toBe('m1');
+    expect(rows[0]!.content).toContain('forked from');
+    expect(rows[0]!.content).toContain('alpha');
+    expect(rows[0]!.content).toContain('m1');
   });
 });
