@@ -19,8 +19,14 @@ interface Env {
   LOADER: WorkerLoader;
   OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
   ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
-  /** Sandbox container DO — @cloudflare/sandbox. One per agent. */
-  SANDBOX: DurableObjectNamespace<ProteusSandbox>;
+  /** Sandbox container DO — @cloudflare/sandbox. One per agent.
+   *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
+   *  looks up `env.Sandbox` directly. */
+  Sandbox: DurableObjectNamespace<ProteusSandbox>;
   AI_GATEWAY_URL: string;
   AI_GATEWAY_AUTH: string;
+  /** Hostname used by @cloudflare/sandbox to build preview URLs.
+   *  Must match a Worker route that points to this Worker (including
+   *  wildcard subdomains so *-sandbox-id.PREVIEW_HOSTNAME resolves). */
+  PREVIEW_HOSTNAME: string;
 }

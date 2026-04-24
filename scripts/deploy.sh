@@ -110,13 +110,14 @@ fi
 
 PROTEUS_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$PROTEUS_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
 
-# Verify wrangler echoed the SANDBOX binding (proves @cloudflare/sandbox is wired).
-if grep -q 'SANDBOX' "$PROTEUS_DEPLOY_LOG"; then
-  echo -e "${GREEN}✅ Proteus bound SANDBOX (ProteusSandbox DO + Container)${NC}"
+# Verify wrangler echoed the Sandbox binding (proves @cloudflare/sandbox is wired).
+# Binding name is "Sandbox" (capital S) — the SDK hardcodes env.Sandbox lookup.
+if grep -qE 'ProteusSandbox' "$PROTEUS_DEPLOY_LOG"; then
+  echo -e "${GREEN}✅ Proteus bound Sandbox (ProteusSandbox DO + Container)${NC}"
 else
-  echo -e "${RED}❌ wrangler output did not mention SANDBOX — binding is missing${NC}"
+  echo -e "${RED}❌ wrangler output did not mention the Sandbox binding${NC}"
   echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
-  echo "     { \"class_name\": \"ProteusSandbox\", \"name\": \"SANDBOX\" }"
+  echo "     { \"class_name\": \"ProteusSandbox\", \"name\": \"Sandbox\" }"
   echo "   and a \"containers\" block."
   exit 1
 fi

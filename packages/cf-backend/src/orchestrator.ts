@@ -958,6 +958,25 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /**
+   * Direct RPC to the sandbox executor's exposePort tool. Used by the UI
+   * and by integration tests to pin a port to the preview iframe grid.
+   * Returns the public URL on success.
+   */
+  @callable() async exposeSandboxPort(port: number, name?: string): Promise<{ url?: string; error?: string }> {
+    const provider = this.rt.executionRouter?.getProvider('sandbox');
+    if (!provider) return { error: 'sandbox executor not available' };
+    const tool = provider.tools.exposePort;
+    if (!tool) return { error: 'sandbox executor has no exposePort' };
+    try {
+      const raw = name ? await tool.execute(port, name) : await tool.execute(port);
+      const url = typeof raw === 'string' ? raw : undefined;
+      return { url };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
    * Return the current list of exposed ports for a given executor. Powers
    * the auto-refreshing preview grid in the Executors tab. Sandbox returns
    * its active `exposePort(...)` registrations; other executors return [].

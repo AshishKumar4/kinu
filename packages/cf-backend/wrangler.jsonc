@@ -7,7 +7,8 @@
   "compatibility_flags": ["nodejs_compat", "experimental"],
   "worker_loaders": [{ "binding": "LOADER" }],
   "routes": [
-    { "pattern": "proteus.ashishkumarsingh.com/*", "zone_id": "6fe16a3a25c46bb975b15e75ea57a0fe" }
+    { "pattern": "proteus.ashishkumarsingh.com/*", "zone_id": "6fe16a3a25c46bb975b15e75ea57a0fe" },
+    { "pattern": "*.proteus.ashishkumarsingh.com/*", "zone_id": "6fe16a3a25c46bb975b15e75ea57a0fe" }
   ],
   "assets": {
     "directory": "dist/client",
@@ -19,8 +20,10 @@
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
-      // (keyed by agent name). Primary remote executor. See docs/EXECUTOR-V2.md.
-      { "class_name": "ProteusSandbox", "name": "SANDBOX" }
+      // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
+      // proxyToSandbox hardcodes `env.Sandbox` lookup (see
+      // @cloudflare/sandbox/dist/file-stream-*.js:3448).
+      { "class_name": "ProteusSandbox", "name": "Sandbox" }
       //
       // SSH/laptop (user's local machine via WebSocket tunnel):
       //   No binding needed — users run a local daemon. The executor becomes
@@ -54,6 +57,7 @@
   // For local dev, add to .dev.vars:
   //   AI_GATEWAY_AUTH=Bearer <your-token>
   "vars": {
-    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1"
+    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com"
   }
 }

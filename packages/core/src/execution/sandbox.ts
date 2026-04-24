@@ -23,6 +23,11 @@ import type { ExecutorProvider, ExecutorCapability } from './types.js';
  * return value we consume. Core accepts `unknown`-typed handles and narrows
  * here, so cf-backend can supply the real thing without core having a
  * package dependency.
+ *
+ * Port APIs require a hostname (RFC 3986 case-sensitivity + preview URL
+ * construction — the SDK builds `https://<port>-<sandbox>-<token>.<hostname>`).
+ * The cf-backend adapter binds a specific hostname into the handle by closing
+ * over env.PREVIEW_HOSTNAME at construction time, so core doesn't need to know.
  */
 export interface SandboxHandle {
   exec(command: string, opts?: { cwd?: string; timeout?: number }):
@@ -32,9 +37,13 @@ export interface SandboxHandle {
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
   deleteFile(path: string): Promise<unknown>;
-  exposePort(port: number, opts?: { name?: string }): Promise<{ exposedUrl?: string }>;
+  /** Opts include both the user-supplied name and the closed-over hostname. */
+  exposePort(port: number, opts: { hostname: string; name?: string }):
+    Promise<{ url: string; port: number; name?: string }>;
   unexposePort(port: number): Promise<unknown>;
-  listPorts(): Promise<{ ports: Array<{ port: number; name?: string; exposedUrl?: string }> }>;
+  /** Hostname required — SDK uses it to build URLs in the result rows. */
+  listPorts(hostname: string):
+    Promise<Array<{ url: string; port: number; status?: string }>>;
 }
 
 const NOT_CONFIGURED =
@@ -57,9 +66,16 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
  * Build an ExecutorProvider from a live SandboxHandle.
  * Pass `undefined` to get a "not configured" stub that appears in the UI's
  * Not-configured footer without breaking the router.
+ *
+ * @param handle     SDK `getSandbox()` result.
+ * @param hostname   `env.PREVIEW_HOSTNAME` — used by exposePort/listPorts to
+ *                   build preview URLs. Required when handle is supplied.
  */
-export function createSandboxExecutor(handle?: SandboxHandle): ExecutorProvider {
-  const connected = handle != null;
+export function createSandboxExecutor(
+  handle?: SandboxHandle,
+  hostname?: string,
+): ExecutorProvider {
+  const connected = handle != null && typeof hostname === 'string' && hostname.length > 0;
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
@@ -146,13 +162,15 @@ export function createSandboxExecutor(handle?: SandboxHandle): ExecutorProvider 
       },
     },
     exposePort: {
-      description: 'Expose a TCP port from the sandbox. Returns the public URL. Optional name.',
+      description: 'Expose a TCP port from the sandbox. Returns the public preview URL. Optional name.',
       execute: async (port: unknown, name?: unknown): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle || !hostname) return NOT_CONFIGURED;
         try {
           const p = Number(port);
-          const r = await handle.exposePort(p, name != null ? { name: String(name) } : undefined);
-          return r.exposedUrl ?? `exposed ${p}`;
+          const opts: { hostname: string; name?: string } = { hostname };
+          if (name != null) opts.name = String(name);
+          const r = await handle.exposePort(p, opts);
+          return r.url ?? `exposed ${p}`;
         } catch (err) {
           return `expose error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -171,12 +189,12 @@ export function createSandboxExecutor(handle?: SandboxHandle): ExecutorProvider 
       },
     },
     listPorts: {
-      description: 'List currently exposed ports. Returns JSON-shaped text.',
+      description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
       execute: async (): Promise<string> => {
-        if (!handle) return NOT_CONFIGURED;
+        if (!handle || !hostname) return NOT_CONFIGURED;
         try {
-          const r = await handle.listPorts();
-          return JSON.stringify(r.ports ?? []);
+          const ports = await handle.listPorts(hostname);
+          return JSON.stringify(ports ?? []);
         } catch (err) {
           return `listPorts error: ${err instanceof Error ? err.message : String(err)}`;
         }
