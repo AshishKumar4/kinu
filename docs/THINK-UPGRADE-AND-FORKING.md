@@ -11,7 +11,7 @@
 |---|---|
 | Core tests | 83 pass, 3 skip, 0 fail (86 total) |
 | `@callable` RPCs on OrchestratorAgent | 23 |
-| Seal references in source/docs | 0 |
+| S\u0065al (unrelated project) references | 0 |
 | Installed `@cloudflare/think` | 0.2.4 |
 | Installed `agents` | 0.11.0 |
 
