@@ -26,7 +26,11 @@ interface Env {
   AI_GATEWAY_URL: string;
   AI_GATEWAY_AUTH: string;
   /** Hostname used by @cloudflare/sandbox to build preview URLs.
-   *  Must match a Worker route that points to this Worker (including
-   *  wildcard subdomains so *-sandbox-id.PREVIEW_HOSTNAME resolves). */
+   *  Must match a host for which Cloudflare wildcard DNS resolves.
+   *  The account's workers.dev subdomain is the simplest choice because
+   *  *.<worker>.<sub>.workers.dev resolves automatically. */
   PREVIEW_HOSTNAME: string;
+  /** Static asset binding — required for SPA fallback when the Worker
+   *  runs first on every route (see `run_worker_first` in wrangler). */
+  ASSETS: Fetcher;
 }
