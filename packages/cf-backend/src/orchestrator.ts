@@ -363,30 +363,49 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   afterToolCall(ctx: ToolCallResultContext): void {
-    this.logActivity("tool_call_end", ctx.toolName);
+    // Think 0.4 renamed: args → input, result → output, and added a success
+    // discriminator + durationMs. See docs/THINK-UPGRADE-AND-FORKING.md §4 U2.
+    // The core ToolCallRecord shape (name/args/result) is stable — we adapt here.
+    const c = ctx as unknown as {
+      toolName: string;
+      input?: Record<string, unknown>;
+      durationMs?: number;
+      success: boolean;
+      output?: unknown;
+      error?: unknown;
+    };
+    const recorded =
+      c.success === false
+        ? { error: c.error instanceof Error ? c.error.message : String(c.error) }
+        : c.output;
+    if (c.success === false) this._turnHadError = true;
+    const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : "";
+    this.logActivity("tool_call_end", `${c.toolName}${dur}`);
     this._turnToolCalls.push({
-      name: ctx.toolName,
-      args: ctx.args,
-      result: ctx.result,
+      name: c.toolName,
+      args: (c.input ?? {}) as Record<string, unknown>,
+      result: recorded,
     });
   }
 
   onStepFinish(ctx: StepContext): void {
+    // Think 0.4: ctx is AI SDK's full StepResult — stepType is gone from the
+    // top level, but toolCalls.length > 0 is a reliable proxy for the old
+    // "tool-result" vs "initial" distinction we logged before.
     this._turnStepCount++;
-    const toolCallNames = Array.isArray(ctx.toolCalls)
-      ? (ctx.toolCalls as Array<{ toolName?: string; name?: string }>)
-          .map(tc => tc?.toolName ?? tc?.name ?? "?")
-          .join(",")
-      : "";
-    const toolCallCount = Array.isArray(ctx.toolCalls) ? ctx.toolCalls.length : 0;
-    const toolResultCount = Array.isArray(ctx.toolResults) ? ctx.toolResults.length : 0;
+    const toolCalls = Array.isArray(ctx.toolCalls) ? ctx.toolCalls : [];
+    const toolResults = Array.isArray(ctx.toolResults) ? ctx.toolResults : [];
+    const toolCallNames = (toolCalls as Array<{ toolName?: string; name?: string }>)
+      .map(tc => tc?.toolName ?? tc?.name ?? "?")
+      .join(",");
+    const derivedStepType = toolCalls.length > 0 ? "tool-call" : "text";
     const textLen = (ctx.text ?? "").length;
     const inTok = ctx.usage?.inputTokens ?? 0;
     const outTok = ctx.usage?.outputTokens ?? 0;
     this.logActivity(
       "step_finish",
-      `step ${this._turnStepCount} stepType=${ctx.stepType} reason=${ctx.finishReason} ` +
-      `textLen=${textLen} tools=${toolCallCount}[${toolCallNames}] results=${toolResultCount} ` +
+      `step ${this._turnStepCount} kind=${derivedStepType} reason=${ctx.finishReason} ` +
+      `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
       `in=${inTok} out=${outTok}`,
     );
   }
@@ -448,13 +467,6 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Fire turn-level evolution in background (does NOT block the TurnQueue)
     this.engine.onTurnCompleteAsync(turn);
-  }
-
-  // FIX 6: Fiber recovery — log and document
-  async onFiberRecovered(ctx: { id: string; name: string; snapshot: unknown }) {
-    console.log(`[proteus] Recovering fiber: ${ctx.name} (${ctx.id}), snapshot: ${ctx.snapshot ? "yes" : "none"}`);
-    // If we had checkpointed MCTS progress, we could resume here.
-    // For now, interrupted MCTS runs start fresh. The search_nodes data persists.
   }
 
   // ── DO initialization ──────────────────────────────────────────
