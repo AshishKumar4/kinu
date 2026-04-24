@@ -18,7 +18,7 @@
     "@phosphor-icons/react": "^2.1.10",
     "@proteus/agent-utils": "workspace:*",
     "@proteus/core": "workspace:*",
-    "agents": "^0.11.0",
+    "agents": "^0.11.5",
     "ai": "^6.0.159",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
