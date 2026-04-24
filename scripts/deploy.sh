@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Unified Proteus + Nimbus deploy pipeline.
+# Proteus deploy pipeline.
 #
-# Deploys Nimbus FIRST (Proteus binds to it via service binding
-# `script_name: "nimbus"`), then Proteus, then verifies both.
+# Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
+# SANDBOX DO + Container binding. Nimbus has been shelved; the legacy
+# SKIP_NIMBUS flag is accepted for backward compat but does nothing.
 #
 # Usage:
-#   bash scripts/deploy.sh                     # sibling ../nimbus path
-#   NIMBUS_PATH=/path/to/nimbus scripts/deploy.sh
+#   bash scripts/deploy.sh
+#   SKIP_E2E=1 bash scripts/deploy.sh        # skip pre-deploy verification
 #   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh
-#   SKIP_E2E=1 scripts/deploy.sh               # skip pre-deploy verification
-#   SKIP_NIMBUS=1 scripts/deploy.sh            # deploy Proteus only
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
@@ -24,34 +23,22 @@ NC='\033[0m'
 PROTEUS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROTEUS_ROOT" || { echo -e "${RED}Cannot cd to Proteus root${NC}"; exit 1; }
 
-NIMBUS_PATH="${NIMBUS_PATH:-$PROTEUS_ROOT/../nimbus}"
-# Resolve to absolute path for clarity in logs
-if [ -d "$NIMBUS_PATH" ]; then
-  NIMBUS_PATH="$(cd "$NIMBUS_PATH" && pwd)"
-fi
-
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 
 # Captured during deploy for final summary
-NIMBUS_URL=""
-NIMBUS_VERSION=""
 PROTEUS_URL="https://proteus.ashishkumarsingh.com/"
 PROTEUS_VERSION=""
 
-# Temp log files — declared early so the trap can clean them regardless of
-# where we fail (including SIGINT).
-NIMBUS_DEPLOY_LOG=""
+# Temp log file — trap cleans up on any exit.
 PROTEUS_DEPLOY_LOG=""
 cleanup() {
-  [ -n "$NIMBUS_DEPLOY_LOG" ] && rm -f "$NIMBUS_DEPLOY_LOG"
   [ -n "$PROTEUS_DEPLOY_LOG" ] && rm -f "$PROTEUS_DEPLOY_LOG"
 }
 trap cleanup EXIT INT TERM
 
-echo -e "${BOLD}Proteus + Nimbus Deploy Pipeline${NC}"
-echo "================================="
+echo -e "${BOLD}Proteus Deploy Pipeline${NC}"
+echo "========================"
 echo "Proteus root: $PROTEUS_ROOT"
-echo "Nimbus path:  $NIMBUS_PATH"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo ""
 
@@ -64,38 +51,6 @@ if ! npx wrangler whoami >/dev/null 2>&1; then
   echo -e "${RED}Wrangler not authenticated.${NC}"
   echo "Run: npx wrangler login"
   exit 1
-fi
-
-# ── Pre-flight: verify Nimbus path ───────────────────────────────
-if [ "${SKIP_NIMBUS:-0}" != "1" ]; then
-  if [ ! -d "$NIMBUS_PATH" ]; then
-    echo -e "${RED}NIMBUS_PATH does not exist: $NIMBUS_PATH${NC}"
-    echo ""
-    echo "Nimbus must be deployed before Proteus (Proteus binds it via"
-    echo "service binding \`script_name: \"nimbus\"\`)."
-    echo ""
-    echo "Clone Nimbus to a sibling directory:"
-    echo "  git clone https://github.com/AshishKumar4/Nimbus.git $NIMBUS_PATH"
-    echo ""
-    echo "Or point NIMBUS_PATH at an existing checkout:"
-    echo "  NIMBUS_PATH=/path/to/nimbus bash scripts/deploy.sh"
-    echo ""
-    echo "Or skip Nimbus deploy (Proteus only):"
-    echo "  SKIP_NIMBUS=1 bash scripts/deploy.sh"
-    exit 1
-  fi
-  if [ ! -f "$NIMBUS_PATH/wrangler.jsonc" ]; then
-    echo -e "${RED}$NIMBUS_PATH/wrangler.jsonc not found — not a Nimbus repo${NC}"
-    exit 1
-  fi
-  # Verify it declares "name": "nimbus"
-  if ! grep -q '"name"[[:space:]]*:[[:space:]]*"nimbus"' "$NIMBUS_PATH/wrangler.jsonc"; then
-    echo -e "${RED}$NIMBUS_PATH/wrangler.jsonc does not declare worker name \"nimbus\"${NC}"
-    echo "This script assumes the Nimbus Worker is deployed as \"nimbus\" so Proteus"
-    echo "can bind it via \`script_name: \"nimbus\"\`. Adjust Nimbus's wrangler.jsonc"
-    echo "or set the name to match."
-    exit 1
-  fi
 fi
 
 # ── Step 1: Pre-deploy verification ──────────────────────────────
@@ -114,62 +69,15 @@ else
   fi
 fi
 
-# ── Step 2: Deploy Nimbus ────────────────────────────────────────
+# Legacy: SKIP_NIMBUS is accepted for backward compat but is a no-op now
+# (Nimbus has been shelved in favor of @cloudflare/sandbox).
 if [ "${SKIP_NIMBUS:-0}" = "1" ]; then
-  echo ""
-  echo -e "${YELLOW}SKIP_NIMBUS=1 — skipping Nimbus deploy${NC}"
-else
-  echo ""
-  echo -e "${BOLD}Step 2: Deploying Nimbus${NC}"
-  echo "cwd: $NIMBUS_PATH"
-  pushd "$NIMBUS_PATH" >/dev/null || { echo -e "${RED}cannot cd to $NIMBUS_PATH${NC}"; exit 1; }
-
-  # Install deps if missing (bun preferred, falls back to npm).
-  if [ ! -d node_modules ] || [ ! -d node_modules/wrangler ]; then
-    echo "Installing Nimbus dependencies (node_modules missing)..."
-    if command -v bun >/dev/null 2>&1; then
-      bun install || { echo -e "${RED}bun install failed in Nimbus${NC}"; popd >/dev/null; exit 1; }
-    else
-      npm install || { echo -e "${RED}npm install failed in Nimbus${NC}"; popd >/dev/null; exit 1; }
-    fi
-  else
-    echo "Nimbus node_modules present — skipping install."
-  fi
-
-  # Deploy. Capture output for logging + version extraction; trap cleans up.
-  NIMBUS_DEPLOY_LOG="$(mktemp -t nimbus-deploy.XXXXXX.log)"
-  echo "Running: npx wrangler deploy (log → $NIMBUS_DEPLOY_LOG)"
-  echo ""
-  if npx wrangler deploy 2>&1 | tee "$NIMBUS_DEPLOY_LOG"; then
-    echo ""
-    echo -e "${GREEN}Nimbus deploy succeeded.${NC}"
-  else
-    echo ""
-    echo -e "${RED}Nimbus deploy failed — see log above.${NC}"
-    popd >/dev/null
-    exit 1
-  fi
-
-  # Extract deployed URL + version ID from wrangler output.
-  NIMBUS_URL="$(grep -oE 'https://nimbus\.[a-zA-Z0-9.-]+\.workers\.dev' "$NIMBUS_DEPLOY_LOG" | head -1)"
-  if [ -z "$NIMBUS_URL" ]; then
-    NIMBUS_URL="$(grep -oE 'https://[^ ]*\.workers\.dev' "$NIMBUS_DEPLOY_LOG" | head -1)"
-  fi
-  NIMBUS_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$NIMBUS_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
-
-  popd >/dev/null
-
-  if [ -n "$NIMBUS_URL" ]; then
-    echo "Nimbus URL:     $NIMBUS_URL"
-  fi
-  if [ -n "$NIMBUS_VERSION" ]; then
-    echo "Nimbus version: $NIMBUS_VERSION"
-  fi
+  echo -e "${YELLOW}SKIP_NIMBUS=1 ignored — Nimbus has been shelved.${NC}"
 fi
 
-# ── Step 3: Deploy Proteus ───────────────────────────────────────
+# ── Step 2: Deploy Proteus ───────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 3: Deploying Proteus${NC}"
+echo -e "${BOLD}Step 2: Deploying Proteus${NC}"
 cd "$PROTEUS_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
 
 # Install deps + build static assets.
@@ -202,27 +110,22 @@ fi
 
 PROTEUS_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$PROTEUS_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
 
-# Verify wrangler echoed the NIMBUS_SESSION binding (proves it was picked up).
-# Hard failure when SKIP_NIMBUS!=1: a silently-missing binding would let Proteus
-# go live without Nimbus access, which is precisely what this script exists to
-# prevent.
-if [ "${SKIP_NIMBUS:-0}" != "1" ]; then
-  if grep -q 'NIMBUS_SESSION' "$PROTEUS_DEPLOY_LOG"; then
-    echo -e "${GREEN}✅ Proteus bound NIMBUS_SESSION${NC}"
-  else
-    echo -e "${RED}❌ wrangler output did not mention NIMBUS_SESSION — binding is missing${NC}"
-    echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
-    echo "     { \"class_name\": \"NimbusSession\", \"name\": \"NIMBUS_SESSION\", \"script_name\": \"nimbus\" }"
-    echo "   (Re-run with SKIP_NIMBUS=1 to deploy Proteus without the Nimbus binding.)"
-    exit 1
-  fi
+# Verify wrangler echoed the SANDBOX binding (proves @cloudflare/sandbox is wired).
+if grep -q 'SANDBOX' "$PROTEUS_DEPLOY_LOG"; then
+  echo -e "${GREEN}✅ Proteus bound SANDBOX (ProteusSandbox DO + Container)${NC}"
+else
+  echo -e "${RED}❌ wrangler output did not mention SANDBOX — binding is missing${NC}"
+  echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
+  echo "     { \"class_name\": \"ProteusSandbox\", \"name\": \"SANDBOX\" }"
+  echo "   and a \"containers\" block."
+  exit 1
 fi
 
 cd "$PROTEUS_ROOT" || exit 1
 
-# ── Step 4: Post-deploy smoke test ───────────────────────────────
+# ── Step 3: Post-deploy smoke test ───────────────────────────────
 echo ""
-echo -e "${BOLD}Step 4: Post-deploy smoke test${NC}"
+echo -e "${BOLD}Step 3: Post-deploy smoke test${NC}"
 echo "Waiting 10s for deployments to propagate..."
 sleep 10
 
@@ -245,32 +148,17 @@ else
   SMOKE_FAIL=1
 fi
 
-# Nimbus (workers.dev URL).
-if [ "${SKIP_NIMBUS:-0}" != "1" ] && [ -n "$NIMBUS_URL" ]; then
-  NIMBUS_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$NIMBUS_URL" 2>/dev/null || echo "000")
-  if [ "$NIMBUS_STATUS" = "200" ]; then
-    echo -e "${GREEN}✅ Nimbus live site returns 200${NC} ($NIMBUS_URL)"
-  else
-    echo -e "${RED}❌ Nimbus live site returns $NIMBUS_STATUS${NC} ($NIMBUS_URL)"
-    SMOKE_FAIL=1
-  fi
-fi
-
 if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo ""
   echo -e "${RED}Smoke test failed.${NC}"
   exit 1
 fi
 
-# ── Step 5: Summary ──────────────────────────────────────────────
+# ── Step 4: Summary ──────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Deploy complete.${NC}"
 echo "================================="
-if [ "${SKIP_NIMBUS:-0}" != "1" ]; then
-  echo "Nimbus:   ${NIMBUS_URL:-(URL not captured)}"
-  echo "          version ${NIMBUS_VERSION:-unknown}"
-fi
 echo "Proteus:  $PROTEUS_URL"
 echo "          version ${PROTEUS_VERSION:-unknown}"
 echo ""
-echo -e "${GREEN}✅ Both Workers deployed and verified.${NC}"
+echo -e "${GREEN}✅ Proteus Worker deployed and verified.${NC}"

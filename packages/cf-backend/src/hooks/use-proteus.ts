@@ -368,34 +368,18 @@ export function useProteus(agentId?: string) {
     }).catch(() => {});
   }, [agent]);
 
+  // Single source of truth: the server-side broadcast. executeInExecutor ONLY
+  // fires the RPC; the broadcast handler below renders the row. This prevents
+  // the double-output bug where the optimistic append AND the broadcast both
+  // fired for one invocation (race-ordering made dedup windows unreliable).
   const executeInExecutor = useCallback((executorId: string, command: string) => {
-    // Single write path: the RPC returns the full { stdout, stderr, exitCode }
-    // and we append ONCE here. The server-side broadcast is ignored for
-    // same-session originators (see the broadcast handler below) to prevent
-    // the double-output bug where typing `ls` once produced two rows.
-    return agent.call("executeInExecutor", [executorId, command])
-      .then((result) => {
-        const r = result as { stdout?: string; stderr?: string; exitCode?: number; error?: string };
-        setExecutorOutputs(prev => {
-          const next = new Map(prev);
-          const existing = next.get(executorId) ?? [];
-          next.set(executorId, [...existing, {
-            id: crypto.randomUUID(), command,
-            stdout: r.stdout ?? '', stderr: r.stderr ?? r.error ?? '',
-            exit_code: r.exitCode ?? (r.error ? 1 : 0),
-            created_at: Date.now(),
-          }]);
-          return next;
-        });
-        return r;
-      });
+    return agent.call("executeInExecutor", [executorId, command]).then(r =>
+      r as { stdout?: string; stderr?: string; exitCode?: number; error?: string });
   }, [agent]);
 
-  // Listen for executor-output broadcasts from OTHER sessions (e.g. the agent
-  // running a `run` tool on the user's behalf). We dedupe against the local
-  // append in executeInExecutor by (executor, command, recency) — the
-  // broadcast ALWAYS fires server-side, so without dedup typing `ls` once
-  // would render twice.
+  // Listen for executor-output broadcasts — the orchestrator broadcasts
+  // whenever an exec completes (user-triggered OR agent-triggered via a
+  // `run` tool). Render one row per broadcast.
   useEffect(() => {
     if (!isConnected) return;
     const ws = (agent as unknown as { _ws?: WebSocket })._ws;
@@ -407,14 +391,6 @@ export function useProteus(agentId?: string) {
           setExecutorOutputs(prev => {
             const next = new Map(prev);
             const existing = next.get(msg.executor) ?? [];
-            // Wider dedup window (5s) — the original 500ms was too tight; if
-            // the agent-side exec took longer than that (almost always for a
-            // Sandbox container boot), we'd render a duplicate. Match on
-            // (executor, command) with a generous recency window.
-            const seen = existing.some(
-              e => e.command === msg.command && Math.abs(e.created_at - msg.timestamp) < 5000,
-            );
-            if (seen) return prev;
             next.set(msg.executor, [...existing, {
               id: crypto.randomUUID(), command: msg.command,
               stdout: msg.stdout ?? '', stderr: msg.stderr ?? '',

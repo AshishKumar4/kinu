@@ -429,22 +429,12 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName }: {
 
   useEffect(() => { termEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [outputs, activeExec]);
 
-  // Try to list exposed ports from the active executor. Only sandbox has
-  // listPorts today; laptop returns []. Polls every 5s so newly started dev
-  // servers appear without a manual refresh.
-  useEffect(() => {
-    if (!activeExecAvailable || activeExec !== "sandbox") { setPinnedPorts([]); return; }
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const r = await onExecute(activeExec, "__listPorts__");
-        void r;
-      } catch { /* ignore */ }
-    };
-    poll();
-    const h = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(h); void cancelled; };
-  }, [activeExec, activeExecAvailable, onExecute]);
+  // Port polling for the Sandbox executor is surfaced via the agent's
+  // `listPorts` tool at chat time (the LLM calls `sandbox.listPorts()`), not
+  // via a UI loop. A dedicated listPorts RPC + auto-refresh grid is a
+  // follow-up; for now, the iframe grid renders whatever the agent has
+  // pinned via setPinnedPorts (exposed as part of Phase E work).
+  useEffect(() => { setPinnedPorts([]); }, [activeExec]);
 
   const handleSubmit = useCallback(async () => {
     const cmd = cmdInput.trim();

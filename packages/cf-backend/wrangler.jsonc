@@ -34,7 +34,7 @@
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
-        "memory_mib": 4096,
+        "memory_mib": 6144,
         "disk_mb": 8000
       }
     }
