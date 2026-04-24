@@ -106,21 +106,23 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
-  // by the agent's stable name. `PREVIEW_HOSTNAME` is required for the
-  // SDK to construct preview URLs when a port is exposed.
+  // by the agent's stable name. `PREVIEW_HOSTNAME` is the public host for
+  // path-style preview URLs (see preview-proxy.ts); `sandboxId` is the
+  // stable DO key so URLs round-trip back to the correct container.
   const env = agent.env as Env & Record<string, unknown>;
   const previewHostname = typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0
     ? env.PREVIEW_HOSTNAME
     : undefined;
+  const sandboxId = `proteus-${agent.name}`;
   if (env.Sandbox && previewHostname) {
     try {
       const handle = getSandbox(
         env.Sandbox as Parameters<typeof getSandbox>[0],
-        `proteus-${agent.name}`,
+        sandboxId,
         { normalizeId: true },
       ) as unknown as SandboxHandle;
-      executionRouter.register(createSandboxExecutor(handle, previewHostname));
-      console.log(`[proteus] SandboxExecutor registered (hostname=${previewHostname})`);
+      executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+      console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
