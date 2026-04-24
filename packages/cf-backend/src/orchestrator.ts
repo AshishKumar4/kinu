@@ -97,6 +97,14 @@ interface ForkPayload {
     scope: string; created_at: number; updated_at: number;
   }>;
   agentConfig: Array<{ key: string; value: string }>;
+  // Think/Session-owned message rows — the table the chat UI actually reads
+  // from. Carried as raw strings (datetime). Includes the time-cutoff at
+  // snapshot time; the shim answers the same query with a no-op filter so
+  // the helper's time-based SELECT still works across DO boundaries.
+  assistantMessages: Array<{
+    id: string; session_id: string; parent_id: string | null;
+    role: string; content: string; created_at: string;
+  }>;
 }
 
 /**
@@ -143,6 +151,14 @@ function buildSqlFromPayload(payload: ForkPayload) {
       }
       if (query.startsWith("SELECT id, name FROM agent_identity")) {
         return [{ id: payload.lineage.forkOriginAgentId, name: payload.lineage.forkOriginAgentName }];
+      }
+      // Think-Session messages: the source DO already time-filtered the
+      // snapshot, so the payload contains exactly the rows to copy. We
+      // accept any SELECT against assistant_messages that mentions the
+      // same columns and return all rows (the time-filter was already
+      // applied during snapshot).
+      if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM assistant_messages")) {
+        return payload.assistantMessages;
       }
       return [];
     };
@@ -1173,6 +1189,21 @@ export class OrchestratorAgent extends Think<Env> {
       agentConfig = this.sql<ForkPayload["agentConfig"][number]>`SELECT key, value FROM agent_config`;
     } catch { /* agent_config may not exist yet */ }
 
+    // Snapshot Think's Session-owned messages up to the cut point. The chat
+    // UI hydrates from assistant_messages (via session.getHistory()'s
+    // recursive CTE), so we must carry these or the fork's chat pane shows
+    // the empty state. Time comparison uses strftime to turn the datetime
+    // column into a unix-ms for comparison with our forkPointMs.
+    let amsgs: ForkPayload["assistantMessages"] = [];
+    try {
+      amsgs = this.sql<ForkPayload["assistantMessages"][number]>`
+        SELECT id, session_id, parent_id, role, content, created_at
+        FROM assistant_messages
+        WHERE strftime('%s', created_at) * 1000 <= ${forkPointMs}
+        ORDER BY created_at ASC
+      `;
+    } catch { /* assistant_messages created lazily by Session — may not exist */ }
+
     return {
       forkName,
       lineage: {
@@ -1189,6 +1220,7 @@ export class OrchestratorAgent extends Think<Env> {
       memoryChunks: memChunks,
       craftedTools: tools,
       agentConfig,
+      assistantMessages: amsgs,
     };
   }
 

@@ -361,4 +361,73 @@ describe('forkAgentStorage', () => {
     const { sql } = fresh();
     expect(readForkLineage(sql)).toBeNull();
   });
+
+  test('14. assistant_messages (Think Session table) carried to fork', () => {
+    // Populate the Session-owned table on the source and verify the fork
+    // hydrates its chat UI from the same rows.
+    const src = fresh();
+    const tgt = fresh();
+    seedTargetBootstrap(tgt);
+    seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [
+        { id: 'm1', role: 'user', content: 'hello', created_at: 1000 },
+        { id: 'm2', role: 'assistant', content: 'hi', parent_id: 'm1', created_at: 1100 },
+      ],
+    });
+    // Session's schema as created by appendMessage's ensureTable. Timestamps
+    // stored as DATETIME strings; the helper uses strftime to compare.
+    src.execRaw(`
+      CREATE TABLE IF NOT EXISTS assistant_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL DEFAULT '',
+        parent_id TEXT,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    // 1000ms → 1970-01-01T00:00:01.000Z; 1100ms → 1970-01-01T00:00:01.100Z.
+    // strftime('%s', ...) yields seconds → *1000 gives 1000 and 1000 (rounds
+    // down). We use a clearly-separated second to avoid truncation.
+    src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES ('m1', '', NULL, 'user',
+              ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hello' }] })},
+              '1970-01-01 00:00:01.000')`;
+    src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES ('m2', '', 'm1', 'assistant',
+              ${JSON.stringify({ id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] })},
+              '1970-01-01 00:00:02.000')`;
+
+    forkAgentStorage(src.sql, tgt.sql, {
+      untilMessageId: 'm2',    // forkPointMs = 1100
+      targetAgentId: 'T', targetAgentName: 'forked',
+    });
+
+    const rows = tgt.sql<{ id: string; role: string; content: string; parent_id: string | null }>`
+      SELECT id, role, content, parent_id FROM assistant_messages ORDER BY id
+    `;
+    // Only m1 (at second=1, strftime returns 1s → 1000ms ≤ 1100ms).
+    // m2 is at second=2 → 2000ms > 1100ms, excluded.
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.id).toBe('m1');
+    expect(rows[0]!.parent_id).toBeNull();
+    expect(rows[0]!.role).toBe('user');
+    expect(rows[0]!.content).toContain('hello');
+  });
+
+  test('15. assistant_messages copy is no-op when source has no such table', () => {
+    // Pure-test source DBs never call into Session so this table is missing.
+    // Helper must not throw in that case.
+    const src = fresh();
+    const tgt = fresh();
+    seedTargetBootstrap(tgt);
+    seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
+    });
+    expect(() => forkAgentStorage(src.sql, tgt.sql, {
+      untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'forked',
+    })).not.toThrow();
+  });
 });

@@ -121,6 +121,51 @@ export function forkAgentStorage(
     `;
   }
 
+  // 6b. Copy assistant_messages — this is the table Think's Session module
+  //     persists UIMessages into (via appendMessage). The chat UI hydrates
+  //     from here via this.messages (→ session.getHistory()). Without this
+  //     copy the fork's chat pane shows "empty state" despite our own
+  //     `messages` table being populated.
+  //
+  //     Think's default _sessionId() returns '' (empty string). We don't
+  //     filter by session_id since the orchestrator only uses one session;
+  //     forks get all assistant_messages rows in the time window.
+  //     parent_id edges are preserved so the recursive CTE in getHistory()
+  //     walks correctly.
+  //
+  //     The table is created lazily by Session.ensureTable() on first append.
+  //     We ensure it exists before inserting (idempotent). Timestamps stored
+  //     as datetimes — we use strftime to preserve the source's values.
+  try {
+    target`
+      CREATE TABLE IF NOT EXISTS assistant_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL DEFAULT '',
+        parent_id TEXT,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
+    target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
+    const amsgs = source<{
+      id: string; session_id: string; parent_id: string | null;
+      role: string; content: string; created_at: string;
+    }>`
+      SELECT id, session_id, parent_id, role, content, created_at
+      FROM assistant_messages
+      WHERE strftime('%s', created_at) * 1000 <= ${forkPointMs}
+      ORDER BY created_at ASC
+    `;
+    for (const m of amsgs) {
+      target`
+        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
+      `;
+    }
+  } catch { /* assistant_messages may not exist in pure-test source DBs — non-fatal */ }
+
   // 7. Copy memory/* VFS rows. Scaffold rows are intentionally excluded so
   //    the fork's onStart re-bootstraps v0 scaffold fresh.
   const vfs = source<{
