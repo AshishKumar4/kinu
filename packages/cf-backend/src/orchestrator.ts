@@ -649,6 +649,44 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── DO initialization ──────────────────────────────────────────
 
+  /**
+   * @callable PC-agent WebSocket attach. The top-level Worker's /pc/connect
+   * handler upgrades the WebSocket, then calls this RPC with the server-side
+   * socket and the presented token. Returns {ok} after verification; the
+   * caller is responsible for closing the socket if !ok.
+   *
+   * Not exposed to the browser UI (too low-level) — but @callable is the
+   * simplest reliable way to reach the DO from the Worker.
+   */
+  @callable() async verifyPcToken(token: string): Promise<{ ok: boolean; tokenId?: string }> {
+    try {
+      this.ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS pc_agent_tokens (
+          id TEXT PRIMARY KEY, token TEXT NOT NULL, label TEXT,
+          created_at INTEGER NOT NULL, last_seen_at INTEGER, revoked_at INTEGER
+        )`,
+      );
+    } catch { /* exists */ }
+    const rows = this.sql<{ id: string }>`
+      SELECT id FROM pc_agent_tokens
+      WHERE token = ${token} AND revoked_at IS NULL LIMIT 1`;
+    if (rows.length === 0) return { ok: false };
+    const tokenId = rows[0]!.id;
+    this.sql`UPDATE pc_agent_tokens SET last_seen_at = ${Date.now()} WHERE id = ${tokenId}`;
+    return { ok: true, tokenId };
+  }
+
+  /** Attach a WebSocket to the laptop executor. Called by pc-handler after verifyPcToken. */
+  async attachPcSocket(server: WebSocket): Promise<void> {
+    try {
+      const rt = this.rt as CFRuntime;
+      rt.sshExecutor?.setSocket?.(server as unknown as Parameters<NonNullable<typeof rt.sshExecutor.setSocket>>[0]);
+      server.addEventListener("close", () => { try { rt.sshExecutor?.clearSocket?.(); } catch { /* ignore */ } });
+    } catch (err) {
+      console.warn("[proteus] PC attach failed:", (err as Error).message);
+    }
+  }
+
   async onStart() {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
@@ -917,6 +955,96 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  /**
+   * Return the current list of exposed ports for a given executor. Powers
+   * the auto-refreshing preview grid in the Executors tab. Sandbox returns
+   * its active `exposePort(...)` registrations; other executors return [].
+   */
+  @callable() async getExposedPorts(executorId: string) {
+    const provider = this.rt.executionRouter?.getProvider(executorId);
+    if (!provider) return { ports: [] as Array<{ port: number; name?: string; url?: string }> };
+    const listPorts = provider.tools.listPorts;
+    if (!listPorts) return { ports: [] };
+    try {
+      const raw = await listPorts.execute();
+      // sandbox.ts returns JSON-encoded text; parse defensively
+      if (typeof raw === 'string') {
+        try {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            return { ports: arr.map(p => ({
+              port: Number(p.port),
+              name: p.name,
+              url: p.exposedUrl ?? p.url,
+            })) };
+          }
+        } catch { /* fall through */ }
+      }
+      return { ports: Array.isArray(raw) ? raw : [] };
+    } catch {
+      return { ports: [] };
+    }
+  }
+
+  /**
+   * Issue a one-shot PC-agent install token. The React UI calls this from
+   * the "Your PC" tab → Generate install command. The token is stored
+   * server-side (unhashed for simplicity in v1; hashing is a follow-up),
+   * and the returned `curl | bash` snippet inlines it for copy-paste.
+   *
+   * Tokens are bound to this agent's DO. The /pc/connect handler checks
+   * the presented token against pc_agent_tokens and calls
+   * rt.sshExecutor.setSocket(...) on match.
+   */
+  @callable() async issuePcToken(label?: string) {
+    // Lazy schema init — runs once per DO.
+    try {
+      this.ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS pc_agent_tokens (
+          id TEXT PRIMARY KEY,
+          token TEXT NOT NULL,
+          label TEXT,
+          created_at INTEGER NOT NULL,
+          last_seen_at INTEGER,
+          revoked_at INTEGER
+        )`,
+      );
+    } catch { /* already exists */ }
+
+    // Revoke any existing non-revoked tokens for this agent (one-at-a-time).
+    const now = Date.now();
+    this.sql`UPDATE pc_agent_tokens SET revoked_at = ${now} WHERE revoked_at IS NULL`;
+
+    const id = nanoid();
+    const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+    this.sql`INSERT INTO pc_agent_tokens (id, token, label, created_at)
+      VALUES (${id}, ${token}, ${label ?? null}, ${now})`;
+
+    // Construct the install command. Agent name is this.name (the DO name).
+    const origin = 'https://proteus.ashishkumarsingh.com';
+    const installCmd =
+      `PROTEUS_AGENT=${this.name} PROTEUS_TOKEN=${token} ` +
+      `curl -fsSL ${origin}/pc/install | bash`;
+    return { id, token, installCommand: installCmd, origin };
+  }
+
+  /** List non-revoked PC tokens for this agent (UI status card). */
+  @callable() async listPcTokens() {
+    try {
+      this.ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS pc_agent_tokens (
+          id TEXT PRIMARY KEY, token TEXT NOT NULL, label TEXT,
+          created_at INTEGER NOT NULL, last_seen_at INTEGER, revoked_at INTEGER
+        )`,
+      );
+    } catch { /* already exists */ }
+    const rows = this.sql<{ id: string; label: string | null; created_at: number; last_seen_at: number | null }>`
+      SELECT id, label, created_at, last_seen_at
+      FROM pc_agent_tokens WHERE revoked_at IS NULL
+      ORDER BY created_at DESC`;
+    return { tokens: rows };
   }
 
   @callable() async getAvailableModels() {

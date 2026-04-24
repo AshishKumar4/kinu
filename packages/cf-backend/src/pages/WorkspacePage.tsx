@@ -20,6 +20,7 @@ import remarkGfm from "remark-gfm";
 import { useProteus, type EvolutionEventRow, type LogEntry } from "@/hooks/use-proteus";
 import { registerAgent } from "@/lib/agent-registry";
 import { MCTSTree } from "@/components/mcts-tree";
+import { ExecutorTerminal } from "@/components/ExecutorTerminal";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import type { MCTSNode } from "@/lib/protocol";
 
@@ -508,12 +509,13 @@ function labelFor(name: string): string {
   return EXECUTOR_LABELS[name] ?? name;
 }
 
-function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName }: {
+function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc }: {
   executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
   outputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<unknown>;
   onBrowse: (id: string, path: string) => Promise<unknown>;
   agentName?: string;
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
 }) {
   // Sandbox-first ordering. We show every executor (available or not) as a tab;
   // unavailable ones render a connection card instead of the terminal so the
@@ -527,33 +529,46 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName }: {
   const [activeExec, setActiveExec] = useState(
     sorted.find(e => e.available)?.name ?? sorted[0]?.name ?? "sandbox",
   );
-  const [cmdInput, setCmdInput] = useState("");
-  const [running, setRunning] = useState(false);
   const [fileEntries, setFileEntries] = useState<string[]>([]);
   const [filePath, setFilePath] = useState("/");
-  const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string }>>([]);
-  const termEndRef = useRef<HTMLDivElement>(null);
+  const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
+  const [pcInstall, setPcInstall] = useState<string | null>(null);
+  const [pcIssuing, setPcIssuing] = useState(false);
 
   const activeExecInfo = sorted.find(e => e.name === activeExec);
   const activeExecAvailable = activeExecInfo?.available ?? false;
 
-  useEffect(() => { termEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [outputs, activeExec]);
+  // Terminal is an xterm component; it manages its own scroll.
 
-  // Port polling for the Sandbox executor is surfaced via the agent's
-  // `listPorts` tool at chat time (the LLM calls `sandbox.listPorts()`), not
-  // via a UI loop. A dedicated listPorts RPC + auto-refresh grid is a
-  // follow-up; for now, the iframe grid renders whatever the agent has
-  // pinned via setPinnedPorts (exposed as part of Phase E work).
-  useEffect(() => { setPinnedPorts([]); }, [activeExec]);
+  // Auto-refresh exposed ports for the active executor every 4 seconds.
+  // Sandbox returns real listings from the container; other executors return [].
+  useEffect(() => {
+    if (!activeExecAvailable) { setPinnedPorts([]); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const r = await rpc("getExposedPorts", [activeExec]) as { ports?: Array<{ port: number; url?: string; name?: string }> };
+        if (cancelled) return;
+        const arr = (r.ports ?? [])
+          .filter(p => typeof p.port === 'number' && p.url)
+          .map(p => ({ port: p.port, url: p.url!, name: p.name }));
+        setPinnedPorts(arr);
+      } catch { /* ignore transient */ }
+    };
+    poll();
+    const h = setInterval(poll, 4000);
+    return () => { cancelled = true; clearInterval(h); };
+  }, [activeExec, activeExecAvailable, rpc]);
 
-  const handleSubmit = useCallback(async () => {
-    const cmd = cmdInput.trim();
-    if (!cmd || running) return;
-    setCmdInput("");
-    setRunning(true);
-    try { await onExecute(activeExec, cmd); } catch { /* handled by hook */ }
-    finally { setRunning(false); }
-  }, [cmdInput, running, activeExec, onExecute]);
+  const issuePcToken = useCallback(async () => {
+    setPcIssuing(true);
+    try {
+      const r = await rpc("issuePcToken", []) as { installCommand?: string };
+      if (r.installCommand) setPcInstall(r.installCommand);
+    } finally {
+      setPcIssuing(false);
+    }
+  }, [rpc]);
 
   const browseTo = useCallback(async (path: string) => {
     setFilePath(path);
@@ -598,16 +613,41 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName }: {
             Install the Proteus PC daemon to let this agent run commands on your local machine.
             The daemon opens one outbound WebSocket — no inbound ports required.
           </p>
-          <div className="rounded-md p-bg border p-border p-3 font-mono text-[11px] p-text select-all break-all">
-            <span className="p-text-3">$ </span>
-            PROTEUS_AGENT={agentName ?? "<your-agent>"} PROTEUS_TOKEN=&lt;one-shot-token&gt; \
-            <br />
-            &nbsp;&nbsp;curl -fsSL https://proteus.ashishkumarsingh.com/pc/install | bash
-          </div>
-          <p className="text-[11px] p-text-3">
-            Request a token via the Settings page → "Generate PC token". The token is one-shot
-            and rotates on revoke. Daemon runs as your user (never root), enforces the command
-            allowlist locally.
+          {!pcInstall ? (
+            <button
+              onClick={issuePcToken}
+              disabled={pcIssuing}
+              className="self-start px-3 py-1.5 rounded-lg text-xs font-medium p-bg-accent p-text-on-accent hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {pcIssuing ? "Generating…" : "Generate install command"}
+            </button>
+          ) : (
+            <>
+              <div className="rounded-md p-bg border p-border p-3 font-mono text-[11px] p-text select-all break-all leading-relaxed">
+                {pcInstall}
+              </div>
+              <div className="flex items-center gap-2 text-[11px]">
+                <button
+                  onClick={() => { navigator.clipboard.writeText(pcInstall).catch(() => {}); }}
+                  className="p-text-2 hover:p-text transition-colors"
+                >
+                  Copy
+                </button>
+                <button
+                  onClick={issuePcToken}
+                  className="p-text-3 hover:p-text-2 transition-colors"
+                >
+                  Regenerate (revokes previous)
+                </button>
+                <span className="ml-auto p-text-3">
+                  Agent: <span className="font-mono p-text-2">{agentName ?? "?"}</span>
+                </span>
+              </div>
+            </>
+          )}
+          <p className="text-[11px] p-text-3 mt-1">
+            Paste the command in your terminal. Daemon runs as your user (never root).
+            Token is one-shot — regenerating revokes the previous.
           </p>
         </div>
       )}
@@ -644,44 +684,20 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName }: {
 
       {/* Terminal + Files split (only when connected) */}
       <div className={`flex-1 flex gap-3 min-h-0 ${activeExecAvailable ? "" : "hidden"}`}>
-        {/* Terminal */}
+        {/* Terminal — xterm.js */}
         <div className="flex-1 flex flex-col min-w-0">
           <div className="flex items-center gap-2 mb-2">
             <TerminalIcon size={14} className="p-text-2" />
             <span className="text-xs font-medium p-text">Terminal</span>
             <Badge variant="secondary">{activeOutputs.length}</Badge>
+            <span className="ml-auto text-[10px] p-text-3">{activeExec}</span>
           </div>
-
-          <div className="flex-1 overflow-y-auto rounded-lg p-elevated border p-border p-2 font-mono text-xs space-y-2 min-h-[200px]">
-            {activeOutputs.length === 0 && (
-              <span className="p-text-3">No commands executed yet. Type a command below.</span>
-            )}
-            {activeOutputs.map(entry => (
-              <div key={entry.id}>
-                <div className="flex items-center gap-1 p-text-2">
-                  <span style={{ color: "var(--c-accent)" }}>$</span>
-                  <span>{entry.command}</span>
-                  <span className="ml-auto p-text-3 text-[10px]">{new Date(entry.created_at).toLocaleTimeString()}</span>
-                </div>
-                {entry.stdout && <pre className="p-text whitespace-pre-wrap mt-0.5 ml-3">{entry.stdout}</pre>}
-                {entry.stderr && entry.exit_code !== 0 && <pre className="text-red-400 whitespace-pre-wrap mt-0.5 ml-3">{entry.stderr}</pre>}
-              </div>
-            ))}
-            <div ref={termEndRef} />
-          </div>
-
-          {/* Command input */}
-          <div className="flex items-center gap-2 mt-2 p-elevated border p-border rounded-lg px-3 py-2">
-            <span className="p-text-2 text-xs font-mono">{activeExec} $</span>
-            <input
-              value={cmdInput}
-              onChange={e => setCmdInput(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSubmit(); } }}
-              placeholder="Type a command..."
-              disabled={running}
-              className="flex-1 bg-transparent text-xs font-mono p-text focus:outline-none placeholder:p-text-3"
+          <div className="flex-1 min-h-[240px]">
+            <ExecutorTerminal
+              executor={activeExec}
+              outputs={activeOutputs}
+              onExecute={(cmd) => onExecute(activeExec, cmd)}
             />
-            {running && <Loader size="sm" />}
           </div>
         </div>
 
@@ -993,6 +1009,7 @@ export default function WorkspacePage() {
                   onExecute={state.executeInExecutor}
                   onBrowse={(id: string, path: string) => state.rpc("getExecutorFiles", [id, path])}
                   agentName={agentId}
+                  rpc={state.rpc}
                 />
               )}
 

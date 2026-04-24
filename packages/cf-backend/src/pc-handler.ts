@@ -94,18 +94,23 @@ async function handlePcConnect(request: Request, env: Env): Promise<Response> {
     return new Response("Missing ?agent or ?token", { status: 400 });
   }
 
-  // Route to the matching OrchestratorAgent DO.
   const ns = env.OrchestratorAgent;
   if (!ns) return new Response("No OrchestratorAgent binding", { status: 500 });
   const id = ns.idFromName(agentName);
   const stub = ns.get(id);
-  // Forward the upgrade to the DO so it can call setSocket on the SSH executor.
-  // We append a marker so the DO's fetch handler can recognize the request.
-  const forward = new Request(
-    `https://internal/__pc_connect__?token=${encodeURIComponent(token)}`,
-    request,
-  );
-  return (stub as unknown as { fetch(req: Request): Promise<Response> }).fetch(forward);
+
+  // Verify token by RPC before upgrading.
+  const verified = await (stub as unknown as { verifyPcToken(token: string): Promise<{ ok: boolean }> })
+    .verifyPcToken(token);
+  if (!verified?.ok) return new Response("unauthorized", { status: 401 });
+
+  // Accept the WebSocket, then hand the server side to the DO.
+  const pair = new WebSocketPair();
+  const [client, server] = [pair[0], pair[1]];
+  (server as unknown as { accept(): void }).accept();
+  await (stub as unknown as { attachPcSocket(ws: WebSocket): Promise<void> }).attachPcSocket(server);
+
+  return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
 }
 
 // ── Daemon source (sync from packages/pc-agent/index.js) ─────────
