@@ -392,6 +392,12 @@ export class OrchestratorAgent extends Think<Env> {
     // Think 0.4: ctx is AI SDK's full StepResult — stepType is gone from the
     // top level, but toolCalls.length > 0 is a reliable proxy for the old
     // "tool-result" vs "initial" distinction we logged before.
+    //
+    // StepResult extras surfaced in activity_log (U3):
+    //   usage.cachedInputTokens — AI Gateway / prompt-caching savings
+    //   usage.reasoningTokens   — Kimi K2.6 reasoning budget consumed
+    //   response.modelId        — authoritative model id per step (useful
+    //                             when cascading Workers AI → AI Gateway)
     this._turnStepCount++;
     const toolCalls = Array.isArray(ctx.toolCalls) ? ctx.toolCalls : [];
     const toolResults = Array.isArray(ctx.toolResults) ? ctx.toolResults : [];
@@ -400,13 +406,27 @@ export class OrchestratorAgent extends Think<Env> {
       .join(",");
     const derivedStepType = toolCalls.length > 0 ? "tool-call" : "text";
     const textLen = (ctx.text ?? "").length;
-    const inTok = ctx.usage?.inputTokens ?? 0;
-    const outTok = ctx.usage?.outputTokens ?? 0;
+    const u = ctx.usage as {
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedInputTokens?: number;
+      reasoningTokens?: number;
+    } | undefined;
+    const inTok = u?.inputTokens ?? 0;
+    const outTok = u?.outputTokens ?? 0;
+    const cached = u?.cachedInputTokens ?? 0;
+    const reasoning = u?.reasoningTokens ?? 0;
+    const modelId = (ctx as unknown as { response?: { modelId?: string } }).response?.modelId;
+    const extras: string[] = [];
+    if (cached > 0) extras.push(`cached=${cached}`);
+    if (reasoning > 0) extras.push(`reasoning=${reasoning}`);
+    if (modelId) extras.push(`model=${modelId}`);
+    const extrasStr = extras.length > 0 ? ` ${extras.join(" ")}` : "";
     this.logActivity(
       "step_finish",
       `step ${this._turnStepCount} kind=${derivedStepType} reason=${ctx.finishReason} ` +
       `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
-      `in=${inTok} out=${outTok}`,
+      `in=${inTok} out=${outTok}${extrasStr}`,
     );
   }
 
