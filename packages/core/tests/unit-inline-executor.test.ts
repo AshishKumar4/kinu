@@ -1,0 +1,153 @@
+/**
+ * Unit tests for workspace.* provider (InlineExecutor) — locks in the
+ * post-regression-fix contract:
+ *   - listTools() returns Array<{name, description, qualityScore}>, NOT a string
+ *   - createTool() preserves original case, does not lowercase
+ *   - createTool() upserts: re-creating an existing tool updates it, no duplicate row
+ *   - invokeCrafted() looks up CraftStore at call-time — works same-turn as createTool()
+ */
+
+import { describe, test, expect } from 'bun:test';
+import { createTestRuntime } from './helpers.js';
+import { createInlineExecutor } from '../src/execution/inline.js';
+
+function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
+  return createInlineExecutor({
+    vfs: rt.storage.vfs,
+    memory: rt.memory,
+    craftStore: rt.craftStore,
+    shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+    sql: rt.storage.sql,
+  });
+}
+
+describe('workspace provider (InlineExecutor)', () => {
+  test('listTools returns an array (not a string)', async () => {
+    const { rt } = createTestRuntime();
+    rt.craftStore.create({
+      name: 'alpha', description: 'first', params: null,
+      code: 'async () => "a"', scope: 'local',
+    });
+    rt.craftStore.create({
+      name: 'beta', description: 'second', params: null,
+      code: 'async () => "b"', scope: 'local',
+    });
+
+    const exec = buildExec(rt);
+    const result = await exec.tools.listTools.execute();
+
+    expect(Array.isArray(result)).toBe(true);
+    const arr = result as Array<{ name: string; description: string; qualityScore: number }>;
+    expect(arr.length).toBe(2);
+    expect(arr.map(t => t.name).sort()).toEqual(['alpha', 'beta']);
+    for (const t of arr) {
+      expect(typeof t.name).toBe('string');
+      expect(typeof t.description).toBe('string');
+      expect(typeof t.qualityScore).toBe('number');
+    }
+  });
+
+  test('listTools returns empty array when no tools', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+    const result = await exec.tools.listTools.execute();
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as unknown[]).length).toBe(0);
+  });
+
+  test('createTool preserves camelCase — does not lowercase', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+
+    const result = await exec.tools.createTool.execute(
+      'multiplyNumbers',
+      'Multiply two numbers',
+      'async (a, b) => a * b',
+    ) as { ok: boolean; name: string; action: string };
+
+    expect(result.ok).toBe(true);
+    expect(result.name).toBe('multiplyNumbers');        // original case preserved
+    expect(result.name).not.toBe('multiplynumbers');    // NOT lowercased
+    expect(result.action).toBe('created');
+
+    // Verify in CraftStore — exact name preserved
+    const stored = rt.craftStore.get('multiplyNumbers');
+    expect(stored).not.toBeNull();
+    expect(stored!.name).toBe('multiplyNumbers');
+  });
+
+  test('createTool sanitizes invalid identifier chars without lowercasing', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+
+    const result = await exec.tools.createTool.execute(
+      'Weird Name-With.Chars!',
+      'test',
+      'async () => 1',
+    ) as { ok: boolean; name: string };
+
+    // Non-identifier chars become _; case preserved.
+    expect(result.ok).toBe(true);
+    expect(result.name).toBe('Weird_Name_With_Chars_');
+  });
+
+  test('createTool prepends _ when name starts with a digit', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+
+    const result = await exec.tools.createTool.execute(
+      '2ndAttempt',
+      'test',
+      'async () => 1',
+    ) as { ok: boolean; name: string };
+
+    expect(result.ok).toBe(true);
+    expect(result.name).toBe('_2ndAttempt');
+  });
+
+  test('createTool upserts — re-creating the SAME name updates the code, no duplicate row', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+
+    // First create
+    const first = await exec.tools.createTool.execute(
+      'greet',
+      'Say hi',
+      'async () => "hello"',
+    ) as { ok: boolean; action: string };
+    expect(first.action).toBe('created');
+    expect(rt.craftStore.list().length).toBe(1);
+
+    // Recreate with same name — should UPDATE, not add a row
+    const second = await exec.tools.createTool.execute(
+      'greet',
+      'Say hi v2',
+      'async () => "hello v2"',
+    ) as { ok: boolean; action: string };
+    expect(second.action).toBe('updated');
+    expect(rt.craftStore.list().length).toBe(1);
+
+    // The stored code reflects the latest version
+    const stored = rt.craftStore.get('greet')!;
+    expect(stored.description).toBe('Say hi v2');
+    expect(stored.code).toBe('async () => "hello v2"');
+  });
+
+  test('createTool rejects missing args with ok: false', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+
+    const noName = await exec.tools.createTool.execute('', 'desc', 'code') as { ok: boolean };
+    expect(noName.ok).toBe(false);
+
+    const noDesc = await exec.tools.createTool.execute('name', '', 'code') as { ok: boolean };
+    expect(noDesc.ok).toBe(false);
+
+    const noCode = await exec.tools.createTool.execute('name', 'desc', '') as { ok: boolean };
+    expect(noCode.ok).toBe(false);
+  });
+
+  // v2.1(E): invokeCrafted removed. Same-turn codemode.<name>() access is
+  // unsupported by design — the LLM must use two turns (createTool, then
+  // codemode.<name>). Tests for createTool alone remain above.
+});

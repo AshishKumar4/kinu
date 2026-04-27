@@ -1,0 +1,92 @@
+/**
+ * Unit tests: UCT selection + ln formula.
+ * Verifies the critical log(x)/log(exp(1.0)) correction.
+ */
+
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { makeSql, makeExecRaw } from './helpers.js';
+import { selectNode } from '../src/mcts/uct.js';
+import { initSearchTables } from '../src/mcts/schemas.js';
+
+function setup() {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initSearchTables(execRaw);
+  return { db, sql };
+}
+
+describe('UCT selection', () => {
+  test('returns null on empty tree', () => {
+    const { sql } = setup();
+    expect(selectNode(sql)).toBeNull();
+  });
+
+  test('selects the only open node', () => {
+    const { sql } = setup();
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('root', 'test', 0, 0, 'open')`;
+    const node = selectNode(sql);
+    expect(node).not.toBeNull();
+    expect(node!.id).toBe('root');
+  });
+
+  test('never selects pruned nodes', () => {
+    const { sql } = setup();
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('pruned1', 'test', 0.99, 100, 'pruned')`;
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('open1', 'test', 0.1, 1, 'open')`;
+    const node = selectNode(sql);
+    expect(node!.id).toBe('open1');
+  });
+
+  test('never selects failed nodes', () => {
+    const { sql } = setup();
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('failed1', 'test', 0.99, 100, 'failed')`;
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('open1', 'test', 0.1, 1, 'open')`;
+    const node = selectNode(sql);
+    expect(node!.id).toBe('open1');
+  });
+
+  test('UCT uses natural log (ln), not log10', () => {
+    const { db } = setup();
+    // ln(10) ≈ 2.302, log10(10) = 1.0
+    // If UCT used log10, the exploration bonus would be ~2.3x smaller
+    const result = db.query('SELECT log(10.0) / log(exp(1.0)) as ln10').get() as { ln10: number };
+    expect(Math.abs(result.ln10 - 2.302585)).toBeLessThan(0.001);
+  });
+
+  test('selects higher-value node when exploration bonus is equal', () => {
+    const { sql } = setup();
+    // Two nodes with same visits (so same exploration bonus)
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('low', 'test', 0.3, 5, 'open')`;
+    sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('high', 'test', 0.9, 5, 'open')`;
+    const node = selectNode(sql);
+    expect(node!.id).toBe('high');
+  });
+
+  test('exploration bonus favors less-visited nodes', () => {
+    const { sql } = setup();
+    // Root with many visits
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('root', NULL, 'test', 0.5, 100, 'open')`;
+    // Well-visited child
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('visited', 'root', 'test', 0.6, 50, 'open')`;
+    // Barely-visited child (should get higher exploration bonus)
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('fresh', 'root', 'test', 0.5, 1, 'open')`;
+
+    const node = selectNode(sql);
+    // fresh should be selected: it has visits=1 so exploration bonus is high
+    // UCT(fresh) = 0.5 + √2 * √(ln(100)/1) ≈ 0.5 + 1.414 * √4.605 ≈ 0.5 + 3.03 = 3.53
+    // UCT(visited) = 0.6 + √2 * √(ln(100)/50) ≈ 0.6 + 1.414 * √0.092 ≈ 0.6 + 0.43 = 1.03
+    expect(node!.id).toBe('fresh');
+  });
+});

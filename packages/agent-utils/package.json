@@ -1,0 +1,23 @@
+{
+  "name": "@proteus/agent-utils",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./vfs": "./src/vfs/index.ts",
+    "./memory": "./src/memory/index.ts",
+    "./stores": "./src/stores/index.ts",
+    "./core": "./src/core/index.ts",
+    "./shell": "./src/shell/index.ts"
+  },
+  "dependencies": {
+    "minimist": "^1.2.8",
+    "picomatch": "^4.0.2",
+    "shell-quote": "^1.8.3"
+  },
+  "devDependencies": {
+    "@types/minimist": "^1.2.5",
+    "@types/picomatch": "^4.0.2",
+    "@types/shell-quote": "^1.7.5"
+  }
+}

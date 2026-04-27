@@ -1,0 +1,157 @@
+@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "tailwindcss";
+@import "@cloudflare/kumo/styles/tailwind";
+
+html, body, #root {
+  width: 100%; height: 100%; margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+/* ── Proteus color system ──────────────────────────────────────── */
+/* Neutral dark — zinc palette, zero blue tint on surfaces         */
+
+:root {
+  --c-bg:       #09090b;
+  --c-sidebar:  #0f0f11;
+  --c-surface:  #18181b;
+  --c-elevated: #1e1e22;
+  --c-border:   rgba(255, 255, 255, 0.08);
+  --c-input-border: #27272a;
+
+  --c-accent:   #8b5cf6;
+  --c-accent-fg: #a78bfa;
+  --c-accent-subtle: rgba(139, 92, 246, 0.12);
+
+  --c-success:  #3fb950;
+  --c-warning:  #d29922;
+  --c-danger:   #f85149;
+
+  --c-text:     #fafafa;
+  --c-text-2:   #a1a1aa;
+  --c-text-3:   #52525b;
+
+  --c-user-bg:     #1a1528;
+  --c-user-border: rgba(139, 92, 246, 0.15);
+  --c-agent-bg:    #141416;
+  --c-agent-border: rgba(255, 255, 255, 0.04);
+}
+
+[data-mode="light"] {
+  --c-bg:       #ffffff;
+  --c-sidebar:  #fafafa;
+  --c-surface:  #f4f4f5;
+  --c-elevated: #ffffff;
+  --c-border:   rgba(0, 0, 0, 0.08);
+  --c-input-border: #e4e4e7;
+
+  --c-accent:   #7c3aed;
+  --c-accent-fg: #7c3aed;
+  --c-accent-subtle: rgba(124, 58, 237, 0.08);
+
+  --c-success:  #16a34a;
+  --c-warning:  #ca8a04;
+  --c-danger:   #dc2626;
+
+  --c-text:     #09090b;
+  --c-text-2:   #71717a;
+  --c-text-3:   #a1a1aa;
+
+  --c-user-bg:     #f5f3ff;
+  --c-user-border: rgba(124, 58, 237, 0.12);
+  --c-agent-bg:    #fafafa;
+  --c-agent-border: rgba(0, 0, 0, 0.04);
+}
+
+body { background: var(--c-bg); color: var(--c-text); }
+
+/* ── Scrollbar ──────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
+* { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
+
+/* ── Chat markdown ──────────────────────────────────────────────── */
+.prose-chat {
+  font-size: 0.875rem; line-height: 1.7; color: var(--c-text);
+  p { margin: 0.4em 0; }
+  p:first-child { margin-top: 0; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 600; }
+  ul, ol { margin: 0.4em 0; padding-left: 1.25rem; }
+  ul { list-style: disc; } ol { list-style: decimal; }
+  h1, h2, h3 { font-weight: 600; margin: 0.6em 0 0.3em; }
+  h1 { font-size: 1.15em; } h2 { font-size: 1.05em; } h3 { font-size: 0.95em; }
+}
+
+/* ── Surfaces ───────────────────────────────────────────────────── */
+.p-bg       { background: var(--c-bg); }
+.p-sidebar  { background: var(--c-sidebar); }
+.p-surface  { background: var(--c-surface); }
+.p-elevated { background: var(--c-elevated); }
+.p-border   { border-color: var(--c-border); }
+
+/* ── Text ───────────────────────────────────────────────────────── */
+.p-text   { color: var(--c-text); }
+.p-text-2 { color: var(--c-text-2); }
+.p-text-3 { color: var(--c-text-3); }
+.p-accent { color: var(--c-accent-fg); }
+
+/* ── Status ─────────────────────────────────────────────────────── */
+.p-success { color: var(--c-success); }
+.p-warning { color: var(--c-warning); }
+.p-danger  { color: var(--c-danger); }
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+.p-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  transition: border-color 0.15s;
+}
+.p-card:hover { border-color: rgba(255, 255, 255, 0.14); }
+
+/* User chat bubble */
+.p-user-bubble {
+  background: var(--c-user-bg);
+  border: 1px solid var(--c-user-border);
+  color: var(--c-text);
+}
+
+/* ── Interactive ────────────────────────────────────────────────── */
+
+.p-focus:focus-within {
+  border-color: var(--c-accent) !important;
+  box-shadow: 0 0 0 3px var(--c-accent-subtle);
+}
+
+.p-tab-active {
+  color: var(--c-accent-fg);
+  border-bottom-color: var(--c-accent);
+}
+
+.p-btn {
+  background: var(--c-accent);
+  color: #fff;
+  border: none;
+  border-radius: 0.5rem;
+  transition: opacity 0.15s;
+}
+.p-btn:hover { opacity: 0.85; }
+.p-btn:disabled { opacity: 0.35; cursor: default; }
+
+.p-nav-active {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-fg);
+}
+
+.p-row-hover:hover { background: var(--c-accent-subtle); }
+
+/* ── Animations ─────────────────────────────────────────────────── */
+@keyframes fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+@keyframes blink-cursor { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+
+@layer utilities {
+  .animate-fade-in { animation: fade-in 0.15s ease-out; }
+  .animate-scale-in { animation: scale-in 0.12s ease-out; }
+  .animate-blink-cursor { animation: blink-cursor 1s step-end infinite; }
+}

@@ -1,0 +1,44 @@
+import type { SqlValue } from "../types";
+
+/** Concatenate multiple Uint8Array chunks into a single Uint8Array. */
+export function concatBuffers(chunks: Uint8Array[]): Uint8Array {
+	if (chunks.length === 0) return new Uint8Array(0);
+	if (chunks.length === 1) return chunks[0];
+
+	const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+	const result = new Uint8Array(totalLength);
+	let offset = 0;
+	for (const chunk of chunks) {
+		result.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return result;
+}
+
+/**
+ * Convert SQL row data to Uint8Array.
+ * Handles ArrayBuffer (BLOB), string (legacy base64 from v1 schema), and null.
+ */
+export function rowDataToBytes(data: SqlValue | undefined): Uint8Array {
+	if (data == null) return new Uint8Array(0);
+	if (data instanceof ArrayBuffer) return new Uint8Array(data);
+	if (typeof data === "string") {
+		// Legacy base64-encoded data from v1 schema
+		const binary = atob(data);
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+		return bytes;
+	}
+	return new Uint8Array(0);
+}
+
+/** Ensure the returned ArrayBuffer is exact-sized (copies if the Uint8Array is a sub-view). */
+export function toBuffer(data: Uint8Array): ArrayBuffer {
+	// If the Uint8Array is a view over a larger buffer, copy to get an exact-sized ArrayBuffer
+	if (data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength) {
+		return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+	}
+	return data.buffer as ArrayBuffer;
+}

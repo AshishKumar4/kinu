@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.db
+*.db-journal
+*.db-wal
+.lake/
+.DS_Store
+
+# Environment files (may contain secrets)
+.env
+.env.local
+.env.*.local
+.dev.vars

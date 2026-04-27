@@ -1,0 +1,116 @@
+/**
+ * Open an existing agent for CLI — uses the proper cli-backend runtime
+ * (FTS5 memory, sandboxed executor, real MCTS branches) instead of the
+ * degraded inline implementations in core/identity/open.ts.
+ *
+ * Provides the same AgentInfo structure as core's openAgent for
+ * display compatibility with CLI commands.
+ */
+
+import type { AgentRuntime } from '@proteus/core';
+import type { LLMProviderConfig } from '@proteus/core';
+import { initAllTables, readSoul } from '@proteus/core';
+import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  purpose: string;
+  scaffoldVersion: number;
+  craftedToolCount: number;
+  searchNodeCount: number;
+  taskCount: number;
+  memorySize: number;
+  createdAt: number;
+}
+
+export interface CLIOpenConfig {
+  llm: LLMProviderConfig;
+  judge?: LLMProviderConfig;
+}
+
+type AgentDb = {
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
+  exec(sql: string): void;
+  run(sql: string, params?: unknown[]): void;
+  query(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown[] };
+};
+
+/**
+ * Open an existing agent using the full CLI backend runtime.
+ *
+ * Unlike core's openAgent (which uses degraded inline VFS/Memory/Executor),
+ * this uses:
+ * - SqliteFS from agent-utils (chunked, with parent tracking)
+ * - MemoryStore with FTS5 (BM25 ranking, markdown chunking)
+ * - Sandboxed executor (Bun subprocess with timeout)
+ * - Real MCTS branch spawner (child processes with LLM calls)
+ * - Proper CraftStore with FTS5 search
+ */
+export function openAgentCLI(
+  db: AgentDb,
+  dbPath: string,
+  config: CLIOpenConfig,
+): { rt: AgentRuntime; info: AgentInfo } {
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+
+  // Ensure all tables exist (idempotent)
+  initAllTables(execRaw);
+
+  // Read identity
+  const identity = sql<{ id: string; name: string; created_at: number }>`
+    SELECT id, name, created_at FROM agent_identity LIMIT 1
+  `[0];
+  if (!identity) throw new Error('No agent identity found. Use createAgent() to create one.');
+
+  // Read soul
+  const purpose = readSoul(sql);
+  if (!purpose) throw new Error('No agent soul found. Database may be corrupted.');
+
+  // Gather stats for AgentInfo display
+  const scaffoldVersion = sql<{ v: number }>`
+    SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
+  `[0]?.v ?? 0;
+  const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
+  const searchNodeCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`[0]?.c ?? 0;
+  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;
+
+  // Memory size — use SUM of text lengths (works for both old flat and new chunked schema)
+  let memorySize = 0;
+  try {
+    memorySize = sql<{ total: number }>`
+      SELECT COALESCE(SUM(size), 0) as total FROM vfs_files WHERE path LIKE 'memory/%'
+    `[0]?.total ?? 0;
+  } catch {
+    // vfs_files schema may differ (chunked vs flat) — try LENGTH(data) fallback
+    try {
+      memorySize = sql<{ total: number }>`
+        SELECT COALESCE(SUM(LENGTH(data)), 0) as total FROM vfs_files WHERE path LIKE 'memory/%'
+      `[0]?.total ?? 0;
+    } catch { /* table may not exist yet */ }
+  }
+
+  // Build the full CLI runtime with proper implementations
+  const rt = createCLIRuntime(db, {
+    dbPath,
+    llm: config.llm,
+    judge: config.judge,
+    agentName: identity.name,
+  });
+
+  return {
+    rt,
+    info: {
+      id: identity.id,
+      name: identity.name,
+      purpose,
+      scaffoldVersion,
+      craftedToolCount,
+      searchNodeCount,
+      taskCount,
+      memorySize,
+      createdAt: identity.created_at,
+    },
+  };
+}

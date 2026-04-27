@@ -1,0 +1,78 @@
+{
+  "name": "proteus",
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "workers_dev": true,
+  "main": "src/server.ts",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat", "experimental"],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // Main site served by the custom domain. Sandbox preview URLs use the
+  // workers.dev subdomain (see PREVIEW_HOSTNAME) because workers.dev
+  // auto-resolves *.<worker>.<sub>.workers.dev without needing zone DNS.
+  "routes": [
+    { "pattern": "proteus.ashishkumarsingh.com/*", "zone_id": "6fe16a3a25c46bb975b15e75ea57a0fe" }
+  ],
+  // Worker runs first for every non-hashed-asset request. That lets
+  // proxyToSandbox intercept preview-URL hosts before the SPA fallback
+  // serves index.html. Static assets under /assets/* (hashed bundles)
+  // bypass the Worker for speed.
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/*", "!/assets/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
+      { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
+      // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
+      // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
+      // proxyToSandbox hardcodes `env.Sandbox` lookup (see
+      // @cloudflare/sandbox/dist/file-stream-*.js:3448).
+      { "class_name": "ProteusSandbox", "name": "Sandbox" }
+      //
+      // SSH/laptop (user's local machine via WebSocket tunnel):
+      //   No binding needed — users run a local daemon. The executor becomes
+      //   available when a tunnel WebSocket attaches at runtime.
+    ]
+  },
+  "containers": [
+    {
+      "class_name": "ProteusSandbox",
+      "image": "docker.io/cloudflare/sandbox:0.8.11",
+      "max_instances": 10,
+      "instance_type": {
+        "vcpu": 2,
+        "memory_mib": 6144,
+        "disk_mb": 8000
+      }
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ProteusSandbox"]
+    }
+  ],
+  // AI_GATEWAY_AUTH is a Wrangler secret — set via:
+  //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
+  // For local dev, add to .dev.vars:
+  //   AI_GATEWAY_AUTH=Bearer <your-token>
+  // PREVIEW_HOSTNAME is the public host the UI/agents use when building
+  // preview URLs. We serve previews via a path prefix (`/_preview/...`)
+  // on the main custom domain — no wildcard DNS required. See
+  // packages/cf-backend/src/preview-proxy.ts for the routing logic.
+  //
+  // (The @cloudflare/sandbox SDK's built-in preview URL scheme requires a
+  // wildcard DNS record + non-workers.dev hostname, neither of which is
+  // available here; we bypass it with our own token-gated proxy.)
+  "vars": {
+    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com"
+  }
+}

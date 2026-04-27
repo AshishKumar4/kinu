@@ -1,0 +1,52 @@
+{
+  "name": "@proteus/cf-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "start": "vite dev",
+    "deploy": "vite build && wrangler deploy",
+    "types": "wrangler types env.d.ts --include-runtime false"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.41",
+    "@cloudflare/ai-chat": "^0.4.2",
+    "@cloudflare/codemode": "^0.3.4",
+    "@cloudflare/kumo": "^1.18.0",
+    "@cloudflare/sandbox": "^0.8.11",
+    "@cloudflare/think": "^0.4.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@proteus/agent-utils": "workspace:*",
+    "@proteus/core": "workspace:*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "agents": "^0.11.5",
+    "ai": "^6.0.159",
+    "clsx": "^2.1.1",
+    "d3": "^7.9.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.10.0",
+    "react-router-dom": "^7.14.1",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.5.0",
+    "workers-ai-provider": "^3.1.10",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-decorators": "^7.25.9",
+    "@cloudflare/vite-plugin": "^1.32.2",
+    "@cloudflare/workers-types": "^4.20260414.1",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@tailwindcss/vite": "^4",
+    "@types/d3": "^7.4.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8",
+    "wrangler": "^4.82.2"
+  }
+}

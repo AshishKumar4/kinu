@@ -1,0 +1,63 @@
+/**
+ * Canonical tool registry — the single source of truth for Proteus's built-in
+ * tool names and descriptions. Consumed by:
+ *   - tools/builtins.ts      (factory for the 5-tool ToolSet)
+ *   - evolution/engine.ts    (crafted-tool filter — BUILT_IN_TOOL_NAMES)
+ *   - cf-backend/orchestrator.ts  (getToolList, getToolDescriptions, beforeTurn)
+ *   - cli surfaces           (chat-loop, tui)
+ *
+ * Changing any name here is a breaking change to prompts, UI, and MCTS scoring.
+ */
+
+export const BUILTIN_TOOLS = [
+  'execute_tools',
+  'run',
+  'explore',
+  'save_note',
+  'search_memory',
+] as const;
+
+export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
+
+/**
+ * Session-scoped tools contributed by Think via `configureSession()` — not
+ * part of the agent's learned capability surface, but active during a turn.
+ */
+export const SESSION_TOOLS = ['set_context', 'load_context', 'search_context'] as const;
+
+/** Whitelist applied in beforeTurn() on the CF backend. */
+export const ACTIVE_TOOLS = [...BUILTIN_TOOLS, ...SESSION_TOOLS] as const;
+
+/** Set form for O(1) membership checks in hot paths (e.g. craft score filter). */
+export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
+
+/**
+ * Canonical descriptions. These are what the LLM sees as tool docstrings and
+ * what the UI shows in the Tools tab.
+ *
+ * Namespace contract (preamble-injection pattern — see docs/CRAFT-ARCHITECTURE.md):
+ *   - `workspace.*` — filesystem / shell / memory primitives.
+ *   - `codemode.*` — every provider exposed via createCodeTool, including
+ *     crafted tools once they have been type-declared at construction time.
+ *   - `tools.<name>` — crafted tools are ALSO reachable as local object
+ *     properties inside the execute_tools async arrow, injected by the
+ *     preamble. Crafted-tool bodies may call `workspace.*`, `codemode.*`,
+ *     and `tools.<other>` interchangeably.
+ */
+export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
+  execute_tools:
+    'Write JS to accomplish tasks. workspace.* for local VFS/shell. sandbox.* for a real Linux ' +
+    'container — use this for npm/pip/dev servers and ANY process that listens on a port. ' +
+    'codemode.* exposes learned patterns. After starting a dev server in the sandbox, call ' +
+    'sandbox.exposePort(port) so the user can SEE the running app — the returned URL renders ' +
+    'as a live iframe in the chat and on the Executors tab. Agent-crafted tools are reachable ' +
+    'as tools.<name>(args) and their bodies may call workspace.*, sandbox.*, codemode.*, ' +
+    'tools.* freely. Runs in sandboxed Worker.',
+  run: 'Run a POSIX shell command (cat, grep, find, sed, ls, etc.). Pipes and redirects work. Optional executor param routes to nimbus/sandbox/laptop.',
+  explore:
+    'MCTS tree search for complex subproblems. Spawns parallel branches, evaluates outcomes, returns the best approach discovered.',
+  save_note:
+    'Save a note to long-term memory (memory/MEMORY.md). FTS-indexed so future turns can retrieve it via search_memory.',
+  search_memory:
+    'Full-text search over long-term memory. Returns matching passages with scores.',
+};

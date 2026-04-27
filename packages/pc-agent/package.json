@@ -1,0 +1,11 @@
+{
+  "name": "@proteus/pc-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/index.js",
+  "bin": {
+    "proteus-pc-agent": "src/index.js"
+  },
+  "description": "Proteus PC executor — reverse-WS daemon. Runs on the user's laptop, connects out to the Proteus Worker, executes commands locally."
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@proteus/cli-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@proteus/core": "workspace:*",
+    "@proteus/agent-utils": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  }
+}

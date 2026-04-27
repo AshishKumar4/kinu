@@ -1,0 +1,18 @@
+{
+  "name": "@proteus/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "proteus": "./bin/cli.ts"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.1.99",
+    "@opentui/react": "^0.1.99",
+    "@proteus/cli-backend": "workspace:*",
+    "@proteus/core": "workspace:*",
+    "react": "^19.2.5"
+  },
+  "scripts": {
+    "start": "bun run bin/cli.ts"
+  }
+}

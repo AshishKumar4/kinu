@@ -1,0 +1,376 @@
+/**
+ * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
+ *
+ * Uses agent-utils for storage (pure DO SQLite — no R2, no @cloudflare/shell):
+ *   VFS      → SqliteFS (vfs_files table with chunked storage)
+ *   Memory   → MemoryStore (FTS5-indexed markdown chunks)
+ *   CraftStore → CraftStore (FTS5-indexed tool storage)
+ *
+ * Uses real Agent SDK APIs for infrastructure:
+ *   Fibers   → Agent.runFiber() (durable, checkpoint/resume via stash)
+ *   Branches → Agent.subAgent() (Facets — co-located child DOs)
+ *   LLM      → Workers AI binding or AI Gateway fallback
+ */
+
+import type {
+  AgentRuntime, BranchHandle,
+  VFS as CoreVFS, Memory, Executor, LLM, Schedule, Identity,
+  SqlExecutor as CoreSqlExecutor, RawSqlExec,
+  ExecuteResult, ResolvedProvider,
+  CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
+  FiberCtx, ExecutionRouter,
+} from "@proteus/core";
+import {
+  DefaultExecutionRouter, createInlineExecutor,
+  createSandboxExecutor, createSSHTunnelExecutor,
+} from "@proteus/core";
+import type { SandboxHandle } from "@proteus/core";
+import { getSandbox } from "@cloudflare/sandbox";
+import { SqliteFS } from "@proteus/agent-utils/vfs";
+import { MemoryStore } from "@proteus/agent-utils/memory";
+import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
+import { createShell } from "@proteus/agent-utils/shell";
+import type { SqlExecutor } from "@proteus/agent-utils";
+import { generateText } from "ai";
+import { createWorkersAI } from "workers-ai-provider";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { DynamicWorkerExecutor } from "@cloudflare/codemode";
+import type { Think } from "@cloudflare/think";
+import { ExplorationAgent } from "./exploration.js";
+
+/** Extended runtime that also exposes the raw SqliteFS for shell emulation
+ *  and the SSH executor for tunnel socket management */
+export type CFRuntime = AgentRuntime & {
+  sqliteFS: SqliteFS;
+  sshExecutor: ReturnType<typeof createSSHTunnelExecutor>;
+};
+
+/** Optional hooks the orchestrator can inject into the CF runtime. */
+export interface CFRuntimeHooks {
+  /**
+   * Fires synchronously from workspace.createTool after a successful
+   * create/update. Legacy hook: PreambleCraftedExecutor doesn't need it
+   * (reads craftStore.list() live). Retained for adapters that want eager
+   * notification.
+   */
+  onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
+}
+
+/**
+ * Build a full AgentRuntime from a Think agent's DO context.
+ */
+export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): CFRuntime {
+  const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
+  const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
+
+  // SqliteFS from agent-utils — pure DO SQLite, no R2
+  const sqliteFS = new SqliteFS(sql);
+  sqliteFS.init();
+
+  // MemoryStore from agent-utils — FTS5-indexed search
+  const memoryStore = new MemoryStore(sqliteFS, sql);
+  memoryStore.ensureSchema();
+
+  // CraftStore from agent-utils — FTS5-indexed tool storage
+  const craftStoreImpl = new AgentUtilsCraftStore(sql);
+  craftStoreImpl.ensureSchema();
+
+  // Adapt SqliteFS to core's VFS interface (SqliteFS has a superset of methods)
+  const vfs = adaptVFS(sqliteFS);
+
+  // Adapt MemoryStore to core's Memory interface
+  const memory = adaptMemory(memoryStore);
+
+  // Adapt CraftStore to core's CraftStore interface
+  const craftStore = adaptCraftStore(craftStoreImpl);
+
+  const envForExec = agent.env as Env & Record<string, unknown>;
+  if (!envForExec.LOADER) {
+    throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
+  }
+  const executor = createExecutor(envForExec.LOADER);
+  const llm = createDualPathLLM(agent);
+  const schedule = createRealSchedule(agent);
+  const identity = createIdentity(agent, vfs, sql as unknown as CoreSqlExecutor);
+
+  // Execution router — manages codemode providers (workspace, nimbus, sandbox, laptop)
+  const shell = createShell(sqliteFS);
+  const executionRouter: ExecutionRouter = new DefaultExecutionRouter();
+  executionRouter.register(createInlineExecutor({
+    vfs, memory, craftStore, shell,
+    // sql is used by workspace.listTools() to look up EMA craft_scores.
+    // Cast because adaptVFS returns core's SqlExecutor shape.
+    sql: sql as unknown as import("@proteus/core").SqlExecutor,
+    // Legacy hook — PreambleCraftedExecutor ignores it (live-reads craftStore).
+    onToolRegistered: hooks.onToolRegistered,
+  }));
+  // Register Sandbox executor — Proteus's primary remote exec surface.
+  // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
+  // by the agent's stable name. `PREVIEW_HOSTNAME` is the public host for
+  // path-style preview URLs (see preview-proxy.ts); `sandboxId` is the
+  // stable DO key so URLs round-trip back to the correct container.
+  const env = agent.env as Env & Record<string, unknown>;
+  const previewHostname = typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0
+    ? env.PREVIEW_HOSTNAME
+    : undefined;
+  const sandboxId = `proteus-${agent.name}`;
+  if (env.Sandbox && previewHostname) {
+    try {
+      const handle = getSandbox(
+        env.Sandbox as Parameters<typeof getSandbox>[0],
+        sandboxId,
+        { normalizeId: true },
+      ) as unknown as SandboxHandle;
+      executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+      console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
+    } catch (err) {
+      console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
+      executionRouter.register(createSandboxExecutor());
+    }
+  } else {
+    if (!previewHostname) console.warn("[proteus] PREVIEW_HOSTNAME not set — Sandbox executor running in stub mode");
+    executionRouter.register(createSandboxExecutor());
+  }
+
+  // Register SSH tunnel executor — always available as a target, but only
+  // "connected" when a user's tunnel WebSocket attaches via setSocket().
+  const sshExecutor = createSSHTunnelExecutor();
+  executionRouter.register(sshExecutor);
+
+  return {
+    storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
+    memory, executor, llm, schedule, identity, craftStore,
+    spawnBranch: createFacetSpawner(agent),
+    abortBranch: createFacetAborter(agent),
+    executionRouter,
+    shell,
+    sqliteFS,
+    sshExecutor,
+  };
+}
+
+// ── Adapters: agent-utils → core interfaces ──────────────────────
+
+function adaptVFS(fs: SqliteFS): CoreVFS {
+  return {
+    readFile: (path, opts) => fs.readFile(path, opts),
+    writeFile: (path, data) => fs.writeFile(path, data),
+    readdir: (path) => fs.readdir(path),
+    async stat(path) {
+      try {
+        const s = await fs.stat(path);
+        return { size: s.size, mtime: s.mtimeMs, isDir: s.type === "dir" };
+      } catch { return null; }
+    },
+    unlink: (path) => fs.unlink(path),
+    mkdir: (path, opts) => fs.mkdir(path, opts),
+    exists: (path) => fs.exists(path),
+  };
+}
+
+function adaptMemory(store: MemoryStore): Memory {
+  return {
+    write: (path, content) => store.writeFile(path, content),
+    append: (path, content) => store.appendToFile(path, content),
+    async index(path) {
+      const content = await store.readFile(path);
+      if (content) await store.indexFile(path, content);
+    },
+    search: (query, limit) => Promise.resolve(store.search(query, limit)),
+    read: (path) => store.readFile(path),
+  };
+}
+
+function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
+  return {
+    create(t) {
+      impl.create({
+        name: t.name, description: t.description,
+        params: t.params as Record<string, string> | undefined ?? undefined,
+        code: t.code, scope: (t.scope ?? "local") as "local" | "shared",
+      });
+    },
+    update(name, patch) {
+      impl.update(name, patch);
+    },
+    get(name) {
+      const tool = impl.get(name);
+      return tool ? adaptCraftedTool(tool) : undefined;
+    },
+    delete(name) { impl.delete(name); },
+    list() { return impl.list().map(adaptCraftedTool); },
+    search(query, limit) { return impl.search(query, limit).map(adaptCraftedTool); },
+    getAll() { return impl.getAll().map(adaptCraftedTool); },
+  };
+}
+
+function adaptCraftedTool(t: { name: string; description: string; params: Record<string, string> | null; code: string; scope: string; createdAt: number; updatedAt: number }): CoreCraftedTool {
+  return {
+    name: t.name,
+    description: t.description,
+    params: t.params,
+    code: t.code,
+    scope: t.scope as CoreCraftedTool["scope"],
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  };
+}
+
+// ── Executor: LOADER-backed DynamicWorkerExecutor ──
+//
+// v2.1(E): delegates to @cloudflare/codemode's DynamicWorkerExecutor which
+// spawns a child Worker per execute() call via env.LOADER.get(). Replaces
+// the broken new-Function() fallback that fired "Code generation from
+// strings disallowed" in production. Consumer: scaffold/modify.ts parse gate
+// is the only caller today; any future caller gets the same real-Worker
+// isolation semantics.
+
+function createExecutor(loader: unknown): Executor {
+  const dwe = new DynamicWorkerExecutor({ loader: loader as ConstructorParameters<typeof DynamicWorkerExecutor>[0]["loader"] });
+  return {
+    async execute(code: string, providers: ResolvedProvider[]): Promise<ExecuteResult> {
+      try {
+        const res = await dwe.execute(code, providers);
+        return res as ExecuteResult;
+      } catch (e) {
+        return { result: undefined, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  };
+}
+
+// ── LLM for evolution reflections ────────────────────────────────
+
+function createDualPathLLM(agent: Think<Env>): LLM {
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      try {
+        const env = agent.env as Env & Record<string, string>;
+        const model = (env.AI && typeof env.AI !== "string")
+          ? createWorkersAI({ binding: env.AI })("@cf/moonshotai/kimi-k2.6")
+          : createOpenAICompatible({
+              name: "workers-ai",
+              baseURL: env.AI_GATEWAY_URL ?? "",
+              headers: { "Authorization": env.AI_GATEWAY_AUTH ?? "" },
+            }).chatModel("workers-ai/@cf/moonshotai/kimi-k2.6");
+        const result = await generateText({ model, prompt, maxOutputTokens: 512 });
+        return result.text.trim();
+      } catch { return "(reflection unavailable)"; }
+    },
+  };
+}
+
+// ── Schedule: real runFiber from Agent base class ────────────────
+
+function createRealSchedule(agent: Think<Env>): Schedule {
+  return {
+    after: async (ms, fn) => { setTimeout(fn, ms); },
+    cron: async () => {},
+    fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
+      return agent.runFiber(name, async (sdkCtx) => {
+        return fn({ stash: sdkCtx.stash, snapshot: sdkCtx.snapshot });
+      });
+    },
+  };
+}
+
+// ── Identity ─────────────────────────────────────────────────────
+
+function createIdentity(agent: Think<Env>, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
+  return {
+    id: agent.ctx.id.toString(),
+    name: agent.name,
+    scaffold: {
+      exists: () => vfs.exists("scaffold/agent.js"),
+      read: () => vfs.readFile("scaffold/agent.js", { encoding: "utf8" }) as Promise<string>,
+      write: (code: string) => vfs.writeFile("scaffold/agent.js", code),
+      version: async () =>
+        (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
+    },
+  };
+}
+
+// ── MCTS branches via real Facets (subAgent) ─────────────────────
+
+function createFacetSpawner(agent: Think<Env>): (branchId: string) => Promise<BranchHandle> {
+  return async (branchId: string): Promise<BranchHandle> => {
+    try {
+      const stub = await agent.subAgent(ExplorationAgent, branchId);
+      return {
+        explore: async (history, tools) => stub.explore(history, tools),
+        evaluate: async (task) => stub.evaluate(task),
+        generateReflection: async (task) => stub.generateReflection(task),
+      };
+    } catch (err) {
+      console.warn(`[proteus] subAgent failed for branch ${branchId}: ${(err as Error).message}. Using inline fallback.`);
+      return createInlineBranch(agent);
+    }
+  };
+}
+
+function createFacetAborter(agent: Think<Env>): (branchId: string) => Promise<void> {
+  return async (branchId: string) => {
+    try { agent.abortSubAgent(ExplorationAgent, branchId); } catch {}
+  };
+}
+
+/**
+ * Inline branch fallback — used when Facets are unavailable.
+ *
+ * Formal spec: DistributedModel.lean requires StorageIsolation (branch storageIds
+ * disjoint from orchestrator storageId). The inline branch enforces this
+ * STRUCTURALLY by capturing only the LLM config, never the agent reference
+ * or its storage. The closure has no path to agent.sql or agent.ctx.storage.
+ */
+function createInlineBranch(agent: Think<Env>): BranchHandle {
+  // Extract ONLY what we need for LLM calls — not the agent itself.
+  // This ensures the branch closure has no reference to orchestrator storage.
+  const env = agent.env as Env & Record<string, string>;
+  const aiBinding = (env.AI && typeof env.AI !== "string") ? env.AI : null;
+  const gatewayUrl = env.AI_GATEWAY_URL ?? "";
+  const gatewayAuth = env.AI_GATEWAY_AUTH ?? "";
+  // agent reference is NOT captured past this point
+  const getModel = () => aiBinding
+    ? createWorkersAI({ binding: aiBinding })("@cf/moonshotai/kimi-k2.6")
+    : createOpenAICompatible({
+        name: "workers-ai",
+        baseURL: gatewayUrl,
+        headers: { "Authorization": gatewayAuth },
+      }).chatModel("workers-ai/@cf/moonshotai/kimi-k2.6");
+
+  return {
+    explore: async (history, _tools) => {
+      const context = history.map((m: { role: string; content: string }) =>
+        `${m.role}: ${m.content}`).join("\n").slice(-800);
+      const result = await generateText({
+        model: getModel(),
+        system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
+        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.` }],
+        maxOutputTokens: 512,
+      });
+      const text = result.text.trim();
+      const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
+      return { text, codeUsed: codeMatch?.[1]?.trim() ?? null };
+    },
+    evaluate: async (task) => {
+      const result = await generateText({
+        model: getModel(),
+        messages: [{ role: "user" as const, content: `Rate this approach (0-1): ${task.slice(0, 500)}\nRespond ONLY: {"score": <float>}` }],
+        maxOutputTokens: 100,
+      });
+      try {
+        const m = result.text.match(/\{[^}]+\}/);
+        return Math.min(1, Math.max(0, Number(JSON.parse(m?.[0] ?? '{"score":0.5}').score)));
+      } catch { return 0.5; }
+    },
+    generateReflection: async (task) => {
+      const result = await generateText({
+        model: getModel(),
+        messages: [{ role: "user" as const, content: `What went wrong? ${task.slice(0, 500)}\nOne sentence.` }],
+        maxOutputTokens: 200,
+      });
+      return result.text.trim();
+    },
+  };
+}

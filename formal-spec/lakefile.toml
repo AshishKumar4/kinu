@@ -1,0 +1,14 @@
+name = "SelfEvolvingAgent"
+version = "0.1.0"
+defaultTargets = ["SelfEvolvingAgent"]
+
+# TSLean provides: Veil Core, DOMonad, DurableObjectState, MultiDO,
+# Storage, Transaction, RPC — all without external deps.
+# We reference it as a local path dependency.
+[[require]]
+name = "TSLean"
+path = "../tslean/lean"
+
+[[lean_lib]]
+name = "SelfEvolvingAgent"
+roots = ["SelfEvolvingAgent"]
