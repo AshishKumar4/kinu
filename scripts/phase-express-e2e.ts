@@ -79,9 +79,17 @@ async function rpcCall(ws: WebSocket, method: string, args: unknown[] = [], time
 }
 
 async function main() {
-  const chromePath = existsSync('/root/.cache/puppeteer/chrome/linux-147.0.7727.56/chrome-linux64/chrome')
-    ? '/root/.cache/puppeteer/chrome/linux-147.0.7727.56/chrome-linux64/chrome'
-    : undefined;
+  // Resolve the chrome binary lazily — the version-tagged path drifts.
+  const chromeRoot = '/root/.cache/puppeteer/chrome';
+  let chromePath: string | undefined;
+  try {
+    const { readdirSync } = await import('node:fs');
+    const versions = readdirSync(chromeRoot).filter(d => d.startsWith('linux-'));
+    const candidate = versions[0]
+      ? `${chromeRoot}/${versions[0]}/chrome-linux64/chrome`
+      : undefined;
+    if (candidate && existsSync(candidate)) chromePath = candidate;
+  } catch { /* fall through to puppeteer's bundled resolution */ }
 
   const browser = await puppeteer.launch({
     executablePath: chromePath,
