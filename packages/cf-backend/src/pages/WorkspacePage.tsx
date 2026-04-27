@@ -20,6 +20,7 @@ import remarkGfm from "remark-gfm";
 import { useProteus, type EvolutionEventRow, type LogEntry } from "@/hooks/use-proteus";
 import { registerAgent } from "@/lib/agent-registry";
 import { MCTSTree } from "@/components/mcts-tree";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ExecutorTerminal } from "@/components/ExecutorTerminal";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import type { MCTSNode } from "@/lib/protocol";
@@ -882,7 +883,10 @@ export default function WorkspacePage() {
               </div>
             </div>
 
-            {/* Messages — generous padding for spacious feel */}
+            {/* Messages — generous padding for spacious feel.
+                ErrorBoundary'd so a single malformed message doesn't
+                whitescreen the chat. (STABILITY-AUDIT §D2.) */}
+            <ErrorBoundary label="Chat">
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
               {state.messages.length === 0 && !state.isStreaming && (
                 <div className="flex flex-col items-center justify-center h-full">
@@ -901,6 +905,7 @@ export default function WorkspacePage() {
               ))}
               <div ref={messagesEndRef} />
             </div>
+            </ErrorBoundary>
 
             {/* Input */}
             <div className="px-5 py-3 border-t p-border lg:px-7">
@@ -947,6 +952,11 @@ export default function WorkspacePage() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-5">
+              {/* Each tab is wrapped in its own ErrorBoundary keyed by tab
+                  name so a render-time throw doesn't whitescreen the whole
+                  workspace. The boundary resets on tab switch because the
+                  key changes. (STABILITY-AUDIT §D2.) */}
+              <ErrorBoundary key={activeTab} label={activeTab}>
               {/* Identity */}
               {activeTab === "Identity" && (as ? (
                 <div className="space-y-4 animate-fade-in">
@@ -1057,6 +1067,7 @@ export default function WorkspacePage() {
               )}
 
               {activeTab === "Logs" && <LogsTab logs={state.logs} connectionStatus={state.connectionStatus} />}
+              </ErrorBoundary>
             </div>
           </div>
         </Panel>
