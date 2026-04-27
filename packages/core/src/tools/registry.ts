@@ -46,9 +46,13 @@ export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
  */
 export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
   execute_tools:
-    'Write JS to accomplish tasks. workspace.* for files/shell, codemode.* for learned patterns. ' +
-    'Agent-crafted tools are also reachable as tools.<name>(args) inside the sandbox; their bodies ' +
-    'may call workspace.*, codemode.*, and tools.* freely. Runs in sandboxed Worker.',
+    'Write JS to accomplish tasks. workspace.* for local VFS/shell. sandbox.* for a real Linux ' +
+    'container — use this for npm/pip/dev servers and ANY process that listens on a port. ' +
+    'codemode.* exposes learned patterns. After starting a dev server in the sandbox, call ' +
+    'sandbox.exposePort(port) so the user can SEE the running app — the returned URL renders ' +
+    'as a live iframe in the chat and on the Executors tab. Agent-crafted tools are reachable ' +
+    'as tools.<name>(args) and their bodies may call workspace.*, sandbox.*, codemode.*, ' +
+    'tools.* freely. Runs in sandboxed Worker.',
   run: 'Run a POSIX shell command (cat, grep, find, sed, ls, etc.). Pipes and redirects work. Optional executor param routes to nimbus/sandbox/laptop.',
   explore:
     'MCTS tree search for complex subproblems. Spawns parallel branches, evaluates outcomes, returns the best approach discovered.',

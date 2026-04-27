@@ -31,14 +31,32 @@ function renderExecutorSection(names: string[]): string {
       case 'nimbus':
         return '  **nimbus.*** — full dev env over DO RPC';
       case 'sandbox':
-        return '  **sandbox.*** — Linux VM over Container';
+        return '  **sandbox.*** — Linux VM over Container (use this for any process that listens on a port; workspace.exec runs in the Worker and cannot expose ports)';
       case 'laptop':
         return '  **laptop.*** — user\'s local machine over SSH tunnel';
       default:
         return `  **${n}.*** — registered executor`;
     }
   });
-  return `\n### Executor namespaces inside execute_tools\n${lines.join('\n')}\n`;
+  // When the sandbox executor is registered, append a "Showing apps" guide
+  // so the model knows that user-visible previews require exposePort. The
+  // app's UI auto-renders the returned URL as a live iframe in the chat
+  // and on the Executors tab. (STABILITY-AUDIT §C1.)
+  const showingApps = names.includes('sandbox')
+    ? `\n### Showing a running app to the user
+For the user to *see* a running web app, you MUST call \`sandbox.exposePort(port)\`
+after starting the server. The returned URL renders as a live iframe both
+inline in the chat (next to the tool result) and on the Executors tab. A
+server running inside the sandbox without exposePort is invisible to the
+user. Typical flow:
+\`\`\`
+await sandbox.exec("cd /workspace && nohup node server.js > out.log 2>&1 &")
+const url = await sandbox.exposePort(8080)   // returns the preview URL
+\`\`\`
+Background the dev server (trailing \`&\` + \`nohup\`) so \`exec\` returns; the
+container keeps the process alive across subsequent calls.\n`
+    : '';
+  return `\n### Executor namespaces inside execute_tools\n${lines.join('\n')}\n${showingApps}`;
 }
 
 function renderBuiltinToolsSection(): string {
