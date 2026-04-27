@@ -55,6 +55,33 @@ function CodeBlock({ children, className }: { children: React.ReactNode; classNa
   );
 }
 
+/**
+ * Detect a Proteus path-style preview URL anywhere inside a tool result.
+ * Tool outputs are usually strings (e.g. `https://.../_preview/8080/.../`)
+ * but can also be objects with a `url` field (the exposeSandboxPort RPC
+ * returns `{url}`). Returns the URL or null.
+ */
+function extractPreviewUrl(output: unknown): string | null {
+  const re = /https:\/\/[^\s"']+\/_preview\/\d+\/[^/\s"']+\/[a-z0-9_]+\/?[^\s"']*/i;
+  if (typeof output === "string") {
+    const m = output.match(re);
+    return m ? m[0] : null;
+  }
+  if (output && typeof output === "object") {
+    const url = (output as { url?: unknown }).url;
+    if (typeof url === "string") {
+      const m = url.match(re);
+      return m ? m[0] : null;
+    }
+    // Last-resort: serialise + scan (covers nested fields).
+    try {
+      const m = JSON.stringify(output).match(re);
+      return m ? m[0] : null;
+    } catch { return null; }
+  }
+  return null;
+}
+
 function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown remarkPlugins={[remarkGfm]} components={{
@@ -230,12 +257,32 @@ function MessageView({
           );
         }
         if (isToolUIPart(part)) {
+          const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+          const previewUrl = extractPreviewUrl(output);
           return (
-            <ToolCallBlock key={part.toolCallId} toolName={getToolName(part)}
-              input={part.input as Record<string, unknown> | undefined}
-              output={part.state === "output-available" ? (part as { output?: unknown }).output : undefined}
-              isRunning={part.state === "input-available" || part.state === "input-streaming"}
-              isError={part.state === "output-error"} />
+            <div key={part.toolCallId}>
+              <ToolCallBlock toolName={getToolName(part)}
+                input={part.input as Record<string, unknown> | undefined}
+                output={output}
+                isRunning={part.state === "input-available" || part.state === "input-streaming"}
+                isError={part.state === "output-error"} />
+              {/* Inline preview card — when a tool returns a /_preview/ URL,
+                  surface a live iframe under the tool block so the user
+                  doesn't have to switch to the Executors tab.
+                  (STABILITY-AUDIT §C4.) */}
+              {previewUrl && (
+                <div className="mt-2 rounded-md p-bg border p-border overflow-hidden">
+                  <div className="px-2 py-1 flex items-center gap-2 text-[11px] p-text-2">
+                    <span className="size-1.5 rounded-full bg-emerald-500" />
+                    <span className="font-mono truncate flex-1">{previewUrl}</span>
+                    <a href={previewUrl} target="_blank" rel="noreferrer" className="ml-auto p-text-2 hover:underline">
+                      open
+                    </a>
+                  </div>
+                  <iframe src={previewUrl} className="w-full h-56 bg-white" title="preview" />
+                </div>
+              )}
+            </div>
           );
         }
         return null;
@@ -509,13 +556,14 @@ function labelFor(name: string): string {
   return EXECUTOR_LABELS[name] ?? name;
 }
 
-function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc }: {
+function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc, pinnedPorts }: {
   executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
   outputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<unknown>;
   onBrowse: (id: string, path: string) => Promise<unknown>;
   agentName?: string;
   rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  pinnedPorts: Array<{ port: number; url: string; name?: string }>;
 }) {
   // Sandbox-first ordering. We show every executor (available or not) as a tab;
   // unavailable ones render a connection card instead of the terminal so the
@@ -531,7 +579,6 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc 
   );
   const [fileEntries, setFileEntries] = useState<string[]>([]);
   const [filePath, setFilePath] = useState("/");
-  const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
   const [pcInstall, setPcInstall] = useState<string | null>(null);
   const [pcIssuing, setPcIssuing] = useState(false);
 
@@ -540,25 +587,9 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc 
 
   // Terminal is an xterm component; it manages its own scroll.
 
-  // Auto-refresh exposed ports for the active executor every 4 seconds.
-  // Sandbox returns real listings from the container; other executors return [].
-  useEffect(() => {
-    if (!activeExecAvailable) { setPinnedPorts([]); return; }
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const r = await rpc("getExposedPorts", [activeExec]) as { ports?: Array<{ port: number; url?: string; name?: string }> };
-        if (cancelled) return;
-        const arr = (r.ports ?? [])
-          .filter(p => typeof p.port === 'number' && p.url)
-          .map(p => ({ port: p.port, url: p.url!, name: p.name }));
-        setPinnedPorts(arr);
-      } catch { /* ignore transient */ }
-    };
-    poll();
-    const h = setInterval(poll, 4000);
-    return () => { cancelled = true; clearInterval(h); };
-  }, [activeExec, activeExecAvailable, rpc]);
+  // pinnedPorts is now hoisted into useProteus and provided via props so the
+  // Executors-tab badge updates regardless of which tab is active.
+  // (STABILITY-AUDIT §C4.)
 
   const issuePcToken = useCallback(async () => {
     setPcIssuing(true);
@@ -799,11 +830,8 @@ export default function WorkspacePage() {
     state.sendChat(t); setChatInput("");
   }, [chatInput, state]);
 
-  if (state.connectionStatus === "error") return (
-    <div className="h-full flex items-center justify-center">
-      <EmptyTab icon={<WifiSlashIcon size={28} className="text-red-400" />} title="Connection lost" hint="Check your network or restart the server" />
-    </div>
-  );
+  // First-paint loading: only when we genuinely have nothing to show.
+  // (STABILITY-AUDIT §A1 — never unmount on transient WS errors.)
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
     <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
   );
@@ -811,6 +839,9 @@ export default function WorkspacePage() {
   const as = state.agentStatus;
   return (
     <div className="h-full flex flex-col">
+      {/* Non-destructive disconnect banner. The chat panel below stays
+          mounted so the in-flight assistant turn is preserved through
+          partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
       {state.connectionStatus === "disconnected" && (
         <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs text-amber-300 border-b p-border" style={{ background: "var(--c-accent-subtle)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
@@ -894,14 +925,25 @@ export default function WorkspacePage() {
           <div className="flex flex-col h-full">
             {/* Tabs — thin accent underline */}
             <div className="flex items-center border-b p-border px-2 gap-0.5">
-              {TABS.map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
-                  className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px ${
-                    activeTab === tab ? "p-tab-active border-b-[1.5px]" : "p-text-2 border-transparent hover:p-text"
-                  }`}>
-                  {tab}
-                </button>
-              ))}
+              {TABS.map(tab => {
+                // Show a port-count badge on the Executors tab so the user
+                // knows a preview is ready even from another tab.
+                // (STABILITY-AUDIT §C4.)
+                const portCount = tab === "Executors" ? state.pinnedPorts.length : 0;
+                return (
+                  <button key={tab} onClick={() => setActiveTab(tab)}
+                    className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px flex items-center gap-1.5 ${
+                      activeTab === tab ? "p-tab-active border-b-[1.5px]" : "p-text-2 border-transparent hover:p-text"
+                    }`}>
+                    <span>{tab}</span>
+                    {portCount > 0 && (
+                      <span className="inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">
+                        {portCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex-1 overflow-y-auto p-5">
@@ -1010,6 +1052,7 @@ export default function WorkspacePage() {
                   onBrowse={(id: string, path: string) => state.rpc("getExecutorFiles", [id, path])}
                   agentName={agentId}
                   rpc={state.rpc}
+                  pinnedPorts={state.pinnedPorts}
                 />
               )}
 

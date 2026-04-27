@@ -55,6 +55,10 @@ export function useProteus(agentId?: string) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [executors, setExecutors] = useState<Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, Array<{ id: string; command: string; stdout: string; stderr: string; exit_code: number; created_at: number }>>>(new Map());
+  // Pinned (exposed) ports for the sandbox executor — polled hook-level so
+  // a count badge on the Executors tab updates regardless of which tab is
+  // currently visible. (STABILITY-AUDIT §C4.)
+  const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
 
   const addLog = useCallback((type: LogEntry["type"], message: string, detail?: string) => {
     setLogs(prev => [...prev.slice(-99), { id: crypto.randomUUID(), time: Date.now(), type, message, detail }]);
@@ -63,6 +67,10 @@ export function useProteus(agentId?: string) {
   const agent = useAgent({
     agent: "orchestrator-agent",
     name: agentId || "default",
+    // onOpen always wins — even if a prior onError pinned the status to
+    // "error", a successful reopen must recover the UI. Without this, a
+    // single transient error event traps the user on the disconnect
+    // banner forever (STABILITY-AUDIT §A1).
     onOpen: useCallback(() => {
       setConnectionStatus("connected");
       addLog("connection", "WebSocket connected");
@@ -72,8 +80,10 @@ export function useProteus(agentId?: string) {
       addLog("connection", "WebSocket disconnected");
     }, [addLog]),
     onError: useCallback(() => {
-      setConnectionStatus("error");
-      addLog("error", "WebSocket error");
+      // Don't clobber a healthy status; partysocket auto-reconnects in the
+      // background. Treat onError as a transient signal — the next onOpen
+      // will recover. Logging only.
+      addLog("error", "WebSocket error (auto-reconnecting)");
     }, [addLog]),
   });
 
@@ -83,7 +93,60 @@ export function useProteus(agentId?: string) {
     clearHistory,
     stop,
     isStreaming,
-  } = useAgentChat({ agent });
+  } = useAgentChat({
+    agent,
+    // Throttle UI updates during high-frequency token deltas (50ms ≈ 20fps).
+    // The chat library forwards this option to @ai-sdk's useChat.
+    experimental_throttle: 50,
+  } as Parameters<typeof useAgentChat>[0] & { experimental_throttle: number });
+
+  // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
+  // The framework's resume effect fires once; partysocket reconnects don't
+  // retrigger it. We listen for the agent's "open" event and call
+  // resumeStream() — server replays buffered chunks from
+  // cf_ai_chat_stream_chunks. (STABILITY-AUDIT §A2.)
+  const isFirstOpen = useRef(true);
+  useEffect(() => {
+    if (!agent) return;
+    const onOpen = () => {
+      // Skip the very first open — useChat's mount-time resume handles it.
+      if (isFirstOpen.current) { isFirstOpen.current = false; return; }
+      const chat = (agent as unknown as { _chat?: { resumeStream?: () => unknown } });
+      // Resume API surface lives on the useChat-bound chat object exposed
+      // by the framework. If it's not present (older Think), this is a no-op.
+      const tryResume = (obj: unknown) => {
+        if (!obj || typeof obj !== "object") return false;
+        const r = (obj as { resumeStream?: () => unknown }).resumeStream;
+        if (typeof r === "function") { try { r.call(obj); return true; } catch { /* ignore */ } }
+        return false;
+      };
+      if (tryResume(chat._chat)) return;
+      // Fallback: try sending a manual resume request directly. Server
+      // recognizes type:"cf_agent_stream_resume_request".
+      try {
+        (agent as unknown as { send: (m: string) => void }).send(
+          JSON.stringify({ type: "cf_agent_stream_resume_request" }),
+        );
+      } catch { /* ignore */ }
+    };
+    agent.addEventListener("open", onOpen as EventListener);
+    return () => agent.removeEventListener("open", onOpen as EventListener);
+  }, [agent]);
+
+  // ── A4: 25s heartbeat keeps the WS warm so Cloudflare's edge doesn't
+  // reap idle connections at ~100s. Server no-ops unknown message types.
+  // (STABILITY-AUDIT §A4.)
+  useEffect(() => {
+    if (connectionStatus !== "connected") return;
+    const id = setInterval(() => {
+      try {
+        (agent as unknown as { send: (m: string) => void }).send(
+          JSON.stringify({ type: "ping" }),
+        );
+      } catch { /* not yet open */ }
+    }, 25_000);
+    return () => clearInterval(id);
+  }, [agent, connectionStatus]);
 
   const isConnected = connectionStatus === "connected";
 
@@ -116,12 +179,16 @@ export function useProteus(agentId?: string) {
     return () => clearInterval(interval);
   }, [isConnected, isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Listen for MCTS progress broadcasts from the server
+  // Listen for MCTS progress broadcasts from the server. We attach to the
+  // outer `agent` EventTarget — NOT the inner `_ws` private field — so the
+  // listener survives partysocket auto-reconnects without a close→open gap
+  // dropping events. (STABILITY-AUDIT §A3.)
   useEffect(() => {
-    if (!isConnected) return;
-    const handler = (event: MessageEvent) => {
+    if (!agent) return;
+    const handler = (event: Event) => {
+      const data = (event as MessageEvent).data;
       try {
-        const msg = JSON.parse(event.data);
+        const msg = JSON.parse(typeof data === "string" ? data : "");
         if (msg.type === "mcts-progress") {
           addLog("evolution", `MCTS ${msg.phase}: ${msg.nodeCount ?? 0} nodes (iter ${msg.iteration ?? "?"})`);
           if (msg.nodes && msg.nodes.length > 0) {
@@ -137,10 +204,9 @@ export function useProteus(agentId?: string) {
         // hex strings — the dedup logic could never match them).
       } catch { /* not JSON or not our message */ }
     };
-    const ws = (agent as unknown as { _ws?: WebSocket })._ws;
-    ws?.addEventListener("message", handler);
-    return () => ws?.removeEventListener("message", handler);
-  }, [isConnected, agent, addLog]); // eslint-disable-line react-hooks/exhaustive-deps
+    agent.addEventListener("message", handler as EventListener);
+    return () => agent.removeEventListener("message", handler as EventListener);
+  }, [agent, addLog]);
 
   function refreshLiveData() {
     agent.call("getEvolutionEvents", [200])
@@ -377,23 +443,23 @@ export function useProteus(agentId?: string) {
       r as { stdout?: string; stderr?: string; exitCode?: number; error?: string });
   }, [agent]);
 
-  // Listen for executor-output broadcasts — the orchestrator broadcasts
-  // whenever an exec completes (user-triggered OR agent-triggered via a
-  // `run` tool). Render one row per broadcast.
+  // Listen for executor-output broadcasts — emitted by the orchestrator on
+  // every exec completion (user- or agent-triggered). Attach to the outer
+  // `agent` EventTarget so the listener survives reconnects (STABILITY-AUDIT
+  // §A3, D5).
   useEffect(() => {
-    if (!isConnected) return;
-    const ws = (agent as unknown as { _ws?: WebSocket })._ws;
-    if (!ws) return;
-    const handler = (event: MessageEvent) => {
+    if (!agent) return;
+    const handler = (event: Event) => {
+      const data = (event as MessageEvent).data;
       try {
-        const msg = JSON.parse(typeof event.data === 'string' ? event.data : '');
-        if (msg.type === 'executor-output') {
+        const msg = JSON.parse(typeof data === "string" ? data : "");
+        if (msg.type === "executor-output") {
           setExecutorOutputs(prev => {
             const next = new Map(prev);
             const existing = next.get(msg.executor) ?? [];
             next.set(msg.executor, [...existing, {
               id: crypto.randomUUID(), command: msg.command,
-              stdout: msg.stdout ?? '', stderr: msg.stderr ?? '',
+              stdout: msg.stdout ?? "", stderr: msg.stderr ?? "",
               exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
             }]);
             return next;
@@ -401,9 +467,33 @@ export function useProteus(agentId?: string) {
         }
       } catch { /* ignore non-JSON */ }
     };
-    ws.addEventListener('message', handler);
-    return () => ws.removeEventListener('message', handler);
-  }, [isConnected, agent]);
+    agent.addEventListener("message", handler as EventListener);
+    return () => agent.removeEventListener("message", handler as EventListener);
+  }, [agent]);
+
+  // Poll the sandbox executor's exposed ports every 4s while connected, so
+  // the Executors-tab badge + inline preview cards see new ports promptly
+  // even when the user is on a different tab. We hard-code "sandbox" here
+  // because that's the only executor that returns non-empty rows (others
+  // return [] cheaply). (STABILITY-AUDIT §C4.)
+  useEffect(() => {
+    if (connectionStatus !== "connected") { setPinnedPorts([]); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const r = await agent.call("getExposedPorts", ["sandbox"]) as {
+          ports?: Array<{ port: number; url?: string; name?: string }>;
+        };
+        if (cancelled) return;
+        setPinnedPorts((r.ports ?? [])
+          .filter(p => typeof p.port === "number" && p.url)
+          .map(p => ({ port: p.port, url: p.url!, name: p.name })));
+      } catch { /* ignore transient */ }
+    };
+    poll();
+    const id = setInterval(poll, 4000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [agent, connectionStatus]);
 
   return {
     messages,
@@ -427,6 +517,8 @@ export function useProteus(agentId?: string) {
     executors,
     executorOutputs,
     executeInExecutor,
+    /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
+    pinnedPorts,
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',
