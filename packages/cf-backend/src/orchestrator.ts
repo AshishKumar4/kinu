@@ -940,6 +940,13 @@ export class OrchestratorAgent extends Think<Env> {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${errMsg}, ${1})`;
+      // Broadcast on error too — symmetric with the success branch above.
+      // Without this, the UI terminal silently swallows failures because
+      // it renders only from broadcasts. (STABILITY-AUDIT §B4.)
+      this.broadcast(JSON.stringify({
+        type: 'executor-output', executor: executorId, command, stdout: '',
+        stderr: errMsg, exitCode: 1, timestamp: Date.now(),
+      }));
       return { error: errMsg, exitCode: 1 };
     }
   }
