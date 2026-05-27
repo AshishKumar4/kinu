@@ -913,7 +913,6 @@ export class OrchestratorAgent extends Think<Env> {
       headers: { Authorization: env.AI_GATEWAY_AUTH ?? '' },
     }).chatModel(`workers-ai/${DEFAULT_MODEL}`);
   }
-}
 
   // ── DO initialization ──────────────────────────────────────────
 
@@ -1693,6 +1692,135 @@ export class OrchestratorAgent extends Think<Env> {
    * Broadcast the current MCTS tree to all connected WebSocket clients.
    * Called after each MCTS iteration so the UI updates in real-time.
    */
+  /**
+   * v2.x: Scaffold-driven chat entry point.
+   *
+   * Runs the agent's current scaffold for a one-shot task with FULL host
+   * bridges (LLM stream, tool dispatch from getTools(), event emit). Streams
+   * progress via `this.broadcast()` so any subscribed client sees text
+   * deltas + tool-call markers in real time. Persists the final assistant
+   * message into `assistant_messages` so fork + Session.getHistory pick it up.
+   *
+   * This is NOT a takeover of Think's onChatMessage — that's gated by
+   * `_runInferenceLoop` which is private. Instead, it's an explicit
+   * scaffold-execution endpoint the UI/CLI can call when scaffold-driven
+   * chat is wanted (vs the standard streamText path).
+   *
+   * Returns the assembled assistant text + emitted events for telemetry.
+   */
+  @callable()
+  async chatViaScaffold(task: string): Promise<{
+    ok: boolean;
+    text: string;
+    emitCount: number;
+    error?: string;
+    messageId?: string;
+  }> {
+    const startedAt = Date.now();
+    let accumulated = '';
+    let emitCount = 0;
+    const runId = `scaffold-chat-${nanoid()}`;
+
+    // Mark run start in the event log so SSE subscribers see the lifecycle.
+    try {
+      this.eventRecorder.emit(runId, { type: 'run_start', agentId: this.name, userMessage: task.slice(0, 400) });
+      this.eventRecorder.emit(runId, { type: 'turn_start', turnIndex: this._sessionTurnCount });
+    } catch { /* nop */ }
+
+    const emit = (ev: import('@proteus/core').ScaffoldEvent) => {
+      emitCount++;
+      try {
+        if (ev.type === 'text_delta') {
+          accumulated += ev.text;
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat',
+            subtype: 'text_delta',
+            runId,
+            text: ev.text,
+          }));
+          this.eventRecorder.emit(runId, { type: 'text_delta', text: ev.text });
+        } else if (ev.type === 'tool_call_start') {
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat',
+            subtype: 'tool_call_start',
+            runId,
+            name: ev.name,
+            args: ev.args,
+            toolCallId: ev.toolCallId,
+          }));
+          this.eventRecorder.emit(runId, {
+            type: 'tool_call_start', name: ev.name, args: ev.args, toolCallId: ev.toolCallId,
+          });
+        } else if (ev.type === 'tool_call_end' || ev.type === 'tool_result') {
+          const tc = ev as { toolCallId: string; result?: unknown; error?: string };
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat',
+            subtype: 'tool_result',
+            runId,
+            toolCallId: tc.toolCallId,
+            result: tc.result,
+            error: tc.error,
+          }));
+          this.eventRecorder.emit(runId, {
+            type: 'tool_call_end', name: 'scaffold', toolCallId: tc.toolCallId,
+            result: tc.result, error: tc.error,
+          });
+        } else if (ev.type === 'error') {
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat', subtype: 'error', runId, message: ev.message,
+          }));
+          this.eventRecorder.emit(runId, { type: 'error', message: ev.message });
+        }
+      } catch (err) {
+        console.warn('[proteus] chatViaScaffold emit failed:', err);
+      }
+    };
+
+    let result: import('@proteus/core').ScaffoldRunResult;
+    try {
+      result = await runScaffold({
+        rt: this.rt, task, emit,
+        llmStream: this.makeScaffoldLLMStream(),
+        callTool: this.makeScaffoldCallTool(),
+        timeoutMs: 5 * 60 * 1000,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        this.eventRecorder.emit(runId, { type: 'error', message: msg });
+        this.eventRecorder.emit(runId, { type: 'run_end', reason: 'errored' });
+      } catch { /* nop */ }
+      return { ok: false, text: accumulated, emitCount, error: msg };
+    }
+
+    // Persist the final message into assistant_messages so the chat UI's
+    // recursive-CTE history view + the fork pipeline include it.
+    const messageId = `scaffold-${nanoid()}`;
+    try {
+      const finalText = accumulated || (typeof result.finalResult === 'string' ? result.finalResult : '');
+      if (finalText) {
+        this.sql`INSERT OR IGNORE INTO assistant_messages
+          (id, session_id, parent_id, role, content, created_at)
+          VALUES (${messageId}, ${'default'}, ${null}, ${'assistant'}, ${finalText}, ${new Date().toISOString()})`;
+      }
+    } catch (err) {
+      console.warn('[proteus] chatViaScaffold persist failed:', err);
+    }
+
+    try {
+      this.eventRecorder.emit(runId, { type: 'turn_end', turnIndex: this._sessionTurnCount });
+      this.eventRecorder.emit(runId, { type: 'run_end', reason: result.ok ? 'completed' : 'errored' });
+    } catch { /* nop */ }
+
+    return {
+      ok: result.ok,
+      text: accumulated,
+      emitCount,
+      error: result.error,
+      messageId,
+    };
+  }
+
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
     try {
       const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, created_at
