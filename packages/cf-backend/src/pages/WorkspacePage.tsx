@@ -688,7 +688,7 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc,
           <div className="text-sm font-medium p-text">{labelFor(activeExec)} — not connected</div>
           <p className="text-xs p-text-2">
             This executor needs a binding in <span className="font-mono">wrangler.jsonc</span>. See
-            <span className="font-mono"> docs/EXECUTOR-V2.md</span>.
+            <span className="font-mono"> docs/EXECUTION.md</span>.
           </p>
         </div>
       )}
