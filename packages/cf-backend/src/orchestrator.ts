@@ -1111,6 +1111,16 @@ export class OrchestratorAgent extends Think<Env> {
     return this.eventRecorder.count(runId);
   }
 
+  // ── v2: MCP server bridge — small RPCs the MCP handler needs ──
+  /** Used by /mcp/v1/<name> save_note tool. */
+  @callable()
+  async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
+    const ts = new Date().toISOString().split('T')[0];
+    await this.rt.memory.append('memory/MEMORY.md', `\n### Note (${ts})\n${content}\n`);
+    await this.rt.memory.index('memory/MEMORY.md');
+    return { ok: true };
+  }
+
   /**
    * Internal: build an llmStream() callback for the scaffold executor. The
    * scaffold's `host.llmStream(opts)` calls this and chunks come back as

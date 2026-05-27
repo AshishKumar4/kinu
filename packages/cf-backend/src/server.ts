@@ -13,6 +13,7 @@ import { routeAgentRequest } from "agents";
 import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
+import { handleMcpRequest } from "./mcp-server.js";
 
 export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
@@ -43,6 +44,14 @@ export default {
     //   GET /api/agents/<name>/runs/<id>/stream     → SSE w/ Last-Event-ID
     const runEventsResp = await handleRunEventsRequest(request, env);
     if (runEventsResp) return runEventsResp;
+
+    // v2: MCP server surface — Proteus as a tool provider for external clients
+    //   /mcp/v1/<agentName>  → streamable-HTTP transport (POST/GET/DELETE)
+    // Tools: search_memory, save_note, list_skills, run_scaffold_once,
+    //        get_shadow_status, list_runs, list_run_events
+    // Resources: proteus://agent/<name>/memory
+    const mcpResp = await handleMcpRequest(request, env);
+    if (mcpResp) return mcpResp;
 
     const agentResp = await routeAgentRequest(request, env);
     if (agentResp) return agentResp;
