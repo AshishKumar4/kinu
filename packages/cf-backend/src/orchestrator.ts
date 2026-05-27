@@ -500,8 +500,9 @@ export class OrchestratorAgent extends Think<Env> {
 
   /**
    * Lazily build the split_heads tool wired to a HeadController that spawns
-   * HeadAgent Facets. Inherited context is read fresh from assistant_messages
-   * at every tool invocation so each head sees the full conversation.
+   * ExplorationAgent Facets in head mode (initHead / runAsHead / abortHead).
+   * Inherited context is read fresh from assistant_messages at every tool
+   * invocation so each head sees the full conversation.
    */
   private getSplitHeadsTool() {
     if (this._splitHeadsTool) return this._splitHeadsTool;
