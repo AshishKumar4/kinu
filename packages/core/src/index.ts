@@ -80,6 +80,28 @@ export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap
 export { modifyScaffold } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
 export { runCanary, checkErrorRateAndRollbackIfNeeded } from './scaffold/staged-rollout.js';
+// v2: scaffold execution + shadow-mode rollout
+export {
+  runScaffold,
+  type ScaffoldRunOptions,
+  type ScaffoldRunResult,
+  type ScaffoldEvent,
+  type ScaffoldEmitFn,
+} from './scaffold/executor.js';
+export {
+  initShadowTables,
+  getPendingScaffold,
+  readScaffoldVersion,
+  recordShadowEvaluation,
+  decidePromotion,
+  applyPromotionDecision,
+  DEFAULT_SHADOW_CONFIG,
+  type PendingScaffold,
+  type ShadowEvaluationRow,
+  type ShadowConfig,
+  type ScaffoldStatus,
+  type JudgeFn,
+} from './scaffold/shadow.js';
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, updateCraftScores } from './craft/ema.js';

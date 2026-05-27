@@ -26,6 +26,7 @@ import { Think, Session } from "@cloudflare/think";
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
 import { createWorkersAI } from "workers-ai-provider";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel, ToolSet } from "ai";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -50,6 +51,10 @@ import {
   // v2: branching heads
   HeadController, HeadJournal, initHeadsTables, createSplitHeadsTool,
   type SerializedMessage,
+  // v2: scaffold-loop closure (scaffold-driven inference + shadow rollout)
+  runScaffold, type ScaffoldRunResult,
+  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
+  readScaffoldVersion, DEFAULT_SHADOW_CONFIG,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
 } from "@proteus/core";
@@ -771,6 +776,8 @@ export class OrchestratorAgent extends Think<Env> {
     initCraftScoreTables(execRaw);
     // v2: branching-heads journal (head_journal, head_evidence, head_merge_results)
     initHeadsTables(execRaw);
+    // v2: scaffold shadow-mode tables (scaffold_evaluations + status col)
+    initShadowTables(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -902,6 +909,132 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async getEvolutionEvents(limit: number = 50) {
     return this.sql`SELECT id, type, message, data, created_at
       FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
+  }
+
+  // ── v2: Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
+
+  /**
+   * Execute the agent's current scaffold for a one-shot task. Captures all
+   * events the scaffold emits and returns them — does NOT inject anything
+   * back into the chat conversation. Use this to test scaffold mutations
+   * without affecting the main turn loop.
+   *
+   * When `useShadowOverride` is true, runs the pending scaffold instead of
+   * the current one (if a pending exists).
+   */
+  @callable()
+  async runScaffoldOnce(
+    task: string,
+    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+  ): Promise<ScaffoldRunResult> {
+    const pending = opts?.useShadowOverride ? getPendingScaffold(this.boundSql) : null;
+    const codeOverride = pending
+      ? (await readScaffoldVersion(this.rt, pending.version)) ?? undefined
+      : undefined;
+    return runScaffold({
+      rt: this.rt, task,
+      emit: () => undefined, // RPC mode — events captured in result.events
+      llmStream: this.makeScaffoldLLMStream(),
+      callTool: this.makeScaffoldCallTool(),
+      scaffoldCodeOverride: codeOverride,
+      timeoutMs: opts?.timeoutMs,
+    });
+  }
+
+  /** Return the current shadow-rollout status: pending version, win counts, decision. */
+  @callable()
+  async getShadowStatus() {
+    const pending = getPendingScaffold(this.boundSql);
+    if (!pending) {
+      const versions = this.sql<{ version: number; status: string; rationale: string; written_at: number }>`
+        SELECT version, status, rationale, written_at FROM scaffold_versions ORDER BY version DESC LIMIT 10`;
+      return { hasPending: false as const, versions };
+    }
+    const decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
+    return { hasPending: true as const, pending, decision, config: DEFAULT_SHADOW_CONFIG };
+  }
+
+  /**
+   * Apply the pending scaffold rollout decision manually.
+   *
+   * `mode='auto'` consults decidePromotion and acts on its verdict (only
+   * acts if decision != 'continue').
+   * `mode='promote'` / `mode='rollback'` forces the corresponding action.
+   */
+  @callable()
+  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback') {
+    const pending = getPendingScaffold(this.boundSql);
+    if (!pending) return { ok: false, error: 'no pending scaffold' };
+    let decision: 'promote' | 'rollback' | 'continue';
+    if (mode === 'auto') {
+      decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
+      if (decision === 'continue') return { ok: false, error: 'inconclusive; need more trials' };
+    } else {
+      decision = mode;
+    }
+    const result = await applyPromotionDecision(this.rt, pending, decision);
+    return { ok: true, ...result };
+  }
+
+  /** List recent scaffold versions with their status. */
+  @callable()
+  async listScaffoldVersions(limit: number = 20) {
+    return this.sql<{ version: number; written_at: number; rationale: string; status: string }>`
+      SELECT version, written_at, rationale, status FROM scaffold_versions
+      ORDER BY version DESC LIMIT ${limit}`;
+  }
+
+  /**
+   * Internal: build an llmStream() callback for the scaffold executor. The
+   * scaffold's `host.llmStream(opts)` calls this and chunks come back as
+   * 'text_delta' events.
+   */
+  private makeScaffoldLLMStream() {
+    const env = this.env as Env & Record<string, string>;
+    const model = env.AI && typeof env.AI !== "string"
+      ? createWorkersAI({ binding: env.AI })(DEFAULT_MODEL)
+      : null;
+    return async function* (opts: { system?: string; messages: Array<{ role: string; content: string }> }) {
+      // Use generateText non-streaming for simplicity; chunked via splitting.
+      // A future v2.1 upgrade can wire Vercel's streamText for true streaming.
+      const { generateText } = await import('ai');
+      const m = model ?? createOpenAICompatible({
+        name: "workers-ai",
+        baseURL: env.AI_GATEWAY_URL ?? "",
+        headers: { Authorization: env.AI_GATEWAY_AUTH ?? "" },
+      }).chatModel(`workers-ai/${DEFAULT_MODEL}`);
+      const result = await generateText({
+        model: m,
+        system: opts.system,
+        messages: opts.messages.map((mm) => ({ role: mm.role as 'user' | 'assistant' | 'system', content: mm.content })),
+        maxOutputTokens: 2048,
+      });
+      // Emit as a single chunk for now; future: real streaming via streamText().
+      yield result.text;
+    };
+  }
+
+  /**
+   * Internal: build a callTool callback that dispatches to the parent's
+   * ToolSet. Used by the scaffold to invoke any tool the orchestrator has
+   * (e.g. save_note, search_memory).
+   */
+  private makeScaffoldCallTool() {
+    const orchestrator = this;
+    return async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+      const tools = orchestrator.getTools();
+      const t = tools[name];
+      if (!t || typeof t.execute !== 'function') {
+        return { error: `tool not found: ${name}` };
+      }
+      try {
+        return await t.execute(args as never, {
+          messages: [], toolCallId: `scaffold-${Date.now()}`,
+        } as never);
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    };
   }
 
   @callable() async getMemoryContent() {
