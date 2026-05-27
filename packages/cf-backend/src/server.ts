@@ -14,6 +14,7 @@ import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
 import { handleMcpRequest } from "./mcp-server.js";
+import { handleHealthRequest } from "./health-route.js";
 
 export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
@@ -40,6 +41,10 @@ export default {
     if (url.pathname.startsWith("/pc/")) {
       return handlePcRequest(request, env);
     }
+
+    // v2 health/info — useful for verifying a deploy went out.
+    const healthResp = handleHealthRequest(request);
+    if (healthResp) return healthResp;
 
     // v2: durable run-event log endpoints
     //   GET /api/agents/<name>/runs                 → list runs
