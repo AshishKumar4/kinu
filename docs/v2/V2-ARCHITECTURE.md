@@ -1,12 +1,24 @@
-# Proteus v2 — Architecture
+# Proteus v2 — Architecture (HISTORICAL pre-cleanup snapshot)
+
+> **⚠️ This document is the AS-BUILT-THEN snapshot from before the cleanup
+> passes that removed parallel systems.** It still references `HeadAgent`,
+> `ReviewAgent`, `SandboxApi`, `createVirtualSandbox`, `createCloudflareSandbox`,
+> `createNimbusSandbox`, `createSSHSandbox`, `DefaultSandboxRegistry`,
+> `sandboxToExecutorProvider`, and `packages/core/src/compaction.ts` — all
+> of which have been **removed** as duplicates of pre-existing systems.
+>
+> **For the as-shipped post-cleanup state, see `docs/v2/HANDOFF.md`.**
+> What's kept (heads as ExplorationAgent mode, executors as the existing
+> ExecutorProvider, Think Session's built-in compaction, EvolutionEngine's
+> existing turn reflection) is documented there.
 
 **Branch:** `worktree-proteus-v2-runtime`
 **Status:** Code complete (deploy pending wrangler auth)
 **Date:** 2026-05-27
 
-This document describes Proteus as it exists *after* the v2 autonomous build.
-See `docs/v2/IMPLEMENTATION_PLAN.md` for the original plan and
-`docs/v2/RESEARCH_NOTES.md` for the API references used.
+This document describes Proteus as it existed during the v2 build, before
+the duplicacy cleanup. See `docs/v2/IMPLEMENTATION_PLAN.md` for the original
+plan and `docs/v2/RESEARCH_NOTES.md` for the API references used.
 
 ---
 
