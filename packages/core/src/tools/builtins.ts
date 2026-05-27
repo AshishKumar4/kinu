@@ -111,6 +111,15 @@ export interface BuiltinToolDeps {
    * when the underlying binding is unavailable.
    */
   vectorStore?: import('../memory/vector-store.js').VectorStore;
+  /**
+   * v2.x: how to handle 'gate' decisions from the approval-gate review.
+   *   'strict'    — reject gate commands until an approval-channel is wired (default)
+   *   'allow_all' — treat gate as warn (logged but executed). Use for trusted
+   *                 dev environments only. Set per-agent via the
+   *                 setShellApprovalMode RPC.
+   *   'deny_all'  — reject everything that isn't 'allow' (max safety)
+   */
+  shellApprovalMode?: 'strict' | 'allow_all' | 'deny_all';
 }
 
 /**
@@ -264,21 +273,29 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['command'],
     }),
     execute: async (args: { command: string; executor?: string }) => {
-      // v2: approval-gate pre-flight. Deny on regex hits for rm-rf-root,
-      // fork-bomb, dd-overwrite-disk, mkfs-physical-disk, curl|sh,
-      // wget|bash, cloud-metadata SSRF. Warn for env-dump and secret-file-read
-      // (logged, but executed). Gate (sudo, chmod-setuid, rm-recursive,
-      // git force-push, etc.) is rejected until an approval-channel is
-      // wired — for now the LLM gets a clear "Requires approval" error so
-      // it can ask the user or work around.
+      // v2: approval-gate pre-flight. See safety/approval-gate.ts for the
+      // ruleset. Behavior at decision='gate' depends on the shellApprovalMode:
+      //   strict     → reject (LLM gets a "Requires user approval" error)
+      //   allow_all  → execute, log as warn (trusted dev environments only)
+      //   deny_all   → reject all gate AND warn (max safety)
+      const mode = deps.shellApprovalMode ?? 'strict';
       const review = reviewCommand(args.command);
       if (review.decision === 'deny') {
         return `Denied by approval gate:\n${formatApproval(review)}`;
       }
       if (review.decision === 'gate') {
-        return `Requires user approval — not yet wired:\n${formatApproval(review)}`;
+        if (mode === 'allow_all') {
+          console.warn(`[proteus] approval-gate gate→allow (allow_all mode): ${formatApproval(review)}`);
+        } else {
+          // strict + deny_all both reject gate decisions.
+          return `Requires user approval (mode=${mode}). To allow, call ` +
+                 `setShellApprovalMode('allow_all') on the agent.\n${formatApproval(review)}`;
+        }
       }
       if (review.decision === 'warn') {
+        if (mode === 'deny_all') {
+          return `Denied by approval gate (deny_all mode):\n${formatApproval(review)}`;
+        }
         console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
       }
 

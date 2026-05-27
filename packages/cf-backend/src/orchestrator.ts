@@ -465,6 +465,12 @@ export class OrchestratorAgent extends Think<Env> {
 
       type FiberCtx = { stash(data: unknown): void };
       const activeFiberCtx: { current: FiberCtx | null } = { current: null };
+      // v2: read approval mode from agent_config (default strict).
+      const apprModeRow = this.sql<{ value: string }>`
+        SELECT value FROM agent_config WHERE key = 'shell_approval_mode' LIMIT 1`;
+      const shellApprovalMode = (apprModeRow[0]?.value ?? 'strict') as
+        'strict' | 'allow_all' | 'deny_all';
+
       const tools = buildBuiltinTools({
         rt: this.rt,
         engine: this.engine,
@@ -474,6 +480,8 @@ export class OrchestratorAgent extends Think<Env> {
         // v2: Vectorize-backed semantic memory. search_memory auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
+        // v2.x: per-agent approval policy for shell exec.
+        shellApprovalMode,
         onMctsProgress: (phase, iteration, budget) => this.broadcastMctsProgress(phase, iteration, budget),
         createMctsSession: () => this.createMCTSSession(),
         onExplorePhase: (phase, task) => {
@@ -1241,6 +1249,38 @@ export class OrchestratorAgent extends Think<Env> {
       console.warn('[proteus] event emit failed at applyScaffoldDecision:', err);
     }
     return { ok: true, ...result };
+  }
+
+  /**
+   * v2.x: change how the `run` builtin handles 'gate' decisions from the
+   * approval-gate review. Stored in agent_config; effective on the NEXT
+   * turn (the tool cache rebuilds when CraftStore changes — and on cold-
+   * start any value here is read).
+   *
+   *   strict     — default; reject gate commands (sudo, rm-recursive, etc.)
+   *   allow_all  — treat gate decisions as warn (logged + executed). Use
+   *                ONLY for trusted dev environments.
+   *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
+   */
+  @callable()
+  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: string }> {
+    if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
+      throw new Error(`invalid mode: ${mode}`);
+    }
+    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('shell_approval_mode', ${mode})`;
+    // Force a tool cache rebuild on next getTools().
+    this._cachedTools = null;
+    this._cachedToolsKey = '';
+    return { ok: true, mode };
+  }
+
+  /** Current shell-approval mode (strict | allow_all | deny_all). */
+  @callable()
+  async getShellApprovalMode(): Promise<{ mode: 'strict' | 'allow_all' | 'deny_all' }> {
+    const row = this.sql<{ value: string }>`
+      SELECT value FROM agent_config WHERE key = 'shell_approval_mode' LIMIT 1`;
+    const mode = (row[0]?.value ?? 'strict') as 'strict' | 'allow_all' | 'deny_all';
+    return { mode };
   }
 
   /** List recent scaffold versions with their status. */
