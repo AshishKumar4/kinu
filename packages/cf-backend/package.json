@@ -9,13 +9,15 @@
     "types": "wrangler types env.d.ts --include-runtime false"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.80",
+    "@ai-sdk/openai": "^3",
     "@ai-sdk/openai-compatible": "^2.0.41",
     "@cloudflare/ai-chat": "^0.4.2",
     "@cloudflare/codemode": "^0.3.4",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@cloudflare/kumo": "^1.18.0",
     "@cloudflare/sandbox": "^0.8.11",
     "@cloudflare/think": "^0.4.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@phosphor-icons/react": "^2.1.10",
     "@proteus/agent-utils": "workspace:*",
     "@proteus/core": "workspace:*",
@@ -36,6 +38,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@proteus/test-utils": "workspace:*",
     "@babel/plugin-proposal-decorators": "^7.25.9",
     "@cloudflare/vite-plugin": "^1.32.2",
     "@cloudflare/workers-types": "^4.20260414.1",

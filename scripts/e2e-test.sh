@@ -100,7 +100,7 @@ else
   ((FAIL++))
 fi
 
-# 5-tool architecture (v2.0: tool construction lives in @proteus/core/tools/builtins)
+# 5-tool architecture (tool construction lives in @proteus/core/tools/builtins)
 REGISTRY_TOOLS=$(grep -cE "'(execute_tools|run|explore|save_note|search_memory)'" packages/core/src/tools/registry.ts 2>/dev/null; echo 0 | head -1)
 REGISTRY_TOOLS=$(printf '%s' "$REGISTRY_TOOLS" | head -n 1)
 CF_USES_FACTORY=$(grep -cE 'buildBuiltinTools\(\{' packages/cf-backend/src/orchestrator.ts 2>/dev/null || printf 0)

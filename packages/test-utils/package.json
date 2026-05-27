@@ -1,5 +1,5 @@
 {
-  "name": "@proteus/core",
+  "name": "@proteus/test-utils",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -7,11 +7,10 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "devDependencies": {
-    "@proteus/test-utils": "workspace:*"
+  "dependencies": {
+    "@proteus/core": "workspace:*"
   },
   "scripts": {
-    "build": "tsc",
     "check": "tsc --noEmit"
   }
 }
