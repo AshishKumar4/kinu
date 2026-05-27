@@ -106,6 +106,16 @@ export {
 // CraftStore quality
 export { emaUpdate, effectiveScore, updateCraftScores } from './craft/ema.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
+// v2: SKILL.md export/import (Hermes-style git-friendly tool format)
+export {
+  craftedToolToSkillMd,
+  parseSkillMd,
+  exportAllSkillsToVfs,
+  importSkillsFromVfs,
+  type SkillMdParseResult,
+  type ExportSkillsResult,
+  type ImportSkillsResult,
+} from './craft/skill-md.js';
 export { periodicCraftConsolidation } from './craft/consolidation.js';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict.js';
 export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migrate-duplicates.js';

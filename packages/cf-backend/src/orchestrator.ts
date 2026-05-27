@@ -60,6 +60,9 @@ import {
   type RunEvent, type RunEventQuery,
   // v2: hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, type HybridHit,
+  // v2: SKILL.md export/import (git-friendly crafted-tool format)
+  exportAllSkillsToVfs, importSkillsFromVfs,
+  type ExportSkillsResult, type ImportSkillsResult,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
 } from "@proteus/core";
@@ -1180,6 +1183,28 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async vectorStoreStatus(): Promise<{ available: boolean }> {
     return { available: this.rt.vectorStore.available };
+  }
+
+  // ── v2: SKILL.md export/import — make crafted tools git-friendly ──
+
+  /**
+   * Export every crafted tool to a SKILL.md file under `skills/` in the VFS.
+   * Returns counts + per-tool error list. Skips tools whose code is empty
+   * or comment-only.
+   */
+  @callable()
+  async exportSkillsToVfs(dir?: string): Promise<ExportSkillsResult> {
+    return exportAllSkillsToVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
+  }
+
+  /**
+   * Import every SKILL.md file under `skills/` in the VFS back into the
+   * CraftStore. For existing tools: update in place. For new ones: create.
+   * Parse errors are reported per-file but don't halt the import.
+   */
+  @callable()
+  async importSkillsFromVfs(dir?: string): Promise<ImportSkillsResult> {
+    return importSkillsFromVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
   }
 
   /**
