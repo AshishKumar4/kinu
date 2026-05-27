@@ -65,6 +65,13 @@
       // parent's ctx.exports + ctx.facets mechanism.
       "tag": "v3",
       "new_sqlite_classes": ["HeadAgent"]
+    },
+    {
+      // v4: Hermes-style background-review Facet. Spawned fire-and-forget
+      // from OrchestratorAgent.onChatResponse to consider per-turn memory
+      // lessons via Workers AI. Same facet pattern as HeadAgent.
+      "tag": "v4",
+      "new_sqlite_classes": ["ReviewAgent"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:

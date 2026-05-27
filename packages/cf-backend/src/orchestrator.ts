@@ -65,6 +65,7 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
+import { ReviewAgent } from "./heads/review-agent.js";
 
 const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
@@ -761,6 +762,32 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Fire turn-level evolution in background (does NOT block the TurnQueue)
     this.engine.onTurnCompleteAsync(turn);
+
+    // v2: Hermes-style background-review fork. Spawn a ReviewAgent Facet
+    // that runs the SKILL_REVIEW_PROMPT against this turn and writes any
+    // worthwhile memory lessons back to MEMORY.md. Fire-and-forget — the
+    // facet is its own DO so eviction-independent + no SQLite contention.
+    const chatHadError = result.status === 'error';
+    void (async () => {
+      try {
+        const stub = await this.subAgent(ReviewAgent, `review-${nanoid(8)}`);
+        const review = await stub.reviewTurn({
+          userText: userText.slice(0, 4000),
+          assistantText: assistantText.slice(0, 4000),
+          toolCallsSummary: JSON.stringify(this._turnToolCalls).slice(0, 2000),
+          hadError: this._turnHadError || chatHadError,
+        });
+        if (review.status === 'wrote_lesson' && review.lesson) {
+          await this.rt.memory.append(
+            'memory/MEMORY.md',
+            `\n### Background review (${new Date().toISOString().split('T')[0]})\n${review.lesson}\n`,
+          );
+          await this.rt.memory.index('memory/MEMORY.md');
+        }
+      } catch (err) {
+        console.warn('[proteus] background review failed:', err);
+      }
+    })();
   }
 
   // ── DO initialization ──────────────────────────────────────────

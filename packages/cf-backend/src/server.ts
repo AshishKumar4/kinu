@@ -22,6 +22,9 @@ export { ProteusSandbox } from "./proteus-sandbox.js";
 // Must be exported from the worker entry so workerd can resolve the class via
 // ctx.exports during facet construction (Agent SDK Sub-Agent RFC).
 export { HeadAgent } from "./heads/head-agent.js";
+// v2: Hermes-style background-review fork — spawned fire-and-forget after
+// each turn to consider whether a memory lesson or skill update is warranted.
+export { ReviewAgent } from "./heads/review-agent.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
