@@ -11,7 +11,7 @@ export default function Layout() {
   const location = useLocation();
 
   // Extract agentId from URL if we're on an agent page
-  const agentMatch = location.pathname.match(/\/(agent|mcts|settings)\/([^/]+)/);
+  const agentMatch = location.pathname.match(/\/(agent|mcts|settings|v2)\/([^/]+)/);
   const agentId = agentMatch?.[2];
 
   const [collapsed, setCollapsed] = useState(() => {
@@ -73,6 +73,7 @@ export default function Layout() {
               {collapsed && <div className="my-1.5 mx-1 border-t" style={{ borderColor: "var(--c-border)" }} />}
               <SidebarLink to={`/agent/${agentId}`} icon={ChatTextIcon} label="Chat" collapsed={collapsed} />
               <SidebarLink to={`/mcts/${agentId}`} icon={TreeStructureIcon} label="MCTS" collapsed={collapsed} />
+              <SidebarLink to={`/v2/${agentId}`} icon={BrainIcon} label="v2 Panel" collapsed={collapsed} />
               <SidebarLink to={`/settings/${agentId}`} icon={GearSixIcon} label="Settings" collapsed={collapsed} />
             </>
           )}

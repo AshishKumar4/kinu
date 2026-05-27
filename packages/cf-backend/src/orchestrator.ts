@@ -1283,6 +1283,33 @@ export class OrchestratorAgent extends Think<Env> {
     return { mode };
   }
 
+  /**
+   * v2.x: generic agent_config setter. Used by the V2 panel UI for tunables
+   * like shadow_sample_rate, auto_promote_scaffold. Allow-listed keys only —
+   * anything else throws so callers can't write arbitrary settings.
+   */
+  @callable()
+  async setAgentConfig(key: string, value: string): Promise<{ ok: true; key: string; value: string }> {
+    const allowedKeys = new Set([
+      'shadow_sample_rate',
+      'auto_promote_scaffold',
+      // shell_approval_mode has its own typed setter; not allowed via this.
+    ]);
+    if (!allowedKeys.has(key)) {
+      throw new Error(`agent_config key not allowed via generic setter: ${key}`);
+    }
+    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${key}, ${value})`;
+    return { ok: true, key, value };
+  }
+
+  /** v2.x: read an agent_config value by key. Returns null if unset. */
+  @callable()
+  async getAgentConfig(key: string): Promise<{ key: string; value: string | null }> {
+    const row = this.sql<{ value: string }>`
+      SELECT value FROM agent_config WHERE key = ${key} LIMIT 1`;
+    return { key, value: row[0]?.value ?? null };
+  }
+
   /** List recent scaffold versions with their status. */
   @callable()
   async listScaffoldVersions(limit: number = 20) {
