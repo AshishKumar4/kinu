@@ -101,6 +101,20 @@ export {
   type ScaffoldStatus,
   type JudgeFn,
 } from './scaffold/shadow.js';
+// v2.x: auto-judge shadow evaluation — sampled-per-turn closure of the
+// shadow-rollout loop. Picks up pending scaffolds, runs them against the
+// same task, asks a judge LLM to compare, records the result, optionally
+// auto-applies promotion/rollback when minTrials is reached.
+export {
+  runAutoShadowEval,
+  JudgeOutputSchema,
+  DEFAULT_AUTO_JUDGE_CONFIG,
+  type AutoJudgeConfig,
+  type AutoShadowEvalResult,
+  type JudgeOutput,
+  type StructuredJudgeFn,
+  type RunAutoShadowEvalOpts,
+} from './scaffold/auto-judge.js';
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, updateCraftScores } from './craft/ema.js';

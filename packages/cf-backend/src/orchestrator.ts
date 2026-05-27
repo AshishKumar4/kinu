@@ -57,6 +57,9 @@ import {
   runScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   readScaffoldVersion, DEFAULT_SHADOW_CONFIG,
+  // v2.x: auto-judge shadow eval — sampled per-turn shadow rollout closure
+  runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
+  type StructuredJudgeFn,
   // v2: durable run-event log
   initRunEventTables, RunEventRecorder,
   type RunEvent, type RunEventQuery,
@@ -830,7 +833,87 @@ export class OrchestratorAgent extends Think<Env> {
     //   • session-level reflection every N turns → maybeEvolveScaffold
     // No separate ReviewAgent Facet — this single hook handles all of it.
     this.engine.onTurnCompleteAsync(turn);
+
+    // v2.x: auto-judge shadow evaluation. When a pending scaffold exists,
+    // sample-and-run (default 25%) the pending against this turn's task,
+    // ask a judge LLM to compare, record. When minTrials is reached AND
+    // agent_config.auto_promote_scaffold='true', auto-apply the decision.
+    void this.runShadowEvalSampled(userText, assistantText);
   }
+
+  /**
+   * Sampled per-turn auto-judge shadow rollout. Fire-and-forget — never
+   * extends the TurnQueue. Reads sampling/auto-promote from agent_config
+   * so the user can toggle without redeploys.
+   */
+  private async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
+    try {
+      // Read tunables from agent_config (default: sample 25%, no auto-apply).
+      const configRows = this.sql<{ key: string; value: string }>`
+        SELECT key, value FROM agent_config
+        WHERE key IN ('shadow_sample_rate', 'auto_promote_scaffold')`;
+      const cfg = new Map(configRows.map((r) => [r.key, r.value]));
+      const sampleRate = Number(cfg.get('shadow_sample_rate') ?? '0.25');
+      const autoApply = cfg.get('auto_promote_scaffold') === 'true';
+      if (sampleRate <= 0) return;
+
+      const judge: StructuredJudgeFn = async (prompt) => {
+        const { generateObject } = await import('ai');
+        const { object } = await generateObject({
+          model: this.getModelForReview(),
+          schema: JudgeOutputSchema,
+          prompt,
+          maxOutputTokens: 512,
+        });
+        return object;
+      };
+
+      const result = await runAutoShadowEval({
+        rt: this.rt,
+        task: task.slice(0, 2000),
+        currentOutput: currentOutput.slice(0, 4000),
+        judge,
+        llmStream: this.makeScaffoldLLMStream(),
+        config: {
+          ...DEFAULT_AUTO_JUDGE_CONFIG,
+          sampleRate,
+          autoApply,
+        },
+      });
+
+      if (!result.skipped && result.evaluation) {
+        // Emit a structured note to the event log for visibility.
+        try {
+          if (this._currentRunId) {
+            this.eventRecorder.emit(this._currentRunId, {
+              type: 'memory_write',
+              path: 'shadow-eval',
+              bytes: result.evaluation.rationale.length,
+            });
+          }
+        } catch { /* nop */ }
+      }
+      if (result.applied) {
+        console.log(`[proteus] auto-judge applied: ${result.applied}`);
+      }
+    } catch (err) {
+      console.warn('[proteus] runShadowEvalSampled failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Get a model for review/judge tasks. Mirrors makeScaffoldLLMStream's resolver. */
+  private getModelForReview(): import('ai').LanguageModel {
+    const env = this.env as Env & Record<string, string>;
+    if (env.AI && typeof env.AI !== 'string') {
+      return createWorkersAI({ binding: env.AI })(DEFAULT_MODEL);
+    }
+    return createOpenAICompatible({
+      name: 'workers-ai',
+      baseURL: env.AI_GATEWAY_URL ?? '',
+      headers: { Authorization: env.AI_GATEWAY_AUTH ?? '' },
+    }).chatModel(`workers-ai/${DEFAULT_MODEL}`);
+  }
+}
 
   // ── DO initialization ──────────────────────────────────────────
 
