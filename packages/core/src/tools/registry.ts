@@ -13,6 +13,7 @@ export const BUILTIN_TOOLS = [
   'execute_tools',
   'run',
   'explore',
+  'split_heads',
   'save_note',
   'search_memory',
 ] as const;
@@ -56,6 +57,12 @@ export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
   run: 'Run a POSIX shell command (cat, grep, find, sed, ls, etc.). Pipes and redirects work. Optional executor param routes to nimbus/sandbox/laptop.',
   explore:
     'MCTS tree search for complex subproblems. Spawns parallel branches, evaluates outcomes, returns the best approach discovered.',
+  split_heads:
+    'Split your reasoning into 2-6 parallel HEADS that explore different angles concurrently. ' +
+    'Each head sees the whole conversation context but has its own ephemeral scratch space. ' +
+    'Heads return findings (summary + evidence + decisions); findings are merged via LLM synthesis. ' +
+    'Use for tasks with distinct sub-questions that benefit from parallel exploration. Avoid for ' +
+    'tasks with one obvious path. Heads may recursively split under a depth budget (default 3).',
   save_note:
     'Save a note to long-term memory (memory/MEMORY.md). FTS-indexed so future turns can retrieve it via search_memory.',
   search_memory:

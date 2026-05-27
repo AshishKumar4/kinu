@@ -57,6 +57,14 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["ProteusSandbox"]
+    },
+    {
+      // v3: branching-heads Facet — each HeadAgent gets its own SQLite-backed
+      // Durable Object spawned via orchestrator.subAgent(HeadAgent, headId).
+      // No top-level DO binding needed — facets are resolved through the
+      // parent's ctx.exports + ctx.facets mechanism.
+      "tag": "v3",
+      "new_sqlite_classes": ["HeadAgent"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:

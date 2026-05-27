@@ -95,6 +95,12 @@ export interface BuiltinToolDeps {
    * it only needs the final ToolSet entry.
    */
   preBuiltExecuteTool?: unknown;
+  /**
+   * When supplied, used as-is for `split_heads`. The orchestrator builds this
+   * via `createSplitHeadsTool` with a wired HeadController; core just slots it
+   * into the ToolSet so the LLM can call it. Absent → no split_heads tool.
+   */
+  splitHeadsTool?: ToolSet[string];
 }
 
 /**
@@ -306,7 +312,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: wrappedExplore,
   });
 
-  // ── 4. save_note ─────────────────────────────────────────────────────────
+  // ── 4. split_heads — parallel reasoning branches with LLM merge ──────────
+  // Built by the orchestrator (which owns the HeadController + Facet runtime)
+  // and slotted in here. Core doesn't reach into cf-backend internals.
+  if (deps.splitHeadsTool) {
+    tools.split_heads = deps.splitHeadsTool;
+  }
+
+  // ── 5. save_note ─────────────────────────────────────────────────────────
   tools.save_note = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.save_note,
     inputSchema: jsonSchema<{ content: string }>({
@@ -322,7 +335,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 5. search_memory ─────────────────────────────────────────────────────
+  // ── 6. search_memory ─────────────────────────────────────────────────────
   tools.search_memory = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.search_memory,
     inputSchema: jsonSchema<{ query: string }>({

@@ -1,7 +1,14 @@
 /**
- * Unit tests for the canonical 5-tool surface (v2.0).
- * CF and CLI both consume buildBuiltinTools, so this test locks in the
- * post-refactor tool inventory and basic per-tool behavior.
+ * Unit tests for the canonical 6-tool surface (v2.1 — added split_heads).
+ *
+ * v2.0 surface (CLI / always): execute_tools, run, explore, save_note, search_memory.
+ * v2.1 addition (CF only when splitHeadsTool is supplied): split_heads.
+ *
+ * The split_heads tool is conditional because it requires a HeadController +
+ * HeadRuntime — CF supplies them via createSplitHeadsTool; CLI doesn't have
+ * Facets and omits the tool. BUILTIN_TOOLS lists all 6 canonical names so
+ * crafted-tool filtering (BUILT_IN_TOOL_NAMES) excludes split_heads from
+ * craft suggestions.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -63,16 +70,41 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-describe('Agent tools (v2.0 canonical 5-tool surface)', () => {
-  test('buildBuiltinTools returns exactly the 5 canonical tools', () => {
+describe('Agent tools (v2.1 canonical 6-tool surface — split_heads conditional)', () => {
+  test('without splitHeadsTool: 5 base tools, split_heads omitted', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const names = Object.keys(t);
+    const expected = BUILTIN_TOOLS.filter((n) => n !== 'split_heads');
 
-    for (const canonical of BUILTIN_TOOLS) {
+    for (const canonical of expected) {
       expect(names).toContain(canonical);
     }
+    expect(names).not.toContain('split_heads');
     expect(names.length).toBe(5);
+    expect(names.sort()).toEqual([...expected].sort());
+  });
+
+  test('with splitHeadsTool stub: all 6 canonical tools present', () => {
+    const { rt } = createTestRuntime();
+    const engine = new EvolutionEngine(rt, { enabled: false });
+    const stubSplitHeads = tool({
+      description: 'stub split_heads',
+      inputSchema: jsonSchema<{ rationale: string }>({
+        type: 'object', properties: { rationale: { type: 'string' } }, required: ['rationale'],
+      }),
+      execute: async () => 'stub',
+    });
+    const t = buildBuiltinTools({
+      rt, engine,
+      craftedToolExecute: nodeCraftedExecute,
+      createExecuteTool: nodeExecFactory as never,
+      codemodeLoader: { __test: true } as unknown,
+      splitHeadsTool: stubSplitHeads,
+    });
+    const names = Object.keys(t);
+    for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
+    expect(names.length).toBe(6);
     expect(names.sort()).toEqual([...BUILTIN_TOOLS].sort());
   });
 

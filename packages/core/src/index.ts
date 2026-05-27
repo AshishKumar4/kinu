@@ -105,6 +105,27 @@ export {
 export { nanoid } from './utils/nanoid.js';
 export { isoDate, today, nowMs } from './utils/date.js';
 
+// ── v2: branching heads (parallel reasoning streams with merge) ──
+// A head is a divergent reasoning thread that sees the WHOLE conversation
+// context, accumulates EPHEMERAL interim context, and merges back via LLM
+// synthesis. Distinct from sub-agents (isolated context, structured return)
+// and MCTS branches (single short LLM call for evaluation).
+export type {
+  HeadId, HeadBudget, HeadInput, HeadReport,
+  Evidence, Decision, ArtifactRef,
+  SplitRequest, MergeResult, MergeStrategy,
+  BudgetSplit, SerializedMessage,
+} from './heads/index.js';
+export {
+  DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
+  deriveChildBudget, budgetExhausted,
+  initHeadsTables,
+  HeadJournal, type HeadJournalRow,
+  HeadController, type HeadRuntime, type SpawnedHead, type MergeLLMFn,
+  MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
+  createSplitHeadsTool, type SplitHeadsInput, type SplitHeadsToolDeps,
+} from './heads/index.js';
+
 // ── v2: unified sandbox abstraction (SandboxApi + impls) ──────────
 // Strict typed contract for any execution environment. Each implementation
 // (Virtual/Cloudflare/Nimbus/SSH) is one file; `sandboxToExecutorProvider`

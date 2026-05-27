@@ -47,12 +47,16 @@ import {
   // Fork feature
   forkAgentStorage, readForkLineage,
   nanoid,
+  // v2: branching heads
+  HeadController, HeadJournal, initHeadsTables, createSplitHeadsTool,
+  type SerializedMessage,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
 } from "@proteus/core";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
+import { createCFHeadRuntime } from "./heads/head-runtime.js";
 
 const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
@@ -187,6 +191,12 @@ export class OrchestratorAgent extends Think<Env> {
   // execute call, so newly-saved tools appear on the next execute_tools
   // invocation without any registry or cache coherence work.
   private _craftExecTool: unknown = null;
+
+  // v2: branching-heads controller and tool — lazily built once per DO lifetime.
+  // The controller wraps a HeadJournal + HeadRuntime (Facet spawner + merge LLM).
+  // The split_heads tool reads inheritedContext lazily via assistant_messages.
+  private _headController: HeadController | null = null;
+  private _splitHeadsTool: ReturnType<typeof createSplitHeadsTool> | null = null;
 
   // ── Activity logging: persisted + broadcast to Logs pane ──
   private _turnT0 = 0;
@@ -428,6 +438,8 @@ export class OrchestratorAgent extends Think<Env> {
         rt: this.rt,
         engine: this.engine,
         preBuiltExecuteTool: this.getExecuteToolsTool(),
+        // v2: branching-heads tool — lazy-built once, then reused across turns.
+        splitHeadsTool: this.getSplitHeadsTool(),
         onMctsProgress: (phase, iteration, budget) => this.broadcastMctsProgress(phase, iteration, budget),
         createMctsSession: () => this.createMCTSSession(),
         onExplorePhase: (phase, task) => {
@@ -453,6 +465,45 @@ export class OrchestratorAgent extends Think<Env> {
       console.error("[proteus] getTools() FAILED:", err);
       throw err;
     }
+  }
+
+  /**
+   * Lazily build the split_heads tool wired to a HeadController that spawns
+   * HeadAgent Facets. Inherited context is read fresh from assistant_messages
+   * at every tool invocation so each head sees the full conversation.
+   */
+  private getSplitHeadsTool() {
+    if (this._splitHeadsTool) return this._splitHeadsTool;
+    const sqlForJournal = this.sql.bind(this) as unknown as SqlExecutor;
+    const journal = new HeadJournal(sqlForJournal);
+    const runtime = createCFHeadRuntime(this);
+    this._headController = new HeadController(runtime, journal);
+    const orchestrator = this;
+    this._splitHeadsTool = createSplitHeadsTool({
+      controller: this._headController,
+      getInheritedContext(): SerializedMessage[] {
+        try {
+          type Row = { id: string; role: string; content: string; created_at: string };
+          const rows = orchestrator.sql<Row>`
+            SELECT id, role, content, created_at
+            FROM assistant_messages
+            ORDER BY created_at ASC`;
+          return rows.map((r) => ({
+            id: r.id,
+            role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
+              ? r.role
+              : 'assistant',
+            content: r.content,
+            createdAt: Date.parse(r.created_at) || 0,
+          }));
+        } catch {
+          // assistant_messages table may not yet exist on a fresh agent.
+          return [];
+        }
+      },
+      defaultModel: undefined, // heads inherit DEFAULT_MODEL
+    });
+    return this._splitHeadsTool;
   }
 
   configureSession(session: Session): Session {
@@ -718,6 +769,8 @@ export class OrchestratorAgent extends Think<Env> {
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);
+    // v2: branching-heads journal (head_journal, head_evidence, head_merge_results)
+    initHeadsTables(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL

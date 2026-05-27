@@ -16,6 +16,10 @@ import { proxyPreviewRequest } from "./preview-proxy.js";
 export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
+// v2: branching-heads Facet — spawned via OrchestratorAgent.subAgent(HeadAgent, id).
+// Must be exported from the worker entry so workerd can resolve the class via
+// ctx.exports during facet construction (Agent SDK Sub-Agent RFC).
+export { HeadAgent } from "./heads/head-agent.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
