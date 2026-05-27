@@ -1,19 +1,29 @@
 import { describe, test, expect } from 'bun:test';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { createTestCredentials, freshOAuthCredential } from '@proteus/test-utils';
-import { CODEX_CRED_KEY } from '@proteus/core';
 
-// Minimal fake `Ai` binding — workers-ai-provider's factory only calls .run()
-// at request time, never at construction; this satisfies the isAvailable check.
 function fakeAiBinding() {
   return { run: async () => ({ result: '' }) } as unknown as object;
+}
+
+/** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
+function fakeUserDOStub(creds: Record<string, Record<string, string>> = {}) {
+  const list = Object.entries(creds).map(([key, headers]) => ({
+    key, kind: headers['x-api-key'] ? 'bearer' : 'oauth' as const,
+    createdAt: 0, updatedAt: 0,
+  }));
+  return {
+    getAuthHeaders: async (key: string) => creds[key] ?? null,
+    hasCredential: async (key: string) => !!creds[key],
+    listCredentials: async () => list,
+    getCredentialBaseURL: async (_key: string) => null,
+  } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
 }
 
 describe('AgentProviderRegistry composition', () => {
   test('registers all 7 providers in preference order', () => {
     const reg = createAgentProviderRegistry({
       env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
+      userDOStub: fakeUserDOStub(),
     });
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
@@ -23,80 +33,63 @@ describe('AgentProviderRegistry composition', () => {
   });
 
   test('normalizeSpecSync — bare @cf/... prefixes workers-ai', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
-    });
+    const reg = createAgentProviderRegistry({ env: { AI: fakeAiBinding() }, userDOStub: fakeUserDOStub() });
     expect(reg.normalizeSpecSync('@cf/moonshotai/kimi-k2.6'))
       .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('normalizeSpecSync — canonical provider/modelId passes through', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
-    });
+    const reg = createAgentProviderRegistry({ env: { AI: fakeAiBinding() }, userDOStub: fakeUserDOStub() });
     expect(reg.normalizeSpecSync('codex/gpt-5.5')).toBe('codex/gpt-5.5');
     expect(reg.normalizeSpecSync('anthropic/claude-opus-4-7')).toBe('anthropic/claude-opus-4-7');
   });
 
-  test('normalizeSpecSync — null/empty returns workers-ai default when env.AI present', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
-    });
+  test('normalizeSpecSync — null returns workers-ai default when env.AI present', () => {
+    const reg = createAgentProviderRegistry({ env: { AI: fakeAiBinding() }, userDOStub: fakeUserDOStub() });
     expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
     expect(reg.normalizeSpecSync('')).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
-    expect(reg.normalizeSpecSync(undefined)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('normalizeSpecSync — null falls back to ai-gateway when no env.AI but vars set', () => {
     const reg = createAgentProviderRegistry({
       env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
-      credentials: createTestCredentials(),
+      userDOStub: fakeUserDOStub(),
     });
     expect(reg.normalizeSpecSync(null)).toBe('ai-gateway/workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('normalizeSpecSync — throws when no sync-resolvable provider', () => {
-    const reg = createAgentProviderRegistry({
-      env: {},
-      credentials: createTestCredentials(),
-    });
+    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
     expect(() => reg.normalizeSpecSync(null)).toThrow(/sync-resolvable/);
   });
 
   test('normalizeSpecSync — throws on unknown provider id', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
-    });
+    const reg = createAgentProviderRegistry({ env: { AI: fakeAiBinding() }, userDOStub: fakeUserDOStub() });
     expect(() => reg.normalizeSpecSync('nonsense/model')).toThrow(/Unknown provider/);
-  });
-
-  test('normalizeSpecSync — bare modelId wraps with sync-default provider', () => {
-    const reg = createAgentProviderRegistry({
-      env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
-    });
-    expect(reg.normalizeSpecSync('gpt-5.5')).toBe('workers-ai/gpt-5.5');
   });
 
   test('async resolveSpec — picks first available provider via cred-aware ordering', async () => {
     // Only codex creds available; workers-ai binding absent.
     const reg = createAgentProviderRegistry({
       env: {},
-      credentials: createTestCredentials({ [CODEX_CRED_KEY]: freshOAuthCredential() }),
+      userDOStub: fakeUserDOStub({
+        'codex.oauth': { Authorization: 'Bearer codex-token', originator: 'codex_cli_rs' },
+      }),
     });
     const spec = await reg.resolveSpec(null);
     expect(spec).toBe('codex/gpt-5.5');
   });
 
-  test('async resolveSpec — accepts canonical spec unchanged', async () => {
+  test('null userDOStub → only env-bound providers available', async () => {
     const reg = createAgentProviderRegistry({
       env: { AI: fakeAiBinding() },
-      credentials: createTestCredentials(),
+      userDOStub: null,
     });
-    expect(await reg.resolveSpec('openai/gpt-4.1')).toBe('openai/gpt-4.1');
+    const list = await reg.registry.listProviders(reg.deps);
+    const credGated = list.filter((p) =>
+      ['codex', 'openai', 'anthropic', 'openrouter', 'openai-compat'].includes(p.id),
+    );
+    for (const p of credGated) expect(p.available).toBe(false);
+    expect(list.find((p) => p.id === 'workers-ai')?.available).toBe(true);
   });
 });

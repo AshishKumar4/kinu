@@ -1,11 +1,14 @@
 // Provider abstraction — a plugin that knows how to build a LanguageModel for
-// a given model id, given env bindings + per-agent credentials. Credentials
-// that can't live in `env` (OAuth tokens, BYO API keys) come through the
-// CredentialStore. createModel is SYNCHRONOUS — async work (cred lookup,
-// token refresh) happens inside the customFetch wrappers each provider passes
-// to the underlying SDK, so model construction never blocks the chat loop.
+// a given model id, given env bindings + an auth resolver. Credentials never
+// pass through this layer in raw form: providers ask the resolver for
+// ready-to-attach HTTP headers (and a baseURL where relevant). All secret
+// material stays inside the implementation that owns it (UserDO in production,
+// stub callbacks in tests).
+//
+// createModel is SYNCHRONOUS — async work (auth resolution, token refresh)
+// happens inside the customFetch wrappers each provider passes to the
+// underlying SDK, so model construction never blocks the chat loop.
 import type { LanguageModel } from 'ai';
-import type { CredentialStore } from '../credentials/store.js';
 
 /** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
@@ -26,20 +29,37 @@ export interface ProviderInfo {
   unavailableReason?: string;
 }
 
+/** Resolved auth for one credential key. Headers are ready to inject into
+ *  a fetch; baseURL is set for providers whose endpoint is part of the
+ *  credential (openai-compat). */
+export interface AuthResolution {
+  headers: Record<string, string>;
+  baseURL?: string;
+}
+
+/** Auth resolver. Implementations: UserDO stub in production, test fixtures
+ *  in unit tests. Returns null when no credential is configured for `key`. */
+export type AuthResolver = (
+  key: string,
+  opts?: { forceRefresh?: boolean },
+) => Promise<AuthResolution | null>;
+
 /** The fields any provider may read from the Worker env. All optional —
- *  providers narrow at the read site (e.g. `typeof env.AI_GATEWAY_URL === 'string'`).
- *  Structurally compatible with wrangler-generated `Env` types: each field is
- *  typed loosely so the consumer's narrower `Env` (e.g. `AI: Ai`) is assignable. */
+ *  providers narrow at the read site. Structurally compatible with
+ *  wrangler-generated `Env` types. */
 export interface ProviderEnv {
   AI?: unknown;
   AI_GATEWAY_URL?: string;
   AI_GATEWAY_AUTH?: string;
-  OPENAI_API_KEY?: string;
 }
 
 export interface ProviderDeps {
   env: ProviderEnv;
-  credentials: CredentialStore;
+  /** Returns auth headers + baseURL for `key`, or null if not configured. */
+  getAuth: AuthResolver;
+  /** Synchronous-friendly "is there a credential for this key" check used by
+   *  isAvailable(). Implementations can be cached for cheap repeated reads. */
+  hasCredential: (key: string) => Promise<boolean>;
   fetch?: typeof fetch;
 }
 

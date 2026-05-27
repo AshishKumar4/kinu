@@ -227,10 +227,13 @@ export * from './curriculum/index.js';
 
 // provider abstraction — single registry for resolving model specs across
 // Workers AI, AI Gateway, Codex (ChatGPT subscription), OpenAI, OpenRouter,
-// and generic OpenAI-compatible upstreams. Per-agent credentials live in the
-// CredentialStore (DO SQL in cf-backend).
+// and generic OpenAI-compatible upstreams. Auth resolution flows through
+// the AuthResolver callback in ProviderDeps — secrets stay inside UserDO
+// (cf-backend) and never enter the provider layer.
 export * from './providers/index.js';
-export * from './credentials/store.js';
+// Credential value shape (still exported for UserDO + tests; the previous
+// CredentialStore interface is gone).
+export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store.js';
 
 // safety — approval gating for shell exec
 export {

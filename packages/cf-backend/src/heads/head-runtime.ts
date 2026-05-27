@@ -15,14 +15,17 @@ import { MergeOutputSchema, type MergeOutput, effortFor, createAgentConfigStore 
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
-import { createSqlCredentialStore } from "../credentials/store.js";
+import type { UserDO } from "../user/user-do.js";
 
-export function createCFHeadRuntime(orchestrator: Think<Env>): HeadRuntime {
-  // The merge LLM uses the chat agent's configured provider — same provider
-  // resolution as ordinary chat, including Codex/OpenRouter when set.
+export function createCFHeadRuntime(orchestrator: Think<Env>, ownerUserId: string): HeadRuntime {
+  // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
+  // is read once from agent_soul by the orchestrator and threaded down.
+  const userDOStub = orchestrator.env.UserDO.get(
+    orchestrator.env.UserDO.idFromName(ownerUserId),
+  ) as DurableObjectStub<UserDO>;
   const reg = createAgentProviderRegistry({
     env: orchestrator.env,
-    credentials: createSqlCredentialStore(orchestrator.ctx.storage.sql),
+    userDOStub,
     appTitle: 'Proteus (heads)',
   });
 
@@ -45,6 +48,7 @@ export function createCFHeadRuntime(orchestrator: Think<Env>): HeadRuntime {
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
+      await stub.setOwner(ownerUserId);
       await stub.initHead(input);
       return {
         id: input.id,

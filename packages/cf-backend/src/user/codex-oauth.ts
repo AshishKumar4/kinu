@@ -23,9 +23,6 @@ export const CODEX_TOKEN_URL = `${CODEX_ISSUER}/oauth/token`;
 const DEVICE_CODE_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/usercode`;
 const DEVICE_POLL_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/token`;
 
-/** Strip token-shaped fields from an upstream error body before including
- *  it in an Error message. Defense-in-depth: the OAuth server shouldn't
- *  echo tokens, but if it ever does we don't want them in our logs. */
 function sanitizeErrorBody(body: string): string {
   return body
     .replace(/("(access|refresh|id|code|user)_token"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$3')
@@ -35,27 +32,21 @@ function sanitizeErrorBody(body: string): string {
 }
 
 export interface DeviceCodeStart {
-  /** Code the user types into the portal. */
   userCode: string;
-  /** Internal handle we pass to the poll endpoint. */
   deviceAuthId: string;
-  /** Recommended polling interval in seconds. */
   pollIntervalSec: number;
-  /** Portal URL the user opens. */
   portalURL: string;
 }
 
 export interface DeviceCodeTokens {
   accessToken: string;
   refreshToken: string;
-  /** Unix-ms expiry derived from the JWT's `exp` claim if present. */
   expiresAt?: number;
   idToken?: string;
 }
 
 export interface CodexOAuthClient {
   startDeviceFlow(): Promise<DeviceCodeStart>;
-  /** Poll once. Returns tokens when authorized, null while pending. */
   pollDeviceFlow(deviceAuthId: string, userCode: string): Promise<DeviceCodeTokens | null>;
   refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken: string; expiresAt?: number }>;
 }
@@ -86,13 +77,12 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
     },
 
     async pollDeviceFlow(deviceAuthId, userCode): Promise<DeviceCodeTokens | null> {
-      // Step 3: poll for authorization_code.
       const pollRes = await fetchFn(DEVICE_POLL_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
       });
-      if (pollRes.status === 403 || pollRes.status === 404) return null; // user hasn't completed yet
+      if (pollRes.status === 403 || pollRes.status === 404) return null;
       if (!pollRes.ok) {
         throw new Error(`Codex poll failed: ${pollRes.status} ${sanitizeErrorBody(await pollRes.text())}`);
       }
@@ -100,7 +90,6 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
       if (!poll.authorization_code || !poll.code_verifier) {
         throw new Error('Codex poll response missing authorization_code/code_verifier');
       }
-      // Step 4: exchange.
       const exchange = await fetchFn(CODEX_TOKEN_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -155,7 +144,6 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
   };
 }
 
-/** Convert exchanged tokens into the OAuthCredential shape stored by Proteus. */
 export function tokensToCredential(t: DeviceCodeTokens, metadata?: Record<string, unknown>): OAuthCredential {
   return {
     kind: 'oauth',

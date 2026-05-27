@@ -3,13 +3,14 @@
 //   Surface: Responses API (default) or Chat Completions
 //
 // For ChatGPT *subscription* credits, use the `codex` provider instead.
-// createModel is sync; customFetch resolves the bearer at request time.
+// createModel is sync; customFetch resolves the bearer at request time via
+// the AuthResolver.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
 
-export const OPENAI_CRED_KEY = 'openai';
+export const OPENAI_CRED_KEY = 'openai.bearer';
 
 const MODELS: ModelInfo[] = [
   { id: 'gpt-5.5',    label: 'GPT-5.5',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'] },
@@ -18,13 +19,6 @@ const MODELS: ModelInfo[] = [
   { id: 'gpt-4.1',    label: 'GPT-4.1',    capabilities: ['tools', 'streaming', 'json-mode', 'vision'] },
   { id: 'o4-mini',    label: 'o4-mini',    capabilities: ['streaming', 'reasoning'] },
 ];
-
-async function readKey(deps: ProviderDeps): Promise<string | null> {
-  const c = await deps.credentials.get(OPENAI_CRED_KEY);
-  if (c?.kind === 'bearer') return c.token;
-  const envKey = deps.env.OPENAI_API_KEY;
-  return typeof envKey === 'string' && envKey ? envKey : null;
-}
 
 export interface OpenAIOptions {
   /** Use the Responses API (default) vs Chat Completions. */
@@ -37,21 +31,21 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
     id: 'openai',
     label: 'OpenAI (direct API)',
     defaultModel: 'gpt-5.5',
-    async isAvailable(deps) { return !!(await readKey(deps)); },
-    async unavailableReason() { return 'No OpenAI API key (cred key: `openai`, or OPENAI_API_KEY env var).'; },
+    async isAvailable(deps) { return deps.hasCredential(OPENAI_CRED_KEY); },
+    unavailableReason() { return 'No OpenAI API key (cred key: `openai.bearer`).'; },
     listModels: () => MODELS,
     createModel(modelId, deps): LanguageModel {
       const baseFetch = deps.fetch ?? fetch;
       const customFetch = asFetchFunction(async (input, init) => {
-        const key = await readKey(deps);
-        if (!key) {
+        const auth = await deps.getAuth(OPENAI_CRED_KEY);
+        if (!auth) {
           return new Response(
             JSON.stringify({ error: 'OpenAI API key not configured' }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
           );
         }
         const headers = new Headers(init?.headers);
-        headers.set('Authorization', `Bearer ${key}`);
+        for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
         return baseFetch(input, { ...init, headers });
       });
       const provider = createOpenAI({ apiKey: 'placeholder', fetch: customFetch });

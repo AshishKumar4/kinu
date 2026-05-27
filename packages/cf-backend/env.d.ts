@@ -12,6 +12,7 @@
 import type { OrchestratorAgent } from "./src/orchestrator.js";
 import type { ExplorationAgent } from "./src/exploration.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
+import type { UserDO } from "./src/user/user-do.js";
 
 interface Env {
   /** Workers AI direct binding. OPTIONAL — fallback is the AI Gateway. */
@@ -19,6 +20,8 @@ interface Env {
   LOADER: WorkerLoader;
   OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
   ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
+  /** Per-user DO: profile + agent registry + credentials + defaults. */
+  UserDO: DurableObjectNamespace<UserDO>;
   /** Sandbox container DO — @cloudflare/sandbox. One per agent.
    *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
    *  looks up `env.Sandbox` directly. */
@@ -38,4 +41,14 @@ interface Env {
    *  When unset, the MCP endpoint is open (dev / personal-account mode).
    *  Set in prod: `echo "<long-random>" | npx wrangler secret put MCP_AUTH_TOKEN` */
   MCP_AUTH_TOKEN?: string;
+  /** Cloudflare Access — team domain, e.g. `myteam.cloudflareaccess.com`.
+   *  Required in production; without it, all auth-protected routes 500. */
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  /** CF Access application AUD claim (set in Zero Trust dashboard when you
+   *  create the Access application). The Worker verifies the JWT's `aud`
+   *  against this exact value. */
+  CF_ACCESS_AUD?: string;
+  /** Local dev backdoor — synthesize an authenticated identity for this
+   *  email without verifying CF Access. Production must leave this unset. */
+  DEV_USER_EMAIL?: string;
 }

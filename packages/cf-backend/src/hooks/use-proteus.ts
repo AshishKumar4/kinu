@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { ToolInfo, MemoryEntry, MCTSNode } from "../lib/protocol";
-import { registerAgent } from "../lib/agent-registry";
+import { touchAgent, registerAgent } from "../lib/user-api";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -284,7 +284,12 @@ export function useProteus(agentId?: string) {
       .then((s) => {
         const status = s as AgentStatus;
         setAgentStatus(status);
-        if (agentId) registerAgent(agentId, status.displayName || status.name, status.purpose);
+        if (agentId) {
+          // Fire-and-forget: record in UserDO (new agent → register; existing → touch).
+          registerAgent(agentId, status.displayName || status.name, status.purpose).catch(() => {
+            touchAgent(agentId).catch(() => {});
+          });
+        }
       })
       .catch(() => {});
 

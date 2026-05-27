@@ -2,57 +2,69 @@
 // Fireworks, DeepInfra, xAI, etc. (all Chat Completions API). For OpenRouter,
 // use the openrouter provider (adds attribution headers + dynamic catalog).
 // For Anthropic direct, a separate Messages-API adapter is required.
-// createModel is sync; customFetch injects bearer + custom baseURL config
-// from the stored credential at request time.
+//
+// One openai-compat endpoint per credential key — the user can register
+// multiple keyed `openai-compat.<name>` credentials (e.g. `openai-compat.groq`,
+// `openai-compat.together`) and pick the model spec as
+// `openai-compat:<name>/<modelId>`.
+//
+// createModel is sync; customFetch resolves the apiKey + baseURL at request
+// time via the AuthResolver.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ProviderDeps } from './types.js';
-import type { OpenAICompatCredential } from '../credentials/store.js';
 import { asFetchFunction } from './fetch-shim.js';
 
-export const OPENAI_COMPAT_CRED_KEY = 'openai-compat';
+export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
-async function readCred(deps: ProviderDeps): Promise<OpenAICompatCredential | null> {
-  const c = await deps.credentials.get(OPENAI_COMPAT_CRED_KEY);
-  return c?.kind === 'openai-compat' ? c : null;
+/** Extract the credential key for an openai-compat provider id.
+ *  `openai-compat:groq` → `openai-compat.groq` */
+function credKeyFor(providerId: string): string {
+  if (providerId === 'openai-compat') return 'openai-compat.default';
+  if (providerId.startsWith('openai-compat:')) {
+    return `openai-compat.${providerId.slice('openai-compat:'.length)}`;
+  }
+  return providerId;
 }
 
-export function createOpenAICompatProvider(): ModelProvider {
+export function createOpenAICompatProvider(providerId: string = 'openai-compat'): ModelProvider {
+  const credKey = credKeyFor(providerId);
   return {
-    id: 'openai-compat',
-    label: 'OpenAI-compatible (BYO base URL)',
-    async isAvailable(deps) { return !!(await readCred(deps)); },
-    async unavailableReason() { return 'No openai-compat credential (set baseURL + apiKey).'; },
+    id: providerId,
+    label: providerId === 'openai-compat'
+      ? 'OpenAI-compatible (BYO base URL)'
+      : `OpenAI-compatible (${providerId.slice('openai-compat:'.length)})`,
+    async isAvailable(deps) { return deps.hasCredential(credKey); },
+    unavailableReason() { return `No openai-compat credential at key \`${credKey}\` (set baseURL + apiKey).`; },
     listModels: () => [],   // dynamic — UI prompts user for model id
 
     createModel(modelId, deps): LanguageModel {
-      // baseURL is sourced from the stored credential, but @ai-sdk needs it
-      // at construction. We pass a placeholder and rewrite the prefix inside
+      const baseFetch = deps.fetch ?? fetch;
+      // baseURL is sourced from the credential, but @ai-sdk needs it at
+      // construction. We pass a placeholder and rewrite the prefix inside
       // customFetch (which re-reads the credential each call, so a UI-side
       // change to baseURL takes effect without rebuilding the model).
-      const baseFetch = deps.fetch ?? fetch;
       const placeholder = 'https://openai-compat.invalid';
       const customFetch = asFetchFunction(async (input, init) => {
-        const cred = await readCred(deps);
-        if (!cred) {
+        const auth = await deps.getAuth(credKey);
+        if (!auth || !auth.baseURL) {
           return new Response(
-            JSON.stringify({ error: 'openai-compat credential not configured' }),
+            JSON.stringify({ error: `openai-compat credential ${credKey} not configured (baseURL required)` }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
           );
         }
         const headers = new Headers(init?.headers);
-        headers.set('Authorization', `Bearer ${cred.apiKey}`);
-        for (const [k, v] of Object.entries(cred.extraHeaders ?? {})) headers.set(k, v);
+        for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
         const originalUrl = typeof input === 'string' ? input
                           : input instanceof URL ? input.toString()
                           : input.url;
         const url = originalUrl.startsWith(placeholder)
-          ? cred.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
+          ? auth.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
           : originalUrl;
         return baseFetch(url, { ...init, headers });
       });
       return createOpenAICompatible({
-        name: 'openai-compat',
+        name: providerId,
         baseURL: placeholder,
         fetch: customFetch,
       }).chatModel(modelId);

@@ -1,46 +1,53 @@
-// Credential fixtures — pre-loaded in-memory CredentialStore for tests.
-import { createInMemoryCredentialStore, type CredentialStore, type Credential } from '@proteus/core';
+// Credential fixtures — auth-resolver shims for tests.
+//
+// The new provider seam exposes `getAuth(key)` returning ready-to-attach
+// HTTP headers rather than raw Credential values. UserDO is the production
+// implementation; this file gives tests the equivalent shape without
+// spinning up a DO.
+import type { AuthResolution, AuthResolver } from '@proteus/core';
 
-/** Build a credential store pre-loaded with the given credentials. */
-export function createTestCredentials(
-  entries: Record<string, Credential> = {},
-): CredentialStore {
-  const store = createInMemoryCredentialStore();
-  for (const [key, value] of Object.entries(entries)) {
-    // fire-and-forget — in-memory store is synchronous under the hood.
-    void store.set(key, value);
-  }
-  return store;
+export interface TestAuth {
+  getAuth: AuthResolver;
+  hasCredential: (key: string) => Promise<boolean>;
+  set: (key: string, value: AuthResolution) => void;
+  remove: (key: string) => void;
 }
 
-/** A fresh OAuth credential — JWT-shaped access token with `exp` far in
- *  the future, so accessTokenExpiring() returns false. */
-export function freshOAuthCredential(opts: { accountId?: string } = {}): Credential {
+/** Build a test auth resolver pre-loaded with the given header bundles. */
+export function createTestAuth(entries: Record<string, AuthResolution> = {}): TestAuth {
+  const store = new Map<string, AuthResolution>(Object.entries(entries));
+  return {
+    async getAuth(key) { return store.get(key) ?? null; },
+    async hasCredential(key) { return store.has(key); },
+    set(key, value) { store.set(key, value); },
+    remove(key) { store.delete(key); },
+  };
+}
+
+/** Codex headers for a fresh OAuth credential — `exp` far in the future. */
+export function codexAuthHeaders(opts: { accountId?: string; accessToken?: string } = {}): AuthResolution {
   const claims: Record<string, unknown> = { exp: Math.floor(Date.now() / 1000) + 3600 };
   if (opts.accountId) {
     claims['https://api.openai.com/auth'] = { chatgpt_account_id: opts.accountId };
   }
   const b64 = (s: string) => Buffer.from(s).toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const accessToken = `header.${b64(JSON.stringify(claims))}.sig`;
-  return {
-    kind: 'oauth',
-    accessToken,
-    refreshToken: 'rfsh-' + Math.random().toString(36).slice(2, 10),
-    expiresAt: Date.now() + 3_600_000,
-    metadata: opts.accountId ? { accountId: opts.accountId } : undefined,
+  const token = opts.accessToken ?? `header.${b64(JSON.stringify(claims))}.sig`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    'User-Agent': 'codex_cli_rs/0.0.0 (Proteus Agent)',
+    originator: 'codex_cli_rs',
   };
+  if (opts.accountId) headers['ChatGPT-Account-ID'] = opts.accountId;
+  return { headers };
 }
 
-/** Expired-token variant — accessTokenExpiring() returns true. */
-export function expiredOAuthCredential(): Credential {
-  const claims = { exp: Math.floor(Date.now() / 1000) - 100 };
-  const b64 = (s: string) => Buffer.from(s).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  return {
-    kind: 'oauth',
-    accessToken: `header.${b64(JSON.stringify(claims))}.sig`,
-    refreshToken: 'rfsh-expired',
-    expiresAt: Date.now() - 100_000,
-  };
+/** Bearer-token-flavored auth resolution. */
+export function bearerAuth(token: string, extra: Record<string, string> = {}): AuthResolution {
+  return { headers: { Authorization: `Bearer ${token}`, ...extra } };
+}
+
+/** Anthropic-flavored (x-api-key) auth resolution. */
+export function anthropicAuth(key: string): AuthResolution {
+  return { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } };
 }

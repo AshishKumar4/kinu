@@ -2,12 +2,19 @@ import { describe, test, expect } from 'bun:test';
 import {
   parseModelSpec, formatModelSpec,
   createProviderRegistry,
-  createInMemoryCredentialStore,
   createOpenAICompatProvider,
-  createCodexProvider, decodeChatGPTAccountId, accessTokenExpiring,
+  createCodexProvider,
   CODEX_CRED_KEY,
-  type ModelProvider, type ProviderDeps,
+  type ModelProvider, type ProviderDeps, type AuthResolution,
 } from '../src/index.ts';
+
+/** Tiny in-memory auth fixture for tests. */
+function createTestAuth(store: Map<string, AuthResolution> = new Map()): Pick<ProviderDeps, 'getAuth' | 'hasCredential'> {
+  return {
+    async getAuth(key) { return store.get(key) ?? null; },
+    async hasCredential(key) { return store.has(key); },
+  };
+}
 
 describe('parseModelSpec', () => {
   test('splits on first slash so workers-ai/@cf/... survives', () => {
@@ -43,19 +50,19 @@ describe('ProviderRegistry', () => {
     };
   }
 
+  const baseDeps = (): ProviderDeps => ({ env: {}, ...createTestAuth() });
+
   test('register + resolve', () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'm1', true));
-    const deps: ProviderDeps = { env: {}, credentials: createInMemoryCredentialStore() };
-    const model = r.resolve('alpha/m1', deps);
+    const model = r.resolve('alpha/m1', baseDeps());
     expect((model as { provider?: string }).provider).toBe('alpha');
   });
 
   test('resolve throws on unknown provider', () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'm1', true));
-    const deps: ProviderDeps = { env: {}, credentials: createInMemoryCredentialStore() };
-    expect(() => r.resolve('beta/m', deps)).toThrow('Unknown provider');
+    expect(() => r.resolve('beta/m', baseDeps())).toThrow('Unknown provider');
   });
 
   test('defaultSpec picks first available provider', async () => {
@@ -63,16 +70,14 @@ describe('ProviderRegistry', () => {
     r.register(fakeProvider('alpha', 'a-default', false));
     r.register(fakeProvider('beta', 'b-default', true));
     r.register(fakeProvider('gamma', 'g-default', true));
-    const deps: ProviderDeps = { env: {}, credentials: createInMemoryCredentialStore() };
-    expect(await r.defaultSpec(deps)).toBe('beta/b-default');
+    expect(await r.defaultSpec(baseDeps())).toBe('beta/b-default');
   });
 
   test('listProviders returns availability info for all', async () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'a', true));
     r.register(fakeProvider('beta', 'b', false));
-    const deps: ProviderDeps = { env: {}, credentials: createInMemoryCredentialStore() };
-    const list = await r.listProviders(deps);
+    const list = await r.listProviders(baseDeps());
     expect(list.map(p => [p.id, p.available])).toEqual([['alpha', true], ['beta', false]]);
   });
 
@@ -83,75 +88,30 @@ describe('ProviderRegistry', () => {
   });
 });
 
-describe('Codex provider — JWT helpers', () => {
-  // Build a JWT-shaped token: <header>.<base64url(claims)>.<sig>
-  function makeJwt(claims: object): string {
-    const b64 = (s: string) => Buffer.from(s).toString('base64')
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    return `header.${b64(JSON.stringify(claims))}.sig`;
-  }
-
-  test('decodeChatGPTAccountId returns the claim from a valid JWT', () => {
-    const token = makeJwt({
-      'https://api.openai.com/auth': { chatgpt_account_id: 'acct-abc123' },
-    });
-    expect(decodeChatGPTAccountId(token)).toBe('acct-abc123');
-  });
-
-  test('decodeChatGPTAccountId returns null on missing claim', () => {
-    expect(decodeChatGPTAccountId(makeJwt({}))).toBeNull();
-  });
-
-  test('decodeChatGPTAccountId returns null on malformed token', () => {
-    expect(decodeChatGPTAccountId('not-a-jwt')).toBeNull();
-    expect(decodeChatGPTAccountId('')).toBeNull();
-  });
-
-  test('accessTokenExpiring is true within skew', () => {
-    const exp = Math.floor(Date.now() / 1000) + 30; // 30s away
-    expect(accessTokenExpiring(makeJwt({ exp }), 60)).toBe(true);
-  });
-
-  test('accessTokenExpiring is false outside skew', () => {
-    const exp = Math.floor(Date.now() / 1000) + 3600; // 1h away
-    expect(accessTokenExpiring(makeJwt({ exp }), 60)).toBe(false);
-  });
-
-  test('accessTokenExpiring is true on undecodable token', () => {
-    expect(accessTokenExpiring('garbage')).toBe(true);
-  });
-});
-
-describe('OpenAI-compat provider — base URL rewriting via customFetch', () => {
-  test('isAvailable when credential stored', async () => {
-    const credentials = createInMemoryCredentialStore();
+describe('OpenAI-compat provider', () => {
+  test('isAvailable reflects credential presence via hasCredential', async () => {
+    const store = new Map<string, AuthResolution>();
+    const deps: ProviderDeps = { env: {}, ...createTestAuth(store) };
     const provider = createOpenAICompatProvider();
-    expect(await provider.isAvailable({ env: {}, credentials })).toBe(false);
+    expect(await provider.isAvailable(deps)).toBe(false);
 
-    await credentials.set('openai-compat', {
-      kind: 'openai-compat',
+    store.set('openai-compat.default', {
+      headers: { Authorization: 'Bearer gsk_test' },
       baseURL: 'https://api.groq.com/openai/v1',
-      apiKey: 'gsk_test',
     });
-    expect(await provider.isAvailable({ env: {}, credentials })).toBe(true);
+    expect(await provider.isAvailable(deps)).toBe(true);
   });
 });
 
-describe('Codex provider — registry integration', () => {
+describe('Codex provider', () => {
   test('isAvailable false when no credential stored', async () => {
-    const credentials = createInMemoryCredentialStore();
-    const provider = createCodexProvider({ refresh: async () => { throw new Error('refresh not expected'); } });
-    expect(await provider.isAvailable({ env: {}, credentials })).toBe(false);
+    const provider = createCodexProvider();
+    expect(await provider.isAvailable({ env: {}, ...createTestAuth() })).toBe(false);
   });
 
-  test('isAvailable true when oauth credential stored', async () => {
-    const credentials = createInMemoryCredentialStore();
-    await credentials.set(CODEX_CRED_KEY, {
-      kind: 'oauth',
-      accessToken: 'fake.eyJleHAiOjk5OTk5OTk5OTl9.sig', // exp far in future
-      refreshToken: 'refresh-token',
-    });
-    const provider = createCodexProvider({ refresh: async () => { throw new Error('refresh not expected'); } });
-    expect(await provider.isAvailable({ env: {}, credentials })).toBe(true);
+  test('isAvailable true when codex.oauth credential exists', async () => {
+    const store = new Map<string, AuthResolution>([[CODEX_CRED_KEY, { headers: { Authorization: 'Bearer fake' } }]]);
+    const provider = createCodexProvider();
+    expect(await provider.isAvailable({ env: {}, ...createTestAuth(store) })).toBe(true);
   });
 });

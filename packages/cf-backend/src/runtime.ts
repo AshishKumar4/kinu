@@ -24,7 +24,6 @@ import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
-  createInMemoryCredentialStore,
   effortFor,
   createAgentConfigStore,
   type VectorStore, type VectorizeIndex,
@@ -41,7 +40,22 @@ import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { createSqlCredentialStore } from "./credentials/store.js";
+import type { UserDO } from "./user/user-do.js";
+
+/** Read owner_user_id from the orchestrator's agent_soul. Empty/missing → null. */
+function readOwnerUserId(agent: Think<Env>): string | null {
+  try {
+    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_soul LIMIT 1`;
+    const v = rows[0]?.owner_user_id;
+    return v && v !== '' ? v : null;
+  } catch { return null; }
+}
+
+function userDOStubFor(agent: Think<Env>): DurableObjectStub<UserDO> | null {
+  const userId = readOwnerUserId(agent);
+  if (!userId) return null;
+  return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+}
 
 /** Extended runtime that exposes the raw SqliteFS for shell emulation, the
  *  SSH executor for tunnel socket management, and the Vectorize-backed
@@ -292,7 +306,7 @@ function createDualPathLLM(agent: Think<Env>): LLM {
       try {
         const reg = createAgentProviderRegistry({
           env: agent.env,
-          credentials: createSqlCredentialStore(agent.ctx.storage.sql),
+          userDOStub: userDOStubFor(agent),
           appTitle: 'Proteus',
         });
         const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
@@ -342,6 +356,8 @@ function createFacetSpawner(agent: Think<Env>): (branchId: string) => Promise<Br
   return async (branchId: string): Promise<BranchHandle> => {
     try {
       const stub = await agent.subAgent(ExplorationAgent, branchId);
+      const owner = readOwnerUserId(agent);
+      if (owner) await stub.setOwner(owner);
       return {
         explore: async (history, tools) => stub.explore(history, tools),
         evaluate: async (task) => stub.evaluate(task),
@@ -375,7 +391,7 @@ function createInlineBranch(agent: Think<Env>): BranchHandle {
   // ai-gateway) only, which need no credential reads.
   const reg = createAgentProviderRegistry({
     env: agent.env,
-    credentials: createInMemoryCredentialStore(),
+    userDOStub: null,
     appTitle: 'Proteus (inline branch)',
   });
   const spec = reg.normalizeSpecSync(null);

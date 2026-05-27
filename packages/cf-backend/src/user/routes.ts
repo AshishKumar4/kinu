@@ -1,0 +1,155 @@
+/**
+ * `/api/user/*` HTTP routes. All operations are user-scoped — the auth
+ * middleware injects the caller's `userId` (sha256(email) from CF Access
+ * JWT) before any of these handlers run.
+ *
+ * Routes:
+ *   GET    /api/user/profile                       — user info
+ *   GET    /api/user/agents                        — agent registry
+ *   POST   /api/user/agents                        — register new agent
+ *   POST   /api/user/agents/:name/touch            — update last_visited
+ *   DELETE /api/user/agents/:name                  — remove from registry
+ *   GET    /api/user/credentials                   — masked listing
+ *   POST   /api/user/credentials/:key              — set
+ *   DELETE /api/user/credentials/:key              — delete
+ *   GET    /api/user/codex                         — Codex status
+ *   POST   /api/user/codex/start                   — start device flow
+ *   POST   /api/user/codex/poll                    — poll device flow
+ *   DELETE /api/user/codex                         — disconnect Codex
+ *   GET    /api/user/config                        — list all defaults
+ *   GET    /api/user/config/:key                   — single default
+ *   PUT    /api/user/config/:key                   — set default
+ *   GET    /api/user/models                        — union of available models
+ *   GET    /api/user/providers                     — connected provider summary
+ */
+import type { AccessIdentity } from '../auth/access.js';
+import type { UserDO } from './user-do.js';
+import { listAvailableModels } from './available-models.js';
+
+function json(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), {
+    ...init,
+    headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
+  });
+}
+
+function err(status: number, message: string): Response {
+  return json({ error: message }, { status });
+}
+
+function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
+  return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+}
+
+export async function handleUserRequest(
+  request: Request,
+  env: Env,
+  identity: AccessIdentity,
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith('/api/user')) return null;
+  const path = url.pathname.slice('/api/user'.length);
+  const method = request.method;
+
+  const stub = getUserDOStub(env, identity.userId);
+  // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
+  await stub.ensureProfile(identity.email);
+
+  // ── Profile ────────────────────────────────────────────────────────
+  if (path === '/profile' && method === 'GET') {
+    return json(await stub.getProfile());
+  }
+
+  // ── Agents ─────────────────────────────────────────────────────────
+  if (path === '/agents' && method === 'GET') {
+    return json(await stub.listAgents());
+  }
+  if (path === '/agents' && method === 'POST') {
+    const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
+    if (!body) return err(400, 'Body must be JSON');
+    if (typeof body.name !== 'string' || !body.name) return err(400, 'name required');
+    if (typeof body.displayName !== 'string' || !body.displayName) return err(400, 'displayName required');
+    try {
+      const entry = await stub.registerAgent(body.name, body.displayName, body.purpose);
+      return json(entry, { status: 201 });
+    } catch (e) { return err(400, (e as Error).message); }
+  }
+  const agentTouchMatch = path.match(/^\/agents\/([^/]+)\/touch$/);
+  if (agentTouchMatch && method === 'POST') {
+    try { await stub.touchAgent(decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
+    catch (e) { return err(400, (e as Error).message); }
+  }
+  const agentMatch = path.match(/^\/agents\/([^/]+)$/);
+  if (agentMatch && method === 'DELETE') {
+    try { await stub.removeAgent(decodeURIComponent(agentMatch[1])); return json({ ok: true }); }
+    catch (e) { return err(400, (e as Error).message); }
+  }
+
+  // ── Credentials ────────────────────────────────────────────────────
+  if (path === '/credentials' && method === 'GET') {
+    return json(await stub.listCredentials());
+  }
+  const credMatch = path.match(/^\/credentials\/([^/]+)$/);
+  if (credMatch) {
+    const key = decodeURIComponent(credMatch[1]);
+    if (method === 'POST') {
+      const body = await safeJson(request);
+      if (body === null) return err(400, 'Body must be JSON');
+      try { await stub.setCredential(key, body); return json({ ok: true }); }
+      catch (e) { return err(400, (e as Error).message); }
+    }
+    if (method === 'DELETE') {
+      try { await stub.deleteCredential(key); return json({ ok: true }); }
+      catch (e) { return err(400, (e as Error).message); }
+    }
+  }
+
+  // ── Codex device flow ──────────────────────────────────────────────
+  if (path === '/codex' && method === 'GET') {
+    return json(await stub.getCodexStatus());
+  }
+  if (path === '/codex' && method === 'DELETE') {
+    await stub.disconnectCodex();
+    return json({ ok: true });
+  }
+  if (path === '/codex/start' && method === 'POST') {
+    try { return json(await stub.startCodexDeviceFlow()); }
+    catch (e) { return err(502, (e as Error).message); }
+  }
+  if (path === '/codex/poll' && method === 'POST') {
+    try { return json(await stub.pollCodexDeviceFlow()); }
+    catch (e) { return err(502, (e as Error).message); }
+  }
+
+  // ── Config (defaults) ──────────────────────────────────────────────
+  if (path === '/config' && method === 'GET') {
+    return json(await stub.listConfig());
+  }
+  const cfgMatch = path.match(/^\/config\/([^/]+)$/);
+  if (cfgMatch) {
+    const key = decodeURIComponent(cfgMatch[1]);
+    if (method === 'GET') {
+      return json({ key, value: await stub.getConfig(key) });
+    }
+    if (method === 'PUT') {
+      const body = await safeJson<{ value?: string }>(request);
+      if (!body || typeof body.value !== 'string') return err(400, 'value (string) required');
+      await stub.setConfig(key, body.value);
+      return json({ ok: true });
+    }
+  }
+
+  // ── Models + providers ─────────────────────────────────────────────
+  if (path === '/providers' && method === 'GET') {
+    return json(await stub.listConnectedProviders());
+  }
+  if (path === '/models' && method === 'GET') {
+    return json(await listAvailableModels(env, identity.userId));
+  }
+
+  return err(404, `No such user route: ${method} ${path}`);
+}
+
+async function safeJson<T = unknown>(request: Request): Promise<T | null> {
+  try { return (await request.json()) as T; } catch { return null; }
+}

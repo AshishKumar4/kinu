@@ -31,7 +31,7 @@ import { Agent, callable } from "agents";
 import { generateText, generateObject, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { createSqlCredentialStore } from "./credentials/store.js";
+import type { UserDO } from "./user/user-do.js";
 import {
   type CraftedTool,
   type HeadId,
@@ -91,12 +91,42 @@ export class ExplorationAgent extends Agent<Env> {
   private _providerRegistry: AgentProviderRegistry | null = null;
   private providerRegistry(): AgentProviderRegistry {
     if (this._providerRegistry) return this._providerRegistry;
+    const userId = this.getOwnerUserId();
+    const userDOStub = userId
+      ? (this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>)
+      : null;
     this._providerRegistry = createAgentProviderRegistry({
       env: this.env,
-      credentials: createSqlCredentialStore(this.ctx.storage.sql),
+      userDOStub,
       appTitle: 'Proteus (exploration)',
     });
     return this._providerRegistry;
+  }
+
+  /** ExplorationAgents inherit ownership from the orchestrator that spawned
+   *  them; the parent calls setOwner immediately after subAgent() returns
+   *  the stub. Persisted to SQL so hibernation between spawn + run is safe. */
+  @callable()
+  async setOwner(userId: string): Promise<{ ok: true }> {
+    if (!userId) throw new Error('userId required');
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS facet_owner (id INTEGER PRIMARY KEY CHECK (id = 1), user_id TEXT NOT NULL)`,
+    );
+    this.ctx.storage.sql.exec(
+      `INSERT INTO facet_owner (id, user_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id`,
+      userId,
+    );
+    this._providerRegistry = null;   // rebuild against the new owner
+    return { ok: true };
+  }
+
+  private getOwnerUserId(): string | null {
+    try {
+      const rows = this.ctx.storage.sql.exec(
+        `SELECT user_id FROM facet_owner WHERE id = 1`,
+      ).toArray() as Array<{ user_id: string }>;
+      return rows[0]?.user_id ?? null;
+    } catch { return null; }
   }
 
   /** Resolve the LanguageModel for this facet. `modelId` is whatever the
@@ -501,6 +531,8 @@ export class ExplorationAgent extends Agent<Env> {
     const runtime = {
       async spawnHead(childInput: HeadInput) {
         const stub = await facet.subAgent(ExplorationAgent, childInput.id);
+        const owner = facet.getOwnerUserId();
+        if (owner) await stub.setOwner(owner);
         await stub.initHead(childInput);
         return {
           id: childInput.id,

@@ -32,6 +32,9 @@
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
+      // Per-user DO: profile + agent registry + credentials + defaults.
+      // Keyed by sha256(email) so the same user always lands on the same DO.
+      { "class_name": "UserDO", "name": "UserDO" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -66,6 +69,10 @@
     },
     // Head mode + background review run inside the existing
     // ExplorationAgent + EvolutionEngine — no additional DO classes.
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["UserDO"]
+    }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
   //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
@@ -81,7 +88,12 @@
   // available here; we bypass it with our own token-gated proxy.)
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
-    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com"
+    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
+    // Cloudflare Access. Set both to the values from the Access application
+    // in your Zero Trust dashboard. Leave unset for local dev — DEV_USER_EMAIL
+    // (in .dev.vars) takes over.
+    // "CF_ACCESS_TEAM_DOMAIN": "<your-team>.cloudflareaccess.com",
+    // "CF_ACCESS_AUD":         "<application-aud-tag>"
   },
   // Workers AI binding — the orchestrator's LLM resolver tries this FIRST,
   // falling back to AI_GATEWAY_URL + AI_GATEWAY_AUTH only when env.AI is

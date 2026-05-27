@@ -1,6 +1,6 @@
 // Runtime validator for credential payloads sent over HTTP. Mirrors the
-// `Credential` union from @proteus/core but rejects unknown shapes outright
-// so a bad request can't write garbage into the store.
+// `Credential` union from @proteus/core but rejects unknown shapes so a bad
+// request can't write garbage into UserDO storage.
 import type { Credential } from '@proteus/core';
 
 export function validateCredential(input: unknown): Credential {
@@ -41,4 +41,20 @@ export function validateCredential(input: unknown): Credential {
   }
 
   throw new Error(`unknown credential kind: ${String(kind)}`);
+}
+
+/** Credential keys must be `[a-zA-Z0-9._-]{1,128}` — alphanumerics, dot,
+ *  underscore, dash. No path traversal characters, no slashes. */
+export function validateCredentialKey(key: string): void {
+  if (!/^[a-zA-Z0-9._-]{1,128}$/.test(key)) {
+    throw new Error('Invalid credential key — alphanumerics, dot, underscore, dash only (max 128 chars).');
+  }
+}
+
+/** Agent names follow the same rule. The DO id system already restricts to
+ *  printable ascii; this is just an extra-strict guard at our API boundary. */
+export function validateAgentName(name: string): void {
+  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) {
+    throw new Error('Invalid agent name — alphanumerics, dot, underscore, dash only (max 64 chars).');
+  }
 }

@@ -4,26 +4,33 @@
 //   1. Cloudflare-specific providers from cf-backend/src/providers/
 //      (workers-ai env.AI binding, ai-gateway env vars)
 //   2. Runtime-agnostic providers from @proteus/core
-//      (codex, openai, openrouter, openai-compat)
+//      (codex, openai, openrouter, openai-compat, anthropic)
 //
 // Ordering is also the preference order for `defaultSpec()`:
-//   workers-ai → ai-gateway → codex → openai → openrouter → openai-compat
+//   workers-ai → ai-gateway → codex → openai → anthropic → openrouter → openai-compat
 //
-// Codex OAuth refresh is wired here (the registry instance carries the
-// OAuthRefresher closure).
+// Auth flows through the UserDO stub passed in opts.userDOStub — getAuth /
+// hasCredential are thin wrappers over its RPCs. No credential material ever
+// touches this layer.
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
-  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type CredentialStore,
+  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js';
 import { createAIGatewayProvider } from './ai-gateway.js';
-import { createCodexOAuthClient } from '../auth/codex-oauth.js';
+import type { UserDO } from '../user/user-do.js';
 
 export interface AgentProviderDeps {
   env: ProviderEnv;
-  credentials: CredentialStore;
+  /** Stub for the per-user DO that owns this user's credentials. Null is
+   *  allowed for short-lived "env-bound providers only" contexts (e.g. the
+   *  inline-branch fallback in runtime.ts, where the spawn closure cannot
+   *  reach the user's UserDO). In that case getAuth always returns null
+   *  and hasCredential always returns false — only workers-ai / ai-gateway
+   *  end up usable. */
+  userDOStub?: DurableObjectStub<UserDO> | null;
   fetch?: typeof fetch;
   refererURL?: string;
   appTitle?: string;
@@ -42,12 +49,11 @@ export interface AgentProviderRegistry {
 }
 
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
-  const oauth = createCodexOAuthClient(opts.fetch);
   const registry = createProviderRegistry();
 
   registry.register(createWorkersAIProvider(opts.workersAI));
   registry.register(createAIGatewayProvider());
-  registry.register(createCodexProvider({ refresh: oauth.refresh.bind(oauth) }));
+  registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
   registry.register(createOpenRouterProvider({
@@ -56,9 +62,33 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   }));
   registry.register(createOpenAICompatProvider());
 
+  // Auth resolver — proxies to UserDO. The DO event loop serializes
+  // concurrent refreshes for the same credential, so we don't need to
+  // dedupe at this layer. When userDOStub is null (inline-branch context),
+  // every lookup returns null so only env-bound providers remain usable.
+  const stub = opts.userDOStub ?? null;
+  const getAuth: AuthResolver = async (key, opts2) => {
+    if (!stub) return null;
+    const headers = await stub.getAuthHeaders(key, opts2);
+    if (!headers) return null;
+    if (key.startsWith('openai-compat.')) {
+      const baseURL = await stub.getCredentialBaseURL(key);
+      if (!baseURL) return null;
+      return { headers, baseURL };
+    }
+    return { headers };
+  };
+
+  const hasCredential = async (key: string) => {
+    if (!stub) return false;
+    const list = await stub.listCredentials();
+    return list.some((c) => c.key === key);
+  };
+
   const deps: ProviderDeps = {
     env: opts.env,
-    credentials: opts.credentials,
+    getAuth,
+    hasCredential,
     fetch: opts.fetch,
   };
 

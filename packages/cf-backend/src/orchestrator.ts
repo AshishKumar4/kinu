@@ -73,23 +73,19 @@ import {
   type ExportSkillsResult, type ImportSkillsResult,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
-  // Provider abstraction
-  CODEX_CRED_KEY, decodeChatGPTAccountId,
   // Adaptive reasoning_effort per stage
   effortFor,
   // Unified strategy dispatch
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
 } from "@proteus/core";
-import { createCodexOAuthClient, tokensToCredential } from "./auth/codex-oauth.js";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { createSqlCredentialStore } from "./credentials/store.js";
-import { validateCredential } from "./credentials/validate.js";
 import { createRLMProvider } from "./rlm.js";
+import type { UserDO } from "./user/user-do.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
@@ -431,12 +427,51 @@ export class OrchestratorAgent extends Think<Env> {
   private _providerRegistry: AgentProviderRegistry | null = null;
   protected providerRegistry(): AgentProviderRegistry {
     if (this._providerRegistry) return this._providerRegistry;
+    const userId = this.getOwnerUserId();
+    if (!userId) {
+      throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
+    }
+    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
     this._providerRegistry = createAgentProviderRegistry({
       env: this.env,
-      credentials: createSqlCredentialStore(this.ctx.storage.sql),
+      userDOStub,
       appTitle: 'Proteus',
     });
     return this._providerRegistry;
+  }
+
+  /** Read the owner userId from agent_soul; '' (empty) means unclaimed. */
+  protected getOwnerUserId(): string | null {
+    try {
+      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_soul LIMIT 1`;
+      const v = rows[0]?.owner_user_id;
+      return v && v !== '' ? v : null;
+    } catch { return null; }
+  }
+
+  /** Worker calls this on every authenticated request before any other RPC.
+   *  Claims the agent for `userId` if unclaimed; 403s on cross-user collision. */
+  @callable()
+  async claimOwner(userId: string): Promise<{ owner: string }> {
+    if (!userId) throw new Error('userId required');
+    const current = this.getOwnerUserId();
+    if (current === null) {
+      // Unclaimed — first touch. Ensure agent_soul has at least one row.
+      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_soul LIMIT 1`;
+      if (exists.length === 0) {
+        this.sql`INSERT INTO agent_soul (purpose, owner_user_id) VALUES (${'A self-evolving coding assistant with MCTS exploration and durable skill evolution.'}, ${userId})`;
+      } else {
+        this.sql`UPDATE agent_soul SET owner_user_id = ${userId}`;
+      }
+      // Invalidate any provider registry the agent might have constructed
+      // before ownership was set (defensive — should be null at this point).
+      this.invalidateModelCaches();
+      return { owner: userId };
+    }
+    if (current !== userId) {
+      throw new Error(`Agent owned by a different user`);
+    }
+    return { owner: current };
   }
 
   /** Stored model spec, or null when unset (registry will pick the default). */
@@ -603,7 +638,9 @@ export class OrchestratorAgent extends Think<Env> {
     if (this._splitHeadsTool) return this._splitHeadsTool;
     const sqlForJournal = this.sql.bind(this) as unknown as SqlExecutor;
     const journal = new HeadJournal(sqlForJournal);
-    const runtime = createCFHeadRuntime(this);
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Agent has no owner — split_heads needs UserDO access for auth.');
+    const runtime = createCFHeadRuntime(this, ownerUserId);
     this._headController = new HeadController(runtime, journal);
     const orchestrator = this;
     this._splitHeadsTool = createSplitHeadsTool({
@@ -1784,24 +1821,11 @@ export class OrchestratorAgent extends Think<Env> {
     return { tokens: rows };
   }
 
-  @callable() async getAvailableModels() {
-    const reg = this.providerRegistry();
-    const models = await reg.registry.listAllModels(reg.deps);
-    const providers = await reg.registry.listProviders(reg.deps);
-    return {
-      current: this.getStoredModelId(),
-      currentNormalized: reg.normalizeSpecSync(this.getStoredModelId()),
-      models: models.map(m => ({
-        // Canonical spec form for storage / set.
-        id: `${m.provider}/${m.id}`,
-        provider: m.provider,
-        modelId: m.id,
-        name: m.label ?? m.id,
-        capabilities: m.capabilities ?? [],
-        contextWindow: m.contextWindow,
-      })),
-      providers,
-    };
+  /** The agent's current stored model spec. UI tells which menu entry to
+   *  preselect; the full available-models list comes from /api/user/models
+   *  (UserDO) so connections are user-scoped. */
+  @callable() async getStoredModelSpec(): Promise<{ spec: string | null }> {
+    return { spec: this.getStoredModelId() };
   }
 
   @callable() async setModel(spec: string) {
@@ -1826,84 +1850,18 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   // ── Credentials & Codex OAuth ─────────────────────────────────────
+  //
+  // All credentials live in UserDO (single source of truth across the user's
+  // agents). The orchestrator no longer stores, refreshes, or even reads
+  // raw credentials — providers resolve auth headers through the UserDO
+  // stub at fetch time. Use the `/api/user/codex/*` routes (or the user
+  // settings UI) to connect ChatGPT / save BYO API keys.
 
-  private _credentials: import('@proteus/core').CredentialStore | null = null;
-  private get credentials(): import('@proteus/core').CredentialStore {
-    if (!this._credentials) this._credentials = createSqlCredentialStore(this.ctx.storage.sql);
-    return this._credentials;
-  }
-
-  private _codexOAuth: ReturnType<typeof createCodexOAuthClient> | null = null;
-  private get codexOAuth() {
-    if (!this._codexOAuth) this._codexOAuth = createCodexOAuthClient(fetch);
-    return this._codexOAuth;
-  }
-
-  @callable() async startCodexDeviceFlow() {
-    return await this.codexOAuth.startDeviceFlow();
-  }
-
-  @callable() async pollCodexDeviceFlow(deviceAuthId: string, userCode: string) {
-    let tokens;
-    try {
-      tokens = await this.codexOAuth.pollDeviceFlow(deviceAuthId, userCode);
-    } catch (err) {
-      // pollDeviceFlow throws on non-OK from upstream OR on missing fields
-      // in the response. Surface to UI so the user can retry; do NOT swallow.
-      return { connected: false, error: (err as Error).message };
-    }
-    if (!tokens) return { connected: false };
-    const accountId = decodeChatGPTAccountId(tokens.accessToken);
-    try {
-      await this.credentials.set(
-        CODEX_CRED_KEY,
-        tokensToCredential(tokens, accountId ? { accountId } : undefined),
-      );
-    } catch (err) {
-      // Tokens were issued by the OAuth server but we failed to persist.
-      // The user code is now consumed upstream — the user will need to
-      // restart the device-code flow. Surface the error.
-      return { connected: false, error: `persist failed: ${(err as Error).message}` };
-    }
-    this.invalidateModelCaches();
-    return { connected: true, accountId };
-  }
-
-  @callable() async getCodexStatus() {
-    const cred = await this.credentials.get(CODEX_CRED_KEY);
-    if (!cred || cred.kind !== 'oauth') return { connected: false };
-    return {
-      connected: true,
-      accountId: decodeChatGPTAccountId(cred.accessToken),
-      expiresAt: cred.expiresAt,
-    };
-  }
-
-  @callable() async disconnectCodex() {
-    await this.credentials.delete(CODEX_CRED_KEY);
-    this.invalidateModelCaches();
-    return { ok: true };
-  }
-
-  /** Listing returns presence + shape only — never the token/key itself. */
-  @callable() async listCredentials() {
-    const rows = this.sql<{ key: string; updated_at: number }>`
-      SELECT key, updated_at FROM agent_credentials ORDER BY key`;
-    return { credentials: rows };
-  }
-
-  @callable() async setCredential(key: string, value: unknown): Promise<{ ok: true }> {
-    await this.credentials.set(key, validateCredential(value));
-    // A credential change can affect which providers are .isAvailable(), so
-    // the cached registry + resolved model must rebuild for the new state
-    // to take effect on the next turn (otherwise users see "no model"
-    // until DO eviction).
-    this.invalidateModelCaches();
-    return { ok: true };
-  }
-
-  @callable() async deleteCredential(key: string): Promise<{ ok: true }> {
-    await this.credentials.delete(key);
+  /** Worker calls this when a credential mutation in UserDO should drop
+   *  cached provider/model state in this agent. Cheap; no-op if nothing
+   *  is cached. */
+  @callable()
+  async onCredentialsChanged(): Promise<{ ok: true }> {
     this.invalidateModelCaches();
     return { ok: true };
   }
