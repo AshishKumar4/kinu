@@ -37,10 +37,19 @@ import {
   type ArtifactRef,
   type ToolCallRecord,
   type SerializedMessage,
+  type MergeStrategy,
+  type SplitRequest,
+  type HeadBudget,
+  type MergeResult,
   budgetExhausted,
+  deriveChildBudget,
   createVirtualSandbox,
   type SandboxApi,
   type ShellResult,
+  HeadController,
+  HeadJournal,
+  MergeOutputSchema,
+  type MergeOutput,
 } from "@proteus/core";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell } from "@proteus/agent-utils/shell";
@@ -63,6 +72,8 @@ export class HeadAgent extends Agent<Env> {
   private startedAt = 0;
   private aborted = false;
   private abortReason: string | null = null;
+  // Recursive splits — heads this head spawned during its run.
+  private childHeadIds: HeadId[] = [];
 
   private getModel(modelId?: string): LanguageModel {
     const id = modelId ?? DEFAULT_MODEL;
@@ -204,7 +215,7 @@ export class HeadAgent extends Agent<Env> {
         evidence: [...this.evidence],
         decisions: [...this.decisions],
         artifactRefs: [...this.artifacts],
-        childHeadIds: [],
+        childHeadIds: [...this.childHeadIds],
         toolCalls: [...this.toolCalls],
         tokenUsage: {
           input: this.tokenUsage.input,
@@ -359,12 +370,177 @@ export class HeadAgent extends Agent<Env> {
           }
         },
       }),
+
+      // v2: recursive head splitting. Reduces depth by 1 per spawn;
+      // budget split is equal across children by default. Result is the
+      // merged narrative + decisions, which this head can then act on.
+      split_subheads: tool({
+        description:
+          "Spawn 2-4 child heads recursively to explore narrower sub-questions of your own task. " +
+          "Each child sees the same inherited conversation context you do. " +
+          "Children's findings are merged via LLM synthesis and returned as a single narrative — " +
+          "you should then use that narrative to inform your own summary. Depth is bounded; " +
+          "this call may fail if your depth budget is exhausted.",
+        inputSchema: jsonSchema<{
+          rationale: string;
+          heads: Array<{ task: string; rationale: string }>;
+          merge_strategy?: MergeStrategy;
+        }>({
+          type: "object",
+          required: ["rationale", "heads"],
+          properties: {
+            rationale: { type: "string", description: "Why the recursive split is warranted." },
+            heads: {
+              type: "array", minItems: 2, maxItems: 4,
+              items: {
+                type: "object", required: ["task", "rationale"],
+                properties: {
+                  task: { type: "string" },
+                  rationale: { type: "string" },
+                },
+              },
+            },
+            merge_strategy: {
+              type: "string",
+              enum: ["synthesize", "best_of", "consensus"],
+              description: "How to combine the children's findings. Default: synthesize.",
+            },
+          },
+        }),
+        execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
+          const bExh = budgetExhausted(input.budget);
+          if (bExh.exhausted) {
+            return `Cannot split: budget exhausted (${bExh.reason}).`;
+          }
+          if (input.budget.maxDepth <= 0) {
+            return "Cannot split: maxDepth budget reached.";
+          }
+
+          try {
+            const result = await this.runRecursiveSplit({
+              rationale,
+              heads,
+              mergeStrategy: merge_strategy ?? input.mergeStrategy,
+            }, input.budget, input);
+
+            for (const childId of result.childHeadIds) {
+              this.childHeadIds.push(childId);
+            }
+            this.recordToolCall("split_subheads", { rationale, heads }, `merged ${result.headCount} children`);
+
+            const lines: string[] = [];
+            lines.push(result.narrative);
+            if (result.decisions.length > 0) {
+              lines.push("");
+              lines.push("Children's selected decisions:");
+              for (const d of result.decisions) {
+                lines.push(`- ${d.question}: ${d.choice}`);
+              }
+            }
+            if (result.unresolvedQuestions.length > 0) {
+              lines.push("");
+              lines.push("Open questions:");
+              for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
+            }
+            return lines.join("\n");
+          } catch (err) {
+            this.recordToolCall("split_subheads", { rationale, heads }, "error");
+            return `split_subheads failed: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        },
+      }),
     };
 
     // Filter by allowedTools if specified.
     return Object.fromEntries(
       Object.entries(allTools).filter(([name]) => isAllowed(name)),
     );
+  }
+
+  /**
+   * Run a recursive split from inside a head. Builds a one-off HeadController
+   * + HeadRuntime that spawns child HeadAgents off THIS facet (so children
+   * are facets of this head, not the orchestrator). Returns a minimal merge
+   * result the parent tool can stringify.
+   */
+  private async runRecursiveSplit(
+    request: { rationale: string; heads: Array<{ task: string; rationale: string }>; mergeStrategy: MergeStrategy },
+    parentBudget: HeadBudget,
+    parentInput: HeadInput,
+  ): Promise<{
+    narrative: string;
+    decisions: readonly Decision[];
+    unresolvedQuestions: readonly string[];
+    childHeadIds: readonly HeadId[];
+    headCount: number;
+  }> {
+    // Build a journal scoped to this facet's own SQLite. (Sibling facet's
+    // journal lives on the orchestrator; recursive children's journal can
+    // live here without competing with the parent's chat SQLite.)
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS head_journal (
+      id TEXT PRIMARY KEY, parent_id TEXT, root_id TEXT NOT NULL, depth INTEGER NOT NULL,
+      task TEXT NOT NULL, rationale TEXT, status TEXT NOT NULL, spawned_at INTEGER NOT NULL,
+      completed_at INTEGER, token_input INTEGER DEFAULT 0, token_output INTEGER DEFAULT 0,
+      wall_clock_ms INTEGER DEFAULT 0, summary TEXT, error_message TEXT,
+      decisions_json TEXT, artifacts_json TEXT, tool_calls_json TEXT,
+      child_head_ids_json TEXT, merge_strategy TEXT NOT NULL DEFAULT 'synthesize')`);
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS head_evidence (
+      id TEXT PRIMARY KEY, head_id TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL,
+      ref TEXT, confidence REAL, created_at INTEGER NOT NULL)`);
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS head_merge_results (
+      root_id TEXT PRIMARY KEY, merged_narrative TEXT NOT NULL,
+      selected_decisions_json TEXT, unresolved_questions_json TEXT,
+      recommendations_json TEXT, cost_head_count INTEGER NOT NULL,
+      cost_total_tokens INTEGER NOT NULL, cost_total_wall_ms INTEGER NOT NULL,
+      cost_max_depth INTEGER NOT NULL, merged_at INTEGER NOT NULL,
+      merge_strategy TEXT NOT NULL)`);
+
+    const journal = new HeadJournal(this.sql.bind(this) as never);
+
+    // Children are facets of THIS HeadAgent (recursive — same class).
+    const headAgent = this;
+    const runtime = {
+      async spawnHead(childInput: HeadInput) {
+        const stub = await headAgent.subAgent(HeadAgent, childInput.id);
+        await stub.init(childInput);
+        return {
+          id: childInput.id,
+          async run(): Promise<HeadReport> { return (await stub.run()) as HeadReport; },
+          async abort(reason: string) {
+            try { await stub.abort(reason); } catch {}
+            try { await headAgent.abortSubAgent(HeadAgent, childInput.id); } catch {}
+          },
+        };
+      },
+      async mergeLLM(prompt: string, _schema: typeof MergeOutputSchema): Promise<MergeOutput> {
+        const { generateObject } = await import("ai");
+        const { object } = await generateObject({
+          model: headAgent.getModel(parentInput.model),
+          schema: MergeOutputSchema,
+          prompt,
+          maxOutputTokens: 2048,
+        });
+        return object as MergeOutput;
+      },
+    };
+
+    const controller = new HeadController(runtime, journal);
+    const result: MergeResult = await controller.run({
+      parentHeadId: parentInput.id,
+      rootId: parentInput.rootId,
+      inheritedContext: parentInput.inheritedContext,
+      request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
+      parentBudget,
+      model: parentInput.model,
+    });
+
+    return {
+      narrative: result.mergedNarrative,
+      decisions: result.selectedDecisions,
+      unresolvedQuestions: result.unresolvedQuestions,
+      childHeadIds: result.evidenceAggregate.map((e) => e.id), // best-effort proxy
+      headCount: result.costSummary.headCount,
+    };
   }
 
   private recordToolCall(name: string, args: Record<string, unknown>, summary: string) {
