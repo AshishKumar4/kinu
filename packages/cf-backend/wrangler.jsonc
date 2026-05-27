@@ -4,13 +4,19 @@
   "workers_dev": true,
   "main": "src/server.ts",
   "compatibility_date": "2025-12-01",
-  "compatibility_flags": ["nodejs_compat", "experimental"],
+  // `experimental` is a dev-only umbrella flag that the deploy API rejects
+  // (code 10021). If a specific experimental feature is needed, enable it
+  // by its real flag name (e.g. `streaming_subrequests`).
+  "compatibility_flags": ["nodejs_compat"],
   "worker_loaders": [{ "binding": "LOADER" }],
   // Main site served by the custom domain. Sandbox preview URLs use the
   // workers.dev subdomain (see PREVIEW_HOSTNAME) because workers.dev
   // auto-resolves *.<worker>.<sub>.workers.dev without needing zone DNS.
+  // custom_domain: true tells wrangler to auto-create the DNS record on
+  // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
+  // proxied DNS record on the zone (manual setup via the dashboard).
   "routes": [
-    { "pattern": "proteus.ashishkumarsingh.com/*", "zone_id": "6fe16a3a25c46bb975b15e75ea57a0fe" }
+    { "pattern": "proteus.ashishkumarsingh.com", "custom_domain": true }
   ],
   // Worker runs first for every non-hashed-asset request. That lets
   // proxyToSandbox intercept preview-URL hosts before the SPA fallback
