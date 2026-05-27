@@ -1,0 +1,13 @@
+# Seed eval corpus — 12 tasks across trivial / tool-use / multi-step
+{"id":"trivial-001","task":"What is 17 * 23?","reference":"391","tags":["math","trivial"]}
+{"id":"trivial-002","task":"Reverse the string 'recursive'.","reference":"evisrucer","tags":["string","trivial"]}
+{"id":"trivial-003","task":"What year did the AI Winter of 1987 begin?","reference":"1987","tags":["factual","trivial"]}
+{"id":"reason-001","task":"Three boxes: A weighs 5kg, B weighs 7kg, C weighs 12kg. Which two together equal C?","reference":"A and B (5+7=12)","tags":["reasoning"]}
+{"id":"reason-002","task":"A train leaves NY at 9am going 60mph. Another leaves Chicago (800mi) at 10am going 80mph. When do they meet?","tags":["reasoning","math"]}
+{"id":"tool-001","task":"Find every file under /workspace that contains the string 'TODO'. Report the count.","tags":["tool-use","workspace"]}
+{"id":"tool-002","task":"Create a JSON file at /workspace/config.json with {\"version\": 1, \"debug\": true}.","tags":["tool-use","workspace"]}
+{"id":"multi-001","task":"Build a small Node.js script that fetches https://httpbin.org/json, parses it, prints the slideshow title. Run it.","tags":["multi-step","tool-use"]}
+{"id":"multi-002","task":"Refactor the function `add(a,b){return a+b}` to support N args. Add a test. Run the test.","tags":["multi-step","tool-use"]}
+{"id":"explore-001","task":"Compare 3 strategies for parsing a 100MB log file: streaming, line-by-line, full-load. Recommend one with reasoning.","tags":["exploration","reasoning"]}
+{"id":"explore-002","task":"Design a rate limiter. Consider: token bucket vs leaky bucket vs fixed window. Compare tradeoffs.","tags":["exploration","reasoning"]}
+{"id":"rlm-001","task":"Summarize this 6000-word document into 5 bullet points. The document discusses MCTS, ToT, GoT, Reflexion, and Voyager. [content elided — agent should chunk and recurse]","tags":["rlm","long-context"]}
