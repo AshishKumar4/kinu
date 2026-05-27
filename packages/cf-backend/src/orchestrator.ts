@@ -911,6 +911,47 @@ export class OrchestratorAgent extends Think<Env> {
       FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
+  // ── v2: Fiber recovery — durable execution surviving DO eviction ──
+  //
+  // The MCTS engine (mcts/engine.ts) calls rt.schedule.fiber('mcts', fn) which
+  // delegates to agent.runFiber(). Per-iteration ctx.stash(phase) checkpoints
+  // progress to cf_agents_runs. If the DO is evicted mid-MCTS, the Agent SDK
+  // re-invokes onFiberRecovered with the last snapshot on cold-start.
+  //
+  // The default base implementation just warns; we override to:
+  //   • log the recovery into evolution_events for the UI
+  //   • broadcast a "recovered" event so the chat panel can show the resume
+  //   • write a memory note so future turns know about the interruption
+  override async onFiberRecovered(ctx: {
+    id: string;
+    name: string;
+    snapshot: unknown;
+    createdAt: number;
+  }): Promise<void> {
+    try {
+      const summary = ctx.snapshot && typeof ctx.snapshot === 'object'
+        ? JSON.stringify(ctx.snapshot).slice(0, 400)
+        : String(ctx.snapshot ?? 'null');
+      console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
+      // Persist for the UI's evolution-events stream.
+      this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+        VALUES (${nanoid()}, 'fiber_recovered',
+                ${`Fiber "${ctx.name}" recovered after interruption`},
+                ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot: ctx.snapshot, createdAt: ctx.createdAt })},
+                ${Date.now()})`;
+      try {
+        await this.rt.memory.append(
+          'memory/MEMORY.md',
+          `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
+          `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
+          `Snapshot at interruption: ${summary}\n`,
+        );
+      } catch { /* memory may not be initialized yet */ }
+    } catch (err) {
+      console.error('[proteus] onFiberRecovered handler failed:', err);
+    }
+  }
+
   // ── v2: Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
 
   /**

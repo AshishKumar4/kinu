@@ -123,6 +123,30 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
+// v2: safety — approval gating for shell exec
+export {
+  reviewCommand,
+  formatApproval,
+  withApprovalGate,
+  type ApprovalDecision,
+  type ApprovalRuleHit,
+  type ApprovalResult,
+} from './safety/index.js';
+
+// v2: context compaction (Hermes/Flue-style, model-agnostic)
+export {
+  DEFAULT_COMPACTION_CONFIG,
+  shouldCompact,
+  estimateTokens,
+  compactMessages,
+} from './compaction.js';
+export type {
+  CompactableMessage,
+  CompactionConfig,
+  CompactionResult,
+  SummarizeFn,
+} from './types/compaction.js';
+
 // Utils
 export { nanoid } from './utils/nanoid.js';
 export { isoDate, today, nowMs } from './utils/date.js';
