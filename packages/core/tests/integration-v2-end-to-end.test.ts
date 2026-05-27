@@ -32,7 +32,7 @@ import {
   // Scaffold
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG, recordShadowEvaluation,
-  initScaffoldTables,
+  initScaffoldTables, modifyScaffold,
   // Events
   initRunEventTables, RunEventRecorder,
   // Approval
@@ -163,6 +163,38 @@ describe('v2 e2e: branching heads → merge', () => {
 // ── 3. Scaffold shadow rollout e2e ───────────────────────────────────
 
 describe('v2 e2e: scaffold shadow rollout', () => {
+  test('modifyScaffold writes new version with status=pending', async () => {
+    const { rt } = createTestRuntime();
+    initScaffoldTables(rt.storage.execRaw);
+    initShadowTables(rt.storage.execRaw);
+    await rt.identity.scaffold.write('async function* run(rt, task) { yield task; }');
+    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+      VALUES (0, ${Date.now()}, 'initial', 'current')`;
+
+    const validCode = `async function* run(rt, task) {
+      yield { type: "chunk", data: "v1: " + task };
+    }`;
+    const result = await modifyScaffold(
+      rt,
+      'Try a tagged response to improve UI rendering for fast paths.',
+      validCode,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.version).toBe(1);
+
+    const pending = getPendingScaffold(rt.storage.sql);
+    expect(pending).not.toBeNull();
+    expect(pending!.version).toBe(1);
+    expect(pending!.trialsSoFar).toBe(0);
+
+    // Verify v0 is still current; v1 is pending.
+    const statuses = rt.storage.sql<{ version: number; status: string }>`
+      SELECT version, status FROM scaffold_versions ORDER BY version`;
+    const map = new Map(statuses.map((s) => [s.version, s.status]));
+    expect(map.get(0)).toBe('current');
+    expect(map.get(1)).toBe('pending');
+  });
+
   test('pending wins → promote; statuses flip correctly', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);

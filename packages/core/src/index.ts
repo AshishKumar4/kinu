@@ -79,7 +79,6 @@ export { initCraftScoreTables } from './craft/schemas.js';
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap.js';
 export { modifyScaffold } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
-export { runCanary, checkErrorRateAndRollbackIfNeeded } from './scaffold/staged-rollout.js';
 // v2: scaffold execution + shadow-mode rollout
 export {
   runScaffold,

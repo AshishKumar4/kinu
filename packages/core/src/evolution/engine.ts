@@ -204,6 +204,22 @@ export class EvolutionEngine {
       const scaffoldExists = await this.rt.identity.scaffold.exists();
       if (!scaffoldExists) return;
 
+      // Skip if a pending scaffold is already in flight — consecutive sessions
+      // would otherwise orphan earlier pending versions. The current pending
+      // must be resolved (promoted or rolled back) before a new proposal.
+      try {
+        const pending = this.rt.storage.sql<{ version: number }>`
+          SELECT version FROM scaffold_versions WHERE status = 'pending' LIMIT 1
+        `;
+        if (pending.length > 0) {
+          this.emit({
+            type: 'scaffold_proposed',
+            message: `Skipped — scaffold v${pending[0].version} is still pending shadow evaluation`,
+          });
+          return;
+        }
+      } catch { /* status column missing on legacy DBs; proceed */ }
+
       const currentScaffold = await this.rt.identity.scaffold.read();
       if (!currentScaffold || currentScaffold.length < 50) return;
 
