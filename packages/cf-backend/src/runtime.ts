@@ -23,6 +23,8 @@ import type {
 import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor,
+  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
+  type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
@@ -39,10 +41,13 @@ import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 
 /** Extended runtime that also exposes the raw SqliteFS for shell emulation
- *  and the SSH executor for tunnel socket management */
+ *  and the SSH executor for tunnel socket management, plus the v2 vector
+ *  store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   sqliteFS: SqliteFS;
   sshExecutor: ReturnType<typeof createSSHTunnelExecutor>;
+  /** v2: Vectorize-backed semantic memory. Noop fallback when no binding. */
+  vectorStore: import("@proteus/core").VectorStore;
 };
 
 /** Optional hooks the orchestrator can inject into the CF runtime. */
@@ -137,6 +142,33 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
   const sshExecutor = createSSHTunnelExecutor();
   executionRouter.register(sshExecutor);
 
+  // v2: Vectorize-backed semantic memory. Only constructs when both
+  // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
+  // binding) are configured. Otherwise falls back to a noop that lets
+  // hybrid search degrade to FTS5-only.
+  const aiBinding = (agent.env as Env & Record<string, unknown>).AI;
+  const vectorizeBinding = (agent.env as Env & Record<string, unknown>).MEMORY_VECTORS;
+  let vectorStore: VectorStore;
+  if (aiBinding && typeof aiBinding !== 'string' && vectorizeBinding) {
+    try {
+      const embedder = createWorkersAIEmbedder({
+        aiBinding: aiBinding as Parameters<typeof createWorkersAIEmbedder>[0]['aiBinding'],
+        model: '@cf/baai/bge-small-en-v1.5',
+        dimensions: 384,
+      });
+      vectorStore = createCloudflareVectorStore({
+        index: vectorizeBinding as VectorizeIndex,
+        embedder,
+      });
+      console.log('[proteus] VectorStore (Cloudflare Vectorize) registered');
+    } catch (err) {
+      console.warn('[proteus] VectorStore construction failed; falling back to noop:', (err as Error).message);
+      vectorStore = createNoopVectorStore();
+    }
+  } else {
+    vectorStore = createNoopVectorStore();
+  }
+
   return {
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
@@ -146,6 +178,7 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
     shell,
     sqliteFS,
     sshExecutor,
+    vectorStore,
   };
 }
 

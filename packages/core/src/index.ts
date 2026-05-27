@@ -123,6 +123,28 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
+// v2: Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
+export {
+  reciprocalRankFusion,
+  createCloudflareVectorStore,
+  createWorkersAIEmbedder,
+  createNoopVectorStore,
+  type VectorStore,
+  type Embedder,
+  type VectorizeIndex,
+  type VectorRecord,
+  type VectorMatch,
+  type VectorMemoryChunk,
+  type VectorSearchHit,
+} from './memory/vector-store.js';
+export {
+  hybridSearch,
+  type LexicalHit,
+  type HybridHit,
+  type LexicalSearchFn,
+  type HybridSearchOptions,
+} from './memory/hybrid-search.js';
+
 // v2: durable run-event log (Flue-style, SSE-resumable)
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,

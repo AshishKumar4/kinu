@@ -90,4 +90,25 @@
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
     "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com"
   }
+  // ── v2 OPTIONAL bindings — uncomment after running the corresponding setup ──
+  //
+  // 1) Workers AI for memory embeddings (no setup beyond enabling Workers AI):
+  //
+  //   "ai": { "binding": "AI" }
+  //
+  // 2) Vectorize index for semantic memory recall. First create the index:
+  //
+  //   wrangler vectorize create proteus-memory \
+  //     --dimensions=384 --metric=cosine
+  //
+  // Then add the binding:
+  //
+  //   "vectorize": [
+  //     { "binding": "MEMORY_VECTORS", "index_name": "proteus-memory" }
+  //   ]
+  //
+  // Once both are set, runtime.ts auto-detects them and constructs
+  // CloudflareVectorStore; the new searchMemoryHybrid @callable + MCP
+  // tool returns RRF-merged FTS5 + Vectorize hits. Without these, the
+  // agent transparently falls back to FTS5-only memory.
 }

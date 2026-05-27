@@ -58,6 +58,8 @@ import {
   // v2: durable run-event log
   initRunEventTables, RunEventRecorder,
   type RunEvent, type RunEventQuery,
+  // v2: hybrid search (FTS5 + Vectorize via RRF)
+  hybridSearch, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
 } from "@proteus/core";
@@ -1146,6 +1148,38 @@ export class OrchestratorAgent extends Think<Env> {
     await this.rt.memory.append('memory/MEMORY.md', `\n### Note (${ts})\n${content}\n`);
     await this.rt.memory.index('memory/MEMORY.md');
     return { ok: true };
+  }
+
+  // ── v2: Hybrid memory search — FTS5 + Vectorize via RRF ──
+  /**
+   * Semantic + lexical search merged via Reciprocal Rank Fusion.
+   * Falls back to pure FTS5 when the Vectorize binding isn't configured.
+   *
+   * Returns enriched HybridHit[] with sources, RRF score, and individual
+   * lexical/semantic scores when available.
+   */
+  @callable()
+  async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
+    const lexicalSearchFn = async (q: string, k: number) => {
+      const results = await this.rt.memory.search(q, k);
+      return results.map((r) => ({
+        // Construct a stable id from path + line range — matches how the
+        // VectorStore stores chunks (caller upserts with this same id).
+        id: `${r.path}#${r.startLine}-${r.endLine}`,
+        path: r.path,
+        startLine: r.startLine,
+        endLine: r.endLine,
+        score: r.score,
+        snippet: r.snippet,
+      }));
+    };
+    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, { finalK: limit });
+  }
+
+  /** Returns whether semantic memory is enabled on this deployment. */
+  @callable()
+  async vectorStoreStatus(): Promise<{ available: boolean }> {
+    return { available: this.rt.vectorStore.available };
   }
 
   /**
