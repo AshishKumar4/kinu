@@ -146,6 +146,10 @@ describe('v2 e2e: branching heads → merge', () => {
     expect(result.selectedDecisions.length).toBe(2);
     expect(result.costSummary.headCount).toBe(3);
     expect(result.evidenceAggregate.length).toBe(3);
+    // v2: headIds is now populated from the actual spawned handles (not
+    // a hack mapping evidence ids).
+    expect(result.headIds.length).toBe(3);
+    expect(result.headIds.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
 
     const rows = sql<{ status: string; summary: string | null }>`SELECT status, summary FROM head_journal`;
     expect(rows.length).toBe(3);

@@ -538,11 +538,21 @@ export class OrchestratorAgent extends Think<Env> {
         }
       },
       getInheritedContext(): SerializedMessage[] {
+        // Cap to the last N messages to keep head LLM context bounded over
+        // long sessions. Think Session already runs compactAfter(96k) on
+        // the assistant_messages table at the orchestrator level; this is
+        // a second safety net specifically for head spawns.
+        const INHERITED_CONTEXT_CAP = 50;
         try {
           type Row = { id: string; role: string; content: string; created_at: string };
           const rows = orchestrator.sql<Row>`
             SELECT id, role, content, created_at
-            FROM assistant_messages
+            FROM (
+              SELECT id, role, content, created_at
+              FROM assistant_messages
+              ORDER BY created_at DESC
+              LIMIT ${INHERITED_CONTEXT_CAP}
+            ) sub
             ORDER BY created_at ASC`;
           return rows.map((r) => ({
             id: r.id,
