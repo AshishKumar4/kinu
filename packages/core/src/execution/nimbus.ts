@@ -52,17 +52,6 @@ const EXEC_NOT_AVAILABLE = 'Nimbus _rpcExec not available. The NimbusSession DO 
 export function createNimbusExecutor(stub?: NimbusStub): ExecutorProvider {
   const connected = stub != null;
 
-  function wrapRpc<T>(
-    fn: () => Promise<T>,
-    fallback: string,
-  ): () => Promise<T | string> {
-    return async () => {
-      if (!connected) return fallback;
-      try { return await fn(); }
-      catch (err) { return `Error: ${err instanceof Error ? err.message : String(err)}`; }
-    };
-  }
-
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the Nimbus development environment. ' +
@@ -84,13 +73,15 @@ export function createNimbusExecutor(stub?: NimbusStub): ExecutorProvider {
 
     readFile: {
       description: 'Read a file from the Nimbus development filesystem.',
-      execute: wrapRpc(
-        async (path: unknown) => {
-          const content = await stub!._rpcReadFile(String(path));
+      execute: async (path: unknown): Promise<unknown> => {
+        if (!stub) return NOT_CONNECTED;
+        try {
+          const content = await stub._rpcReadFile(String(path));
           return content ?? `File not found: ${path}`;
-        },
-        NOT_CONNECTED,
-      ) as (...args: unknown[]) => Promise<unknown>,
+        } catch (err) {
+          return `readFile error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
     },
 
     writeFile: {
