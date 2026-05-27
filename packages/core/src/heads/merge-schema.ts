@@ -1,49 +1,41 @@
-/**
- * Zod schema for the merge LLM's structured output.
- *
- * Aligned with MergeResult — the controller validates the LLM's response
- * against this schema and rejects if parse fails (with a clear error so
- * the LLM can retry).
- *
- * We use Zod (already a Proteus dep + Vercel AI SDK's tool inputSchema
- * standard) rather than Valibot here for consistency; the Phase-4
- * Valibot migration can swap this out behind the same MergeResult shape.
- */
+// Schema for the merge LLM's structured output. Valibot — it implements
+// StandardSchemaV1 so the AI SDK's generateObject({ schema }) accepts it
+// directly, and the bundle is ~1.5kB vs Zod's ~12kB.
+import * as v from 'valibot';
 
-import { z } from 'zod';
-
-export const EvidenceItemSchema = z.object({
-  id: z.string(),
-  kind: z.enum(['tool_output', 'fact', 'citation', 'artifact']),
-  body: z.string(),
-  ref: z.string().optional(),
-  confidence: z.number().min(0).max(1).optional(),
+export const EvidenceItemSchema = v.object({
+  id: v.string(),
+  kind: v.picklist(['tool_output', 'fact', 'citation', 'artifact']),
+  body: v.string(),
+  ref: v.optional(v.string()),
+  confidence: v.optional(v.pipe(v.number(), v.minValue(0), v.maxValue(1))),
 });
 
-export const DecisionSchema = z.object({
-  question: z.string(),
-  choice: z.string(),
-  rationale: z.string(),
-  supportingEvidence: z.array(z.string()).optional(),
+export const DecisionSchema = v.object({
+  question: v.string(),
+  choice: v.string(),
+  rationale: v.string(),
+  supportingEvidence: v.optional(v.array(v.string())),
 });
 
-export const MergeOutputSchema = z.object({
-  /** The unified narrative the parent head writes back into the conversation. */
-  narrative: z.string()
-    .min(1, 'narrative must be non-empty')
-    .describe('Coherent narrative that integrates the heads\' findings.'),
-
-  /** Decisions the LLM selected as final answers across all heads. */
-  selected_decisions: z.array(DecisionSchema)
-    .describe('Final answers the merge has chosen from the heads\' decision lists.'),
-
-  /** Questions the heads disagreed on or could not resolve. */
-  unresolved_questions: z.array(z.string())
-    .describe('Questions raised by one or more heads that remain open.'),
-
-  /** Concrete next-step suggestions the parent should consider. */
-  recommendations: z.array(z.string())
-    .describe('Actionable next steps. Each item should be one short imperative sentence.'),
+export const MergeOutputSchema = v.object({
+  narrative: v.pipe(
+    v.string(),
+    v.minLength(1, 'narrative must be non-empty'),
+    v.description("Coherent narrative that integrates the heads' findings."),
+  ),
+  selected_decisions: v.pipe(
+    v.array(DecisionSchema),
+    v.description("Final answers the merge has chosen from the heads' decision lists."),
+  ),
+  unresolved_questions: v.pipe(
+    v.array(v.string()),
+    v.description('Questions raised by one or more heads that remain open.'),
+  ),
+  recommendations: v.pipe(
+    v.array(v.string()),
+    v.description('Actionable next steps. Each item should be one short imperative sentence.'),
+  ),
 });
 
-export type MergeOutput = z.infer<typeof MergeOutputSchema>;
+export type MergeOutput = v.InferOutput<typeof MergeOutputSchema>;

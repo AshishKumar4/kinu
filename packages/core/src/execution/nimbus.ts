@@ -7,7 +7,7 @@
  *   • 10 GB SQLite-backed VFS per session
  *   • Sub-500ms cold starts, $0 idle (DO hibernation)
  *
- * Public WebSocket protocol (per docs/v2/RESEARCH_NOTES.md §C):
+ * Public WebSocket protocol (per docs/RESEARCH_NOTES.md §C):
  *   • POST /new → 302 → /s/{sessionId}/
  *   • ws://{endpoint}/s/{sessionId}/ws
  *     ─ terminal:   {type:"input"|"resize", ...} → {type:"output", data}
@@ -133,7 +133,10 @@ export function createNimbusExecutor(opts?: NimbusExecutorOpts): ExecutorProvide
       if (!pending) return;
       pendingFs.delete(reqId);
       clearTimeout(pending.timeout);
-      pending.resolve(msg as unknown as NimbusFsResult);
+      // Narrow to NimbusFsResult — at this point we've already type-checked
+      // `msg.type` is one of the three fs-* result types and the shape of
+      // those messages matches the NimbusFsResult union by construction.
+      pending.resolve(msg as NimbusFsResult);
       return;
     }
 

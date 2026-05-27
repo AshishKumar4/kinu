@@ -16,7 +16,7 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
-import { z } from 'zod';
+import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, recordShadowEvaluation,
@@ -24,19 +24,17 @@ import {
 } from './shadow.js';
 import { runScaffold, type ScaffoldRunResult } from './executor.js';
 
-/**
- * Build a judge function that uses an LLM to compare current vs pending
- * scaffold output on the same task. The judge must produce strictly
- * structured output for downstream stats.
- */
-export const JudgeOutputSchema = z.object({
-  winner: z.enum(['current', 'pending', 'tie']),
-  rationale: z.string().min(1),
-  currentScore: z.number().min(0).max(1),
-  pendingScore: z.number().min(0).max(1),
+/** Structured judge output — compares current vs pending scaffold on the
+ *  same task. Valibot schema; AI SDK's generateObject accepts it via the
+ *  StandardSchema spec. */
+export const JudgeOutputSchema = v.object({
+  winner: v.picklist(['current', 'pending', 'tie']),
+  rationale: v.pipe(v.string(), v.minLength(1)),
+  currentScore: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
+  pendingScore: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
 });
 
-export type JudgeOutput = z.infer<typeof JudgeOutputSchema>;
+export type JudgeOutput = v.InferOutput<typeof JudgeOutputSchema>;
 
 /**
  * The host supplies one of these — typically a wrapper over generateObject

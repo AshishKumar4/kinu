@@ -14,6 +14,7 @@
  * surfaces overruns).
  */
 
+import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid.js';
 import {
   type HeadId,
@@ -119,7 +120,9 @@ export class HeadController {
         rationale: h.rationale,
         inheritedContext: opts.inheritedContext,
         budget: childBudget,
-        model: opts.model,
+        // Per-head model wins over the parent default — enables heterogeneous
+        // model fleets (multi-agent debate / panel-of-experts).
+        model: h.model ?? opts.model,
         allowedSandboxes: h.allowedSandboxes,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
@@ -219,9 +222,9 @@ export class HeadController {
       };
     }
 
-    const parse = MergeOutputSchema.safeParse(merged);
+    const parse = v.safeParse(MergeOutputSchema, merged);
     if (!parse.success) {
-      const narrative = fallbackNarrative(reports, rationale, `merge schema invalid: ${parse.error.message}`);
+      const narrative = fallbackNarrative(reports, rationale, `merge schema invalid: ${parse.issues.map(i => i.message).join('; ')}`);
       return {
         mergedNarrative: narrative,
         selectedDecisions: reports.flatMap((r) => r.decisions),
@@ -234,10 +237,10 @@ export class HeadController {
     }
 
     return {
-      mergedNarrative: parse.data.narrative,
-      selectedDecisions: parse.data.selected_decisions as readonly Decision[],
-      unresolvedQuestions: parse.data.unresolved_questions,
-      recommendations: parse.data.recommendations,
+      mergedNarrative: parse.output.narrative,
+      selectedDecisions: parse.output.selected_decisions as readonly Decision[],
+      unresolvedQuestions: parse.output.unresolved_questions,
+      recommendations: parse.output.recommendations,
       evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
       headIds,
       costSummary: summarizeCost(reports, parentBudget),

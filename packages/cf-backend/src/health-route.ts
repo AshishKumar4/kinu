@@ -1,54 +1,48 @@
-/**
- * GET /api/v2/health — returns a v2 build-info JSON.
- *
- * Useful for confirming a deploy actually went out: hit the URL,
- * see the build sha + v2 feature flags + endpoint list.
- */
+// GET /api/health — build-info JSON. Useful for confirming a deploy went out:
+// hit the URL, see the feature list + endpoint map.
 
-const V2_FEATURES: ReadonlyArray<string> = [
-  'sandbox-api',
+const FEATURES: ReadonlyArray<string> = [
+  'multi-provider-registry',
+  'codex-oauth',
   'branching-heads',
   'scaffold-loop-closure',
   'scaffold-shadow-rollout',
   'run-event-log',
   'sse-resume',
   'mcp-server',
-  'background-review-fork',
+  'background-review',
   'compaction',
   'approval-gate',
-  'fiber-recovery-hook',
+  'fiber-recovery',
 ];
 
 export function handleHealthRequest(request: Request): Response | null {
   const url = new URL(request.url);
-  if (url.pathname !== '/api/v2/health') return null;
+  if (url.pathname !== '/api/health') return null;
   if (request.method !== 'GET') return null;
   return Response.json({
     ok: true,
-    version: 'proteus-v2',
-    features: V2_FEATURES,
+    features: FEATURES,
     endpoints: {
-      // Run events (Flue-style)
+      // Run events
       'GET /api/agents/<name>/runs': 'list recent runs w/ event counts',
-      'GET /api/agents/<name>/runs/<id>/events?since=&limit=&types=':
-        'paginated event query',
-      'GET /api/agents/<name>/runs/<id>/stream':
-        'SSE w/ Last-Event-ID resume',
+      'GET /api/agents/<name>/runs/<id>/events?since=&limit=&types=': 'paginated event query',
+      'GET /api/agents/<name>/runs/<id>/stream': 'SSE w/ Last-Event-ID resume',
+      // Auth / credentials
+      'POST /api/agents/<name>/auth/codex/start | /codex/poll': 'ChatGPT OAuth device-code flow',
+      'GET/DELETE /api/agents/<name>/auth/codex': 'Codex connection status / disconnect',
+      'POST/DELETE /api/agents/<name>/auth/credentials/<key>': 'BYO API key for openai / openrouter / openai-compat',
       // MCP
-      'POST/GET/DELETE /mcp/v1/<agentName>':
-        'MCP streamable-HTTP server (tools: search_memory, save_note, list_skills, run_scaffold_once, get_shadow_status, list_runs, list_run_events; resource: proteus://agent/<n>/memory)',
-      // Chat (existing)
-      '/agents/orchestrator-agent/<name>/...': 'Think chat WebSocket',
-      // Preview (existing)
+      'POST/GET/DELETE /mcp/v1/<agentName>': 'MCP streamable-HTTP server',
+      // Chat (Think SDK)
+      '/agents/orchestrator-agent/<name>/...': 'chat WebSocket',
+      // Preview
       '/_preview/<port>/<sandbox>/<token>/': 'sandbox container preview proxy',
-      // PC tunnel (existing)
+      // PC tunnel
       '/pc/connect': 'reverse-WebSocket tunnel for SSH/laptop sandbox',
     },
     timestamp: new Date().toISOString(),
   }, {
-    headers: {
-      'access-control-allow-origin': '*',
-      'cache-control': 'no-cache',
-    },
+    headers: { 'access-control-allow-origin': '*', 'cache-control': 'no-cache' },
   });
 }

@@ -34,9 +34,7 @@ import { updateCraftScores } from '../craft/ema.js';
 
 /**
  * Built-in tool names — crafted-tool scoring ignores these.
- * v2.0: sourced from the canonical registry so CF and CLI share one truth.
- * Previously this was a private hand-maintained set that drifted from the
- * actual 5-tool surface — see docs/V2-MIGRATION.md (F4).
+ * Sourced from the canonical registry so CF and CLI share one truth.
  */
 import { BUILTIN_TOOL_NAMES as BUILT_IN_TOOL_NAMES } from '../tools/registry.js';
 import { modifyScaffold } from '../scaffold/modify.js';

@@ -14,12 +14,20 @@ export {
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types.js';
-// v2.0: legacy `buildAgentTools` (6-tool surface) removed in favor of the
-// canonical `buildBuiltinTools` exported below. See docs/V2-MIGRATION.md.
+// Canonical `buildBuiltinTools` is exported below. The legacy 6-tool
+// `buildAgentTools` surface has been removed.
 
 // Configuration
 export { DEFAULT_CONFIG, DEFAULT_MAX_STEPS, mergeConfig, resolveMaxSteps } from './config.js';
 export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config.js';
+
+// Typed accessors over the `agent_config` key/value table — collapses ~23
+// raw-SQL sites into a deep module with known-key getters/setters.
+export {
+  createAgentConfigStore, initAgentConfigTable,
+  AGENT_CONFIG_KEYS,
+  type AgentConfigStore, type AgentConfigKey, type ShellApprovalMode,
+} from './config/index.js';
 
 // Types
 export type * from './types/primitives.js';
@@ -36,7 +44,7 @@ export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
 
-// Canonical tool registry + factories (v2.0 — shared across CF and CLI)
+// Canonical tool registry + factories (shared across CF and CLI)
 export {
   BUILTIN_TOOLS,
   SESSION_TOOLS,
@@ -68,6 +76,12 @@ export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/r
 export { converge } from './mcts/convergence.js';
 export { pruneAndReflect } from './mcts/pruning.js';
 export { evaluateWithMultiModelJudging } from './mcts/evaluation.js';
+// Process Reward Models — step-level scoring for fine-grained MCTS pruning
+// and scaffold runtime early-termination.
+export {
+  scoreStepWithJudge, blendStepScore,
+  type StepScore, type StepScoreInput,
+} from './mcts/step-prm.js';
 export { estimateCost } from './mcts/cost.js';
 
 // Schemas
@@ -79,7 +93,7 @@ export { initCraftScoreTables } from './craft/schemas.js';
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap.js';
 export { modifyScaffold } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
-// v2: scaffold execution + shadow-mode rollout
+// scaffold execution + shadow-mode rollout
 export {
   runScaffold,
   type ScaffoldRunOptions,
@@ -101,7 +115,7 @@ export {
   type ScaffoldStatus,
   type JudgeFn,
 } from './scaffold/shadow.js';
-// v2.x: auto-judge shadow evaluation — sampled-per-turn closure of the
+// auto-judge shadow evaluation — sampled-per-turn closure of the
 // shadow-rollout loop. Picks up pending scaffolds, runs them against the
 // same task, asks a judge LLM to compare, records the result, optionally
 // auto-applies promotion/rollback when minTrials is reached.
@@ -119,7 +133,7 @@ export {
 // CraftStore quality
 export { emaUpdate, effectiveScore, updateCraftScores } from './craft/ema.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
-// v2: SKILL.md export/import (Hermes-style git-friendly tool format)
+// SKILL.md export/import (Hermes-style git-friendly tool format)
 export {
   craftedToolToSkillMd,
   parseSkillMd,
@@ -145,7 +159,7 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
-// v2: Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
+// Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
 export {
   reciprocalRankFusion,
   createCloudflareVectorStore,
@@ -171,7 +185,21 @@ export {
 // Used by workspace.saveNote, save_note builtin tool, and MCP saveNoteFromMcp.
 export { appendMemoryNote } from './memory/note.js';
 
-// v2: durable run-event log (Flue-style, SSE-resumable)
+// agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
+// Top-K recent facts are auto-rendered into the system prompt every turn.
+export {
+  initFactsTable, createFactsStore, renderFactsBlock,
+  type Fact, type FactsStore,
+} from './memory/facts.js';
+
+// Sleep-time compute — between-turn background memory compression
+// (Letta-style; ~50% test-time token reduction reported).
+export {
+  runSleepTimeCompute, applySleepTimeUpdate,
+  type SleepTimeInput, type SleepTimeUpdate,
+} from './memory/sleep-time-compute.js';
+
+// durable run-event log (Flue-style, SSE-resumable)
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,
 } from './events/index.js';
@@ -182,7 +210,29 @@ export {
   type RunEventQuery,
 } from './events/index.js';
 
-// v2: safety — approval gating for shell exec
+// InferenceLoop — universal contract for "run a turn." Adapts Think /
+// scaffold / Heads / RLM behind one AsyncIterable<RunEvent> stream.
+export * from './loops/types.js';
+
+// ExplorationStrategy — single seam for "search candidate continuations,
+// score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.
+export * from './strategy/index.js';
+
+// Eval harness — A/B test arbitrary strategies/loops on a corpus of tasks.
+export * from './eval/index.js';
+
+// Voyager-style automatic curriculum + Absolute Zero learnability filter.
+// Proposes next tasks at the "barely succeeds" sweet spot.
+export * from './curriculum/index.js';
+
+// provider abstraction — single registry for resolving model specs across
+// Workers AI, AI Gateway, Codex (ChatGPT subscription), OpenAI, OpenRouter,
+// and generic OpenAI-compatible upstreams. Per-agent credentials live in the
+// CredentialStore (DO SQL in cf-backend).
+export * from './providers/index.js';
+export * from './credentials/store.js';
+
+// safety — approval gating for shell exec
 export {
   reviewCommand,
   formatApproval,
@@ -196,7 +246,7 @@ export {
 export { nanoid } from './utils/nanoid.js';
 export { isoDate, today, nowMs } from './utils/date.js';
 
-// ── v2: branching heads (parallel reasoning streams with merge) ──
+// ── branching heads (parallel reasoning streams with merge) ──
 // A head is a divergent reasoning thread that sees the WHOLE conversation
 // context, accumulates EPHEMERAL interim context, and merges back via LLM
 // synthesis. Distinct from sub-agents (isolated context, structured return)

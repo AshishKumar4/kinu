@@ -20,14 +20,17 @@ export interface SystemPromptOptions {
   purposeOverride?: string;
 }
 
-const FALLBACK_PURPOSE = 'You are a helpful coding assistant.';
+const FALLBACK_PURPOSE = 'You are Proteus, a self-evolving coding agent with a persistent ' +
+  'world model (remember_fact / recall_fact), a mutable tool surface (codemode crafted ' +
+  'tools), parallel exploration (think / split_heads), and the ability to spawn sub-LLM ' +
+  'calls inside the codemode sandbox (llm.query).';
 
 function renderExecutorSection(names: string[]): string {
   if (names.length === 0) return '';
   const lines = names.map((n) => {
     switch (n) {
       case 'workspace':
-        return '  **workspace.*** — local VFS + shell (readFile, writeFile, readdir, exists, exec, searchMemory, saveNote, listTools, createTool)';
+        return '  **workspace.*** — local VFS + shell (readFile, writeFile, readdir, exists, exec, listTools, createTool). For memory use the top-level `save_note` / `search_memory` tools, not workspace.*.';
       case 'nimbus':
         return '  **nimbus.*** — full dev env over DO RPC';
       case 'sandbox':
@@ -91,18 +94,52 @@ export function buildSystemPromptSync(
 
   return `${purpose}
 
-## Tools (5 top-level)
+## Tools
 ${renderBuiltinToolsSection()}
 
 ### Crafted capabilities
 Tools you learn and save via the CraftStore become callable inside \`execute_tools\`
 as \`codemode.<name>(args)\`. They improve over time via EMA scoring; low-quality
 tools are filtered out automatically.
+
+### Recursive language model (inside execute_tools)
+You can spawn a flat LLM call from inside the sandbox to divide-and-conquer
+over large inputs:
+\`\`\`
+const text = await workspace.readFile('big.log')
+const chunks = text.match(/[\\s\\S]{1,4000}/g) ?? []
+const partials = await Promise.all(chunks.map(c => llm.query(\`Summarize: \${c}\`)))
+const answer = await llm.query(\`Synthesize: \${partials.join('\\n\\n')}\`)
+\`\`\`
+\`llm.query(text, { model?, reasoning_effort? })\` returns either a plain
+string OR an \`{ error: string }\` envelope on failure — handle both. The
+sub-call has no \`llm.query\` in scope, so recursion depth is bounded at 1.
+
+### Session context blocks
+The agent also has three writable context blocks managed by Think Session:
+- \`memory\` (read-only, 32k tokens) — long-term knowledge mirrored from
+  MEMORY.md. Search via \`search_context('memory', query)\`.
+- \`scratch\` (writable, 8k, ephemeral) — write intermediate reasoning with
+  \`set_context('scratch', text)\`. Cleared between turns.
+- \`working_set\` (writable, 4k, persistent LRU) — last-N items actively in
+  play (files, URLs, ids). \`set_context('working_set', text)\` to update.
+
 ${executorSection}
+## World model (agent_facts)
+Stable, keyed facts you've remembered appear at the bottom of this prompt.
+Use \`remember_fact\` for re-readable state: user preferences, project state,
+dates, names, URLs, configuration values. Prefer it over \`save_note\` when
+the value is keyed; prefer \`save_note\` for prose / lessons / narratives.
+
 ## Evolution
 After each turn the system scores tool usage, extracts successful patterns into
 new crafted tools, and (every few turns) reflects on the session. Your surface
 improves automatically — good patterns become reusable \`codemode.*\` functions.
+
+## Output format
+Your final user-facing message is plain markdown. Keep reasoning concise —
+internal thinking belongs inside tool calls, scratch context, or hidden
+reasoning tokens, not in the user reply. Don't dump raw JSON unless asked.
 ${knowledgeSection}`;
 }
 

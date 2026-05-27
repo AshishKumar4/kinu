@@ -24,6 +24,9 @@ import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
+  createInMemoryCredentialStore,
+  effortFor,
+  createAgentConfigStore,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -34,19 +37,19 @@ import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores"
 import { createShell } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
 import { generateText } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
+import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { createSqlCredentialStore } from "./credentials/store.js";
 
-/** Extended runtime that also exposes the raw SqliteFS for shell emulation
- *  and the SSH executor for tunnel socket management, plus the v2 vector
- *  store for semantic memory. */
+/** Extended runtime that exposes the raw SqliteFS for shell emulation, the
+ *  SSH executor for tunnel socket management, and the Vectorize-backed
+ *  vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   sqliteFS: SqliteFS;
   sshExecutor: ReturnType<typeof createSSHTunnelExecutor>;
-  /** v2: Vectorize-backed semantic memory. Noop fallback when no binding. */
+  /** Vectorize-backed semantic memory. Noop fallback when no binding. */
   vectorStore: import("@proteus/core").VectorStore;
 };
 
@@ -142,7 +145,7 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
   const sshExecutor = createSSHTunnelExecutor();
   executionRouter.register(sshExecutor);
 
-  // v2: Vectorize-backed semantic memory. Only constructs when both
+  // Vectorize-backed semantic memory. Only constructs when both
   // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
   // binding) are configured. Otherwise falls back to a noop that lets
   // hybrid search degrade to FTS5-only.
@@ -251,7 +254,7 @@ function adaptCraftedTool(t: { name: string; description: string; params: Record
 
 // ── Executor: LOADER-backed DynamicWorkerExecutor ──
 //
-// v2.1(E): delegates to @cloudflare/codemode's DynamicWorkerExecutor which
+// delegates to @cloudflare/codemode's DynamicWorkerExecutor which
 // spawns a child Worker per execute() call via env.LOADER.get(). Replaces
 // the broken new-Function() fallback that fired "Code generation from
 // strings disallowed" in production. Consumer: scaffold/modify.ts parse gate
@@ -272,22 +275,31 @@ function createExecutor(loader: unknown): Executor {
   };
 }
 
-// ── LLM for evolution reflections ────────────────────────────────
+// LLM for evolution reflections. Uses the agent's configured provider via
+// the registry — picks up Codex/OpenRouter/etc. automatically when the user
+// has switched providers.
+function readStoredModelSpec(agent: Think<Env>): string | null {
+  // Single canonical path through the typed config store — no raw SQL.
+  return createAgentConfigStore(
+    agent.sql.bind(agent) as unknown as CoreSqlExecutor,
+  ).getModel();
+}
 
 function createDualPathLLM(agent: Think<Env>): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
-        const env = agent.env as Env & Record<string, string>;
-        const model = (env.AI && typeof env.AI !== "string")
-          ? createWorkersAI({ binding: env.AI })("@cf/moonshotai/kimi-k2.6")
-          : createOpenAICompatible({
-              name: "workers-ai",
-              baseURL: env.AI_GATEWAY_URL ?? "",
-              headers: { "Authorization": env.AI_GATEWAY_AUTH ?? "" },
-            }).chatModel("workers-ai/@cf/moonshotai/kimi-k2.6");
-        const result = await generateText({ model, prompt, maxOutputTokens: 512 });
+        const reg = createAgentProviderRegistry({
+          env: agent.env,
+          credentials: createSqlCredentialStore(agent.ctx.storage.sql),
+          appTitle: 'Proteus',
+        });
+        const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
+        const result = await generateText({
+          model, prompt, maxOutputTokens: 512,
+          ...effortFor('reflection'),
+        });
         return result.text.trim();
       } catch { return "(reflection unavailable)"; }
     },
@@ -357,20 +369,17 @@ function createFacetAborter(agent: Think<Env>): (branchId: string) => Promise<vo
  * or its storage. The closure has no path to agent.sql or agent.ctx.storage.
  */
 function createInlineBranch(agent: Think<Env>): BranchHandle {
-  // Extract ONLY what we need for LLM calls — not the agent itself.
-  // This ensures the branch closure has no reference to orchestrator storage.
-  const env = agent.env as Env & Record<string, string>;
-  const aiBinding = (env.AI && typeof env.AI !== "string") ? env.AI : null;
-  const gatewayUrl = env.AI_GATEWAY_URL ?? "";
-  const gatewayAuth = env.AI_GATEWAY_AUTH ?? "";
-  // agent reference is NOT captured past this point
-  const getModel = () => aiBinding
-    ? createWorkersAI({ binding: aiBinding })("@cf/moonshotai/kimi-k2.6")
-    : createOpenAICompatible({
-        name: "workers-ai",
-        baseURL: gatewayUrl,
-        headers: { "Authorization": gatewayAuth },
-      }).chatModel("workers-ai/@cf/moonshotai/kimi-k2.6");
+  // Capture only env (not agent.sql / agent.ctx.storage) so the branch
+  // closure satisfies StorageIsolation. Stored credentials are not available
+  // here — inline branches use the env-bound providers (workers-ai or
+  // ai-gateway) only, which need no credential reads.
+  const reg = createAgentProviderRegistry({
+    env: agent.env,
+    credentials: createInMemoryCredentialStore(),
+    appTitle: 'Proteus (inline branch)',
+  });
+  const spec = reg.normalizeSpecSync(null);
+  const getModel = () => reg.resolveModel(spec);
 
   return {
     explore: async (history, _tools) => {

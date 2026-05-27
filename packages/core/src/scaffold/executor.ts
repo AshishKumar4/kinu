@@ -3,7 +3,7 @@
  *
  * The mutable scaffold (`scaffold/agent.js`) is the agent's own agentic loop,
  * versioned in scaffold_versions, validated through modifyScaffold's 4 gates,
- * and rewritten via maybeEvolveScaffold. Before v2, the scaffold was stored
+ * and rewritten via maybeEvolveScaffold. Earlier, the scaffold was stored
  * but NEVER executed — every turn ran Think's standard streamText() loop.
  *
  * This module closes the loop. It executes the scaffold through the codemode

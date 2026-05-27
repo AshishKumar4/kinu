@@ -11,7 +11,7 @@ import type { RawSqlExec } from '../types/primitives.js';
 
 export function initScaffoldTables(execRaw: RawSqlExec): void {
   // status: 'current' | 'pending' | 'rolled_back' | 'historical'
-  // Drives v2 shadow-mode rollout in scaffold/shadow.ts. Existing rows
+  // Drives shadow-mode rollout in scaffold/shadow.ts. Existing rows
   // (created before this column landed) default to 'current'.
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_versions (

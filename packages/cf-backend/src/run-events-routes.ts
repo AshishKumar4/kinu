@@ -9,7 +9,7 @@
  * RPCs (getRunEvents / listRuns / countRunEvents). The SSE stream loops a
  * polling read against the agent — Worker DO RPCs can't hold a single
  * persistent server-push channel here, so we drain new events on a short
- * interval. This is the simple Flue-compatible model; v2.x can swap for
+ * interval. This is the simple Flue-compatible model; future enhancement can swap for
  * a true push over agent.broadcast() once the chat protocol surface is
  * extended.
  */
@@ -102,7 +102,14 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   if (streamMatch) {
     const [, agentName, runId] = streamMatch;
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
-    const sinceIndex = lastEventId ? Number(lastEventId) : -1;
+    // Validate Last-Event-ID is a non-negative integer; otherwise replay
+    // from the start. A NaN would silently rewind to -1 and re-deliver
+    // every event the client has already seen.
+    let sinceIndex = -1;
+    if (lastEventId !== null) {
+      const n = Number(lastEventId);
+      if (Number.isFinite(n) && n >= -1 && Number.isInteger(n)) sinceIndex = n;
+    }
     return streamRunEvents(env, agentName, runId, sinceIndex);
   }
 

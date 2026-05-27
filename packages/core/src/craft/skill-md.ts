@@ -38,6 +38,7 @@
  */
 
 import type { CraftedTool } from '../types/craft.js';
+import { ensureDir } from '../utils/vfs-helpers.js';
 
 export interface SkillMdParseResult {
   /** The crafted-tool fields we recognized. */
@@ -280,7 +281,7 @@ export async function exportAllSkillsToVfs(
 ): Promise<ExportSkillsResult> {
   const dir = opts.dir ?? 'skills';
   const result: ExportSkillsResult = { written: 0, skipped: 0, errors: [] };
-  try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
+  await ensureDir(vfs, dir);
   for (const tool of craftStore.list()) {
     if (!tool.code || tool.code.startsWith('//')) {
       result.skipped++;

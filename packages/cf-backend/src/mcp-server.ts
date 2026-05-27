@@ -46,6 +46,17 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Max-Age": "86400",
 };
 
+/** Constant-time string comparison — guards against timing-side-channel
+ *  enumeration of MCP_AUTH_TOKEN by attackers. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 function withCors(response: Response): Response {
   for (const [k, v] of Object.entries(corsHeaders)) response.headers.set(k, v);
   return response;
@@ -256,6 +267,19 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
 
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  // Optional shared-secret auth. If env.MCP_AUTH_TOKEN is set, require it.
+  // When unset (dev mode / personal account), the endpoint is open — same
+  // behaviour as before. Set the secret in prod:
+  //   echo "<long-random>" | npx wrangler secret put MCP_AUTH_TOKEN
+  const required = (env as { MCP_AUTH_TOKEN?: string }).MCP_AUTH_TOKEN;
+  if (required) {
+    const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    // Timing-safe compare so an attacker can't byte-iterate the secret.
+    if (!timingSafeEqual(provided, required)) {
+      return withCors(Response.json({ error: 'Unauthorized' }, { status: 401 }));
+    }
   }
 
   // /mcp/v1/<agentName>[/...] — agentName is the second segment after /mcp/v1/

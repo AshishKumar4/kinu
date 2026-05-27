@@ -70,22 +70,26 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-describe('Agent tools (v2.1 canonical 6-tool surface — split_heads conditional)', () => {
-  test('without splitHeadsTool: 5 base tools, split_heads omitted', () => {
+// split_heads, think, and the fact tools (remember/recall/forget_fact) are
+// conditional on their deps. Base = everything else. Full surface = all
+// canonical tools.
+const CONDITIONAL_TOOLS = ['split_heads', 'think', 'remember_fact', 'recall_fact', 'forget_fact'] as const;
+const BASE_TOOLS = BUILTIN_TOOLS.filter(
+  (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
+);
+
+describe('Agent tools (canonical surface — split_heads/think/facts conditional)', () => {
+  test('without conditional deps: base tools only', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const names = Object.keys(t);
-    const expected = BUILTIN_TOOLS.filter((n) => n !== 'split_heads');
 
-    for (const canonical of expected) {
-      expect(names).toContain(canonical);
-    }
-    expect(names).not.toContain('split_heads');
-    expect(names.length).toBe(5);
-    expect(names.sort()).toEqual([...expected].sort());
+    for (const canonical of BASE_TOOLS) expect(names).toContain(canonical);
+    for (const conditional of CONDITIONAL_TOOLS) expect(names).not.toContain(conditional);
+    expect(names.length).toBe(BASE_TOOLS.length);
   });
 
-  test('with splitHeadsTool stub: all 6 canonical tools present', () => {
+  test('with all conditional deps: full canonical surface present', () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt, { enabled: false });
     const stubSplitHeads = tool({
@@ -95,17 +99,30 @@ describe('Agent tools (v2.1 canonical 6-tool surface — split_heads conditional
       }),
       execute: async () => 'stub',
     });
+    const stubThink = tool({
+      description: 'stub think',
+      inputSchema: jsonSchema<{ strategy: string; task: string }>({
+        type: 'object', properties: { strategy: { type: 'string' }, task: { type: 'string' } },
+        required: ['strategy', 'task'],
+      }),
+      execute: async () => 'stub',
+    });
+    const stubFacts = {
+      upsert: () => {}, recall: () => null, forget: () => {},
+      recentTopK: () => [], all: () => [],
+    };
     const t = buildBuiltinTools({
       rt, engine,
       craftedToolExecute: nodeCraftedExecute,
       createExecuteTool: nodeExecFactory as never,
       codemodeLoader: { __test: true } as unknown,
       splitHeadsTool: stubSplitHeads,
+      thinkTool: stubThink,
+      facts: stubFacts,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
-    expect(names.length).toBe(6);
-    expect(names.sort()).toEqual([...BUILTIN_TOOLS].sort());
+    expect(names.length).toBe(BUILTIN_TOOLS.length);
   });
 
   test('each tool carries description + inputSchema', () => {

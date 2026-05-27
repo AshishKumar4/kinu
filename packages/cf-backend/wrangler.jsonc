@@ -64,9 +64,8 @@
       "tag": "v2",
       "new_sqlite_classes": ["ProteusSandbox"]
     },
-    // v3/v4 reserved (HeadAgent + ReviewAgent — both removed in cleanup;
-    // head mode now lives in ExplorationAgent's existing SQLite class,
-    // background review folded back into EvolutionEngine's onTurnCompleteAsync).
+    // Head mode + background review run inside the existing
+    // ExplorationAgent + EvolutionEngine — no additional DO classes.
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
   //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
@@ -91,7 +90,7 @@
   // Llama 4 Scout) AND semantic-memory embeddings (bge-small-en-v1.5)
   // when the Vectorize index below is also enabled.
   "ai": { "binding": "AI" }
-  // ── v2 OPTIONAL: Vectorize binding for semantic memory ─────────────
+  // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
   //
   // First create the index:
   //   wrangler vectorize create proteus-memory \

@@ -47,6 +47,12 @@ const splitHeadsInputSchema = jsonSchema<SplitHeadsInput>({
         properties: {
           task: { type: "string", description: "What this specific head should explore. Be concrete." },
           rationale: { type: "string", description: "Why this angle matters." },
+          model: {
+            type: "string",
+            description:
+              "Provider/model spec for THIS head (e.g. 'codex/gpt-5.5', 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'). " +
+              "Omit to inherit the orchestrator's model. Use heterogeneous models per head for multi-agent debate.",
+          },
           allowedSandboxes: {
             type: "array",
             items: { type: "string" },
@@ -68,6 +74,12 @@ const splitHeadsInputSchema = jsonSchema<SplitHeadsInput>({
         "'synthesize' = unify into one narrative. " +
         "'best_of' = pick the strongest. " +
         "'consensus' = highlight agreement and surface disagreements.",
+    },
+    merge_model: {
+      type: "string",
+      description:
+        "Provider/model spec for the MERGE LLM. Omit to inherit the orchestrator's model. " +
+        "Useful for using a strong judge model to synthesize results from cheaper heads.",
     },
     max_depth: {
       type: "integer",
@@ -93,10 +105,14 @@ export interface SplitHeadsInput {
   heads: Array<{
     task: string;
     rationale: string;
+    /** Per-head model spec (e.g. `codex/gpt-5.5`). Heterogeneous fleet → multi-agent debate. */
+    model?: string;
     allowedSandboxes?: string[];
     allowedTools?: string[];
   }>;
   merge_strategy?: MergeStrategy;
+  /** Model spec for the merge LLM (default: orchestrator's). */
+  merge_model?: string;
   max_depth?: number;
   max_tokens?: number;
   max_wall_clock_ms?: number;
@@ -163,8 +179,10 @@ export function createSplitHeadsTool(deps: SplitHeadsToolDeps): Tool<SplitHeadsI
 
       const request: SplitRequest = {
         rationale: input.rationale,
+        // Per-head model carries through to the controller via input.heads[i].model.
         heads: input.heads,
         mergeStrategy: strategy,
+        mergeModel: input.merge_model,
       };
 
       const rootId = `split-${nanoid()}`;

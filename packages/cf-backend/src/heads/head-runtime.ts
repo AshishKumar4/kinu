@@ -2,48 +2,42 @@
  * CFHeadRuntime — concrete HeadRuntime for the branching-heads primitive.
  *
  * Heads run as ExplorationAgent Facets in head mode (initHead + runAsHead).
- * The same Facet class powers MCTS branches in MCTS mode (explore + evaluate);
- * head mode is a different ToolSet + a multi-step inference loop on top of
- * the same parallel-spawn infrastructure.
- *
- * Constructed once per chat agent; passed into HeadController.
+ * The same Facet class powers MCTS branches in MCTS mode; head mode is a
+ * different ToolSet + a multi-step inference loop on top of the same
+ * parallel-spawn infrastructure.
  */
 
 import { generateObject } from "ai";
-import type { LanguageModel } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type {
   HeadRuntime, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
 } from "@proteus/core";
-import { MergeOutputSchema, type MergeOutput } from "@proteus/core";
+import { MergeOutputSchema, type MergeOutput, effortFor, createAgentConfigStore } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
-
-const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
-
-function getModel(env: Env, modelId?: string): LanguageModel {
-  const id = modelId ?? DEFAULT_MODEL;
-  const e = env as Env & Record<string, string>;
-  if (e.AI && typeof e.AI !== "string") {
-    return createWorkersAI({ binding: e.AI })(id);
-  }
-  const compatId = id.startsWith("workers-ai/") ? id : `workers-ai/${id}`;
-  return createOpenAICompatible({
-    name: "workers-ai",
-    baseURL: e.AI_GATEWAY_URL ?? "",
-    headers: { Authorization: e.AI_GATEWAY_AUTH ?? "" },
-  }).chatModel(compatId);
-}
+import { createAgentProviderRegistry } from "../providers/agent-registry.js";
+import { createSqlCredentialStore } from "../credentials/store.js";
 
 export function createCFHeadRuntime(orchestrator: Think<Env>): HeadRuntime {
+  // The merge LLM uses the chat agent's configured provider — same provider
+  // resolution as ordinary chat, including Codex/OpenRouter when set.
+  const reg = createAgentProviderRegistry({
+    env: orchestrator.env,
+    credentials: createSqlCredentialStore(orchestrator.ctx.storage.sql),
+    appTitle: 'Proteus (heads)',
+  });
+
+  const config = createAgentConfigStore(
+    orchestrator.sql.bind(orchestrator) as unknown as import('@proteus/core').SqlExecutor,
+  );
   const mergeLLM: MergeLLMFn = async (prompt, schema): Promise<MergeOutput> => {
-    const model = getModel(orchestrator.env);
+    const stored = config.getModel();
+    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
     const { object } = await generateObject({
       model,
       schema: schema as typeof MergeOutputSchema,
       prompt,
       maxOutputTokens: 4096,
+      ...effortFor('head_merge'),
     });
     return object as MergeOutput;
   };

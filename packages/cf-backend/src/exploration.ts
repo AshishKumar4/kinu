@@ -9,7 +9,7 @@
  *                           judges the accumulated trace; generateReflection
  *                           produces a failure post-mortem.
  *
- *   HEAD mode  (v2)       — long-form multi-step inference used by the
+ *   HEAD mode         — long-form multi-step inference used by the
  *                           branching-heads primitive (split_heads tool).
  *                           @callable init() / runAsHead() / abort() drive
  *                           an agentic loop with a restricted tool surface
@@ -30,8 +30,8 @@
 import { Agent, callable } from "agents";
 import { generateText, generateObject, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { createSqlCredentialStore } from "./credentials/store.js";
 import {
   type CraftedTool,
   type HeadId,
@@ -55,13 +55,12 @@ import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
 
-const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 const MAX_HEAD_STEPS = 16;
 
 export class ExplorationAgent extends Agent<Env> {
   // ── MCTS-mode state (pre-existing) ──────────────────────────────
 
-  // ── Head-mode state (v2) ────────────────────────────────────────
+  // ── Head-mode state  ────────────────────────────────────────
   private headInput: HeadInput | null = null;
   private headEvidence: Evidence[] = [];
   private headDecisions: Decision[] = [];
@@ -89,18 +88,23 @@ export class ExplorationAgent extends Agent<Env> {
     return this._shell;
   }
 
-  private getModel(modelId?: string): LanguageModel {
-    const id = modelId ?? DEFAULT_MODEL;
-    const env = this.env as Env & Record<string, string>;
-    if (env.AI && typeof env.AI !== "string") {
-      return createWorkersAI({ binding: env.AI })(id);
-    }
-    const compatId = id.startsWith("workers-ai/") ? id : `workers-ai/${id}`;
-    return createOpenAICompatible({
-      name: "workers-ai",
-      baseURL: env.AI_GATEWAY_URL ?? "",
-      headers: { Authorization: env.AI_GATEWAY_AUTH ?? "" },
-    }).chatModel(compatId);
+  private _providerRegistry: AgentProviderRegistry | null = null;
+  private providerRegistry(): AgentProviderRegistry {
+    if (this._providerRegistry) return this._providerRegistry;
+    this._providerRegistry = createAgentProviderRegistry({
+      env: this.env,
+      credentials: createSqlCredentialStore(this.ctx.storage.sql),
+      appTitle: 'Proteus (exploration)',
+    });
+    return this._providerRegistry;
+  }
+
+  /** Resolve the LanguageModel for this facet. `modelId` is whatever the
+   *  parent passed (could be a bare modelId or a full spec); the registry
+   *  normalizes it (handles BC `@cf/...` form). */
+  getModel(modelId?: string): LanguageModel {
+    const reg = this.providerRegistry();
+    return reg.resolveModel(reg.normalizeSpecSync(modelId));
   }
 
   async onStart() {
@@ -183,7 +187,7 @@ export class ExplorationAgent extends Agent<Env> {
     return text.trim();
   }
 
-  // ── Head mode @callables (v2) ───────────────────────────────────
+  // ── Head mode @callables  ───────────────────────────────────
 
   /** Initialize this facet as a branching-heads worker. */
   @callable()

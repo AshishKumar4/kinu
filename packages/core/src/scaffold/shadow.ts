@@ -214,8 +214,8 @@ export function decidePromotion(
     if (winRate <= config.rollbackThreshold) return { decision: 'rollback', winRate };
   }
   if (pending.trialsSoFar >= config.maxTrials) {
-    // Force a decision — ties → rollback (safety bias).
-    return { decision: winRate >= 0.5 ? 'promote' : 'rollback', winRate };
+    // Force a decision — ties → rollback (safety bias: strict > 0.5 only).
+    return { decision: winRate > 0.5 ? 'promote' : 'rollback', winRate };
   }
   return { decision: 'continue', winRate };
 }

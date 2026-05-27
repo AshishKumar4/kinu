@@ -16,6 +16,7 @@ import type { ExecutorProvider, ExecutorCapability } from './types.js';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import { appendMemoryNote } from '../memory/note.js';
+import { ensureDir } from '../utils/vfs-helpers.js';
 
 interface ShellExec {
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -56,9 +57,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (path: unknown, content: unknown) => {
         const p = String(path);
         const dir = p.split('/').slice(0, -1).join('/');
-        if (dir) {
-          try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
-        }
+        if (dir) await ensureDir(vfs, dir);
         await vfs.writeFile(p, String(content));
         if (p.startsWith('memory/')) await memory.index(p);
         return `Written ${String(content).length} bytes to ${p}`;

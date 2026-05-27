@@ -105,14 +105,14 @@ export interface BuiltinToolDeps {
    */
   splitHeadsTool?: ToolSet[string];
   /**
-   * v2: optional Vectorize-backed VectorStore for semantic memory recall.
+   * Optional Vectorize-backed VectorStore for semantic memory recall.
    * When provided, search_memory does hybrid retrieval (FTS5 + Vectorize via
    * RRF) instead of FTS5-only. Falls back gracefully when not provided OR
    * when the underlying binding is unavailable.
    */
   vectorStore?: import('../memory/vector-store.js').VectorStore;
   /**
-   * v2.x: how to handle 'gate' decisions from the approval-gate review.
+   * How to handle 'gate' decisions from the approval-gate review.
    *   'strict'    — reject gate commands until an approval-channel is wired (default)
    *   'allow_all' — treat gate as warn (logged but executed). Use for trusted
    *                 dev environments only. Set per-agent via the
@@ -120,6 +120,22 @@ export interface BuiltinToolDeps {
    *   'deny_all'  — reject everything that isn't 'allow' (max safety)
    */
   shellApprovalMode?: 'strict' | 'allow_all' | 'deny_all';
+  /** agent_facts world model. When provided, exposes remember/recall/forget_fact tools. */
+  facts?: import('../memory/facts.js').FactsStore;
+  /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
+   *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
+   *  ∪ frequently-used recent) are injected — saves context as the store
+   *  grows large. */
+  toolSurfacing?: {
+    mode: 'all' | 'relevant';
+    /** The user's task / current message — drives FTS5 relevance. */
+    query?: string;
+    /** Default 20. */
+    maxRelevant?: number;
+  };
+  /** Unified `think(strategy, task, budget)` tool. Built by the orchestrator
+   *  from the StrategyRegistry; core just slots it into the ToolSet. */
+  thinkTool?: ToolSet[string];
 }
 
 /**
@@ -135,6 +151,7 @@ function buildCraftedToolSetFromExecute(
   factory: CraftedToolExecute,
   minScore: number,
   preexistingNames: Set<string>,
+  surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
 ): Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }> {
   const out: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }> = {};
   let list;
@@ -156,8 +173,32 @@ function buildCraftedToolSetFromExecute(
 
   for (const t of list) preexistingNames.add(t.name);
 
+  // Relevance filter (Voyager / Tool-Search style): when the agent has many
+  // crafted tools, stuffing them all into every turn wastes context and hurts
+  // selection. In 'relevant' mode we fetch top-K via FTS5 over the current
+  // user message, then union with the top-K most frequently used recent tools.
+  let relevantNames: Set<string> | null = null;
+  if (surfacing?.mode === 'relevant') {
+    const maxRelevant = surfacing.maxRelevant ?? 20;
+    const half = Math.max(5, Math.floor(maxRelevant / 2));
+    relevantNames = new Set();
+    if (surfacing.query && surfacing.query.length > 0) {
+      try {
+        for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
+      } catch { /* FTS not initialized yet */ }
+    }
+    // Pad with most-frequently-used recent tools (recency-weighted).
+    try {
+      const top = rt.storage.sql<{ tool_name: string }>`
+        SELECT tool_name FROM craft_scores
+        ORDER BY uses DESC, last_used_at DESC LIMIT ${maxRelevant}`;
+      for (const r of top) relevantNames.add(r.tool_name);
+    } catch { /* fine */ }
+  }
+
   for (const t of list) {
     if (!t.code || t.code.startsWith('//')) continue;
+    if (relevantNames && !relevantNames.has(t.name)) continue;
     const s = scores.get(t.name);
     if (s) {
       const eff = effectiveScore(s.score, s.lastUsedAt, now);
@@ -177,15 +218,17 @@ function buildCraftedToolSetFromExecute(
 
 /** Default in-memory SessionWriter when no backend-specific one is provided. */
 function createInMemorySession(): SessionWriter {
-  const messages: Array<{ message: { id: string; role: string; parts: unknown[] }; parentId: string | null }> = [];
+  type StoredMessage = Parameters<SessionWriter['appendMessage']>[0];
+  const messages: Array<{ message: StoredMessage; parentId: string | null }> = [];
   return {
     async appendMessage(message, parentId) {
-      messages.push({ message: message as never, parentId: parentId ?? null });
+      messages.push({ message, parentId: parentId ?? null });
     },
     getHistory() {
       return messages.map((m) => ({
-        role: m.message.role,
-        content: m.message.parts.map((p: unknown) => (p as { text?: string }).text ?? '').join(''),
+        role: (m.message as { role?: string }).role ?? 'user',
+        content: ((m.message as { parts?: ReadonlyArray<{ text?: string }> }).parts ?? [])
+          .map((p) => p.text ?? '').join(''),
       }));
     },
     async compact() {
@@ -204,7 +247,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const tools: ToolSet = {};
 
   // ── 1. execute_tools ─────────────────────────────────────────────────────
-  // v2.1(E): single code path. Crafted tools always dispatch through
+  // single code path. Crafted tools always dispatch through
   // deps.craftedToolExecute (CF → LOADER Worker, CLI → Node eval).
   // Host-side codegen is GONE — the Proxy live-lookup that used it is
   // deleted, and the legacy in-process compile path is no longer here.
@@ -215,6 +258,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         deps.craftedToolExecute,
         deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
         preexistingCraftNames,
+        deps.toolSurfacing,
       )
     : {};
 
@@ -233,7 +277,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }
   }
 
-  // v2.1(E): no core-level fallback. Callers MUST supply createExecuteTool
+  // no core-level fallback. Callers MUST supply createExecuteTool
   // (CF passes @cloudflare/think's real one; CLI passes a Node adapter
   // from @proteus/cli-backend/execute-tools-factory). If neither is wired,
   // execute_tools returns a sharp error — a silent in-process compile
@@ -273,7 +317,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['command'],
     }),
     execute: async (args: { command: string; executor?: string }) => {
-      // v2: approval-gate pre-flight. See safety/approval-gate.ts for the
+      // Approval-gate pre-flight. See safety/approval-gate.ts for the
       // ruleset. Behavior at decision='gate' depends on the shellApprovalMode:
       //   strict     → reject (LLM gets a "Requires user approval" error)
       //   allow_all  → execute, log as warn (trusted dev environments only)
@@ -364,6 +408,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.split_heads = deps.splitHeadsTool;
   }
 
+  // Unified `think` tool — strategy dispatcher (single-shot / mcts / heads / …).
+  // Built by the orchestrator (which owns the StrategyRegistry) and slotted in.
+  if (deps.thinkTool) {
+    tools.think = deps.thinkTool;
+  }
+
   // ── 5. save_note ─────────────────────────────────────────────────────────
   tools.save_note = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.save_note,
@@ -374,6 +424,67 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }),
     execute: async (args: { content: string }) => appendMemoryNote(memory, args.content),
   });
+
+  // ── agent_facts: typed, idempotent, keyed world model ──────────────────
+  const facts = deps.facts;
+  if (facts) {
+    tools.remember_fact = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.remember_fact,
+      inputSchema: jsonSchema<{ key: string; value: unknown; confidence?: number }>({
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'Stable identifier (e.g. "user.tz", "deploy.target")' },
+          value: { description: 'Any JSON value — string, number, object, array' },
+          confidence: { type: 'number', minimum: 0, maximum: 1, description: '0..1; default 1.0' },
+        },
+        required: ['key', 'value'],
+      }),
+      execute: async (args) => {
+        // Pre-flight serialize so circular refs / non-serializable values
+        // surface as a clean tool error instead of crashing the turn.
+        try { JSON.stringify(args.value); }
+        catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
+        if (typeof args.key !== 'string' || args.key.length === 0) {
+          return { error: 'key must be a non-empty string' };
+        }
+        facts.upsert(args.key, args.value, { confidence: args.confidence });
+        return { ok: true, key: args.key };
+      },
+    });
+    tools.recall_fact = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.recall_fact,
+      inputSchema: jsonSchema<{ key: string }>({
+        type: 'object',
+        properties: { key: { type: 'string' } },
+        required: ['key'],
+      }),
+      execute: async (args) => {
+        const f = facts.recall(args.key);
+        if (!f) return { found: false, key: args.key };
+        return {
+          found: true,
+          key: f.key,
+          value: f.value,
+          confidence: f.confidence,
+          source: f.source,
+          lastObservedAt: f.lastObservedAt,
+        };
+      },
+    });
+    tools.forget_fact = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.forget_fact,
+      inputSchema: jsonSchema<{ key: string }>({
+        type: 'object',
+        properties: { key: { type: 'string' } },
+        required: ['key'],
+      }),
+      execute: async (args) => {
+        const existed = facts.recall(args.key) !== null;
+        facts.forget(args.key);
+        return { ok: true, key: args.key, existed };
+      },
+    });
+  }
 
   // ── 6. search_memory ─────────────────────────────────────────────────────
   // Auto-hybrid: if a Vectorize-backed VectorStore is wired AND available,

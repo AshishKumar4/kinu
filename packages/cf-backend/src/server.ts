@@ -15,6 +15,7 @@ import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
 import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
+import { handleAuthRequest } from "./auth/routes.js";
 
 export { OrchestratorAgent } from "./orchestrator.js";
 // ExplorationAgent is the single Facet class for parallel sub-agent work.
@@ -38,24 +39,31 @@ export default {
       return handlePcRequest(request, env);
     }
 
-    // v2 health/info — useful for verifying a deploy went out.
+    // Build-info — confirm a deploy went out.
     const healthResp = handleHealthRequest(request);
     if (healthResp) return healthResp;
 
-    // v2: durable run-event log endpoints
+    // Durable run-event log:
     //   GET /api/agents/<name>/runs                 → list runs
     //   GET /api/agents/<name>/runs/<id>/events     → paginated query
     //   GET /api/agents/<name>/runs/<id>/stream     → SSE w/ Last-Event-ID
     const runEventsResp = await handleRunEventsRequest(request, env);
     if (runEventsResp) return runEventsResp;
 
-    // v2: MCP server surface — Proteus as a tool provider for external clients
+    // MCP server — Proteus exposes its tools/memory to external clients:
     //   /mcp/v1/<agentName>  → streamable-HTTP transport (POST/GET/DELETE)
     // Tools: search_memory, save_note, list_skills, run_scaffold_once,
     //        get_shadow_status, list_runs, list_run_events
     // Resources: proteus://agent/<name>/memory
     const mcpResp = await handleMcpRequest(request, env);
     if (mcpResp) return mcpResp;
+
+    // Auth — provider credentials + Codex OAuth device-code flow:
+    //   POST /api/agents/<name>/auth/codex/start | /codex/poll
+    //   GET/DELETE /api/agents/<name>/auth/codex
+    //   POST/DELETE /api/agents/<name>/auth/credentials/<key>
+    const authResp = await handleAuthRequest(request, env);
+    if (authResp) return authResp;
 
     const agentResp = await routeAgentRequest(request, env);
     if (agentResp) return agentResp;

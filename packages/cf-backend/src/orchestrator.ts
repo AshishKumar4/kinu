@@ -1,32 +1,30 @@
 /**
  * OrchestratorAgent — self-evolving chat agent extending Think.
  *
- * 5-tool architecture (all tool construction lives in @proteus/core/tools):
- *   execute_tools  — codemode sandbox with workspace.* + codemode.* (crafted) APIs
- *   run            — POSIX shell command with optional executor routing
- *   explore        — MCTS tree search via durable fiber
- *   save_note      — append to MEMORY.md (FTS-indexed)
- *   search_memory  — FTS5 search over long-term memory
- *
- * All filesystem operations (read, write, edit, grep, find, etc.) are available
- * as workspace.* APIs inside the execute_tools codemode sandbox. Crafted tools
- * from the CraftStore are injected as codemode.* inside the sandbox.
+ * Tool surface (constructed in @proteus/core/tools/builtins):
+ *   execute_tools — codemode sandbox: workspace.* + sandbox.* + codemode.*
+ *                   (crafted) + llm.query (Recursive Language Models)
+ *   run           — POSIX shell command (with approval-gate review)
+ *   think         — unified strategy dispatcher (single-shot / mcts / heads / …)
+ *   split_heads   — direct branching heads (parallel + merge)
+ *   explore       — direct MCTS (legacy; think({strategy:'mcts'}) preferred)
+ *   save_note     — append to MEMORY.md (FTS-indexed)
+ *   search_memory — hybrid FTS5 + Vectorize lexical/semantic retrieval
+ *   remember_fact / recall_fact / forget_fact — typed world model (agent_facts)
  *
  * This file is a THIN ADAPTER: tool factory, system prompt, and crafted-tool
  * injection all live in @proteus/core so the CLI surface shares them verbatim.
- * See docs/V2-MIGRATION.md for the drift-elimination rationale.
  */
 
 import { callable } from "agents";
 import { Think, Session } from "@cloudflare/think";
-// v2.1-liveness — preamble-injection pattern: we construct the codemode tool
+// preamble-injection pattern: we construct the codemode tool
 // directly via createCodeTool + PreambleCraftedExecutor. The executor reads
 // craftStore.list() on every call and splices a `const tools = {...}`
 // preamble into the LLM's sandbox arrow, so mid-turn additions are visible
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
-import { createWorkersAI } from "workers-ai-provider";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { streamText, generateObject } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -37,10 +35,9 @@ import {
   bootstrapScaffold,
   initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
   resolveMaxSteps,
-  // v2.0 canonical tool + prompt surface — single source of truth
+  // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   buildSystemPromptSync,
-  createChatModel,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS,
   ACTIVE_TOOLS,
@@ -48,41 +45,53 @@ import {
   // Fork feature
   forkAgentStorage, readForkLineage,
   nanoid,
-  // v2: branching heads
+  // Branching heads
   HeadController, HeadJournal, initHeadsTables, createSplitHeadsTool,
   type SerializedMessage,
-  // v2: single canonical memory-note write primitive
+  // Canonical memory-note write primitive
   appendMemoryNote,
-  // v2: scaffold-loop closure (scaffold-driven inference + shadow rollout)
+  // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   runScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   readScaffoldVersion, DEFAULT_SHADOW_CONFIG,
-  // v2.x: auto-judge shadow eval — sampled per-turn shadow rollout closure
+  // Auto-judge shadow eval — sampled per-turn shadow rollout closure
   runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
   type StructuredJudgeFn,
-  // v2: durable run-event log
+  // Durable run-event log
   initRunEventTables, RunEventRecorder,
   type RunEvent, type RunEventQuery,
-  // v2: hybrid search (FTS5 + Vectorize via RRF)
+  // agent_facts world model
+  initFactsTable, createFactsStore, renderFactsBlock, type FactsStore,
+  // Typed agent_config store
+  createAgentConfigStore,
+  // Voyager curriculum + Absolute Zero learnability proposer
+  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, type HybridHit,
-  // v2: SKILL.md export/import (git-friendly crafted-tool format)
+  // SKILL.md export/import (git-friendly crafted-tool format)
   exportAllSkillsToVfs, importSkillsFromVfs,
   type ExportSkillsResult, type ImportSkillsResult,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
+  // Provider abstraction
+  CODEX_CRED_KEY, decodeChatGPTAccountId,
+  // Adaptive reasoning_effort per stage
+  effortFor,
+  // Unified strategy dispatch
+  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
+  createHeadsStrategy, createThinkTool,
 } from "@proteus/core";
+import { createCodexOAuthClient, tokensToCredential } from "./auth/codex-oauth.js";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
+import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { createSqlCredentialStore } from "./credentials/store.js";
+import { validateCredential } from "./credentials/validate.js";
+import { createRLMProvider } from "./rlm.js";
 
-const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
-
-const AVAILABLE_MODELS = [
-  { id: "@cf/moonshotai/kimi-k2.6", name: "Kimi K2.6", description: "Advanced reasoning model with extended thinking" },
-  { id: "@cf/meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", description: "General-purpose instruction model" },
-] as const;
 
 // ── Fork payload types ────────────────────────────────────────────
 // The source DO assembles this and sends it to the fork DO's rawCopyFromFork.
@@ -135,7 +144,7 @@ interface ForkPayload {
  * of truth. Only the exact SELECT shapes that forkAgentStorage issues are
  * supported — this is a minimal shim, not a general SQL engine.
  */
-function buildSqlFromPayload(payload: ForkPayload) {
+function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
   const rawSql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown[] =
     (strings, ...values) => {
       const query = strings.join("?").replace(/\s+/g, " ").trim();
@@ -184,7 +193,10 @@ function buildSqlFromPayload(payload: ForkPayload) {
       }
       return [];
     };
-  return rawSql as never;
+  // SqlExecutor uses a generic-bound tagged-template signature; the shim
+  // is single-return-type. Cast to SqlExecutor (not `never`) so callers
+  // get proper template-tag typing without unsafe widening.
+  return rawSql as unknown as SqlExecutor;
 }
 
 export class OrchestratorAgent extends Think<Env> {
@@ -210,13 +222,13 @@ export class OrchestratorAgent extends Think<Env> {
   // invocation without any registry or cache coherence work.
   private _craftExecTool: unknown = null;
 
-  // v2: branching-heads controller and tool — lazily built once per DO lifetime.
+  // Branching-heads controller and tool — lazily built once per DO lifetime.
   // The controller wraps a HeadJournal + HeadRuntime (Facet spawner + merge LLM).
   // The split_heads tool reads inheritedContext lazily via assistant_messages.
   private _headController: HeadController | null = null;
   private _splitHeadsTool: ReturnType<typeof createSplitHeadsTool> | null = null;
 
-  // v2: durable run-event recorder (Flue-style discriminated union, SSE-resumable).
+  // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
   // Initialized lazily on first event so onStart can wire the table before use.
   private _eventRecorder: RunEventRecorder | null = null;
   private get eventRecorder(): RunEventRecorder {
@@ -224,6 +236,61 @@ export class OrchestratorAgent extends Think<Env> {
       this._eventRecorder = new RunEventRecorder(this.boundSql);
     }
     return this._eventRecorder;
+  }
+
+  // agent_facts world model — typed, idempotent, keyed.
+  private _factsStore: FactsStore | null = null;
+  private get facts(): FactsStore {
+    if (!this._factsStore) this._factsStore = createFactsStore(this.boundSql);
+    return this._factsStore;
+  }
+
+  // Typed accessors over the `agent_config` key/value table — replaces
+  // scattered raw SQL with a single deep module.
+  private _config: import('@proteus/core').AgentConfigStore | null = null;
+  private get config(): import('@proteus/core').AgentConfigStore {
+    if (!this._config) this._config = createAgentConfigStore(this.boundSql);
+    return this._config;
+  }
+
+  // StrategyRegistry — single-shot + MCTS + Heads adapters. Powers the
+  // unified `think(strategy, task, budget)` tool.
+  private _strategyRegistry: import('@proteus/core').StrategyRegistry | null = null;
+  private get strategyRegistry(): import('@proteus/core').StrategyRegistry {
+    if (this._strategyRegistry) return this._strategyRegistry;
+    const reg = createStrategyRegistry();
+    reg.register(createSingleShotStrategy());
+    reg.register(createMCTSStrategy());
+    reg.register(createHeadsStrategy());
+    this._strategyRegistry = reg;
+    return reg;
+  }
+
+  private _thinkTool: ToolSet[string] | null = null;
+  private getThinkTool(): ToolSet[string] {
+    if (this._thinkTool) return this._thinkTool;
+    this._thinkTool = createThinkTool({
+      registry: this.strategyRegistry,
+      rt: this.rt,
+      model: this.getModel(),
+      defaultOptions: () => ({
+        // MCTS needs a SessionWriter — orchestrator provides one. Heads
+        // needs the controller from getSplitHeadsTool's pipeline.
+        mcts: { session: this.createMCTSSession() },
+        heads: { controller: this.getHeadController() },
+      }),
+    });
+    return this._thinkTool;
+  }
+
+  private getHeadController(): HeadController {
+    // The split-heads tool also builds one; reuse if present so both tools
+    // share the same journal + runtime.
+    void this.getSplitHeadsTool();
+    if (!this._headController) {
+      throw new Error('HeadController not initialized — getSplitHeadsTool() must run first.');
+    }
+    return this._headController;
   }
 
   /** Convenience: current runId for event emission. One run per turn. */
@@ -338,7 +405,13 @@ export class OrchestratorAgent extends Think<Env> {
       const executionRouter = this.rt.executionRouter;
       const executorProviders = executionRouter?.getProviders() ?? [];
       const craftedProvider = { name: 'codemode', tools: seededCraftedTools };
-      const allProviders = [craftedProvider, ...executorProviders.map(p => ({
+      // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
+      // Sub-call has no llm.query in scope, so depth is bounded at 1.
+      const rlmProvider = createRLMProvider(
+        this.providerRegistry(),
+        () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
+      );
+      const allProviders = [craftedProvider, rlmProvider, ...executorProviders.map(p => ({
         name: p.name,
         tools: p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>,
         types: p.types,
@@ -355,44 +428,35 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── Model resolution ───────────────────────────────────────────
 
-  private getStoredModelId(): string {
-    try {
-      const rows = this.sql<{ model: string }>`
-        SELECT value as model FROM agent_config WHERE key = 'model' LIMIT 1`;
-      return rows[0]?.model ?? DEFAULT_MODEL;
-    } catch { return DEFAULT_MODEL; }
+  private _providerRegistry: AgentProviderRegistry | null = null;
+  protected providerRegistry(): AgentProviderRegistry {
+    if (this._providerRegistry) return this._providerRegistry;
+    this._providerRegistry = createAgentProviderRegistry({
+      env: this.env,
+      credentials: createSqlCredentialStore(this.ctx.storage.sql),
+      appTitle: 'Proteus',
+    });
+    return this._providerRegistry;
   }
 
-  private createModel(modelId: string): LanguageModel {
-    const env = this.env as Env & Record<string, string>;
-    if (env.AI && typeof env.AI !== "string") {
-      const binding = env.AI as unknown as Parameters<typeof createWorkersAI>[0]["binding"];
-      const factory = createWorkersAI({ binding });
-      return createChatModel({
-        kind: "workers-ai",
-        modelId,
-        sessionAffinity: this.sessionAffinity,
-        factory: (id, opts) => factory(id, opts) as LanguageModel,
-      });
-    }
-    const gatewayUrl = env.AI_GATEWAY_URL;
-    const gatewayAuth = env.AI_GATEWAY_AUTH;
-    if (gatewayUrl && gatewayAuth) {
-      return createChatModel({
-        kind: "ai-gateway",
-        baseURL: gatewayUrl,
-        auth: gatewayAuth,
-        modelId,
-      });
-    }
-    throw new Error("No AI model configured.");
+  /** Stored model spec, or null when unset (registry will pick the default). */
+  private getStoredModelId(): string | null {
+    return this.config.getModel();
   }
 
   // ── Think lifecycle overrides ──────────────────────────────────
 
+  /** Think calls `getModel()` synchronously per turn — cache to avoid
+   *  reconstructing on every turn when the stored spec hasn't changed. */
+  private _cachedModel: LanguageModel | null = null;
+  private _cachedModelSpec: string | null = null;
   getModel(): LanguageModel {
     this.logActivity("getmodel");
-    const model = this.createModel(this.getStoredModelId());
+    const stored = this.getStoredModelId();
+    if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
+    const reg = this.providerRegistry();
+    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
+    this._cachedModel = model; this._cachedModelSpec = stored;
     return model;
   }
 
@@ -404,20 +468,40 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private _cachedSystemPrompt: string | null = null;
   private _cachedSystemPromptKey: string = "";
+  /** Cached soul.purpose. Loaded lazily on first read, invalidated by
+   *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
+  private _cachedSoulPurpose: string | null = null;
+  private getSoulPurpose(): string {
+    if (this._cachedSoulPurpose === null) {
+      try {
+        const rows = this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
+        this._cachedSoulPurpose = rows[0]?.purpose ?? '';
+      } catch { this._cachedSoulPurpose = ''; }
+    }
+    return this._cachedSoulPurpose;
+  }
 
   getSystemPrompt(): string {
     this.logActivity("getsystemprompt_start");
     const execs = (this.rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const key = `${this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`[0]?.purpose ?? ""}\u0000${execs.join(",")}`;
+    const key = `${this.getSoulPurpose()}\u0000${execs.join(",")}`;
+    let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
+      base = this._cachedSystemPrompt;
       this.logActivity("getsystemprompt_end", "cache hit");
-      return this._cachedSystemPrompt;
+    } else {
+      base = buildSystemPromptSync(this.rt, { registeredExecutors: execs });
+      this._cachedSystemPrompt = base;
+      this._cachedSystemPromptKey = key;
+      this.logActivity("getsystemprompt_end", `${base.length} chars`);
     }
-    const prompt = buildSystemPromptSync(this.rt, { registeredExecutors: execs });
-    this._cachedSystemPrompt = prompt;
-    this._cachedSystemPromptKey = key;
-    this.logActivity("getsystemprompt_end", `${prompt.length} chars`);
-    return prompt;
+    // Render top-K recent facts on every turn (cheap; bypasses cache because
+    // facts change between turns). Empty → return unmodified base prompt.
+    try {
+      const factsBlock = renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 });
+      if (factsBlock) return `${base}\n\n## World model (facts you remembered):\n${factsBlock}`;
+    } catch { /* facts table not yet initialized */ }
+    return base;
   }
 
   /**
@@ -449,7 +533,7 @@ export class OrchestratorAgent extends Think<Env> {
     this.logActivity("gettools_start");
 
     // Cache key includes CraftStore updated_at AND craft_scores last_used_at
-    // because effective-score filtering depends on recency (v2: F5 fix).
+    // because effective-score filtering depends on recency.
     const cacheKey = this._craftCacheKey();
     if (this._cachedTools && cacheKey === this._cachedToolsKey) {
       this.logActivity("gettools_end", "cache hit");
@@ -465,23 +549,23 @@ export class OrchestratorAgent extends Think<Env> {
 
       type FiberCtx = { stash(data: unknown): void };
       const activeFiberCtx: { current: FiberCtx | null } = { current: null };
-      // v2: read approval mode from agent_config (default strict).
-      const apprModeRow = this.sql<{ value: string }>`
-        SELECT value FROM agent_config WHERE key = 'shell_approval_mode' LIMIT 1`;
-      const shellApprovalMode = (apprModeRow[0]?.value ?? 'strict') as
-        'strict' | 'allow_all' | 'deny_all';
+      const shellApprovalMode = this.config.getShellApprovalMode();
 
       const tools = buildBuiltinTools({
         rt: this.rt,
         engine: this.engine,
         preBuiltExecuteTool: this.getExecuteToolsTool(),
-        // v2: branching-heads tool — lazy-built once, then reused across turns.
+        // Branching-heads tool — lazy-built once, then reused across turns.
         splitHeadsTool: this.getSplitHeadsTool(),
-        // v2: Vectorize-backed semantic memory. search_memory auto-uses
+        // Unified strategy dispatcher (single-shot / mcts / heads / …).
+        thinkTool: this.getThinkTool(),
+        // Vectorize-backed semantic memory. search_memory auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
-        // v2.x: per-agent approval policy for shell exec.
+        // Per-agent approval policy for shell exec.
         shellApprovalMode,
+        // Typed, keyed world-model store — exposes remember/recall/forget_fact.
+        facts: this.facts,
         onMctsProgress: (phase, iteration, budget) => this.broadcastMctsProgress(phase, iteration, budget),
         createMctsSession: () => this.createMCTSSession(),
         onExplorePhase: (phase, task) => {
@@ -524,7 +608,7 @@ export class OrchestratorAgent extends Think<Env> {
     const orchestrator = this;
     this._splitHeadsTool = createSplitHeadsTool({
       controller: this._headController,
-      // v2: stream head_split / head_merge into the durable event log so
+      // Stream head_split / head_merge into the durable event log so
       // SSE subscribers + MCP `list_run_events` see the split lifecycle.
       onPhase: (event) => {
         try {
@@ -578,22 +662,36 @@ export class OrchestratorAgent extends Think<Env> {
           return [];
         }
       },
-      defaultModel: undefined, // heads inherit DEFAULT_MODEL
+      defaultModel: undefined, // heads inherit the chat agent's resolved model
     });
     return this._splitHeadsTool;
   }
 
   configureSession(session: Session): Session {
-    // Built-in Think compaction — auto-fires when accumulated message
-    // tokens cross the threshold. Kimi K2.6's window is large; we compact
-    // at ~96k input tokens to leave headroom for the response + tools.
-    // Think.Session owns the summarization LLM call internally.
+    // Context blocks the LLM can read AND write via the Think Session tools
+    // (`set_context`, `load_context`, `search_context` — see tools/registry.ts
+    // ACTIVE_TOOLS whitelist). Block sizes total ~60k tokens; the chat window
+    // compacts at 96k to leave headroom for the streaming response.
     return session
       .withContext("memory", {
         description:
-          "Long-term knowledge: learned facts, user preferences, project context, " +
-          "discovered patterns, and crafted tool descriptions.",
+          "Long-term knowledge: learned facts, project context, discovered " +
+          "patterns, crafted tool descriptions. Loaded from MEMORY.md.",
         maxTokens: 32000,
+      })
+      .withContext("scratch", {
+        description:
+          "Ephemeral scratchpad for the current turn — write intermediate " +
+          "reasoning, partial results, hypothesis lists. Cleared between turns. " +
+          "Use `set_context('scratch', text)` to write.",
+        maxTokens: 8000,
+      })
+      .withContext("working_set", {
+        description:
+          "Last-N items the agent is actively working on (files, tasks, URLs). " +
+          "Persists across turns until manually replaced. " +
+          "Use `set_context('working_set', text)` to update.",
+        maxTokens: 4000,
       })
       .withCachedPrompt()
       .compactAfter(96_000);
@@ -614,7 +712,7 @@ export class OrchestratorAgent extends Think<Env> {
     this._firstChunkReceived = false;
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
-    // v2: start a new run for the event log.
+    // Start a new run for the event log.
     this._currentRunId = `run-${nanoid()}`;
     try {
       this.eventRecorder.emit(this._currentRunId, {
@@ -662,7 +760,7 @@ export class OrchestratorAgent extends Think<Env> {
       args: (c.input ?? {}) as Record<string, unknown>,
       result: recorded,
     });
-    // v2: persist tool_call_end into the durable run-event log.
+    // Persist tool_call_end into the durable run-event log.
     try {
       if (this._currentRunId) {
         this.eventRecorder.emit(this._currentRunId, {
@@ -719,7 +817,7 @@ export class OrchestratorAgent extends Think<Env> {
       `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
       `in=${inTok} out=${outTok}${extrasStr}`,
     );
-    // v2: mirror into the durable run-event log so external SSE subscribers
+    // Mirror into the durable run-event log so external SSE subscribers
     // see per-step progress (UI Last-Event-ID resume + MCP/HTTP consumers).
     try {
       if (this._currentRunId) {
@@ -740,7 +838,7 @@ export class OrchestratorAgent extends Think<Env> {
     // is allowed again from here forward. Evolution (engine.onTurnCompleteAsync)
     // runs fire-and-forget below and does NOT extend the busy window.
     this._inFlight = false;
-    // v2: emit turn_end + run_end into the durable event log.
+    // Emit turn_end + run_end into the durable event log.
     try {
       if (this._currentRunId) {
         this.eventRecorder.emit(this._currentRunId, {
@@ -842,11 +940,44 @@ export class OrchestratorAgent extends Think<Env> {
     // No separate ReviewAgent Facet — this single hook handles all of it.
     this.engine.onTurnCompleteAsync(turn);
 
-    // v2.x: auto-judge shadow evaluation. When a pending scaffold exists,
+    // Auto-judge shadow evaluation. When a pending scaffold exists,
     // sample-and-run (default 25%) the pending against this turn's task,
     // ask a judge LLM to compare, record. When minTrials is reached AND
     // agent_config.auto_promote_scaffold='true', auto-apply the decision.
     void this.runShadowEvalSampled(userText, assistantText);
+
+    // Sleep-time compute — between-turn background memory compression.
+    // Reads recent turn, asks judge to upsert/decay facts + compress scratch
+    // block. Letta-style; ~50% test-time token reduction reported. Gated
+    // by agent_config.sleep_time_compute='true' (default off).
+    void this.runSleepTimeCompute(userText, assistantText, this._turnToolCalls);
+  }
+
+  /** Background memory compression. Reads recent turn, updates agent_facts +
+   *  scratch block. Fire-and-forget; does not block TurnQueue. */
+  private async runSleepTimeCompute(
+    task: string, output: string, toolCalls: ToolCallRecord[],
+  ): Promise<void> {
+    try {
+      if (!this.config.getSleepTimeComputeEnabled()) return;
+      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@proteus/core');
+      const currentFacts = this.facts.recentTopK(30).map(f => ({
+        key: f.key, value: f.value, confidence: f.confidence,
+      }));
+      const update = await runSleepTimeCompute(this.rt.llm, {
+        task: task.slice(0, 2000),
+        output: output.slice(0, 4000),
+        toolCalls: toolCalls.map(tc => tc.name),
+        currentFacts,
+      });
+      if (!update) return;
+      const summary = applySleepTimeUpdate(this.facts, update);
+      console.log(
+        `[proteus] sleep-time-compute: upserted=${summary.upserted} decayed=${summary.decayed} blocks=${summary.blocksWritten}`,
+      );
+    } catch (err) {
+      console.warn('[proteus] sleep-time-compute failed:', err instanceof Error ? err.message : err);
+    }
   }
 
   /**
@@ -856,22 +987,17 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
     try {
-      // Read tunables from agent_config (default: sample 25%, no auto-apply).
-      const configRows = this.sql<{ key: string; value: string }>`
-        SELECT key, value FROM agent_config
-        WHERE key IN ('shadow_sample_rate', 'auto_promote_scaffold')`;
-      const cfg = new Map(configRows.map((r) => [r.key, r.value]));
-      const sampleRate = Number(cfg.get('shadow_sample_rate') ?? '0.25');
-      const autoApply = cfg.get('auto_promote_scaffold') === 'true';
+      const sampleRate = this.config.getShadowSampleRate();
+      const autoApply = this.config.getAutoPromoteScaffold();
       if (sampleRate <= 0) return;
 
       const judge: StructuredJudgeFn = async (prompt) => {
-        const { generateObject } = await import('ai');
         const { object } = await generateObject({
           model: this.getModelForReview(),
           schema: JudgeOutputSchema,
           prompt,
           maxOutputTokens: 512,
+          ...effortFor('judge'),
         });
         return object;
       };
@@ -909,17 +1035,11 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Get a model for review/judge tasks. Mirrors makeScaffoldLLMStream's resolver. */
+  /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
+   *  the user's chosen model so quality assessments stay consistent. */
   private getModelForReview(): import('ai').LanguageModel {
-    const env = this.env as Env & Record<string, string>;
-    if (env.AI && typeof env.AI !== 'string') {
-      return createWorkersAI({ binding: env.AI })(DEFAULT_MODEL);
-    }
-    return createOpenAICompatible({
-      name: 'workers-ai',
-      baseURL: env.AI_GATEWAY_URL ?? '',
-      headers: { Authorization: env.AI_GATEWAY_AUTH ?? '' },
-    }).chatModel(`workers-ai/${DEFAULT_MODEL}`);
+    const reg = this.providerRegistry();
+    return reg.resolveModel(reg.normalizeSpecSync(this.getStoredModelId()));
   }
 
   // ── DO initialization ──────────────────────────────────────────
@@ -993,19 +1113,23 @@ export class OrchestratorAgent extends Think<Env> {
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);
-    // v2: branching-heads journal (head_journal, head_evidence, head_merge_results)
+    // Branching-heads journal (head_journal, head_evidence, head_merge_results)
     initHeadsTables(execRaw);
-    // v2: scaffold shadow-mode tables (scaffold_evaluations + status col)
+    // Scaffold shadow-mode tables (scaffold_evaluations + status col)
     initShadowTables(execRaw);
-    // v2: durable run-event log (run_events table)
+    // Durable run-event log (run_events table)
     initRunEventTables(execRaw);
+    // agent_facts world model (keyed JSON facts w/ confidence + recency)
+    initFactsTable(execRaw);
+    // Voyager curriculum proposed-tasks queue (UI + autonomous loop consume).
+    initCurriculumTable(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
     )`);
 
-    // v2.1(F): one-time per-agent migration that merges case-collision
-    // duplicates in crafted_tools + craft_scores left over from pre-v2
+    // one-time per-agent migration that merges case-collision
+    // duplicates in crafted_tools + craft_scores left over from older
     // code that lowercased names. Gated by _v2_codegen_migration_done.
     try {
       // Wrap `this.sql` in a closure that preserves the `this` binding.
@@ -1020,7 +1144,7 @@ export class OrchestratorAgent extends Think<Env> {
       const report = migrateCraftedToolDuplicates(sqlForMigration, execRaw);
       if (report.ranMigration && report.mergedGroups > 0) {
         console.log(
-          `[proteus] v2.1 duplicate migration: merged ${report.mergedGroups} group(s), ` +
+          `[proteus] duplicate migration: merged ${report.mergedGroups} group(s), ` +
           `deleted ${report.rowsDeletedCraftedTools} crafted_tools rows, ` +
           `${report.rowsDeletedCraftScores} craft_scores rows`,
         );
@@ -1055,10 +1179,7 @@ export class OrchestratorAgent extends Think<Env> {
   // ── Callable RPC methods ───────────────────────────────────────
 
   private getDisplayName(): string {
-    try {
-      const rows = this.sql<{ value: string }>`SELECT value FROM agent_config WHERE key = 'display_name' LIMIT 1`;
-      return rows[0]?.value ?? this.name;
-    } catch { return this.name; }
+    return this.config.getDisplayName() ?? this.name;
   }
 
   @callable()
@@ -1099,7 +1220,8 @@ export class OrchestratorAgent extends Think<Env> {
       };
     } catch {
       return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", createdAt: 0,
-        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0, model: DEFAULT_MODEL,
+        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
+        model: this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
         forkLineage: null };
     }
   }
@@ -1132,7 +1254,7 @@ export class OrchestratorAgent extends Think<Env> {
       FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
-  // ── v2: Fiber recovery — durable execution surviving DO eviction ──
+  // ── Fiber recovery — durable execution surviving DO eviction ──
   //
   // The MCTS engine (mcts/engine.ts) calls rt.schedule.fiber('mcts', fn) which
   // delegates to agent.runFiber(). Per-iteration ctx.stash(phase) checkpoints
@@ -1173,7 +1295,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  // ── v2: Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
+  // ── Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
 
   /**
    * Execute the agent's current scaffold for a one-shot task. Captures all
@@ -1236,7 +1358,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
     const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
     const result = await applyPromotionDecision(this.rt, pending, decision);
-    // v2: emit the promotion/rollback into the durable event log so SSE
+    // Emit the promotion/rollback into the durable event log so SSE
     // subscribers + MCP `list_run_events` see the decision in-band.
     try {
       const runId = this._currentRunId || `scaffold-${nanoid()}`;
@@ -1252,7 +1374,7 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /**
-   * v2.x: change how the `run` builtin handles 'gate' decisions from the
+   * Change how the `run` builtin handles 'gate' decisions from the
    * approval-gate review. Stored in agent_config; effective on the NEXT
    * turn (the tool cache rebuilds when CraftStore changes — and on cold-
    * start any value here is read).
@@ -1267,7 +1389,7 @@ export class OrchestratorAgent extends Think<Env> {
     if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
       throw new Error(`invalid mode: ${mode}`);
     }
-    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('shell_approval_mode', ${mode})`;
+    this.config.setShellApprovalMode(mode);
     // Force a tool cache rebuild on next getTools().
     this._cachedTools = null;
     this._cachedToolsKey = '';
@@ -1277,14 +1399,11 @@ export class OrchestratorAgent extends Think<Env> {
   /** Current shell-approval mode (strict | allow_all | deny_all). */
   @callable()
   async getShellApprovalMode(): Promise<{ mode: 'strict' | 'allow_all' | 'deny_all' }> {
-    const row = this.sql<{ value: string }>`
-      SELECT value FROM agent_config WHERE key = 'shell_approval_mode' LIMIT 1`;
-    const mode = (row[0]?.value ?? 'strict') as 'strict' | 'allow_all' | 'deny_all';
-    return { mode };
+    return { mode: this.config.getShellApprovalMode() };
   }
 
   /**
-   * v2.x: generic agent_config setter. Used by the V2 panel UI for tunables
+   * Generic agent_config setter. Used by the Settings page for tunables
    * like shadow_sample_rate, auto_promote_scaffold. Allow-listed keys only —
    * anything else throws so callers can't write arbitrary settings.
    */
@@ -1293,21 +1412,22 @@ export class OrchestratorAgent extends Think<Env> {
     const allowedKeys = new Set([
       'shadow_sample_rate',
       'auto_promote_scaffold',
+      'sleep_time_compute',
+      'tool_surfacing_mode',
+      'review_model',
       // shell_approval_mode has its own typed setter; not allowed via this.
     ]);
     if (!allowedKeys.has(key)) {
       throw new Error(`agent_config key not allowed via generic setter: ${key}`);
     }
-    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${key}, ${value})`;
+    this.config.set(key, value);
     return { ok: true, key, value };
   }
 
-  /** v2.x: read an agent_config value by key. Returns null if unset. */
+  /** Read an agent_config value by key. Returns null if unset. */
   @callable()
   async getAgentConfig(key: string): Promise<{ key: string; value: string | null }> {
-    const row = this.sql<{ value: string }>`
-      SELECT value FROM agent_config WHERE key = ${key} LIMIT 1`;
-    return { key, value: row[0]?.value ?? null };
+    return { key, value: this.config.get(key) };
   }
 
   /** List recent scaffold versions with their status. */
@@ -1318,7 +1438,7 @@ export class OrchestratorAgent extends Think<Env> {
       ORDER BY version DESC LIMIT ${limit}`;
   }
 
-  // ── v2: Durable run-event log — read endpoints + run listing ──
+  // ── Durable run-event log — read endpoints + run listing ──
 
   /**
    * Paginated read of a single run's events. For SSE-style resume, pass
@@ -1342,7 +1462,7 @@ export class OrchestratorAgent extends Think<Env> {
     return this.eventRecorder.count(runId);
   }
 
-  // ── v2: MCP server bridge — small RPCs the MCP handler needs ──
+  // ── MCP server bridge — small RPCs the MCP handler needs ──
   /** Used by /mcp/v1/<name> save_note tool. Routes through the same
    *  appendMemoryNote primitive as workspace.saveNote + save_note builtin. */
   @callable()
@@ -1351,7 +1471,7 @@ export class OrchestratorAgent extends Think<Env> {
     return { ok: true };
   }
 
-  // ── v2: Hybrid memory search — FTS5 + Vectorize via RRF ──
+  // ── Hybrid memory search — FTS5 + Vectorize via RRF ──
   /**
    * Semantic + lexical search merged via Reciprocal Rank Fusion.
    * Falls back to pure FTS5 when the Vectorize binding isn't configured.
@@ -1383,7 +1503,7 @@ export class OrchestratorAgent extends Think<Env> {
     return { available: this.rt.vectorStore.available };
   }
 
-  // ── v2: SKILL.md export/import — make crafted tools git-friendly ──
+  // ── SKILL.md export/import — make crafted tools git-friendly ──
 
   /**
    * Export every crafted tool to a SKILL.md file under `skills/` in the VFS.
@@ -1405,33 +1525,20 @@ export class OrchestratorAgent extends Think<Env> {
     return importSkillsFromVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
   }
 
-  /**
-   * Internal: build an llmStream() callback for the scaffold executor. The
-   * scaffold's `host.llmStream(opts)` calls this and chunks come back as
-   * 'text_delta' events.
-   */
+  /** Build a streaming LLM callback the scaffold executor calls via
+   *  `host.llmStream(opts)` — chunks come back as 'text_delta' events. */
   private makeScaffoldLLMStream() {
-    const env = this.env as Env & Record<string, string>;
-    const model = env.AI && typeof env.AI !== "string"
-      ? createWorkersAI({ binding: env.AI })(DEFAULT_MODEL)
-      : null;
-    return async function* (opts: { system?: string; messages: Array<{ role: string; content: string }> }) {
-      // Use generateText non-streaming for simplicity; chunked via splitting.
-      // A future v2.1 upgrade can wire Vercel's streamText for true streaming.
-      const { generateText } = await import('ai');
-      const m = model ?? createOpenAICompatible({
-        name: "workers-ai",
-        baseURL: env.AI_GATEWAY_URL ?? "",
-        headers: { Authorization: env.AI_GATEWAY_AUTH ?? "" },
-      }).chatModel(`workers-ai/${DEFAULT_MODEL}`);
-      const result = await generateText({
-        model: m,
+    const model = this.getModelForReview();
+    return async function* (opts: { system?: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> }) {
+      const result = streamText({
+        model,
         system: opts.system,
-        messages: opts.messages.map((mm) => ({ role: mm.role as 'user' | 'assistant' | 'system', content: mm.content })),
+        messages: opts.messages,
         maxOutputTokens: 2048,
+        // Scaffold authors its own controller — high effort for careful output.
+        ...effortFor('scaffold_mutation'),
       });
-      // Emit as a single chunk for now; future: real streaming via streamText().
-      yield result.text;
+      for await (const chunk of result.textStream) yield chunk;
     };
   }
 
@@ -1501,13 +1608,10 @@ export class OrchestratorAgent extends Think<Env> {
     return { builtIn, crafted, executors };
   }
 
-  @callable() async setModel(modelId: string) {
-    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('model', ${modelId})`;
-    return { model: modelId };
-  }
+  // setModel moved below — validates spec via the provider registry before storing.
 
   @callable() async setDisplayName(displayName: string) {
-    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${displayName})`;
+    this.config.setDisplayName(displayName);
     return { displayName };
   }
 
@@ -1681,11 +1785,158 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable() async getAvailableModels() {
-    return { current: this.getStoredModelId(), models: AVAILABLE_MODELS };
+    const reg = this.providerRegistry();
+    const models = await reg.registry.listAllModels(reg.deps);
+    const providers = await reg.registry.listProviders(reg.deps);
+    return {
+      current: this.getStoredModelId(),
+      currentNormalized: reg.normalizeSpecSync(this.getStoredModelId()),
+      models: models.map(m => ({
+        // Canonical spec form for storage / set.
+        id: `${m.provider}/${m.id}`,
+        provider: m.provider,
+        modelId: m.id,
+        name: m.label ?? m.id,
+        capabilities: m.capabilities ?? [],
+        contextWindow: m.contextWindow,
+      })),
+      providers,
+    };
+  }
+
+  @callable() async setModel(spec: string) {
+    const reg = this.providerRegistry();
+    // Validate before storing — surfaces unknown-provider / invalid-spec
+    // errors at config time, not on the next chat turn.
+    const normalized = reg.normalizeSpecSync(spec);
+    this.config.setModel(normalized);
+    this.invalidateModelCaches();
+    return { ok: true, spec: normalized };
+  }
+
+  /** Invalidate every cache that depends on the resolved model so the next
+   *  getModel() / getThinkTool() / providerRegistry() call rebuilds. */
+  private invalidateModelCaches(): void {
+    this._cachedModel = null;
+    this._cachedModelSpec = null;
+    this._thinkTool = null;
+    // Provider registry caches per-agent OAuth refreshers; rebuild so a
+    // disconnected provider stops being marked available.
+    this._providerRegistry = null;
+  }
+
+  // ── Credentials & Codex OAuth ─────────────────────────────────────
+
+  private _credentials: import('@proteus/core').CredentialStore | null = null;
+  private get credentials(): import('@proteus/core').CredentialStore {
+    if (!this._credentials) this._credentials = createSqlCredentialStore(this.ctx.storage.sql);
+    return this._credentials;
+  }
+
+  private _codexOAuth: ReturnType<typeof createCodexOAuthClient> | null = null;
+  private get codexOAuth() {
+    if (!this._codexOAuth) this._codexOAuth = createCodexOAuthClient(fetch);
+    return this._codexOAuth;
+  }
+
+  @callable() async startCodexDeviceFlow() {
+    return await this.codexOAuth.startDeviceFlow();
+  }
+
+  @callable() async pollCodexDeviceFlow(deviceAuthId: string, userCode: string) {
+    let tokens;
+    try {
+      tokens = await this.codexOAuth.pollDeviceFlow(deviceAuthId, userCode);
+    } catch (err) {
+      // pollDeviceFlow throws on non-OK from upstream OR on missing fields
+      // in the response. Surface to UI so the user can retry; do NOT swallow.
+      return { connected: false, error: (err as Error).message };
+    }
+    if (!tokens) return { connected: false };
+    const accountId = decodeChatGPTAccountId(tokens.accessToken);
+    try {
+      await this.credentials.set(
+        CODEX_CRED_KEY,
+        tokensToCredential(tokens, accountId ? { accountId } : undefined),
+      );
+    } catch (err) {
+      // Tokens were issued by the OAuth server but we failed to persist.
+      // The user code is now consumed upstream — the user will need to
+      // restart the device-code flow. Surface the error.
+      return { connected: false, error: `persist failed: ${(err as Error).message}` };
+    }
+    this.invalidateModelCaches();
+    return { connected: true, accountId };
+  }
+
+  @callable() async getCodexStatus() {
+    const cred = await this.credentials.get(CODEX_CRED_KEY);
+    if (!cred || cred.kind !== 'oauth') return { connected: false };
+    return {
+      connected: true,
+      accountId: decodeChatGPTAccountId(cred.accessToken),
+      expiresAt: cred.expiresAt,
+    };
+  }
+
+  @callable() async disconnectCodex() {
+    await this.credentials.delete(CODEX_CRED_KEY);
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  /** Listing returns presence + shape only — never the token/key itself. */
+  @callable() async listCredentials() {
+    const rows = this.sql<{ key: string; updated_at: number }>`
+      SELECT key, updated_at FROM agent_credentials ORDER BY key`;
+    return { credentials: rows };
+  }
+
+  @callable() async setCredential(key: string, value: unknown): Promise<{ ok: true }> {
+    await this.credentials.set(key, validateCredential(value));
+    // A credential change can affect which providers are .isAvailable(), so
+    // the cached registry + resolved model must rebuild for the new state
+    // to take effect on the next turn (otherwise users see "no model"
+    // until DO eviction).
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  @callable() async deleteCredential(key: string): Promise<{ ok: true }> {
+    await this.credentials.delete(key);
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  // ── Voyager curriculum: propose / list / accept next tasks ─────────
+
+  @callable() async proposeCurriculumTasks(count?: number) {
+    const proposals = await proposeNextTasks({
+      rt: this.rt,
+      judge: this.rt.llm,
+      count: count ?? 5,
+    });
+    return { proposals };
+  }
+
+  @callable() async listCurriculumTasks(status?: 'pending' | 'accepted' | 'rejected' | 'completed') {
+    return { tasks: listProposedTasks(this.rt, status) };
+  }
+
+  @callable() async setCurriculumTaskStatus(
+    id: string, status: 'pending' | 'accepted' | 'rejected' | 'completed',
+  ) {
+    updateProposedTaskStatus(this.rt, id, status);
+    return { ok: true };
   }
 
   @callable() async setSoul(purpose: string) {
     this.sql`UPDATE agent_soul SET purpose = ${purpose}`;
+    // Invalidate the cached purpose + system prompt so the next turn
+    // picks up the new identity.
+    this._cachedSoulPurpose = null;
+    this._cachedSystemPrompt = null;
+    this._cachedSystemPromptKey = '';
     return { purpose };
   }
 
@@ -1735,23 +1986,22 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable() async getMctsConfig() {
-    const rows = this.sql<{ key: string; value: string }>`
-      SELECT key, value FROM agent_config WHERE key IN ('mcts_c', 'mcts_iterations', 'mcts_depth', 'mcts_branches')`;
-    const cfg: Record<string, string> = {};
-    for (const r of rows) cfg[r.key] = r.value;
     return {
-      explorationConstant: parseFloat(cfg.mcts_c ?? "1.414"),
-      maxIterations: parseInt(cfg.mcts_iterations ?? "50"),
-      maxDepth: parseInt(cfg.mcts_depth ?? "5"),
-      branchBudget: parseInt(cfg.mcts_branches ?? "3"),
+      explorationConstant: parseFloat(this.config.get('mcts_c') ?? '1.414'),
+      maxIterations: parseInt(this.config.get('mcts_iterations') ?? '50'),
+      maxDepth: parseInt(this.config.get('mcts_depth') ?? '5'),
+      branchBudget: parseInt(this.config.get('mcts_branches') ?? '3'),
     };
   }
 
-  @callable() async setMctsConfig(config: { explorationConstant?: number; maxIterations?: number; maxDepth?: number; branchBudget?: number }) {
-    if (config.explorationConstant !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_c', ${String(config.explorationConstant)})`;
-    if (config.maxIterations !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_iterations', ${String(config.maxIterations)})`;
-    if (config.maxDepth !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_depth', ${String(config.maxDepth)})`;
-    if (config.branchBudget !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_branches', ${String(config.branchBudget)})`;
+  @callable() async setMctsConfig(config: {
+    explorationConstant?: number; maxIterations?: number;
+    maxDepth?: number; branchBudget?: number;
+  }) {
+    if (config.explorationConstant !== undefined) this.config.set('mcts_c', String(config.explorationConstant));
+    if (config.maxIterations !== undefined) this.config.set('mcts_iterations', String(config.maxIterations));
+    if (config.maxDepth !== undefined) this.config.set('mcts_depth', String(config.maxDepth));
+    if (config.branchBudget !== undefined) this.config.set('mcts_branches', String(config.branchBudget));
     return config;
   }
 
@@ -1760,7 +2010,7 @@ export class OrchestratorAgent extends Think<Env> {
    * Called after each MCTS iteration so the UI updates in real-time.
    */
   /**
-   * v2.x: Scaffold-driven chat entry point.
+   * Scaffold-driven chat entry point.
    *
    * Runs the agent's current scaffold for a one-shot task with FULL host
    * bridges (LLM stream, tool dispatch from getTools(), event emit). Streams
