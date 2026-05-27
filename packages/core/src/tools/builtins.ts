@@ -29,6 +29,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { nanoid } from '../utils/nanoid.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
+import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 
 /**
  * Narrow local shape of @cloudflare/think/tools/execute#createExecuteTool.
@@ -263,6 +264,24 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['command'],
     }),
     execute: async (args: { command: string; executor?: string }) => {
+      // v2: approval-gate pre-flight. Deny on regex hits for rm-rf-root,
+      // fork-bomb, dd-overwrite-disk, mkfs-physical-disk, curl|sh,
+      // wget|bash, cloud-metadata SSRF. Warn for env-dump and secret-file-read
+      // (logged, but executed). Gate (sudo, chmod-setuid, rm-recursive,
+      // git force-push, etc.) is rejected until an approval-channel is
+      // wired — for now the LLM gets a clear "Requires approval" error so
+      // it can ask the user or work around.
+      const review = reviewCommand(args.command);
+      if (review.decision === 'deny') {
+        return `Denied by approval gate:\n${formatApproval(review)}`;
+      }
+      if (review.decision === 'gate') {
+        return `Requires user approval — not yet wired:\n${formatApproval(review)}`;
+      }
+      if (review.decision === 'warn') {
+        console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
+      }
+
       const key = args.executor ?? 'workspace';
       if (key !== 'workspace') {
         const provider = router?.getProvider(key);
