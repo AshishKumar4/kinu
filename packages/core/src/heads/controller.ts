@@ -57,6 +57,14 @@ export interface HeadRuntime {
 }
 
 /** Build a HeadController. */
+/**
+ * Phase event the host can subscribe to — fired with the actual head IDs
+ * the controller spawned (not a guess from the tool side).
+ */
+export type SplitPhaseEvent =
+  | { kind: 'split'; rootId: HeadId; headIds: readonly HeadId[]; rationale: string }
+  | { kind: 'merge'; rootId: HeadId; headCount: number; mergedNarrative: string };
+
 export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
@@ -69,6 +77,8 @@ export class HeadController {
    * orchestrator's main turn).
    *
    * Returns the MergeResult; also writes the cached merge into the journal.
+   * Fires `onPhase` once on split (with the real head IDs) and once on
+   * merge — used by the host to fan out to SSE / event log / UI.
    */
   async run(opts: {
     parentHeadId: HeadId | null;
@@ -77,6 +87,7 @@ export class HeadController {
     request: SplitRequest;
     parentBudget?: HeadBudget;
     model?: string;
+    onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
     const rootId = opts.rootId ?? opts.parentHeadId ?? nanoid();
     const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
@@ -120,6 +131,14 @@ export class HeadController {
     const handles = await Promise.all(spawnPromises);
     const startedAt = Date.now();
 
+    // Fire 'split' with the REAL head ids the controller just spawned.
+    opts.onPhase?.({
+      kind: 'split',
+      rootId,
+      headIds: handles.map((h) => h.id),
+      rationale: opts.request.rationale,
+    });
+
     // Race each head against the parent's wall-clock.
     const reports = await Promise.all(
       handles.map(async (h): Promise<HeadReport> => {
@@ -150,8 +169,21 @@ export class HeadController {
     );
 
     // Synthesize via LLM.
-    const mergeResult = await this.merge(reports, opts.request.rationale, strategy, opts.inheritedContext, parentBudget);
+    const mergeResult = await this.merge(
+      reports,
+      opts.request.rationale,
+      strategy,
+      opts.inheritedContext,
+      parentBudget,
+      handles.map((h) => h.id),
+    );
     this.journal.cacheMerge(rootId, mergeResult, strategy);
+    opts.onPhase?.({
+      kind: 'merge',
+      rootId,
+      headCount: mergeResult.costSummary.headCount,
+      mergedNarrative: mergeResult.mergedNarrative,
+    });
     return mergeResult;
   }
 
@@ -168,13 +200,13 @@ export class HeadController {
     strategy: MergeStrategy,
     inheritedContext: readonly SerializedMessage[],
     parentBudget: HeadBudget,
+    headIds: readonly HeadId[] = reports.map((r) => r.id),
   ): Promise<MergeResult> {
     const prompt = buildMergePrompt(reports, rationale, strategy, inheritedContext);
     let merged: MergeOutput;
     try {
       merged = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
     } catch (err) {
-      // Hard merge failure: return a fallback narrative that lists each head's summary.
       const narrative = fallbackNarrative(reports, rationale, err instanceof Error ? err.message : String(err));
       return {
         mergedNarrative: narrative,
@@ -182,11 +214,11 @@ export class HeadController {
         unresolvedQuestions: [],
         recommendations: [],
         evidenceAggregate: reports.flatMap((r) => r.evidence),
+        headIds,
         costSummary: summarizeCost(reports, parentBudget),
       };
     }
 
-    // Validate again defensively — runtimes may not enforce.
     const parse = MergeOutputSchema.safeParse(merged);
     if (!parse.success) {
       const narrative = fallbackNarrative(reports, rationale, `merge schema invalid: ${parse.error.message}`);
@@ -196,17 +228,18 @@ export class HeadController {
         unresolvedQuestions: [],
         recommendations: [],
         evidenceAggregate: reports.flatMap((r) => r.evidence),
+        headIds,
         costSummary: summarizeCost(reports, parentBudget),
       };
     }
 
-    const finalNarrative = parse.data.narrative;
     return {
-      mergedNarrative: finalNarrative,
+      mergedNarrative: parse.data.narrative,
       selectedDecisions: parse.data.selected_decisions as readonly Decision[],
       unresolvedQuestions: parse.data.unresolved_questions,
       recommendations: parse.data.recommendations,
       evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
+      headIds,
       costSummary: summarizeCost(reports, parentBudget),
     };
   }

@@ -532,7 +532,7 @@ export class ExplorationAgent extends Agent<Env> {
       narrative: result.mergedNarrative,
       decisions: result.selectedDecisions,
       unresolvedQuestions: result.unresolvedQuestions,
-      childHeadIds: result.evidenceAggregate.map((e) => e.id),
+      childHeadIds: result.headIds,
       headCount: result.costSummary.headCount,
     };
   }

@@ -119,11 +119,11 @@ export interface SplitHeadsToolDeps {
   /**
    * Optional: invoked on split / merge so the host can fan out events
    * (SSE, telemetry, UI nested timelines). One call per phase per split.
+   * The controller fires it with the REAL spawned head ids.
    */
-  onPhase?: (event:
-    | { kind: 'split'; rootId: string; headIds: readonly string[]; rationale: string }
-    | { kind: 'merge'; rootId: string; headCount: number; mergedNarrative: string },
-  ) => void;
+  onPhase?: import('./controller.js').HeadController['run'] extends (opts: { onPhase?: infer T }) => unknown
+    ? T
+    : never;
 }
 
 /**
@@ -170,12 +170,8 @@ export function createSplitHeadsTool(deps: SplitHeadsToolDeps): Tool<SplitHeadsI
       const rootId = `split-${nanoid()}`;
 
       try {
-        deps.onPhase?.({
-          kind: 'split',
-          rootId,
-          headIds: input.heads.map((_h, i) => `${rootId}-d1-${i}`),
-          rationale: input.rationale,
-        });
+        // Forward onPhase straight to the controller, which fires it with
+        // the REAL spawned head ids + correct merge stats — no guessing.
         const result: MergeResult = await deps.controller.run({
           parentHeadId: null,
           rootId,
@@ -183,12 +179,7 @@ export function createSplitHeadsTool(deps: SplitHeadsToolDeps): Tool<SplitHeadsI
           request,
           parentBudget,
           model: deps.defaultModel,
-        });
-        deps.onPhase?.({
-          kind: 'merge',
-          rootId,
-          headCount: result.costSummary.headCount,
-          mergedNarrative: result.mergedNarrative,
+          onPhase: deps.onPhase,
         });
         return formatMergeResult(result, strategy);
       } catch (err) {

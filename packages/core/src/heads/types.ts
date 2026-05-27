@@ -172,6 +172,8 @@ export interface MergeResult {
   readonly recommendations: readonly string[];
   /** Aggregate of every head's evidence — for memory writeback. */
   readonly evidenceAggregate: readonly Evidence[];
+  /** The ids of every head spawned in this split (root-level only — not recursive). */
+  readonly headIds: readonly HeadId[];
   readonly costSummary: {
     readonly headCount: number;
     readonly totalTokens: number;

@@ -141,15 +141,18 @@ export class HeadJournal {
       FROM head_merge_results WHERE root_id = ${rootId}`;
     const r = rows[0];
     if (!r) return null;
-    // Evidence aggregate is not cached — rebuild from head_evidence on demand.
+    // Evidence aggregate + headIds are not cached as separate columns —
+    // rebuild from head_journal/head_evidence on demand.
     const tree = this.readTree(rootId);
     const evidence: Evidence[] = tree.flatMap((h) => this.readEvidence(h.id));
+    const headIds: HeadId[] = tree.filter((h) => h.parent_id == null || h.parent_id === '').map((h) => h.id);
     return {
       mergedNarrative: r.merged_narrative,
       selectedDecisions: r.selected_decisions_json ? JSON.parse(r.selected_decisions_json) : [],
       unresolvedQuestions: r.unresolved_questions_json ? JSON.parse(r.unresolved_questions_json) : [],
       recommendations: r.recommendations_json ? JSON.parse(r.recommendations_json) : [],
       evidenceAggregate: evidence,
+      headIds: headIds.length > 0 ? headIds : tree.map((h) => h.id),
       costSummary: {
         headCount: r.cost_head_count,
         totalTokens: r.cost_total_tokens,

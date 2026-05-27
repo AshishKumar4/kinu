@@ -32,6 +32,7 @@ export {
   type HeadRuntime,
   type SpawnedHead,
   type MergeLLMFn,
+  type SplitPhaseEvent,
 } from './controller.js';
 
 export {
