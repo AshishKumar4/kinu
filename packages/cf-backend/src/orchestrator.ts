@@ -55,6 +55,9 @@ import {
   runScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   readScaffoldVersion, DEFAULT_SHADOW_CONFIG,
+  // v2: durable run-event log
+  initRunEventTables, RunEventRecorder,
+  type RunEvent, type RunEventQuery,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
 } from "@proteus/core";
@@ -202,6 +205,19 @@ export class OrchestratorAgent extends Think<Env> {
   // The split_heads tool reads inheritedContext lazily via assistant_messages.
   private _headController: HeadController | null = null;
   private _splitHeadsTool: ReturnType<typeof createSplitHeadsTool> | null = null;
+
+  // v2: durable run-event recorder (Flue-style discriminated union, SSE-resumable).
+  // Initialized lazily on first event so onStart can wire the table before use.
+  private _eventRecorder: RunEventRecorder | null = null;
+  private get eventRecorder(): RunEventRecorder {
+    if (!this._eventRecorder) {
+      this._eventRecorder = new RunEventRecorder(this.boundSql);
+    }
+    return this._eventRecorder;
+  }
+
+  /** Convenience: current runId for event emission. One run per turn. */
+  private _currentRunId = '';
 
   // ── Activity logging: persisted + broadcast to Logs pane ──
   private _turnT0 = 0;
@@ -537,6 +553,20 @@ export class OrchestratorAgent extends Think<Env> {
     this._firstChunkReceived = false;
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
+    // v2: start a new run for the event log.
+    this._currentRunId = `run-${nanoid()}`;
+    try {
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'run_start',
+        agentId: this.name,
+      });
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'turn_start',
+        turnIndex: this._sessionTurnCount,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at beforeTurn:', err);
+    }
     return { activeTools: [...ACTIVE_TOOLS] };
   }
 
@@ -571,6 +601,21 @@ export class OrchestratorAgent extends Think<Env> {
       args: (c.input ?? {}) as Record<string, unknown>,
       result: recorded,
     });
+    // v2: persist tool_call_end into the durable run-event log.
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'tool_call_end',
+          name: c.toolName,
+          toolCallId: `tc-${this._turnToolCalls.length}`,
+          result: recorded,
+          error: c.success === false ? String(c.error ?? '') : undefined,
+          durationMs: c.durationMs,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at afterToolCall:', err);
+    }
   }
 
   onStepFinish(ctx: StepContext): void {
@@ -621,6 +666,21 @@ export class OrchestratorAgent extends Think<Env> {
     // is allowed again from here forward. Evolution (engine.onTurnCompleteAsync)
     // runs fire-and-forget below and does NOT extend the busy window.
     this._inFlight = false;
+    // v2: emit turn_end + run_end into the durable event log.
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'turn_end',
+          turnIndex: this._sessionTurnCount,
+        });
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'run_end',
+          reason: result.status,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at onChatResponse:', err);
+    }
     if (result.status !== "completed") return;
 
     const userMessages = this.messages.filter(m => m.role === "user");
@@ -778,6 +838,8 @@ export class OrchestratorAgent extends Think<Env> {
     initHeadsTables(execRaw);
     // v2: scaffold shadow-mode tables (scaffold_evaluations + status col)
     initShadowTables(execRaw);
+    // v2: durable run-event log (run_events table)
+    initRunEventTables(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -1023,6 +1085,30 @@ export class OrchestratorAgent extends Think<Env> {
     return this.sql<{ version: number; written_at: number; rationale: string; status: string }>`
       SELECT version, written_at, rationale, status FROM scaffold_versions
       ORDER BY version DESC LIMIT ${limit}`;
+  }
+
+  // ── v2: Durable run-event log — read endpoints + run listing ──
+
+  /**
+   * Paginated read of a single run's events. For SSE-style resume, pass
+   * the last seen `since` index and the recorder returns events strictly
+   * after it.
+   */
+  @callable()
+  async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
+    return this.eventRecorder.read(runId, opts ?? {});
+  }
+
+  /** List the agent's recent runs with their latest timestamp + event count. */
+  @callable()
+  async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
+    return this.eventRecorder.listRuns(limit);
+  }
+
+  /** Count events for a single run — for UI badges. */
+  @callable()
+  async countRunEvents(runId: string): Promise<number> {
+    return this.eventRecorder.count(runId);
   }
 
   /**

@@ -18,7 +18,8 @@
 
 import type { CompactionResult, CompactionConfig, CompactableMessage, SummarizeFn } from './types/compaction.js';
 
-export const DEFAULT_COMPACTION_CONFIG: Required<CompactionConfig> = {
+/** Concrete defaults; summarizationModel is intentionally left adapter-supplied. */
+export const DEFAULT_COMPACTION_CONFIG: Omit<Required<CompactionConfig>, 'summarizationModel'> = {
   enabled: true,
   reserveTokens: 20_000,
   keepRecentTokens: 8_000,
@@ -26,7 +27,6 @@ export const DEFAULT_COMPACTION_CONFIG: Required<CompactionConfig> = {
   // Rough chars-per-token; English ~ 4. Used when no explicit token counter
   // is provided. Conservative high estimate keeps us from under-compacting.
   charsPerToken: 4,
-  summarizationModel: undefined,
 };
 
 /** Did `tokenCount` cross the threshold where we should run compaction? */

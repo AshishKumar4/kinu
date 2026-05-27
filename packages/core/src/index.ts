@@ -123,6 +123,17 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
+// v2: durable run-event log (Flue-style, SSE-resumable)
+export type {
+  RunEvent, RunEventBase, RunEventInput, RunEventType,
+} from './events/index.js';
+export {
+  initRunEventTables,
+  RunEventRecorder,
+  type RunEventListener,
+  type RunEventQuery,
+} from './events/index.js';
+
 // v2: safety — approval gating for shell exec
 export {
   reviewCommand,

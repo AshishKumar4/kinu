@@ -12,6 +12,7 @@
 import { routeAgentRequest } from "agents";
 import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
+import { handleRunEventsRequest } from "./run-events-routes.js";
 
 export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
@@ -35,6 +36,13 @@ export default {
     if (url.pathname.startsWith("/pc/")) {
       return handlePcRequest(request, env);
     }
+
+    // v2: durable run-event log endpoints
+    //   GET /api/agents/<name>/runs                 → list runs
+    //   GET /api/agents/<name>/runs/<id>/events     → paginated query
+    //   GET /api/agents/<name>/runs/<id>/stream     → SSE w/ Last-Event-ID
+    const runEventsResp = await handleRunEventsRequest(request, env);
+    if (runEventsResp) return runEventsResp;
 
     const agentResp = await routeAgentRequest(request, env);
     if (agentResp) return agentResp;

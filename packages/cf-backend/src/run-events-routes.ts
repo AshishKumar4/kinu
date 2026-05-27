@@ -1,0 +1,173 @@
+/**
+ * HTTP routes for the durable run-event log.
+ *
+ *   GET /api/agents/:agentName/runs            → list recent runs
+ *   GET /api/agents/:agentName/runs/:runId/events?since=&limit=&types=
+ *   GET /api/agents/:agentName/runs/:runId/stream  → SSE w/ Last-Event-ID resume
+ *
+ * Routes through to the OrchestratorAgent DO by name, calling its @callable
+ * RPCs (getRunEvents / listRuns / countRunEvents). The SSE stream loops a
+ * polling read against the agent — Worker DO RPCs can't hold a single
+ * persistent server-push channel here, so we drain new events on a short
+ * interval. This is the simple Flue-compatible model; v2.x can swap for
+ * a true push over agent.broadcast() once the chat protocol surface is
+ * extended.
+ */
+
+import { getAgentByName } from "agents";
+import type { OrchestratorAgent } from "./orchestrator.js";
+import type { RunEventQuery, RunEvent, RunEventType } from "@proteus/core";
+
+const SSE_POLL_MS = 500;
+const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const SSE_HEARTBEAT_MS = 15_000;
+const ALLOWED_TYPES: ReadonlySet<RunEventType> = new Set<RunEventType>([
+  'run_start', 'turn_start', 'text_delta', 'tool_call_start', 'tool_call_end',
+  'step_finish', 'head_split', 'head_merge', 'scaffold_promotion',
+  'scaffold_rollback', 'memory_write', 'fiber_recovered', 'error',
+  'turn_end', 'run_end',
+]);
+
+function corsHeaders(extra: Record<string, string> = {}): Headers {
+  return new Headers({
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-allow-headers': 'content-type, last-event-id',
+    ...extra,
+  });
+}
+
+async function resolveAgent(env: Env, agentName: string) {
+  // routeAgentRequest expects /agents/<class>/<name>; we use getAgentByName.
+  // Class name is hardcoded to "OrchestratorAgent" (only one Think class).
+  const stub = await getAgentByName<Env, OrchestratorAgent>(
+    (env as Env & { OrchestratorAgent: DurableObjectNamespace }).OrchestratorAgent,
+    agentName,
+  );
+  return stub;
+}
+
+function parseTypesParam(s: string | null): RunEventType[] | undefined {
+  if (!s) return undefined;
+  const parsed = s.split(',').map((t) => t.trim()).filter(Boolean);
+  const valid = parsed.filter((t): t is RunEventType => ALLOWED_TYPES.has(t as RunEventType));
+  return valid.length > 0 ? valid : undefined;
+}
+
+export async function handleRunEventsRequest(request: Request, env: Env): Promise<Response | null> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+
+  if (!path.startsWith('/api/agents/')) return null;
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders() });
+  }
+  if (request.method !== 'GET') return null;
+
+  // /api/agents/<name>/runs
+  const listMatch = path.match(/^\/api\/agents\/([^/]+)\/runs\/?$/);
+  if (listMatch) {
+    const [, agentName] = listMatch;
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? '50')));
+    try {
+      const stub = await resolveAgent(env, agentName);
+      const runs = await stub.listRuns(limit);
+      return Response.json(runs, { headers: corsHeaders() });
+    } catch (err) {
+      return Response.json({ error: (err as Error).message }, { status: 500, headers: corsHeaders() });
+    }
+  }
+
+  // /api/agents/<name>/runs/<runId>/events
+  const eventsMatch = path.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/events\/?$/);
+  if (eventsMatch) {
+    const [, agentName, runId] = eventsMatch;
+    const opts: RunEventQuery = {
+      since: url.searchParams.has('since') ? Number(url.searchParams.get('since')) : undefined,
+      limit: url.searchParams.has('limit') ? Math.min(500, Number(url.searchParams.get('limit'))) : undefined,
+      types: parseTypesParam(url.searchParams.get('types')),
+    };
+    try {
+      const stub = await resolveAgent(env, agentName);
+      const events = await stub.getRunEvents(runId, opts);
+      return Response.json(events, { headers: corsHeaders() });
+    } catch (err) {
+      return Response.json({ error: (err as Error).message }, { status: 500, headers: corsHeaders() });
+    }
+  }
+
+  // /api/agents/<name>/runs/<runId>/stream — SSE w/ Last-Event-ID resume
+  const streamMatch = path.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/stream\/?$/);
+  if (streamMatch) {
+    const [, agentName, runId] = streamMatch;
+    const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
+    const sinceIndex = lastEventId ? Number(lastEventId) : -1;
+    return streamRunEvents(env, agentName, runId, sinceIndex);
+  }
+
+  return null;
+}
+
+function streamRunEvents(env: Env, agentName: string, runId: string, sinceIndex: number): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const startedAt = Date.now();
+      let cursor = sinceIndex;
+      let heartbeatAt = Date.now();
+
+      const stub = await resolveAgent(env, agentName);
+
+      const send = (ev: RunEvent) => {
+        const lines = [
+          `id: ${ev.eventIndex}`,
+          `event: ${ev.type}`,
+          `data: ${JSON.stringify(ev)}`,
+          '', // blank line ends the SSE message
+          '',
+        ];
+        controller.enqueue(encoder.encode(lines.join('\n')));
+        cursor = Math.max(cursor, ev.eventIndex);
+        heartbeatAt = Date.now();
+      };
+
+      try {
+        // Initial replay — drain everything strictly after sinceIndex.
+        let backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: 500 });
+        for (const ev of backlog) send(ev);
+
+        // Poll loop until run_end or timeout. Cloudflare Workers can hold
+        // a single SSE connection for up to several minutes; the client's
+        // EventSource will auto-reconnect on disconnect with Last-Event-ID.
+        while (Date.now() - startedAt < SSE_TIMEOUT_MS) {
+          await new Promise((r) => setTimeout(r, SSE_POLL_MS));
+          backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: 200 });
+          for (const ev of backlog) send(ev);
+          const hasRunEnd = backlog.some((e) => e.type === 'run_end');
+          if (hasRunEnd) break;
+          if (Date.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
+            controller.enqueue(encoder.encode(`:heartbeat ${Date.now()}\n\n`));
+            heartbeatAt = Date.now();
+          }
+        }
+        controller.close();
+      } catch (err) {
+        controller.enqueue(encoder.encode(
+          `event: error\ndata: ${JSON.stringify({ error: (err as Error).message })}\n\n`,
+        ));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: corsHeaders({
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'connection': 'keep-alive',
+      'x-accel-buffering': 'no',
+    }),
+  });
+}
