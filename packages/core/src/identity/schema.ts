@@ -16,11 +16,18 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
 
-  // Immutable purpose — the agent cannot rewrite this
+  // Immutable purpose — the agent cannot rewrite this. owner_user_id is set
+  // once by the Worker when the agent is first claimed by a logged-in user
+  // (sha256(email) form). Subsequent requests verify the caller's userId
+  // matches before any RPC runs.
   `CREATE TABLE IF NOT EXISTS agent_soul (
-    purpose    TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    purpose       TEXT NOT NULL,
+    created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    owner_user_id TEXT NOT NULL DEFAULT ''
   )`,
+  // Idempotent ALTER for agents that exist from before owner_user_id was
+  // introduced — DO SQL ignores the error if the column already exists.
+  `ALTER TABLE agent_soul ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
 
   // ── MCTS search tree ───────────────────────────────────────────
   // BUG-1 FIX: value defaults to 0, NOT 0.5
@@ -185,9 +192,19 @@ const DDL = [
   )`,
 ];
 
-/** Initialize all agent tables. Idempotent — safe to call on every startup. */
+/** Initialize all agent tables. Idempotent — safe to call on every startup.
+ *  ALTER statements may error if the column already exists; we swallow only
+ *  that specific class so re-runs are safe. */
 export function initAllTables(execRaw: RawSqlExec): void {
   for (const ddl of DDL) {
-    execRaw(ddl);
+    try { execRaw(ddl); }
+    catch (err) {
+      const msg = (err as Error).message ?? '';
+      if (/duplicate column name|already exists/i.test(msg) && /^\s*ALTER/i.test(ddl)) {
+        // Idempotent ALTER — column already present. Skip silently.
+        continue;
+      }
+      throw err;
+    }
   }
 }

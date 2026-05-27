@@ -14,12 +14,20 @@ export {
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types.js';
-// v2.0: legacy `buildAgentTools` (6-tool surface) removed in favor of the
-// canonical `buildBuiltinTools` exported below. See docs/V2-MIGRATION.md.
+// Canonical `buildBuiltinTools` is exported below. The legacy 6-tool
+// `buildAgentTools` surface has been removed.
 
 // Configuration
 export { DEFAULT_CONFIG, DEFAULT_MAX_STEPS, mergeConfig, resolveMaxSteps } from './config.js';
 export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config.js';
+
+// Typed accessors over the `agent_config` key/value table — collapses ~23
+// raw-SQL sites into a deep module with known-key getters/setters.
+export {
+  createAgentConfigStore, initAgentConfigTable,
+  AGENT_CONFIG_KEYS,
+  type AgentConfigStore, type AgentConfigKey, type ShellApprovalMode,
+} from './config/index.js';
 
 // Types
 export type * from './types/primitives.js';
@@ -36,7 +44,7 @@ export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
 
-// Canonical tool registry + factories (v2.0 — shared across CF and CLI)
+// Canonical tool registry + factories (shared across CF and CLI)
 export {
   BUILTIN_TOOLS,
   SESSION_TOOLS,
@@ -68,6 +76,12 @@ export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/r
 export { converge } from './mcts/convergence.js';
 export { pruneAndReflect } from './mcts/pruning.js';
 export { evaluateWithMultiModelJudging } from './mcts/evaluation.js';
+// Process Reward Models — step-level scoring for fine-grained MCTS pruning
+// and scaffold runtime early-termination.
+export {
+  scoreStepWithJudge, blendStepScore,
+  type StepScore, type StepScoreInput,
+} from './mcts/step-prm.js';
 export { estimateCost } from './mcts/cost.js';
 
 // Schemas
@@ -79,11 +93,56 @@ export { initCraftScoreTables } from './craft/schemas.js';
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap.js';
 export { modifyScaffold } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
-export { runCanary, checkErrorRateAndRollbackIfNeeded } from './scaffold/staged-rollout.js';
+// scaffold execution + shadow-mode rollout
+export {
+  runScaffold,
+  type ScaffoldRunOptions,
+  type ScaffoldRunResult,
+  type ScaffoldEvent,
+  type ScaffoldEmitFn,
+} from './scaffold/executor.js';
+export {
+  initShadowTables,
+  getPendingScaffold,
+  readScaffoldVersion,
+  recordShadowEvaluation,
+  decidePromotion,
+  applyPromotionDecision,
+  DEFAULT_SHADOW_CONFIG,
+  type PendingScaffold,
+  type ShadowEvaluationRow,
+  type ShadowConfig,
+  type ScaffoldStatus,
+  type JudgeFn,
+} from './scaffold/shadow.js';
+// auto-judge shadow evaluation — sampled-per-turn closure of the
+// shadow-rollout loop. Picks up pending scaffolds, runs them against the
+// same task, asks a judge LLM to compare, records the result, optionally
+// auto-applies promotion/rollback when minTrials is reached.
+export {
+  runAutoShadowEval,
+  JudgeOutputSchema,
+  DEFAULT_AUTO_JUDGE_CONFIG,
+  type AutoJudgeConfig,
+  type AutoShadowEvalResult,
+  type JudgeOutput,
+  type StructuredJudgeFn,
+  type RunAutoShadowEvalOpts,
+} from './scaffold/auto-judge.js';
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, updateCraftScores } from './craft/ema.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
+// SKILL.md export/import (Hermes-style git-friendly tool format)
+export {
+  craftedToolToSkillMd,
+  parseSkillMd,
+  exportAllSkillsToVfs,
+  importSkillsFromVfs,
+  type SkillMdParseResult,
+  type ExportSkillsResult,
+  type ImportSkillsResult,
+} from './craft/skill-md.js';
 export { periodicCraftConsolidation } from './craft/consolidation.js';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict.js';
 export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migrate-duplicates.js';
@@ -95,12 +154,119 @@ export {
   createSandboxExecutor, type SandboxHandle,
   createSSHTunnelExecutor,
   // Legacy (shelved) — kept for type imports only.
-  createNimbusExecutor, type NimbusStub,
-  createContainerExecutor, type ContainerStub,
+  createNimbusExecutor, type NimbusExecutorOpts,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
+// Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
+export {
+  reciprocalRankFusion,
+  createCloudflareVectorStore,
+  createWorkersAIEmbedder,
+  createNoopVectorStore,
+  type VectorStore,
+  type Embedder,
+  type VectorizeIndex,
+  type VectorRecord,
+  type VectorMatch,
+  type VectorMemoryChunk,
+  type VectorSearchHit,
+} from './memory/vector-store.js';
+export {
+  hybridSearch,
+  type LexicalHit,
+  type HybridHit,
+  type LexicalSearchFn,
+  type HybridSearchOptions,
+} from './memory/hybrid-search.js';
+
+// Memory write primitive — single canonical "save a note to MEMORY.md".
+// Used by workspace.saveNote, save_note builtin tool, and MCP saveNoteFromMcp.
+export { appendMemoryNote } from './memory/note.js';
+
+// agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
+// Top-K recent facts are auto-rendered into the system prompt every turn.
+export {
+  initFactsTable, createFactsStore, renderFactsBlock,
+  type Fact, type FactsStore,
+} from './memory/facts.js';
+
+// Sleep-time compute — between-turn background memory compression
+// (Letta-style; ~50% test-time token reduction reported).
+export {
+  runSleepTimeCompute, applySleepTimeUpdate,
+  type SleepTimeInput, type SleepTimeUpdate,
+} from './memory/sleep-time-compute.js';
+
+// durable run-event log (Flue-style, SSE-resumable)
+export type {
+  RunEvent, RunEventBase, RunEventInput, RunEventType,
+} from './events/index.js';
+export {
+  initRunEventTables,
+  RunEventRecorder,
+  type RunEventListener,
+  type RunEventQuery,
+} from './events/index.js';
+
+// InferenceLoop — universal contract for "run a turn." Adapts Think /
+// scaffold / Heads / RLM behind one AsyncIterable<RunEvent> stream.
+export * from './loops/types.js';
+
+// ExplorationStrategy — single seam for "search candidate continuations,
+// score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.
+export * from './strategy/index.js';
+
+// Eval harness — A/B test arbitrary strategies/loops on a corpus of tasks.
+export * from './eval/index.js';
+
+// Voyager-style automatic curriculum + Absolute Zero learnability filter.
+// Proposes next tasks at the "barely succeeds" sweet spot.
+export * from './curriculum/index.js';
+
+// provider abstraction — single registry for resolving model specs across
+// Workers AI, AI Gateway, Codex (ChatGPT subscription), OpenAI, OpenRouter,
+// and generic OpenAI-compatible upstreams. Auth resolution flows through
+// the AuthResolver callback in ProviderDeps — secrets stay inside UserDO
+// (cf-backend) and never enter the provider layer.
+export * from './providers/index.js';
+// Credential value shape (still exported for UserDO + tests; the previous
+// CredentialStore interface is gone).
+export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store.js';
+
+// safety — approval gating for shell exec
+export {
+  reviewCommand,
+  formatApproval,
+  withApprovalGate,
+  type ApprovalDecision,
+  type ApprovalRuleHit,
+  type ApprovalResult,
+} from './safety/index.js';
+
 // Utils
 export { nanoid } from './utils/nanoid.js';
 export { isoDate, today, nowMs } from './utils/date.js';
+
+// ── branching heads (parallel reasoning streams with merge) ──
+// A head is a divergent reasoning thread that sees the WHOLE conversation
+// context, accumulates EPHEMERAL interim context, and merges back via LLM
+// synthesis. Distinct from sub-agents (isolated context, structured return)
+// and MCTS branches (single short LLM call for evaluation).
+export type {
+  HeadId, HeadBudget, HeadInput, HeadReport,
+  Evidence, Decision, ArtifactRef,
+  SplitRequest, MergeResult, MergeStrategy,
+  BudgetSplit, SerializedMessage,
+} from './heads/index.js';
+export {
+  DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
+  deriveChildBudget, budgetExhausted,
+  initHeadsTables,
+  HeadJournal, type HeadJournalRow,
+  HeadController, type HeadRuntime, type SpawnedHead, type MergeLLMFn,
+  MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
+  createSplitHeadsTool, type SplitHeadsInput, type SplitHeadsToolDeps,
+} from './heads/index.js';
+

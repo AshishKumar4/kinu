@@ -1,7 +1,14 @@
 /**
- * Unit tests for the canonical 5-tool surface (v2.0).
- * CF and CLI both consume buildBuiltinTools, so this test locks in the
- * post-refactor tool inventory and basic per-tool behavior.
+ * Unit tests for the canonical 6-tool surface (v2.1 — added split_heads).
+ *
+ * v2.0 surface (CLI / always): execute_tools, run, explore, save_note, search_memory.
+ * v2.1 addition (CF only when splitHeadsTool is supplied): split_heads.
+ *
+ * The split_heads tool is conditional because it requires a HeadController +
+ * HeadRuntime — CF supplies them via createSplitHeadsTool; CLI doesn't have
+ * Facets and omits the tool. BUILTIN_TOOLS lists all 6 canonical names so
+ * crafted-tool filtering (BUILT_IN_TOOL_NAMES) excludes split_heads from
+ * craft suggestions.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -63,17 +70,59 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-describe('Agent tools (v2.0 canonical 5-tool surface)', () => {
-  test('buildBuiltinTools returns exactly the 5 canonical tools', () => {
+// split_heads, think, and the fact tools (remember/recall/forget_fact) are
+// conditional on their deps. Base = everything else. Full surface = all
+// canonical tools.
+const CONDITIONAL_TOOLS = ['split_heads', 'think', 'remember_fact', 'recall_fact', 'forget_fact'] as const;
+const BASE_TOOLS = BUILTIN_TOOLS.filter(
+  (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
+);
+
+describe('Agent tools (canonical surface — split_heads/think/facts conditional)', () => {
+  test('without conditional deps: base tools only', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const names = Object.keys(t);
 
-    for (const canonical of BUILTIN_TOOLS) {
-      expect(names).toContain(canonical);
-    }
-    expect(names.length).toBe(5);
-    expect(names.sort()).toEqual([...BUILTIN_TOOLS].sort());
+    for (const canonical of BASE_TOOLS) expect(names).toContain(canonical);
+    for (const conditional of CONDITIONAL_TOOLS) expect(names).not.toContain(conditional);
+    expect(names.length).toBe(BASE_TOOLS.length);
+  });
+
+  test('with all conditional deps: full canonical surface present', () => {
+    const { rt } = createTestRuntime();
+    const engine = new EvolutionEngine(rt, { enabled: false });
+    const stubSplitHeads = tool({
+      description: 'stub split_heads',
+      inputSchema: jsonSchema<{ rationale: string }>({
+        type: 'object', properties: { rationale: { type: 'string' } }, required: ['rationale'],
+      }),
+      execute: async () => 'stub',
+    });
+    const stubThink = tool({
+      description: 'stub think',
+      inputSchema: jsonSchema<{ strategy: string; task: string }>({
+        type: 'object', properties: { strategy: { type: 'string' }, task: { type: 'string' } },
+        required: ['strategy', 'task'],
+      }),
+      execute: async () => 'stub',
+    });
+    const stubFacts = {
+      upsert: () => {}, recall: () => null, forget: () => {},
+      recentTopK: () => [], all: () => [],
+    };
+    const t = buildBuiltinTools({
+      rt, engine,
+      craftedToolExecute: nodeCraftedExecute,
+      createExecuteTool: nodeExecFactory as never,
+      codemodeLoader: { __test: true } as unknown,
+      splitHeadsTool: stubSplitHeads,
+      thinkTool: stubThink,
+      facts: stubFacts,
+    });
+    const names = Object.keys(t);
+    for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
+    expect(names.length).toBe(BUILTIN_TOOLS.length);
   });
 
   test('each tool carries description + inputSchema', () => {

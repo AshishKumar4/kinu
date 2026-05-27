@@ -34,9 +34,7 @@ import { updateCraftScores } from '../craft/ema.js';
 
 /**
  * Built-in tool names — crafted-tool scoring ignores these.
- * v2.0: sourced from the canonical registry so CF and CLI share one truth.
- * Previously this was a private hand-maintained set that drifted from the
- * actual 5-tool surface — see docs/V2-MIGRATION.md (F4).
+ * Sourced from the canonical registry so CF and CLI share one truth.
  */
 import { BUILTIN_TOOL_NAMES as BUILT_IN_TOOL_NAMES } from '../tools/registry.js';
 import { modifyScaffold } from '../scaffold/modify.js';
@@ -203,6 +201,22 @@ export class EvolutionEngine {
     try {
       const scaffoldExists = await this.rt.identity.scaffold.exists();
       if (!scaffoldExists) return;
+
+      // Skip if a pending scaffold is already in flight — consecutive sessions
+      // would otherwise orphan earlier pending versions. The current pending
+      // must be resolved (promoted or rolled back) before a new proposal.
+      try {
+        const pending = this.rt.storage.sql<{ version: number }>`
+          SELECT version FROM scaffold_versions WHERE status = 'pending' LIMIT 1
+        `;
+        if (pending.length > 0) {
+          this.emit({
+            type: 'scaffold_proposed',
+            message: `Skipped — scaffold v${pending[0].version} is still pending shadow evaluation`,
+          });
+          return;
+        }
+      } catch { /* status column missing on legacy DBs; proceed */ }
 
       const currentScaffold = await this.rt.identity.scaffold.read();
       if (!currentScaffold || currentScaffold.length < 50) return;

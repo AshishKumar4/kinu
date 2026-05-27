@@ -4,13 +4,19 @@
   "workers_dev": true,
   "main": "src/server.ts",
   "compatibility_date": "2025-12-01",
-  "compatibility_flags": ["nodejs_compat", "experimental"],
+  // `experimental` is a dev-only umbrella flag that the deploy API rejects
+  // (code 10021). If a specific experimental feature is needed, enable it
+  // by its real flag name (e.g. `streaming_subrequests`).
+  "compatibility_flags": ["nodejs_compat"],
   "worker_loaders": [{ "binding": "LOADER" }],
   // Main site served by the custom domain. Sandbox preview URLs use the
   // workers.dev subdomain (see PREVIEW_HOSTNAME) because workers.dev
   // auto-resolves *.<worker>.<sub>.workers.dev without needing zone DNS.
+  // custom_domain: true tells wrangler to auto-create the DNS record on
+  // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
+  // proxied DNS record on the zone (manual setup via the dashboard).
   "routes": [
-    { "pattern": "proteus.ashishkumarsingh.com/*", "zone_id": "6fe16a3a25c46bb975b15e75ea57a0fe" }
+    { "pattern": "proteus.ashishkumarsingh.com", "custom_domain": true }
   ],
   // Worker runs first for every non-hashed-asset request. That lets
   // proxyToSandbox intercept preview-URL hosts before the SPA fallback
@@ -26,6 +32,9 @@
     "bindings": [
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
+      // Per-user DO: profile + agent registry + credentials + defaults.
+      // Keyed by sha256(email) so the same user always lands on the same DO.
+      { "class_name": "UserDO", "name": "UserDO" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -57,6 +66,12 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["ProteusSandbox"]
+    },
+    // Head mode + background review run inside the existing
+    // ExplorationAgent + EvolutionEngine — no additional DO classes.
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["UserDO"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
@@ -73,6 +88,33 @@
   // available here; we bypass it with our own token-gated proxy.)
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
-    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com"
-  }
+    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
+    // Cloudflare Access. Set both to the values from the Access application
+    // in your Zero Trust dashboard. Leave unset for local dev — DEV_USER_EMAIL
+    // (in .dev.vars) takes over.
+    // "CF_ACCESS_TEAM_DOMAIN": "<your-team>.cloudflareaccess.com",
+    // "CF_ACCESS_AUD":         "<application-aud-tag>"
+  },
+  // Workers AI binding — the orchestrator's LLM resolver tries this FIRST,
+  // falling back to AI_GATEWAY_URL + AI_GATEWAY_AUTH only when env.AI is
+  // absent. With this binding present, no secret is required; Workers AI
+  // bills against the account directly. Powers chat LLM calls (Kimi K2.6,
+  // Llama 4 Scout) AND semantic-memory embeddings (bge-small-en-v1.5)
+  // when the Vectorize index below is also enabled.
+  "ai": { "binding": "AI" }
+  // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
+  //
+  // First create the index:
+  //   wrangler vectorize create proteus-memory \
+  //     --dimensions=384 --metric=cosine
+  //
+  // Then add the binding:
+  //   ,"vectorize": [
+  //     { "binding": "MEMORY_VECTORS", "index_name": "proteus-memory" }
+  //   ]
+  //
+  // Once present, runtime.ts auto-detects it and constructs
+  // CloudflareVectorStore; search_memory + searchMemoryHybrid return
+  // RRF-merged FTS5 + Vectorize hits. Without it, agent transparently
+  // falls back to FTS5-only.
 }

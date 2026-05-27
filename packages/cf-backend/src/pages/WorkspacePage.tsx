@@ -18,7 +18,7 @@ import type { UIMessage } from "ai";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useProteus, type EvolutionEventRow, type LogEntry } from "@/hooks/use-proteus";
-import { registerAgent } from "@/lib/agent-registry";
+import { touchAgent } from "@/lib/user-api";
 import { MCTSTree } from "@/components/mcts-tree";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ExecutorTerminal } from "@/components/ExecutorTerminal";
@@ -27,12 +27,8 @@ import type { MCTSNode } from "@/lib/protocol";
 
 const TABS = ["Identity", "Tools", "Memory", "MCTS Tree", "Evolution", "Executors", "Logs"] as const;
 type Tab = (typeof TABS)[number];
-const MODELS = [
-  { id: "@cf/moonshotai/kimi-k2.6", label: "Kimi K2.6" },
-  { id: "@cf/meta/llama-4-scout-17b-16e-instruct", label: "Llama 4 Scout" },
-  { id: "@cf/meta/llama-4-maverick-17b-128e-instruct", label: "Llama 4 Maverick" },
-  { id: "@cf/qwen/qwen2.5-coder-32b-instruct", label: "Qwen 2.5 Coder" },
-];
+// MODELS are pulled dynamically from /api/user/models (which unions the
+// connected providers' menus). The picker re-fetches on every page mount.
 
 /* ── Code block ───────────────────────────────────────────────── */
 
@@ -530,10 +526,18 @@ function MCTSTreeTab({ mctsTree }: { mctsTree: MCTSNode | null }) {
 }
 
 function ModelSelector({ current, onChange }: { current: string; onChange: (id: string) => void }) {
+  const [models, setModels] = useState<Array<{ spec: string; label: string }>>([]);
+  useEffect(() => {
+    import("../lib/user-api").then(({ listAvailableModels }) => {
+      listAvailableModels().then((m) => setModels(m.map((x) => ({ spec: x.spec, label: x.label }))))
+        .catch(() => setModels([]));
+    });
+  }, []);
   return (
     <select value={current} onChange={e => onChange(e.target.value)}
       className="text-[11px] p-elevated border p-border rounded-md px-1.5 py-1 p-text focus:outline-none">
-      {MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+      {models.length === 0 && <option value="">(no providers connected)</option>}
+      {models.map(m => <option key={m.spec} value={m.spec}>{m.label}</option>)}
     </select>
   );
 }
@@ -688,7 +692,7 @@ function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc,
           <div className="text-sm font-medium p-text">{labelFor(activeExec)} — not connected</div>
           <p className="text-xs p-text-2">
             This executor needs a binding in <span className="font-mono">wrangler.jsonc</span>. See
-            <span className="font-mono"> docs/EXECUTOR-V2.md</span>.
+            <span className="font-mono"> docs/EXECUTION.md</span>.
           </p>
         </div>
       )}
@@ -814,7 +818,7 @@ export default function WorkspacePage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialPromptSent = useRef(false);
 
-  useEffect(() => { if (agentId) registerAgent(agentId); }, [agentId]);
+  useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [state.messages]);
 
   useEffect(() => {
@@ -870,7 +874,7 @@ export default function WorkspacePage() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <ModelSelector current={as?.model ?? MODELS[0]!.id} onChange={state.setModel} />
+                <ModelSelector current={as?.model ?? ""} onChange={state.setModel} />
                 {state.messages.length > 0 && (
                   <Button variant="ghost" shape="square" size="sm" onClick={state.clearHistory} icon={<TrashIcon size={12} />} aria-label="Clear" />
                 )}
@@ -972,7 +976,7 @@ export default function WorkspacePage() {
                   <div className="space-y-0">
                     {([
                       ["Purpose", as.purpose],
-                      ["Model", MODELS.find(m => m.id === as.model)?.label ?? as.model],
+                      ["Model", as.model],
                       ["Scaffold", `v${as.scaffoldVersion}`],
                       ["MCTS Nodes", String(as.searchNodeCount)],
                       ["Crafted Tools", String(as.craftedToolCount)],

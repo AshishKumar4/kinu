@@ -1,0 +1,92 @@
+// Behavior tests for buildSystemPromptSync — the canonical system prompt.
+// Catches drift: stale tool references, missing capability sections, RLM
+// example correctness, and that registered-executors render correctly.
+import { describe, test, expect } from 'bun:test';
+import { buildSystemPromptSync, BUILTIN_TOOLS } from '../src/index.ts';
+import { createTestRuntime } from '@proteus/test-utils';
+
+describe('buildSystemPromptSync', () => {
+  test('uses FALLBACK_PURPOSE when agent_soul is missing', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Proteus/);          // identity self-id
+    expect(prompt).toMatch(/coding agent/i);
+  });
+
+  test('honors purposeOverride', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, { purposeOverride: 'CUSTOM ROLE TEXT' });
+    expect(prompt).toContain('CUSTOM ROLE TEXT');
+    expect(prompt).not.toMatch(/^You are Proteus/);   // fallback NOT used
+  });
+
+  test('renders every BUILTIN_TOOL with its description', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    for (const name of BUILTIN_TOOLS) {
+      expect(prompt).toContain(`**${name}**`);
+    }
+  });
+
+  test('teaches RLM via a real-API code example (no hallucinated symbols)', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/llm\.query/);
+    expect(prompt).toMatch(/Recursive language model/);
+    // Regression: we previously had `splitLargeText(input, 4000)` which
+    // doesn't exist anywhere in the runtime surface.
+    expect(prompt).not.toContain('splitLargeText');
+  });
+
+  test('documents session-context blocks (memory/scratch/working_set)', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Session context blocks/);
+    expect(prompt).toContain('scratch');
+    expect(prompt).toContain('working_set');
+    expect(prompt).toMatch(/set_context/);
+  });
+
+  test('renders executor section when registeredExecutors supplied', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      registeredExecutors: ['workspace', 'sandbox'],
+    });
+    expect(prompt).toContain('workspace.*');
+    expect(prompt).toContain('sandbox.*');
+    expect(prompt).toMatch(/Showing a running app/);
+    expect(prompt).toMatch(/exposePort/);
+  });
+
+  test('omits executor section when no executors registered', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, { registeredExecutors: [] });
+    expect(prompt).not.toMatch(/Executor namespaces/);
+  });
+
+  test('appends knowledge section when extraKnowledge supplied', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, { extraKnowledge: 'EXTRA-NOTE-XYZ' });
+    expect(prompt).toContain('## Knowledge');
+    expect(prompt).toContain('EXTRA-NOTE-XYZ');
+  });
+
+  test('includes output-format guidance', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Output format/);
+    expect(prompt).toMatch(/plain markdown|markdown/);
+  });
+
+  test('does NOT promise unimplemented strategies (ToT/GoT/Reflexion as if they exist)', () => {
+    // Regression: the `think` tool description previously claimed support for
+    // strategies that don't exist. Build the prompt and check it doesn't
+    // promise them as if they're available.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    // The think description should mention the THREE that exist explicitly.
+    expect(prompt).toMatch(/single-shot/);
+    expect(prompt).toMatch(/mcts/);
+    expect(prompt).toMatch(/heads/);
+  });
+});

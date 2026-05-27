@@ -106,7 +106,7 @@ function buildPathPreviewUrl(
 
 const NOT_CONFIGURED =
   'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
-  'and Container to wrangler.jsonc (see docs/EXECUTOR-V2.md).';
+  'and Container to wrangler.jsonc (see docs/EXECUTION.md).';
 
 /**
  * Substring markers (lower-cased) for transient sandbox/RPC errors that the

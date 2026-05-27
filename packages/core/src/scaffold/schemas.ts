@@ -10,15 +10,24 @@
 import type { RawSqlExec } from '../types/primitives.js';
 
 export function initScaffoldTables(execRaw: RawSqlExec): void {
+  // status: 'current' | 'pending' | 'rolled_back' | 'historical'
+  // Drives shadow-mode rollout in scaffold/shadow.ts. Existing rows
+  // (created before this column landed) default to 'current'.
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_versions (
       version        INTEGER PRIMARY KEY,
       written_at     INTEGER NOT NULL,
       rationale      TEXT NOT NULL,
       canary_score   REAL,
-      baseline_score REAL
+      baseline_score REAL,
+      status         TEXT NOT NULL DEFAULT 'current'
     )
   `);
+  // Existing databases: backfill status via ALTER if the column is
+  // missing. Try/catch because ALTER fails if the column already exists.
+  try {
+    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'current'`);
+  } catch { /* column exists — fine */ }
 
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_regression_fixtures (

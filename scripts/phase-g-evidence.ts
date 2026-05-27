@@ -144,7 +144,7 @@ async function main() {
 
   const beforeAllFrames = 0;
 
-  // ── Turn 1: create the tool only (v2.1(E) — no same-turn invocation) ──────
+  // ── Turn 1: create the tool only ──────
   log('\n--- Turn 1: create the tool "double" ---');
   const beforeTurn1 = allFrames.length;
   const prompt1 =

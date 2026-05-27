@@ -1,217 +1,233 @@
+/**
+ * Per-agent settings page. Credentials + defaults live in /user/settings;
+ * this page covers concerns scoped to ONE agent: identity, model choice,
+ * MCTS knobs, scaffold/shadow status, shell-approval mode.
+ */
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Button, Loader, Badge } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
 import {
-  FloppyDiskIcon, BrainIcon, TreeStructureIcon, CheckIcon,
-  ArrowLeftIcon, PencilSimpleIcon, WarningIcon, TrashIcon,
-  EraserIcon, GitBranchIcon,
+  FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
+  ShieldIcon, TreeStructureIcon, GitBranchIcon, KeyIcon,
 } from "@phosphor-icons/react";
 import { useProteus } from "@/hooks/use-proteus";
+import { listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
 
-function Card({ title, icon: Icon, children, variant }: {
+const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
+  + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
+  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+  + " placeholder:p-text-3";
+
+function Card({ title, icon: Icon, children }: {
   title: string; icon: React.ComponentType<{ size?: number; className?: string }>;
-  children: React.ReactNode; variant?: "danger";
+  children: React.ReactNode;
 }) {
   return (
-    <div className={`p-card rounded-xl p-5 animate-fade-in ${variant === "danger" ? "!border-red-500/20" : ""}`}>
-      <div className="flex items-center gap-2 mb-4">
-        <Icon size={16} className={variant === "danger" ? "text-red-400" : "p-accent"} />
-        <span className="text-sm font-semibold p-text">{title}</span>
-      </div>
+    <section className="p-card rounded-xl p-5 space-y-3">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <Icon size={16} className="p-accent" />
+        <span>{title}</span>
+      </h2>
       {children}
-    </div>
+    </section>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <label className="text-xs p-text-2 block font-medium">{label}</label>
-      {children}
-    </div>
-  );
-}
+type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
-const inputCls = "w-full rounded-lg px-3 py-2 text-sm p-text focus:outline-none transition-all" +
-  " border border-[var(--c-input-border)] bg-[var(--c-surface)]" +
-  " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]" +
-  " placeholder:p-text-3";
+interface ShadowStatus {
+  hasPending: boolean;
+  pending?: {
+    version: number; writtenAt: number; rationale: string;
+    trialsSoFar: number; pendingWins: number; currentWins: number; ties: number;
+  };
+  decision?: { decision: "promote" | "rollback" | "continue"; winRate: number };
+  versions?: Array<{ version: number; status: string; rationale: string; written_at: number }>;
+}
 
 export default function SettingsPage() {
   const { agentId } = useParams();
   const state = useProteus(agentId);
-  const [modelName, setModelName] = useState("@cf/moonshotai/kimi-k2.6");
+
   const [displayName, setDisplayName] = useState("");
   const [purpose, setPurpose] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<string | null>(null);
-  const [mctsC, setMctsC] = useState(1.414);
-  const [mctsIter, setMctsIter] = useState(50);
-  const [mctsDepth, setMctsDepth] = useState(5);
-  const [mctsBranches, setMctsBranches] = useState(3);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [models, setModels] = useState<ModelMenuEntry[]>([]);
+  const [currentSpec, setCurrentSpec] = useState<string>("");
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("strict");
+  const [shadow, setShadow] = useState<ShadowStatus | null>(null);
+  const [mcts, setMcts] = useState({ explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 });
 
   useEffect(() => {
     if (state.agentStatus) {
-      setModelName(state.agentStatus.model || "@cf/moonshotai/kimi-k2.6");
       setDisplayName(state.agentStatus.displayName || state.agentStatus.name || "");
       setPurpose(state.agentStatus.purpose || "");
     }
   }, [state.agentStatus]);
 
-  // Load MCTS config
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (state.connectionStatus !== "connected") return;
-    state.rpc("getMctsConfig", []).then((cfg: unknown) => {
-      const c = cfg as { explorationConstant: number; maxIterations: number; maxDepth: number; branchBudget: number };
-      setMctsC(c.explorationConstant);
-      setMctsIter(c.maxIterations);
-      setMctsDepth(c.maxDepth);
-      setMctsBranches(c.branchBudget);
-    }).catch(() => {});
-  }, [state.connectionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleSave = useCallback(async () => {
-    setSaving(true);
+    setErr(null);
     try {
-      await Promise.all([
-        state.setModel(modelName),
-        state.rpc("setDisplayName", [displayName]),
-        state.rpc("setSoul", [purpose]),
-        state.rpc("setMctsConfig", [{ explorationConstant: mctsC, maxIterations: mctsIter, maxDepth: mctsDepth, branchBudget: mctsBranches }]),
+      const [m, current, mode, sh, mc] = await Promise.all([
+        listAvailableModels(),
+        state.rpc("getStoredModelSpec", []) as Promise<{ spec: string | null }>,
+        state.rpc("getShellApprovalMode", []) as Promise<{ mode: ApprovalMode }>,
+        state.rpc("getShadowStatus", []) as Promise<ShadowStatus>,
+        state.rpc("getMctsConfig", []) as Promise<typeof mcts>,
       ]);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } finally {
-      setSaving(false);
-    }
-  }, [state, modelName, displayName, purpose, mctsC, mctsIter, mctsDepth, mctsBranches]);
-
-  const handleDangerAction = useCallback(async (action: string) => {
-    setConfirmAction(null);
-    try {
-      if (action === "clearMemory") await state.rpc("clearMemory", []);
-      if (action === "resetMcts") await state.rpc("resetMctsTree", []);
-    } catch (err) {
-      console.error("Action failed:", err);
+      setModels(m);
+      setCurrentSpec(current.spec ?? "");
+      setApprovalMode(mode.mode);
+      setShadow(sh);
+      setMcts(mc);
+    } catch (e) {
+      setErr((e as Error).message);
     }
   }, [state]);
 
+  useEffect(() => { void load(); }, [load]);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      await Promise.all([
+        state.rpc("setDisplayName", [displayName]),
+        state.rpc("setSoul", [purpose]),
+        currentSpec ? state.setModel(currentSpec) : Promise.resolve(),
+        state.rpc("setShellApprovalMode", [approvalMode]),
+        state.rpc("setMctsConfig", [mcts]),
+      ]);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }, [state, displayName, purpose, currentSpec, approvalMode, mcts]);
+
+  if (state.connectionStatus !== "connected") {
+    return <div className="h-full flex items-center justify-center"><Loader size="md" /></div>;
+  }
+
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-8 space-y-5">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <Link to={`/agent/${agentId}`}>
-            <Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button>
-          </Link>
+      <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+        <header className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold tracking-tight p-text">Settings</h1>
-            <p className="text-xs p-text-3 font-mono">{agentId}</p>
+            <Link to={`/agent/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
+              <ArrowLeftIcon size={12} /> Back to chat
+            </Link>
+            <h1 className="text-2xl font-semibold">Agent settings</h1>
+            <p className="text-xs p-text-3 mt-1 flex items-center gap-1.5">
+              <span className="font-mono">{agentId}</span>
+              <span>·</span>
+              <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
+                <KeyIcon size={11} /> User settings & credentials
+              </Link>
+            </p>
           </div>
-        </div>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-4 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2"
+          >
+            {saved ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
+            <span>{saving ? "Saving…" : saved ? "Saved" : "Save"}</span>
+          </button>
+        </header>
+
+        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
 
         {/* Identity */}
-        <Card title="Agent Identity" icon={PencilSimpleIcon}>
-          <div className="space-y-4">
-            <Field label="Display Name">
-              <input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="My Agent" className={inputCls} />
-            </Field>
-            <Field label="Purpose / Soul">
-              <textarea value={purpose} onChange={e => setPurpose(e.target.value)} rows={3} placeholder="What is this agent's purpose?"
-                className={`${inputCls} resize-none`} />
-            </Field>
+        <Card title="Identity" icon={BrainIcon}>
+          <div className="space-y-1.5">
+            <label className="text-xs p-text-2 font-medium">Display name</label>
+            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs p-text-2 font-medium">Mission / purpose</label>
+            <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={3}
+              className={`${inputCls} font-mono`} placeholder="What is this agent for?" />
           </div>
         </Card>
 
         {/* Model */}
-        <Card title="Model" icon={BrainIcon}>
-          <Field label="Language Model">
-            <select value={modelName} onChange={e => setModelName(e.target.value)} className={inputCls}>
-              <option value="@cf/moonshotai/kimi-k2.6">Kimi K2.6 (reasoning)</option>
-              <option value="@cf/meta/llama-4-scout-17b-16e-instruct">Llama 4 Scout (fast)</option>
-              <option value="@cf/meta/llama-4-maverick-17b-128e-instruct">Llama 4 Maverick</option>
-              <option value="@cf/qwen/qwen2.5-coder-32b-instruct">Qwen 2.5 Coder 32B</option>
+        <Card title="Model" icon={GearSixIcon}>
+          {models.length === 0 ? (
+            <p className="text-xs p-text-3">
+              No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in user settings.
+            </p>
+          ) : (
+            <select value={currentSpec} onChange={(e) => setCurrentSpec(e.target.value)} className={inputCls}>
+              <option value="">(default)</option>
+              {models.map((m) => (
+                <option key={m.spec} value={m.spec}>{m.label}</option>
+              ))}
             </select>
-          </Field>
+          )}
+          <p className="text-[11px] p-text-3">
+            Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.
+          </p>
         </Card>
 
-        {/* Agent Info */}
-        <Card title="Agent Info" icon={TreeStructureIcon}>
-          <div className="space-y-0 text-sm">
-            {state.agentStatus ? (
-              [["Name", state.agentStatus.name], ["Scaffold", `v${state.agentStatus.scaffoldVersion}`], ["MCTS Nodes", state.agentStatus.searchNodeCount], ["Crafted Tools", state.agentStatus.craftedToolCount], ["Messages", state.agentStatus.messageCount]].map(([l, v]) => (
-                <div key={String(l)} className="flex justify-between py-2 border-b p-border last:border-0">
-                  <span className="p-text-2">{String(l)}</span>
-                  <span className="p-text font-medium">{String(v)}</span>
-                </div>
-              ))
-            ) : <div className="flex justify-center py-4"><Loader size="sm" /></div>}
+        {/* Approval */}
+        <Card title="Shell-command approval" icon={ShieldIcon}>
+          <div className="grid grid-cols-3 gap-2">
+            {(['strict', 'allow_all', 'deny_all'] as ApprovalMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setApprovalMode(m)}
+                className={`p-2 rounded-md text-xs ${approvalMode === m ? 'p-accent-bg p-accent' : 'p-card hover:p-card-hover'}`}
+              >{m === 'strict' ? 'Strict (review)' : m === 'allow_all' ? 'Allow all' : 'Deny all'}</button>
+            ))}
           </div>
         </Card>
 
-        {/* MCTS Parameters */}
-        <Card title="MCTS Exploration" icon={TreeStructureIcon}>
-          <div className="space-y-4">
-            <Field label={`Exploration constant (C) — ${mctsC.toFixed(3)}`}>
-              <input type="range" min="0.1" max="3" step="0.01" value={mctsC} onChange={e => setMctsC(parseFloat(e.target.value))}
-                className="w-full accent-[var(--c-accent)]" />
-              <div className="flex justify-between text-[10px] p-text-3 mt-0.5"><span>0.1 (exploit)</span><span>3.0 (explore)</span></div>
-            </Field>
-            <Field label="Max iterations">
-              <input type="number" min={1} max={500} value={mctsIter} onChange={e => setMctsIter(parseInt(e.target.value) || 50)} className={inputCls} />
-            </Field>
-            <Field label="Max depth">
-              <input type="number" min={1} max={20} value={mctsDepth} onChange={e => setMctsDepth(parseInt(e.target.value) || 5)} className={inputCls} />
-            </Field>
-            <Field label="Branch budget">
-              <input type="number" min={1} max={10} value={mctsBranches} onChange={e => setMctsBranches(parseInt(e.target.value) || 3)} className={inputCls} />
-            </Field>
+        {/* MCTS knobs */}
+        <Card title="MCTS tunables" icon={TreeStructureIcon}>
+          <div className="grid grid-cols-2 gap-3">
+            <NumField label="Exploration constant" value={mcts.explorationConstant} step={0.1} onChange={(v) => setMcts({ ...mcts, explorationConstant: v })} />
+            <NumField label="Max iterations" value={mcts.maxIterations} step={1} onChange={(v) => setMcts({ ...mcts, maxIterations: v })} />
+            <NumField label="Max depth" value={mcts.maxDepth} step={1} onChange={(v) => setMcts({ ...mcts, maxDepth: v })} />
+            <NumField label="Branch budget" value={mcts.branchBudget} step={1} onChange={(v) => setMcts({ ...mcts, branchBudget: v })} />
           </div>
         </Card>
 
-        {/* Save */}
-        <button onClick={handleSave} disabled={saving || state.connectionStatus !== "connected"}
-          className="p-btn rounded-lg px-5 py-2.5 text-sm font-medium flex items-center gap-2 cursor-pointer">
-          {saving ? <Loader size="sm" /> : saved ? <CheckIcon size={16} /> : <FloppyDiskIcon size={16} />}
-          {saving ? "Saving..." : saved ? "Saved" : "Save All Changes"}
-        </button>
-
-        {/* Danger Zone */}
-        <Card title="Danger Zone" icon={WarningIcon} variant="danger">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-sm p-text block">Clear Memory</span>
-                <span className="text-xs p-text-3">Delete all memory files and FTS index</span>
+        {/* Shadow */}
+        {shadow && (
+          <Card title="Scaffold shadow rollout" icon={GitBranchIcon}>
+            {shadow.hasPending ? (
+              <div className="text-xs space-y-2">
+                <div>Pending v{shadow.pending?.version} — {shadow.pending?.trialsSoFar} trials so far</div>
+                <div className="text-[11px] p-text-3">{shadow.pending?.rationale}</div>
               </div>
-              {confirmAction === "clearMemory" ? (
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setConfirmAction(null)}>Cancel</Button>
-                  <button onClick={() => handleDangerAction("clearMemory")} className="rounded-lg px-3 py-1.5 text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer">Confirm</button>
-                </div>
-              ) : (
-                <Button variant="secondary" size="sm" onClick={() => setConfirmAction("clearMemory")} icon={<EraserIcon size={12} />}>Clear</Button>
-              )}
-            </div>
-            <div className="border-t p-border" />
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-sm p-text block">Reset MCTS Tree</span>
-                <span className="text-xs p-text-3">Delete all exploration nodes</span>
-              </div>
-              {confirmAction === "resetMcts" ? (
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setConfirmAction(null)}>Cancel</Button>
-                  <button onClick={() => handleDangerAction("resetMcts")} className="rounded-lg px-3 py-1.5 text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors cursor-pointer">Confirm</button>
-                </div>
-              ) : (
-                <Button variant="secondary" size="sm" onClick={() => setConfirmAction("resetMcts")} icon={<GitBranchIcon size={12} />}>Reset</Button>
-              )}
-            </div>
-          </div>
-        </Card>
+            ) : (
+              <p className="text-xs p-text-3">No pending scaffold.</p>
+            )}
+          </Card>
+        )}
       </div>
+    </div>
+  );
+}
+
+function NumField({ label, value, step, onChange }: { label: string; value: number; step: number; onChange: (v: number) => void }) {
+  return (
+    <div className="space-y-1">
+      <label className="text-[11px] p-text-2">{label}</label>
+      <input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className={inputCls}
+      />
     </div>
   );
 }

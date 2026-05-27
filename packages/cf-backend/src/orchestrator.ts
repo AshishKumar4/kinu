@@ -1,31 +1,30 @@
 /**
  * OrchestratorAgent — self-evolving chat agent extending Think.
  *
- * 5-tool architecture (all tool construction lives in @proteus/core/tools):
- *   execute_tools  — codemode sandbox with workspace.* + codemode.* (crafted) APIs
- *   run            — POSIX shell command with optional executor routing
- *   explore        — MCTS tree search via durable fiber
- *   save_note      — append to MEMORY.md (FTS-indexed)
- *   search_memory  — FTS5 search over long-term memory
- *
- * All filesystem operations (read, write, edit, grep, find, etc.) are available
- * as workspace.* APIs inside the execute_tools codemode sandbox. Crafted tools
- * from the CraftStore are injected as codemode.* inside the sandbox.
+ * Tool surface (constructed in @proteus/core/tools/builtins):
+ *   execute_tools — codemode sandbox: workspace.* + sandbox.* + codemode.*
+ *                   (crafted) + llm.query (Recursive Language Models)
+ *   run           — POSIX shell command (with approval-gate review)
+ *   think         — unified strategy dispatcher (single-shot / mcts / heads / …)
+ *   split_heads   — direct branching heads (parallel + merge)
+ *   explore       — direct MCTS (legacy; think({strategy:'mcts'}) preferred)
+ *   save_note     — append to MEMORY.md (FTS-indexed)
+ *   search_memory — hybrid FTS5 + Vectorize lexical/semantic retrieval
+ *   remember_fact / recall_fact / forget_fact — typed world model (agent_facts)
  *
  * This file is a THIN ADAPTER: tool factory, system prompt, and crafted-tool
  * injection all live in @proteus/core so the CLI surface shares them verbatim.
- * See docs/V2-MIGRATION.md for the drift-elimination rationale.
  */
 
 import { callable } from "agents";
 import { Think, Session } from "@cloudflare/think";
-// v2.1-liveness — preamble-injection pattern: we construct the codemode tool
+// preamble-injection pattern: we construct the codemode tool
 // directly via createCodeTool + PreambleCraftedExecutor. The executor reads
 // craftStore.list() on every call and splices a `const tools = {...}`
 // preamble into the LLM's sandbox arrow, so mid-turn additions are visible
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
-import { createWorkersAI } from "workers-ai-provider";
+import { streamText, generateObject } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -36,10 +35,9 @@ import {
   bootstrapScaffold,
   initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
   resolveMaxSteps,
-  // v2.0 canonical tool + prompt surface — single source of truth
+  // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   buildSystemPromptSync,
-  createChatModel,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS,
   ACTIVE_TOOLS,
@@ -47,20 +45,49 @@ import {
   // Fork feature
   forkAgentStorage, readForkLineage,
   nanoid,
+  // Branching heads
+  HeadController, HeadJournal, initHeadsTables, createSplitHeadsTool,
+  type SerializedMessage,
+  // Canonical memory-note write primitive
+  appendMemoryNote,
+  // Scaffold loop closure (scaffold-driven inference + shadow rollout)
+  runScaffold, type ScaffoldRunResult,
+  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
+  readScaffoldVersion, DEFAULT_SHADOW_CONFIG,
+  // Auto-judge shadow eval — sampled per-turn shadow rollout closure
+  runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
+  type StructuredJudgeFn,
+  // Durable run-event log
+  initRunEventTables, RunEventRecorder,
+  type RunEvent, type RunEventQuery,
+  // agent_facts world model
+  initFactsTable, createFactsStore, renderFactsBlock, type FactsStore,
+  // Typed agent_config store
+  createAgentConfigStore,
+  // Voyager curriculum + Absolute Zero learnability proposer
+  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  // Hybrid search (FTS5 + Vectorize via RRF)
+  hybridSearch, type HybridHit,
+  // SKILL.md export/import (git-friendly crafted-tool format)
+  exportAllSkillsToVfs, importSkillsFromVfs,
+  type ExportSkillsResult, type ImportSkillsResult,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
+  // Adaptive reasoning_effort per stage
+  effortFor,
+  // Unified strategy dispatch
+  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
+  createHeadsStrategy, createThinkTool,
 } from "@proteus/core";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
+import { createCFHeadRuntime } from "./heads/head-runtime.js";
+import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { createRLMProvider } from "./rlm.js";
+import type { UserDO } from "./user/user-do.js";
 
-const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
-
-const AVAILABLE_MODELS = [
-  { id: "@cf/moonshotai/kimi-k2.6", name: "Kimi K2.6", description: "Advanced reasoning model with extended thinking" },
-  { id: "@cf/meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", description: "General-purpose instruction model" },
-] as const;
 
 // ── Fork payload types ────────────────────────────────────────────
 // The source DO assembles this and sends it to the fork DO's rawCopyFromFork.
@@ -113,7 +140,7 @@ interface ForkPayload {
  * of truth. Only the exact SELECT shapes that forkAgentStorage issues are
  * supported — this is a minimal shim, not a general SQL engine.
  */
-function buildSqlFromPayload(payload: ForkPayload) {
+function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
   const rawSql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown[] =
     (strings, ...values) => {
       const query = strings.join("?").replace(/\s+/g, " ").trim();
@@ -162,7 +189,10 @@ function buildSqlFromPayload(payload: ForkPayload) {
       }
       return [];
     };
-  return rawSql as never;
+  // SqlExecutor uses a generic-bound tagged-template signature; the shim
+  // is single-return-type. Cast to SqlExecutor (not `never`) so callers
+  // get proper template-tag typing without unsafe widening.
+  return rawSql as unknown as SqlExecutor;
 }
 
 export class OrchestratorAgent extends Think<Env> {
@@ -187,6 +217,80 @@ export class OrchestratorAgent extends Think<Env> {
   // execute call, so newly-saved tools appear on the next execute_tools
   // invocation without any registry or cache coherence work.
   private _craftExecTool: unknown = null;
+
+  // Branching-heads controller and tool — lazily built once per DO lifetime.
+  // The controller wraps a HeadJournal + HeadRuntime (Facet spawner + merge LLM).
+  // The split_heads tool reads inheritedContext lazily via assistant_messages.
+  private _headController: HeadController | null = null;
+  private _splitHeadsTool: ReturnType<typeof createSplitHeadsTool> | null = null;
+
+  // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
+  // Initialized lazily on first event so onStart can wire the table before use.
+  private _eventRecorder: RunEventRecorder | null = null;
+  private get eventRecorder(): RunEventRecorder {
+    if (!this._eventRecorder) {
+      this._eventRecorder = new RunEventRecorder(this.boundSql);
+    }
+    return this._eventRecorder;
+  }
+
+  // agent_facts world model — typed, idempotent, keyed.
+  private _factsStore: FactsStore | null = null;
+  private get facts(): FactsStore {
+    if (!this._factsStore) this._factsStore = createFactsStore(this.boundSql);
+    return this._factsStore;
+  }
+
+  // Typed accessors over the `agent_config` key/value table — replaces
+  // scattered raw SQL with a single deep module.
+  private _config: import('@proteus/core').AgentConfigStore | null = null;
+  private get config(): import('@proteus/core').AgentConfigStore {
+    if (!this._config) this._config = createAgentConfigStore(this.boundSql);
+    return this._config;
+  }
+
+  // StrategyRegistry — single-shot + MCTS + Heads adapters. Powers the
+  // unified `think(strategy, task, budget)` tool.
+  private _strategyRegistry: import('@proteus/core').StrategyRegistry | null = null;
+  private get strategyRegistry(): import('@proteus/core').StrategyRegistry {
+    if (this._strategyRegistry) return this._strategyRegistry;
+    const reg = createStrategyRegistry();
+    reg.register(createSingleShotStrategy());
+    reg.register(createMCTSStrategy());
+    reg.register(createHeadsStrategy());
+    this._strategyRegistry = reg;
+    return reg;
+  }
+
+  private _thinkTool: ToolSet[string] | null = null;
+  private getThinkTool(): ToolSet[string] {
+    if (this._thinkTool) return this._thinkTool;
+    this._thinkTool = createThinkTool({
+      registry: this.strategyRegistry,
+      rt: this.rt,
+      model: this.getModel(),
+      defaultOptions: () => ({
+        // MCTS needs a SessionWriter — orchestrator provides one. Heads
+        // needs the controller from getSplitHeadsTool's pipeline.
+        mcts: { session: this.createMCTSSession() },
+        heads: { controller: this.getHeadController() },
+      }),
+    });
+    return this._thinkTool;
+  }
+
+  private getHeadController(): HeadController {
+    // The split-heads tool also builds one; reuse if present so both tools
+    // share the same journal + runtime.
+    void this.getSplitHeadsTool();
+    if (!this._headController) {
+      throw new Error('HeadController not initialized — getSplitHeadsTool() must run first.');
+    }
+    return this._headController;
+  }
+
+  /** Convenience: current runId for event emission. One run per turn. */
+  private _currentRunId = '';
 
   // ── Activity logging: persisted + broadcast to Logs pane ──
   private _turnT0 = 0;
@@ -297,7 +401,13 @@ export class OrchestratorAgent extends Think<Env> {
       const executionRouter = this.rt.executionRouter;
       const executorProviders = executionRouter?.getProviders() ?? [];
       const craftedProvider = { name: 'codemode', tools: seededCraftedTools };
-      const allProviders = [craftedProvider, ...executorProviders.map(p => ({
+      // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
+      // Sub-call has no llm.query in scope, so depth is bounded at 1.
+      const rlmProvider = createRLMProvider(
+        this.providerRegistry(),
+        () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
+      );
+      const allProviders = [craftedProvider, rlmProvider, ...executorProviders.map(p => ({
         name: p.name,
         tools: p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>,
         types: p.types,
@@ -314,44 +424,74 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── Model resolution ───────────────────────────────────────────
 
-  private getStoredModelId(): string {
-    try {
-      const rows = this.sql<{ model: string }>`
-        SELECT value as model FROM agent_config WHERE key = 'model' LIMIT 1`;
-      return rows[0]?.model ?? DEFAULT_MODEL;
-    } catch { return DEFAULT_MODEL; }
+  private _providerRegistry: AgentProviderRegistry | null = null;
+  protected providerRegistry(): AgentProviderRegistry {
+    if (this._providerRegistry) return this._providerRegistry;
+    const userId = this.getOwnerUserId();
+    if (!userId) {
+      throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
+    }
+    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+    this._providerRegistry = createAgentProviderRegistry({
+      env: this.env,
+      userDOStub,
+      appTitle: 'Proteus',
+    });
+    return this._providerRegistry;
   }
 
-  private createModel(modelId: string): LanguageModel {
-    const env = this.env as Env & Record<string, string>;
-    if (env.AI && typeof env.AI !== "string") {
-      const binding = env.AI as unknown as Parameters<typeof createWorkersAI>[0]["binding"];
-      const factory = createWorkersAI({ binding });
-      return createChatModel({
-        kind: "workers-ai",
-        modelId,
-        sessionAffinity: this.sessionAffinity,
-        factory: (id, opts) => factory(id, opts) as LanguageModel,
-      });
+  /** Read the owner userId from agent_soul; '' (empty) means unclaimed. */
+  protected getOwnerUserId(): string | null {
+    try {
+      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_soul LIMIT 1`;
+      const v = rows[0]?.owner_user_id;
+      return v && v !== '' ? v : null;
+    } catch { return null; }
+  }
+
+  /** Worker calls this on every authenticated request before any other RPC.
+   *  Claims the agent for `userId` if unclaimed; 403s on cross-user collision. */
+  @callable()
+  async claimOwner(userId: string): Promise<{ owner: string }> {
+    if (!userId) throw new Error('userId required');
+    const current = this.getOwnerUserId();
+    if (current === null) {
+      // Unclaimed — first touch. Ensure agent_soul has at least one row.
+      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_soul LIMIT 1`;
+      if (exists.length === 0) {
+        this.sql`INSERT INTO agent_soul (purpose, owner_user_id) VALUES (${'A self-evolving coding assistant with MCTS exploration and durable skill evolution.'}, ${userId})`;
+      } else {
+        this.sql`UPDATE agent_soul SET owner_user_id = ${userId}`;
+      }
+      // Invalidate any provider registry the agent might have constructed
+      // before ownership was set (defensive — should be null at this point).
+      this.invalidateModelCaches();
+      return { owner: userId };
     }
-    const gatewayUrl = env.AI_GATEWAY_URL;
-    const gatewayAuth = env.AI_GATEWAY_AUTH;
-    if (gatewayUrl && gatewayAuth) {
-      return createChatModel({
-        kind: "ai-gateway",
-        baseURL: gatewayUrl,
-        auth: gatewayAuth,
-        modelId,
-      });
+    if (current !== userId) {
+      throw new Error(`Agent owned by a different user`);
     }
-    throw new Error("No AI model configured.");
+    return { owner: current };
+  }
+
+  /** Stored model spec, or null when unset (registry will pick the default). */
+  private getStoredModelId(): string | null {
+    return this.config.getModel();
   }
 
   // ── Think lifecycle overrides ──────────────────────────────────
 
+  /** Think calls `getModel()` synchronously per turn — cache to avoid
+   *  reconstructing on every turn when the stored spec hasn't changed. */
+  private _cachedModel: LanguageModel | null = null;
+  private _cachedModelSpec: string | null = null;
   getModel(): LanguageModel {
     this.logActivity("getmodel");
-    const model = this.createModel(this.getStoredModelId());
+    const stored = this.getStoredModelId();
+    if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
+    const reg = this.providerRegistry();
+    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
+    this._cachedModel = model; this._cachedModelSpec = stored;
     return model;
   }
 
@@ -363,20 +503,40 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private _cachedSystemPrompt: string | null = null;
   private _cachedSystemPromptKey: string = "";
+  /** Cached soul.purpose. Loaded lazily on first read, invalidated by
+   *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
+  private _cachedSoulPurpose: string | null = null;
+  private getSoulPurpose(): string {
+    if (this._cachedSoulPurpose === null) {
+      try {
+        const rows = this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
+        this._cachedSoulPurpose = rows[0]?.purpose ?? '';
+      } catch { this._cachedSoulPurpose = ''; }
+    }
+    return this._cachedSoulPurpose;
+  }
 
   getSystemPrompt(): string {
     this.logActivity("getsystemprompt_start");
     const execs = (this.rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const key = `${this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`[0]?.purpose ?? ""}\u0000${execs.join(",")}`;
+    const key = `${this.getSoulPurpose()}\u0000${execs.join(",")}`;
+    let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
+      base = this._cachedSystemPrompt;
       this.logActivity("getsystemprompt_end", "cache hit");
-      return this._cachedSystemPrompt;
+    } else {
+      base = buildSystemPromptSync(this.rt, { registeredExecutors: execs });
+      this._cachedSystemPrompt = base;
+      this._cachedSystemPromptKey = key;
+      this.logActivity("getsystemprompt_end", `${base.length} chars`);
     }
-    const prompt = buildSystemPromptSync(this.rt, { registeredExecutors: execs });
-    this._cachedSystemPrompt = prompt;
-    this._cachedSystemPromptKey = key;
-    this.logActivity("getsystemprompt_end", `${prompt.length} chars`);
-    return prompt;
+    // Render top-K recent facts on every turn (cheap; bypasses cache because
+    // facts change between turns). Empty → return unmodified base prompt.
+    try {
+      const factsBlock = renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 });
+      if (factsBlock) return `${base}\n\n## World model (facts you remembered):\n${factsBlock}`;
+    } catch { /* facts table not yet initialized */ }
+    return base;
   }
 
   /**
@@ -408,7 +568,7 @@ export class OrchestratorAgent extends Think<Env> {
     this.logActivity("gettools_start");
 
     // Cache key includes CraftStore updated_at AND craft_scores last_used_at
-    // because effective-score filtering depends on recency (v2: F5 fix).
+    // because effective-score filtering depends on recency.
     const cacheKey = this._craftCacheKey();
     if (this._cachedTools && cacheKey === this._cachedToolsKey) {
       this.logActivity("gettools_end", "cache hit");
@@ -424,10 +584,23 @@ export class OrchestratorAgent extends Think<Env> {
 
       type FiberCtx = { stash(data: unknown): void };
       const activeFiberCtx: { current: FiberCtx | null } = { current: null };
+      const shellApprovalMode = this.config.getShellApprovalMode();
+
       const tools = buildBuiltinTools({
         rt: this.rt,
         engine: this.engine,
         preBuiltExecuteTool: this.getExecuteToolsTool(),
+        // Branching-heads tool — lazy-built once, then reused across turns.
+        splitHeadsTool: this.getSplitHeadsTool(),
+        // Unified strategy dispatcher (single-shot / mcts / heads / …).
+        thinkTool: this.getThinkTool(),
+        // Vectorize-backed semantic memory. search_memory auto-uses
+        // hybrid retrieval when this is provided + available; FTS5-only fallback.
+        vectorStore: this.rt.vectorStore,
+        // Per-agent approval policy for shell exec.
+        shellApprovalMode,
+        // Typed, keyed world-model store — exposes remember/recall/forget_fact.
+        facts: this.facts,
         onMctsProgress: (phase, iteration, budget) => this.broadcastMctsProgress(phase, iteration, budget),
         createMctsSession: () => this.createMCTSSession(),
         onExplorePhase: (phase, task) => {
@@ -455,15 +628,110 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
+  /**
+   * Lazily build the split_heads tool wired to a HeadController that spawns
+   * ExplorationAgent Facets in head mode (initHead / runAsHead / abortHead).
+   * Inherited context is read fresh from assistant_messages at every tool
+   * invocation so each head sees the full conversation.
+   */
+  private getSplitHeadsTool() {
+    if (this._splitHeadsTool) return this._splitHeadsTool;
+    const sqlForJournal = this.sql.bind(this) as unknown as SqlExecutor;
+    const journal = new HeadJournal(sqlForJournal);
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Agent has no owner — split_heads needs UserDO access for auth.');
+    const runtime = createCFHeadRuntime(this, ownerUserId);
+    this._headController = new HeadController(runtime, journal);
+    const orchestrator = this;
+    this._splitHeadsTool = createSplitHeadsTool({
+      controller: this._headController,
+      // Stream head_split / head_merge into the durable event log so
+      // SSE subscribers + MCP `list_run_events` see the split lifecycle.
+      onPhase: (event) => {
+        try {
+          if (!this._currentRunId) return;
+          if (event.kind === 'split') {
+            this.eventRecorder.emit(this._currentRunId, {
+              type: 'head_split',
+              rootId: event.rootId,
+              headIds: [...event.headIds],
+              rationale: event.rationale,
+            });
+          } else {
+            this.eventRecorder.emit(this._currentRunId, {
+              type: 'head_merge',
+              rootId: event.rootId,
+              headCount: event.headCount,
+              mergedNarrative: event.mergedNarrative,
+            });
+          }
+        } catch (err) {
+          console.warn('[proteus] event emit failed at split-heads onPhase:', err);
+        }
+      },
+      getInheritedContext(): SerializedMessage[] {
+        // Cap to the last N messages to keep head LLM context bounded over
+        // long sessions. Think Session already runs compactAfter(96k) on
+        // the assistant_messages table at the orchestrator level; this is
+        // a second safety net specifically for head spawns.
+        const INHERITED_CONTEXT_CAP = 50;
+        try {
+          type Row = { id: string; role: string; content: string; created_at: string };
+          const rows = orchestrator.sql<Row>`
+            SELECT id, role, content, created_at
+            FROM (
+              SELECT id, role, content, created_at
+              FROM assistant_messages
+              ORDER BY created_at DESC
+              LIMIT ${INHERITED_CONTEXT_CAP}
+            ) sub
+            ORDER BY created_at ASC`;
+          return rows.map((r) => ({
+            id: r.id,
+            role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
+              ? r.role
+              : 'assistant',
+            content: r.content,
+            createdAt: Date.parse(r.created_at) || 0,
+          }));
+        } catch {
+          // assistant_messages table may not yet exist on a fresh agent.
+          return [];
+        }
+      },
+      defaultModel: undefined, // heads inherit the chat agent's resolved model
+    });
+    return this._splitHeadsTool;
+  }
+
   configureSession(session: Session): Session {
+    // Context blocks the LLM can read AND write via the Think Session tools
+    // (`set_context`, `load_context`, `search_context` — see tools/registry.ts
+    // ACTIVE_TOOLS whitelist). Block sizes total ~60k tokens; the chat window
+    // compacts at 96k to leave headroom for the streaming response.
     return session
       .withContext("memory", {
         description:
-          "Long-term knowledge: learned facts, user preferences, project context, " +
-          "discovered patterns, and crafted tool descriptions.",
+          "Long-term knowledge: learned facts, project context, discovered " +
+          "patterns, crafted tool descriptions. Loaded from MEMORY.md.",
         maxTokens: 32000,
       })
-      .withCachedPrompt();
+      .withContext("scratch", {
+        description:
+          "Ephemeral scratchpad for the current turn — write intermediate " +
+          "reasoning, partial results, hypothesis lists. Cleared between turns. " +
+          "Use `set_context('scratch', text)` to write.",
+        maxTokens: 8000,
+      })
+      .withContext("working_set", {
+        description:
+          "Last-N items the agent is actively working on (files, tasks, URLs). " +
+          "Persists across turns until manually replaced. " +
+          "Use `set_context('working_set', text)` to update.",
+        maxTokens: 4000,
+      })
+      .withCachedPrompt()
+      .compactAfter(96_000);
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -481,6 +749,20 @@ export class OrchestratorAgent extends Think<Env> {
     this._firstChunkReceived = false;
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
+    // Start a new run for the event log.
+    this._currentRunId = `run-${nanoid()}`;
+    try {
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'run_start',
+        agentId: this.name,
+      });
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'turn_start',
+        turnIndex: this._sessionTurnCount,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at beforeTurn:', err);
+    }
     return { activeTools: [...ACTIVE_TOOLS] };
   }
 
@@ -515,6 +797,21 @@ export class OrchestratorAgent extends Think<Env> {
       args: (c.input ?? {}) as Record<string, unknown>,
       result: recorded,
     });
+    // Persist tool_call_end into the durable run-event log.
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'tool_call_end',
+          name: c.toolName,
+          toolCallId: `tc-${this._turnToolCalls.length}`,
+          result: recorded,
+          error: c.success === false ? String(c.error ?? '') : undefined,
+          durationMs: c.durationMs,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at afterToolCall:', err);
+    }
   }
 
   onStepFinish(ctx: StepContext): void {
@@ -557,6 +854,19 @@ export class OrchestratorAgent extends Think<Env> {
       `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
       `in=${inTok} out=${outTok}${extrasStr}`,
     );
+    // Mirror into the durable run-event log so external SSE subscribers
+    // see per-step progress (UI Last-Event-ID resume + MCP/HTTP consumers).
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'step_finish',
+          stepIndex: this._turnStepCount,
+          reason: typeof ctx.finishReason === 'string' ? ctx.finishReason : undefined,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at onStepFinish:', err);
+    }
   }
 
   async onChatResponse(result: ChatResponseResult) {
@@ -565,6 +875,21 @@ export class OrchestratorAgent extends Think<Env> {
     // is allowed again from here forward. Evolution (engine.onTurnCompleteAsync)
     // runs fire-and-forget below and does NOT extend the busy window.
     this._inFlight = false;
+    // Emit turn_end + run_end into the durable event log.
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'turn_end',
+          turnIndex: this._sessionTurnCount,
+        });
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'run_end',
+          reason: result.status,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at onChatResponse:', err);
+    }
     if (result.status !== "completed") return;
 
     const userMessages = this.messages.filter(m => m.role === "user");
@@ -643,8 +968,115 @@ export class OrchestratorAgent extends Think<Env> {
       );
     }
 
-    // Fire turn-level evolution in background (does NOT block the TurnQueue)
+    // Fire turn-level evolution in background (does NOT block the TurnQueue).
+    // EvolutionEngine.onTurnCompleteAsync already does Hermes-style reflection:
+    //   • quality assessment + threshold check
+    //   • generateTurnReflection → append `### Lesson` to MEMORY.md
+    //   • pattern extraction → upsertCraftedTool with Jaccard conflict guard
+    //   • session-level reflection every N turns → maybeEvolveScaffold
+    // No separate ReviewAgent Facet — this single hook handles all of it.
     this.engine.onTurnCompleteAsync(turn);
+
+    // Auto-judge shadow evaluation. When a pending scaffold exists,
+    // sample-and-run (default 25%) the pending against this turn's task,
+    // ask a judge LLM to compare, record. When minTrials is reached AND
+    // agent_config.auto_promote_scaffold='true', auto-apply the decision.
+    void this.runShadowEvalSampled(userText, assistantText);
+
+    // Sleep-time compute — between-turn background memory compression.
+    // Reads recent turn, asks judge to upsert/decay facts + compress scratch
+    // block. Letta-style; ~50% test-time token reduction reported. Gated
+    // by agent_config.sleep_time_compute='true' (default off).
+    void this.runSleepTimeCompute(userText, assistantText, this._turnToolCalls);
+  }
+
+  /** Background memory compression. Reads recent turn, updates agent_facts +
+   *  scratch block. Fire-and-forget; does not block TurnQueue. */
+  private async runSleepTimeCompute(
+    task: string, output: string, toolCalls: ToolCallRecord[],
+  ): Promise<void> {
+    try {
+      if (!this.config.getSleepTimeComputeEnabled()) return;
+      const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@proteus/core');
+      const currentFacts = this.facts.recentTopK(30).map(f => ({
+        key: f.key, value: f.value, confidence: f.confidence,
+      }));
+      const update = await runSleepTimeCompute(this.rt.llm, {
+        task: task.slice(0, 2000),
+        output: output.slice(0, 4000),
+        toolCalls: toolCalls.map(tc => tc.name),
+        currentFacts,
+      });
+      if (!update) return;
+      const summary = applySleepTimeUpdate(this.facts, update);
+      console.log(
+        `[proteus] sleep-time-compute: upserted=${summary.upserted} decayed=${summary.decayed} blocks=${summary.blocksWritten}`,
+      );
+    } catch (err) {
+      console.warn('[proteus] sleep-time-compute failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Sampled per-turn auto-judge shadow rollout. Fire-and-forget — never
+   * extends the TurnQueue. Reads sampling/auto-promote from agent_config
+   * so the user can toggle without redeploys.
+   */
+  private async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
+    try {
+      const sampleRate = this.config.getShadowSampleRate();
+      const autoApply = this.config.getAutoPromoteScaffold();
+      if (sampleRate <= 0) return;
+
+      const judge: StructuredJudgeFn = async (prompt) => {
+        const { object } = await generateObject({
+          model: this.getModelForReview(),
+          schema: JudgeOutputSchema,
+          prompt,
+          maxOutputTokens: 512,
+          ...effortFor('judge'),
+        });
+        return object;
+      };
+
+      const result = await runAutoShadowEval({
+        rt: this.rt,
+        task: task.slice(0, 2000),
+        currentOutput: currentOutput.slice(0, 4000),
+        judge,
+        llmStream: this.makeScaffoldLLMStream(),
+        config: {
+          ...DEFAULT_AUTO_JUDGE_CONFIG,
+          sampleRate,
+          autoApply,
+        },
+      });
+
+      if (!result.skipped && result.evaluation) {
+        // Emit a structured note to the event log for visibility.
+        try {
+          if (this._currentRunId) {
+            this.eventRecorder.emit(this._currentRunId, {
+              type: 'memory_write',
+              path: 'shadow-eval',
+              bytes: result.evaluation.rationale.length,
+            });
+          }
+        } catch { /* nop */ }
+      }
+      if (result.applied) {
+        console.log(`[proteus] auto-judge applied: ${result.applied}`);
+      }
+    } catch (err) {
+      console.warn('[proteus] runShadowEvalSampled failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
+   *  the user's chosen model so quality assessments stay consistent. */
+  private getModelForReview(): import('ai').LanguageModel {
+    const reg = this.providerRegistry();
+    return reg.resolveModel(reg.normalizeSpecSync(this.getStoredModelId()));
   }
 
   // ── DO initialization ──────────────────────────────────────────
@@ -718,13 +1150,23 @@ export class OrchestratorAgent extends Think<Env> {
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);
+    // Branching-heads journal (head_journal, head_evidence, head_merge_results)
+    initHeadsTables(execRaw);
+    // Scaffold shadow-mode tables (scaffold_evaluations + status col)
+    initShadowTables(execRaw);
+    // Durable run-event log (run_events table)
+    initRunEventTables(execRaw);
+    // agent_facts world model (keyed JSON facts w/ confidence + recency)
+    initFactsTable(execRaw);
+    // Voyager curriculum proposed-tasks queue (UI + autonomous loop consume).
+    initCurriculumTable(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
     )`);
 
-    // v2.1(F): one-time per-agent migration that merges case-collision
-    // duplicates in crafted_tools + craft_scores left over from pre-v2
+    // one-time per-agent migration that merges case-collision
+    // duplicates in crafted_tools + craft_scores left over from older
     // code that lowercased names. Gated by _v2_codegen_migration_done.
     try {
       // Wrap `this.sql` in a closure that preserves the `this` binding.
@@ -739,7 +1181,7 @@ export class OrchestratorAgent extends Think<Env> {
       const report = migrateCraftedToolDuplicates(sqlForMigration, execRaw);
       if (report.ranMigration && report.mergedGroups > 0) {
         console.log(
-          `[proteus] v2.1 duplicate migration: merged ${report.mergedGroups} group(s), ` +
+          `[proteus] duplicate migration: merged ${report.mergedGroups} group(s), ` +
           `deleted ${report.rowsDeletedCraftedTools} crafted_tools rows, ` +
           `${report.rowsDeletedCraftScores} craft_scores rows`,
         );
@@ -774,10 +1216,7 @@ export class OrchestratorAgent extends Think<Env> {
   // ── Callable RPC methods ───────────────────────────────────────
 
   private getDisplayName(): string {
-    try {
-      const rows = this.sql<{ value: string }>`SELECT value FROM agent_config WHERE key = 'display_name' LIMIT 1`;
-      return rows[0]?.value ?? this.name;
-    } catch { return this.name; }
+    return this.config.getDisplayName() ?? this.name;
   }
 
   @callable()
@@ -818,7 +1257,8 @@ export class OrchestratorAgent extends Think<Env> {
       };
     } catch {
       return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", createdAt: 0,
-        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0, model: DEFAULT_MODEL,
+        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
+        model: this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
         forkLineage: null };
     }
   }
@@ -849,6 +1289,317 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async getEvolutionEvents(limit: number = 50) {
     return this.sql`SELECT id, type, message, data, created_at
       FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
+  }
+
+  // ── Fiber recovery — durable execution surviving DO eviction ──
+  //
+  // The MCTS engine (mcts/engine.ts) calls rt.schedule.fiber('mcts', fn) which
+  // delegates to agent.runFiber(). Per-iteration ctx.stash(phase) checkpoints
+  // progress to cf_agents_runs. If the DO is evicted mid-MCTS, the Agent SDK
+  // re-invokes onFiberRecovered with the last snapshot on cold-start.
+  //
+  // The default base implementation just warns; we override to:
+  //   • log the recovery into evolution_events for the UI
+  //   • broadcast a "recovered" event so the chat panel can show the resume
+  //   • write a memory note so future turns know about the interruption
+  override async onFiberRecovered(ctx: {
+    id: string;
+    name: string;
+    snapshot: unknown;
+    createdAt: number;
+  }): Promise<void> {
+    try {
+      const summary = ctx.snapshot && typeof ctx.snapshot === 'object'
+        ? JSON.stringify(ctx.snapshot).slice(0, 400)
+        : String(ctx.snapshot ?? 'null');
+      console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
+      // Persist for the UI's evolution-events stream.
+      this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+        VALUES (${nanoid()}, 'fiber_recovered',
+                ${`Fiber "${ctx.name}" recovered after interruption`},
+                ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot: ctx.snapshot, createdAt: ctx.createdAt })},
+                ${Date.now()})`;
+      try {
+        await this.rt.memory.append(
+          'memory/MEMORY.md',
+          `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
+          `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
+          `Snapshot at interruption: ${summary}\n`,
+        );
+      } catch { /* memory may not be initialized yet */ }
+    } catch (err) {
+      console.error('[proteus] onFiberRecovered handler failed:', err);
+    }
+  }
+
+  // ── Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
+
+  /**
+   * Execute the agent's current scaffold for a one-shot task. Captures all
+   * events the scaffold emits and returns them — does NOT inject anything
+   * back into the chat conversation. Use this to test scaffold mutations
+   * without affecting the main turn loop.
+   *
+   * When `useShadowOverride` is true, runs the pending scaffold instead of
+   * the current one (if a pending exists).
+   */
+  @callable()
+  async runScaffoldOnce(
+    task: string,
+    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+  ): Promise<ScaffoldRunResult> {
+    const pending = opts?.useShadowOverride ? getPendingScaffold(this.boundSql) : null;
+    const codeOverride = pending
+      ? (await readScaffoldVersion(this.rt, pending.version)) ?? undefined
+      : undefined;
+    return runScaffold({
+      rt: this.rt, task,
+      emit: () => undefined, // RPC mode — events captured in result.events
+      llmStream: this.makeScaffoldLLMStream(),
+      callTool: this.makeScaffoldCallTool(),
+      scaffoldCodeOverride: codeOverride,
+      timeoutMs: opts?.timeoutMs,
+    });
+  }
+
+  /** Return the current shadow-rollout status: pending version, win counts, decision. */
+  @callable()
+  async getShadowStatus() {
+    const pending = getPendingScaffold(this.boundSql);
+    if (!pending) {
+      const versions = this.sql<{ version: number; status: string; rationale: string; written_at: number }>`
+        SELECT version, status, rationale, written_at FROM scaffold_versions ORDER BY version DESC LIMIT 10`;
+      return { hasPending: false as const, versions };
+    }
+    const decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
+    return { hasPending: true as const, pending, decision, config: DEFAULT_SHADOW_CONFIG };
+  }
+
+  /**
+   * Apply the pending scaffold rollout decision manually.
+   *
+   * `mode='auto'` consults decidePromotion and acts on its verdict (only
+   * acts if decision != 'continue').
+   * `mode='promote'` / `mode='rollback'` forces the corresponding action.
+   */
+  @callable()
+  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback') {
+    const pending = getPendingScaffold(this.boundSql);
+    if (!pending) return { ok: false, error: 'no pending scaffold' };
+    let decision: 'promote' | 'rollback' | 'continue';
+    if (mode === 'auto') {
+      decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
+      if (decision === 'continue') return { ok: false, error: 'inconclusive; need more trials' };
+    } else {
+      decision = mode;
+    }
+    const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
+    const result = await applyPromotionDecision(this.rt, pending, decision);
+    // Emit the promotion/rollback into the durable event log so SSE
+    // subscribers + MCP `list_run_events` see the decision in-band.
+    try {
+      const runId = this._currentRunId || `scaffold-${nanoid()}`;
+      this.eventRecorder.emit(runId, {
+        type: decision === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+        fromVersion,
+        toVersion: result.newCurrentVersion,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at applyScaffoldDecision:', err);
+    }
+    return { ok: true, ...result };
+  }
+
+  /**
+   * Change how the `run` builtin handles 'gate' decisions from the
+   * approval-gate review. Stored in agent_config; effective on the NEXT
+   * turn (the tool cache rebuilds when CraftStore changes — and on cold-
+   * start any value here is read).
+   *
+   *   strict     — default; reject gate commands (sudo, rm-recursive, etc.)
+   *   allow_all  — treat gate decisions as warn (logged + executed). Use
+   *                ONLY for trusted dev environments.
+   *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
+   */
+  @callable()
+  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: string }> {
+    if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
+      throw new Error(`invalid mode: ${mode}`);
+    }
+    this.config.setShellApprovalMode(mode);
+    // Force a tool cache rebuild on next getTools().
+    this._cachedTools = null;
+    this._cachedToolsKey = '';
+    return { ok: true, mode };
+  }
+
+  /** Current shell-approval mode (strict | allow_all | deny_all). */
+  @callable()
+  async getShellApprovalMode(): Promise<{ mode: 'strict' | 'allow_all' | 'deny_all' }> {
+    return { mode: this.config.getShellApprovalMode() };
+  }
+
+  /**
+   * Generic agent_config setter. Used by the Settings page for tunables
+   * like shadow_sample_rate, auto_promote_scaffold. Allow-listed keys only —
+   * anything else throws so callers can't write arbitrary settings.
+   */
+  @callable()
+  async setAgentConfig(key: string, value: string): Promise<{ ok: true; key: string; value: string }> {
+    const allowedKeys = new Set([
+      'shadow_sample_rate',
+      'auto_promote_scaffold',
+      'sleep_time_compute',
+      'tool_surfacing_mode',
+      'review_model',
+      // shell_approval_mode has its own typed setter; not allowed via this.
+    ]);
+    if (!allowedKeys.has(key)) {
+      throw new Error(`agent_config key not allowed via generic setter: ${key}`);
+    }
+    this.config.set(key, value);
+    return { ok: true, key, value };
+  }
+
+  /** Read an agent_config value by key. Returns null if unset. */
+  @callable()
+  async getAgentConfig(key: string): Promise<{ key: string; value: string | null }> {
+    return { key, value: this.config.get(key) };
+  }
+
+  /** List recent scaffold versions with their status. */
+  @callable()
+  async listScaffoldVersions(limit: number = 20) {
+    return this.sql<{ version: number; written_at: number; rationale: string; status: string }>`
+      SELECT version, written_at, rationale, status FROM scaffold_versions
+      ORDER BY version DESC LIMIT ${limit}`;
+  }
+
+  // ── Durable run-event log — read endpoints + run listing ──
+
+  /**
+   * Paginated read of a single run's events. For SSE-style resume, pass
+   * the last seen `since` index and the recorder returns events strictly
+   * after it.
+   */
+  @callable()
+  async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
+    return this.eventRecorder.read(runId, opts ?? {});
+  }
+
+  /** List the agent's recent runs with their latest timestamp + event count. */
+  @callable()
+  async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
+    return this.eventRecorder.listRuns(limit);
+  }
+
+  /** Count events for a single run — for UI badges. */
+  @callable()
+  async countRunEvents(runId: string): Promise<number> {
+    return this.eventRecorder.count(runId);
+  }
+
+  // ── MCP server bridge — small RPCs the MCP handler needs ──
+  /** Used by /mcp/v1/<name> save_note tool. Routes through the same
+   *  appendMemoryNote primitive as workspace.saveNote + save_note builtin. */
+  @callable()
+  async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
+    await appendMemoryNote(this.rt.memory, content);
+    return { ok: true };
+  }
+
+  // ── Hybrid memory search — FTS5 + Vectorize via RRF ──
+  /**
+   * Semantic + lexical search merged via Reciprocal Rank Fusion.
+   * Falls back to pure FTS5 when the Vectorize binding isn't configured.
+   *
+   * Returns enriched HybridHit[] with sources, RRF score, and individual
+   * lexical/semantic scores when available.
+   */
+  @callable()
+  async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
+    const lexicalSearchFn = async (q: string, k: number) => {
+      const results = await this.rt.memory.search(q, k);
+      return results.map((r) => ({
+        // Construct a stable id from path + line range — matches how the
+        // VectorStore stores chunks (caller upserts with this same id).
+        id: `${r.path}#${r.startLine}-${r.endLine}`,
+        path: r.path,
+        startLine: r.startLine,
+        endLine: r.endLine,
+        score: r.score,
+        snippet: r.snippet,
+      }));
+    };
+    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, { finalK: limit });
+  }
+
+  /** Returns whether semantic memory is enabled on this deployment. */
+  @callable()
+  async vectorStoreStatus(): Promise<{ available: boolean }> {
+    return { available: this.rt.vectorStore.available };
+  }
+
+  // ── SKILL.md export/import — make crafted tools git-friendly ──
+
+  /**
+   * Export every crafted tool to a SKILL.md file under `skills/` in the VFS.
+   * Returns counts + per-tool error list. Skips tools whose code is empty
+   * or comment-only.
+   */
+  @callable()
+  async exportSkillsToVfs(dir?: string): Promise<ExportSkillsResult> {
+    return exportAllSkillsToVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
+  }
+
+  /**
+   * Import every SKILL.md file under `skills/` in the VFS back into the
+   * CraftStore. For existing tools: update in place. For new ones: create.
+   * Parse errors are reported per-file but don't halt the import.
+   */
+  @callable()
+  async importSkillsFromVfs(dir?: string): Promise<ImportSkillsResult> {
+    return importSkillsFromVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
+  }
+
+  /** Build a streaming LLM callback the scaffold executor calls via
+   *  `host.llmStream(opts)` — chunks come back as 'text_delta' events. */
+  private makeScaffoldLLMStream() {
+    const model = this.getModelForReview();
+    return async function* (opts: { system?: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> }) {
+      const result = streamText({
+        model,
+        system: opts.system,
+        messages: opts.messages,
+        maxOutputTokens: 2048,
+        // Scaffold authors its own controller — high effort for careful output.
+        ...effortFor('scaffold_mutation'),
+      });
+      for await (const chunk of result.textStream) yield chunk;
+    };
+  }
+
+  /**
+   * Internal: build a callTool callback that dispatches to the parent's
+   * ToolSet. Used by the scaffold to invoke any tool the orchestrator has
+   * (e.g. save_note, search_memory).
+   */
+  private makeScaffoldCallTool() {
+    const orchestrator = this;
+    return async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+      const tools = orchestrator.getTools();
+      const t = tools[name];
+      if (!t || typeof t.execute !== 'function') {
+        return { error: `tool not found: ${name}` };
+      }
+      try {
+        return await t.execute(args as never, {
+          messages: [], toolCallId: `scaffold-${Date.now()}`,
+        } as never);
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    };
   }
 
   @callable() async getMemoryContent() {
@@ -894,13 +1645,10 @@ export class OrchestratorAgent extends Think<Env> {
     return { builtIn, crafted, executors };
   }
 
-  @callable() async setModel(modelId: string) {
-    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('model', ${modelId})`;
-    return { model: modelId };
-  }
+  // setModel moved below — validates spec via the provider registry before storing.
 
   @callable() async setDisplayName(displayName: string) {
-    this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${displayName})`;
+    this.config.setDisplayName(displayName);
     return { displayName };
   }
 
@@ -1073,12 +1821,80 @@ export class OrchestratorAgent extends Think<Env> {
     return { tokens: rows };
   }
 
-  @callable() async getAvailableModels() {
-    return { current: this.getStoredModelId(), models: AVAILABLE_MODELS };
+  /** The agent's current stored model spec. UI tells which menu entry to
+   *  preselect; the full available-models list comes from /api/user/models
+   *  (UserDO) so connections are user-scoped. */
+  @callable() async getStoredModelSpec(): Promise<{ spec: string | null }> {
+    return { spec: this.getStoredModelId() };
+  }
+
+  @callable() async setModel(spec: string) {
+    const reg = this.providerRegistry();
+    // Validate before storing — surfaces unknown-provider / invalid-spec
+    // errors at config time, not on the next chat turn.
+    const normalized = reg.normalizeSpecSync(spec);
+    this.config.setModel(normalized);
+    this.invalidateModelCaches();
+    return { ok: true, spec: normalized };
+  }
+
+  /** Invalidate every cache that depends on the resolved model so the next
+   *  getModel() / getThinkTool() / providerRegistry() call rebuilds. */
+  private invalidateModelCaches(): void {
+    this._cachedModel = null;
+    this._cachedModelSpec = null;
+    this._thinkTool = null;
+    // Provider registry caches per-agent OAuth refreshers; rebuild so a
+    // disconnected provider stops being marked available.
+    this._providerRegistry = null;
+  }
+
+  // ── Credentials & Codex OAuth ─────────────────────────────────────
+  //
+  // All credentials live in UserDO (single source of truth across the user's
+  // agents). The orchestrator no longer stores, refreshes, or even reads
+  // raw credentials — providers resolve auth headers through the UserDO
+  // stub at fetch time. Use the `/api/user/codex/*` routes (or the user
+  // settings UI) to connect ChatGPT / save BYO API keys.
+
+  /** Worker calls this when a credential mutation in UserDO should drop
+   *  cached provider/model state in this agent. Cheap; no-op if nothing
+   *  is cached. */
+  @callable()
+  async onCredentialsChanged(): Promise<{ ok: true }> {
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  // ── Voyager curriculum: propose / list / accept next tasks ─────────
+
+  @callable() async proposeCurriculumTasks(count?: number) {
+    const proposals = await proposeNextTasks({
+      rt: this.rt,
+      judge: this.rt.llm,
+      count: count ?? 5,
+    });
+    return { proposals };
+  }
+
+  @callable() async listCurriculumTasks(status?: 'pending' | 'accepted' | 'rejected' | 'completed') {
+    return { tasks: listProposedTasks(this.rt, status) };
+  }
+
+  @callable() async setCurriculumTaskStatus(
+    id: string, status: 'pending' | 'accepted' | 'rejected' | 'completed',
+  ) {
+    updateProposedTaskStatus(this.rt, id, status);
+    return { ok: true };
   }
 
   @callable() async setSoul(purpose: string) {
     this.sql`UPDATE agent_soul SET purpose = ${purpose}`;
+    // Invalidate the cached purpose + system prompt so the next turn
+    // picks up the new identity.
+    this._cachedSoulPurpose = null;
+    this._cachedSystemPrompt = null;
+    this._cachedSystemPromptKey = '';
     return { purpose };
   }
 
@@ -1128,23 +1944,22 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable() async getMctsConfig() {
-    const rows = this.sql<{ key: string; value: string }>`
-      SELECT key, value FROM agent_config WHERE key IN ('mcts_c', 'mcts_iterations', 'mcts_depth', 'mcts_branches')`;
-    const cfg: Record<string, string> = {};
-    for (const r of rows) cfg[r.key] = r.value;
     return {
-      explorationConstant: parseFloat(cfg.mcts_c ?? "1.414"),
-      maxIterations: parseInt(cfg.mcts_iterations ?? "50"),
-      maxDepth: parseInt(cfg.mcts_depth ?? "5"),
-      branchBudget: parseInt(cfg.mcts_branches ?? "3"),
+      explorationConstant: parseFloat(this.config.get('mcts_c') ?? '1.414'),
+      maxIterations: parseInt(this.config.get('mcts_iterations') ?? '50'),
+      maxDepth: parseInt(this.config.get('mcts_depth') ?? '5'),
+      branchBudget: parseInt(this.config.get('mcts_branches') ?? '3'),
     };
   }
 
-  @callable() async setMctsConfig(config: { explorationConstant?: number; maxIterations?: number; maxDepth?: number; branchBudget?: number }) {
-    if (config.explorationConstant !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_c', ${String(config.explorationConstant)})`;
-    if (config.maxIterations !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_iterations', ${String(config.maxIterations)})`;
-    if (config.maxDepth !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_depth', ${String(config.maxDepth)})`;
-    if (config.branchBudget !== undefined) this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('mcts_branches', ${String(config.branchBudget)})`;
+  @callable() async setMctsConfig(config: {
+    explorationConstant?: number; maxIterations?: number;
+    maxDepth?: number; branchBudget?: number;
+  }) {
+    if (config.explorationConstant !== undefined) this.config.set('mcts_c', String(config.explorationConstant));
+    if (config.maxIterations !== undefined) this.config.set('mcts_iterations', String(config.maxIterations));
+    if (config.maxDepth !== undefined) this.config.set('mcts_depth', String(config.maxDepth));
+    if (config.branchBudget !== undefined) this.config.set('mcts_branches', String(config.branchBudget));
     return config;
   }
 
@@ -1152,6 +1967,135 @@ export class OrchestratorAgent extends Think<Env> {
    * Broadcast the current MCTS tree to all connected WebSocket clients.
    * Called after each MCTS iteration so the UI updates in real-time.
    */
+  /**
+   * Scaffold-driven chat entry point.
+   *
+   * Runs the agent's current scaffold for a one-shot task with FULL host
+   * bridges (LLM stream, tool dispatch from getTools(), event emit). Streams
+   * progress via `this.broadcast()` so any subscribed client sees text
+   * deltas + tool-call markers in real time. Persists the final assistant
+   * message into `assistant_messages` so fork + Session.getHistory pick it up.
+   *
+   * This is NOT a takeover of Think's onChatMessage — that's gated by
+   * `_runInferenceLoop` which is private. Instead, it's an explicit
+   * scaffold-execution endpoint the UI/CLI can call when scaffold-driven
+   * chat is wanted (vs the standard streamText path).
+   *
+   * Returns the assembled assistant text + emitted events for telemetry.
+   */
+  @callable()
+  async chatViaScaffold(task: string): Promise<{
+    ok: boolean;
+    text: string;
+    emitCount: number;
+    error?: string;
+    messageId?: string;
+  }> {
+    const startedAt = Date.now();
+    let accumulated = '';
+    let emitCount = 0;
+    const runId = `scaffold-chat-${nanoid()}`;
+
+    // Mark run start in the event log so SSE subscribers see the lifecycle.
+    try {
+      this.eventRecorder.emit(runId, { type: 'run_start', agentId: this.name, userMessage: task.slice(0, 400) });
+      this.eventRecorder.emit(runId, { type: 'turn_start', turnIndex: this._sessionTurnCount });
+    } catch { /* nop */ }
+
+    const emit = (ev: import('@proteus/core').ScaffoldEvent) => {
+      emitCount++;
+      try {
+        if (ev.type === 'text_delta') {
+          accumulated += ev.text;
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat',
+            subtype: 'text_delta',
+            runId,
+            text: ev.text,
+          }));
+          this.eventRecorder.emit(runId, { type: 'text_delta', text: ev.text });
+        } else if (ev.type === 'tool_call_start') {
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat',
+            subtype: 'tool_call_start',
+            runId,
+            name: ev.name,
+            args: ev.args,
+            toolCallId: ev.toolCallId,
+          }));
+          this.eventRecorder.emit(runId, {
+            type: 'tool_call_start', name: ev.name, args: ev.args, toolCallId: ev.toolCallId,
+          });
+        } else if (ev.type === 'tool_call_end' || ev.type === 'tool_result') {
+          const tc = ev as { toolCallId: string; result?: unknown; error?: string };
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat',
+            subtype: 'tool_result',
+            runId,
+            toolCallId: tc.toolCallId,
+            result: tc.result,
+            error: tc.error,
+          }));
+          this.eventRecorder.emit(runId, {
+            type: 'tool_call_end', name: 'scaffold', toolCallId: tc.toolCallId,
+            result: tc.result, error: tc.error,
+          });
+        } else if (ev.type === 'error') {
+          this.broadcast(JSON.stringify({
+            type: 'scaffold-chat', subtype: 'error', runId, message: ev.message,
+          }));
+          this.eventRecorder.emit(runId, { type: 'error', message: ev.message });
+        }
+      } catch (err) {
+        console.warn('[proteus] chatViaScaffold emit failed:', err);
+      }
+    };
+
+    let result: import('@proteus/core').ScaffoldRunResult;
+    try {
+      result = await runScaffold({
+        rt: this.rt, task, emit,
+        llmStream: this.makeScaffoldLLMStream(),
+        callTool: this.makeScaffoldCallTool(),
+        timeoutMs: 5 * 60 * 1000,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        this.eventRecorder.emit(runId, { type: 'error', message: msg });
+        this.eventRecorder.emit(runId, { type: 'run_end', reason: 'errored' });
+      } catch { /* nop */ }
+      return { ok: false, text: accumulated, emitCount, error: msg };
+    }
+
+    // Persist the final message into assistant_messages so the chat UI's
+    // recursive-CTE history view + the fork pipeline include it.
+    const messageId = `scaffold-${nanoid()}`;
+    try {
+      const finalText = accumulated || (typeof result.finalResult === 'string' ? result.finalResult : '');
+      if (finalText) {
+        this.sql`INSERT OR IGNORE INTO assistant_messages
+          (id, session_id, parent_id, role, content, created_at)
+          VALUES (${messageId}, ${'default'}, ${null}, ${'assistant'}, ${finalText}, ${new Date().toISOString()})`;
+      }
+    } catch (err) {
+      console.warn('[proteus] chatViaScaffold persist failed:', err);
+    }
+
+    try {
+      this.eventRecorder.emit(runId, { type: 'turn_end', turnIndex: this._sessionTurnCount });
+      this.eventRecorder.emit(runId, { type: 'run_end', reason: result.ok ? 'completed' : 'errored' });
+    } catch { /* nop */ }
+
+    return {
+      ok: result.ok,
+      text: accumulated,
+      emitCount,
+      error: result.error,
+      messageId,
+    };
+  }
+
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
     try {
       const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, created_at

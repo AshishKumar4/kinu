@@ -2,7 +2,7 @@
  * One-time per-agent migration that merges case-collision duplicates in
  * `crafted_tools` and `craft_scores`.
  *
- * Context: pre-v2 code lowercased tool names on createTool; current code
+ * Context: older code lowercased tool names on createTool; current code
  * preserves case. Existing agents can have both `multiplyNumbers` and
  * `multiplynumbers` as separate PRIMARY KEY rows. Left alone they'd bloat
  * getToolList and fight for craft_scores EMA credit.

@@ -1,0 +1,170 @@
+/**
+ * Unit tests for RunEventRecorder.
+ */
+
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import {
+  initRunEventTables, RunEventRecorder,
+  type RunEvent,
+} from '../src/index.js';
+import { makeSql, makeExecRaw } from './helpers.js';
+
+function setup(): { recorder: RunEventRecorder; sql: ReturnType<typeof makeSql> } {
+  const db = new Database(':memory:');
+  initRunEventTables(makeExecRaw(db));
+  const sql = makeSql(db);
+  return { recorder: new RunEventRecorder(sql), sql };
+}
+
+describe('RunEventRecorder.emit', () => {
+  test('assigns monotonic eventIndex starting at 0', () => {
+    const { recorder } = setup();
+    const a = recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
+    const b = recorder.emit('run-1', { type: 'turn_start', turnIndex: 0 });
+    expect(a.eventIndex).toBe(0);
+    expect(b.eventIndex).toBe(1);
+  });
+
+  test('per-runId indices are independent', () => {
+    const { recorder } = setup();
+    const a = recorder.emit('run-A', { type: 'run_start', agentId: 'a' });
+    const b = recorder.emit('run-B', { type: 'run_start', agentId: 'a' });
+    expect(a.eventIndex).toBe(0);
+    expect(b.eventIndex).toBe(0);
+  });
+
+  test('decorates each event with runId + ISO timestamp', () => {
+    const { recorder } = setup();
+    const a = recorder.emit('run-1', { type: 'text_delta', text: 'hi' });
+    expect(a.runId).toBe('run-1');
+    expect(typeof a.timestamp).toBe('string');
+    expect(a.timestamp.length).toBeGreaterThan(10);
+  });
+
+  test('persists events to the run_events table', () => {
+    const { recorder, sql } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
+    recorder.emit('run-1', { type: 'text_delta', text: 'x' });
+    const rows = sql<{ event_index: number; type: string }>`
+      SELECT event_index, type FROM run_events WHERE run_id = 'run-1' ORDER BY event_index`;
+    expect(rows.length).toBe(2);
+    expect(rows[0].type).toBe('run_start');
+    expect(rows[1].type).toBe('text_delta');
+  });
+});
+
+describe('RunEventRecorder.read', () => {
+  test('returns events in eventIndex order', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 5; i++) {
+      recorder.emit('run-1', { type: 'text_delta', text: `t${i}` });
+    }
+    const out = recorder.read('run-1');
+    expect(out.length).toBe(5);
+    expect(out.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test('honors since lower bound', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 5; i++) {
+      recorder.emit('run-1', { type: 'text_delta', text: `t${i}` });
+    }
+    const out = recorder.read('run-1', { since: 3 });
+    expect(out.length).toBe(2);
+    expect(out[0].eventIndex).toBe(3);
+    expect(out[1].eventIndex).toBe(4);
+  });
+
+  test('honors limit', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 20; i++) {
+      recorder.emit('run-1', { type: 'text_delta', text: `t${i}` });
+    }
+    expect(recorder.read('run-1', { limit: 5 }).length).toBe(5);
+  });
+
+  test('honors types filter', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
+    recorder.emit('run-1', { type: 'text_delta', text: 'x' });
+    recorder.emit('run-1', { type: 'text_delta', text: 'y' });
+    recorder.emit('run-1', { type: 'run_end' });
+
+    const onlyText = recorder.read('run-1', { types: ['text_delta'] });
+    expect(onlyText.length).toBe(2);
+    expect(onlyText.every((e) => e.type === 'text_delta')).toBe(true);
+  });
+});
+
+describe('RunEventRecorder.readSince', () => {
+  test('returns events strictly after the given index — for SSE resume', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 5; i++) {
+      recorder.emit('run-1', { type: 'text_delta', text: `t${i}` });
+    }
+    const after2 = recorder.readSince('run-1', 2);
+    expect(after2.length).toBe(2);
+    expect(after2[0].eventIndex).toBe(3);
+  });
+
+  test('returns empty when no events after', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_end' });
+    expect(recorder.readSince('run-1', 100).length).toBe(0);
+  });
+});
+
+describe('RunEventRecorder.observe', () => {
+  test('fans out new events to subscribers', () => {
+    const { recorder } = setup();
+    const seen: RunEvent[] = [];
+    const unsub = recorder.observe((e) => seen.push(e));
+    recorder.emit('run-1', { type: 'text_delta', text: 'x' });
+    recorder.emit('run-1', { type: 'text_delta', text: 'y' });
+    expect(seen.length).toBe(2);
+    unsub();
+    recorder.emit('run-1', { type: 'text_delta', text: 'z' });
+    expect(seen.length).toBe(2); // no more after unsub
+  });
+});
+
+describe('RunEventRecorder.listRuns / count', () => {
+  test('groups distinct runs by latest ts', () => {
+    const { recorder } = setup();
+    recorder.emit('run-A', { type: 'run_start', agentId: 'a' });
+    recorder.emit('run-A', { type: 'run_end' });
+    recorder.emit('run-B', { type: 'run_start', agentId: 'a' });
+
+    const runs = recorder.listRuns();
+    expect(runs.length).toBe(2);
+    const ids = runs.map((r) => r.runId);
+    expect(ids).toContain('run-A');
+    expect(ids).toContain('run-B');
+  });
+
+  test('count returns total events per run', () => {
+    const { recorder } = setup();
+    for (let i = 0; i < 7; i++) {
+      recorder.emit('run-1', { type: 'text_delta', text: `t${i}` });
+    }
+    expect(recorder.count('run-1')).toBe(7);
+    expect(recorder.count('no-such')).toBe(0);
+  });
+});
+
+describe('integration: after restart, indices resume correctly', () => {
+  test('a fresh recorder backed by the same DB continues monotonic indices', () => {
+    const db = new Database(':memory:');
+    initRunEventTables(makeExecRaw(db));
+    const sql = makeSql(db);
+    const r1 = new RunEventRecorder(sql);
+    r1.emit('run-1', { type: 'run_start', agentId: 'a' });
+    r1.emit('run-1', { type: 'text_delta', text: 'x' });
+
+    // Simulate process restart — new recorder, same SQLite.
+    const r2 = new RunEventRecorder(sql);
+    const next = r2.emit('run-1', { type: 'turn_end', turnIndex: 0 });
+    expect(next.eventIndex).toBe(2);
+  });
+});

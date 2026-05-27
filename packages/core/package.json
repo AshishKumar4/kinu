@@ -7,6 +7,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "devDependencies": {
+    "@proteus/test-utils": "workspace:*"
+  },
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit"

@@ -55,20 +55,29 @@ export async function modifyScaffold(
   }
 
   // Gate 3: version checkpoint
+  //   • Back up the current code to scaffold/agent.js.v{v} (lets rollback restore)
+  //   • Insert a NEW row for v+1 with status='pending' — picked up by shadow.ts
+  //     (decidePromotion → applyPromotionDecision) over the next N turns.
+  //
+  // Bug history: this used to `INSERT OR REPLACE ... (version=v, ...)` which
+  // overwrote the OLD version's rationale with the NEW one and never tracked
+  // v+1 — making shadow-mode rollout impossible (getPendingScaffold always
+  // returned null). Fixed by inserting v+1 explicitly with the right status.
   const v = await rt.identity.scaffold.version();
+  const newVersion = v + 1;
   const current = await rt.identity.scaffold.read();
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${v}`, current);
   rt.storage.sql`
-    INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale)
-    VALUES (${v}, ${nowMs()}, ${rationale})
+    INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending')
   `;
 
   // Gate 4: write
   await rt.identity.scaffold.write(code);
   await rt.memory.append(
     `memory/logs/${today()}.md`,
-    `\n## Scaffold v${v + 1}\n${rationale}\n`,
+    `\n## Scaffold v${newVersion} (pending)\n${rationale}\n`,
   );
 
-  return { ok: true, version: v + 1 };
+  return { ok: true, version: newVersion };
 }

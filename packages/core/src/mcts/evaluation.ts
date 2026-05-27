@@ -38,8 +38,11 @@ async function tryExecutionBasedScoring(
   task: string,
   trajectory: string,
 ): Promise<number | null> {
-  const codeBlocks = [...trajectory.matchAll(/```(?:javascript|typescript|python)?\n([\s\S]*?)\n```/g)]
-    .map(m => m[1]!);
+  // Match common fence languages — JS/TS communities use `js` / `ts` far more
+  // than the verbose forms, and Python rollouts often use `py`.
+  const codeBlocks = [...trajectory.matchAll(
+    /```(?:javascript|typescript|python|js|ts|py|tsx|jsx)?\n([\s\S]*?)\n```/g,
+  )].map(m => m[1]!);
 
   if (codeBlocks.length === 0) return null;
 
@@ -97,13 +100,19 @@ async function calibrate(
   rawScore: number,
 ): Promise<number> {
   const taskWords = task.toLowerCase().replace(/[^a-z ]/g, '').split(' ').slice(0, 5).join(' ');
-  const reference = sql<{ best_score: number }>`
-    SELECT MAX(score) as best_score
-    FROM task_history
-    WHERE task LIKE ${'%' + taskWords + '%'}
-      AND outcome = 'success'
-      AND score IS NOT NULL
-  `[0]?.best_score;
+  // task_history is an optional table the host populates over time. On a
+  // fresh agent it doesn't exist yet — return the raw score unchanged
+  // instead of throwing on the missing-table SQL error.
+  let reference: number | null | undefined;
+  try {
+    reference = sql<{ best_score: number | null }>`
+      SELECT MAX(score) as best_score
+      FROM task_history
+      WHERE task LIKE ${'%' + taskWords + '%'}
+        AND outcome = 'success'
+        AND score IS NOT NULL
+    `[0]?.best_score;
+  } catch { return rawScore; }
 
   if (reference == null || reference < 0.1) return rawScore;
 
