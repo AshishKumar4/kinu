@@ -1,21 +1,21 @@
 /**
  * v2 end-to-end integration test.
  *
- * Exercises the three new pillars together against in-memory SQLite +
- * stubbed LLMs to validate that:
- *   1. SandboxApi (VirtualSandbox) + sandboxToExecutorProvider compose
- *      correctly with the existing codemode-shaped ExecutorProvider surface
- *   2. Branching heads — HeadController spawns N heads, awaits, merges via
- *      a deterministic mock LLM, persists the journal + cached merge
+ * Exercises the v2 additions together against in-memory SQLite + stubbed
+ * LLMs. After the duplicacy cleanup, this validates:
+ *
+ *   1. Inline executor (`createInlineExecutor`) — the pre-existing
+ *      ExecutorProvider that backs codemode's workspace.* namespace.
+ *      Round-trip a file + shell exec through its tool surface.
+ *   2. Branching heads — HeadController spawns N heads, awaits, merges
+ *      via a deterministic mock LLM, persists the journal + cached merge.
  *   3. Scaffold shadow rollout — write pending version, record N trials
  *      with biased outcomes, decidePromotion fires the right verdict,
- *      applyPromotionDecision flips statuses correctly
+ *      applyPromotionDecision flips statuses correctly.
  *   4. Durable event log — emit events through the full turn lifecycle,
- *      replay via readSince (the SSE-resume semantics)
- *   5. Compaction — drop a long synthetic conversation through the
- *      summarizer, verify head + tail preserved
- *   6. Approval gate — wrap a fake exec function and confirm allow/warn/
- *      gate/deny classification routes correctly
+ *      replay via readSince (the SSE-resume semantics).
+ *   5. Approval gate — wrap a fake exec function and confirm allow/warn/
+ *      gate/deny classification routes correctly.
  *
  * No network. No LLM calls. The test asserts contracts, not behaviors.
  */
@@ -23,9 +23,8 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  // Sandbox
-  createVirtualSandbox, sandboxToExecutorProvider, DefaultSandboxRegistry,
-  type VirtualVFS, type VirtualShell,
+  // Execution layer (pre-existing — no parallel sandbox abstraction)
+  createInlineExecutor,
   // Heads
   HeadController, HeadJournal, initHeadsTables,
   type HeadInput, type HeadReport, type HeadRuntime, type SpawnedHead,
@@ -33,92 +32,34 @@ import {
   // Scaffold
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG, recordShadowEvaluation,
-  initScaffoldTables, bootstrapScaffold,
+  initScaffoldTables,
   // Events
   initRunEventTables, RunEventRecorder,
-  // Compaction
-  compactMessages, type CompactableMessage,
   // Approval
   reviewCommand, withApprovalGate,
-  // Test helpers
 } from '../src/index.js';
 import { makeSql, makeExecRaw, createTestRuntime } from './helpers.js';
 
-// ── In-memory VirtualVFS for sandbox tests ───────────────────────────
+// ── 1. Inline executor (workspace provider) ──────────────────────────
 
-function makeMemoryVFS(): VirtualVFS {
-  const files = new Map<string, string>();
-  const dirs = new Set<string>(['/']);
-  const seedParents = (path: string) => {
-    const parts = path.split('/').filter(Boolean);
-    let cur = '';
-    for (let i = 0; i < parts.length - 1; i++) {
-      cur += '/' + parts[i];
-      dirs.add(cur);
-    }
-  };
-  return {
-    async readFile(path, opts) {
-      if (!files.has(path)) throw new Error(`ENOENT: ${path}`);
-      const data = files.get(path)!;
-      return opts?.encoding === 'utf8' ? data : new TextEncoder().encode(data);
-    },
-    async writeFile(path, data) {
-      const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
-      seedParents(path);
-      files.set(path, text);
-    },
-    async readdir(path) {
-      const prefix = path === '/' ? '/' : path + '/';
-      const seen = new Set<string>();
-      for (const f of files.keys()) {
-        if (f.startsWith(prefix)) {
-          const name = f.slice(prefix.length).split('/')[0];
-          if (name) seen.add(name);
-        }
-      }
-      return Array.from(seen);
-    },
-    async stat(path) {
-      if (dirs.has(path) || path === '/') return { type: 'dir' as const, size: 0, mtimeMs: 0 };
-      if (files.has(path)) return { type: 'file' as const, size: files.get(path)!.length, mtimeMs: 0 };
-      throw new Error(`ENOENT: ${path}`);
-    },
-    async unlink(path) { if (!files.delete(path)) throw new Error(`ENOENT: ${path}`); },
-    async mkdir(path) { seedParents(path + '/'); dirs.add(path); },
-    async exists(path) { return files.has(path) || dirs.has(path); },
-    async rmdir(path) { dirs.delete(path); },
-  };
-}
+describe('v2 e2e: workspace executor via createInlineExecutor', () => {
+  test('writeFile + readFile + exec round-trip through ExecutorProvider tools', async () => {
+    const { rt } = createTestRuntime();
+    const provider = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async (cmd) => cmd.includes('echo hi')
+        ? { stdout: 'hi\n', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: '', exitCode: 0 } },
+      sql: rt.storage.sql,
+    });
 
-const passthroughShell: VirtualShell = {
-  async exec(input) {
-    if (input.includes('echo hello')) return { stdout: 'hello\n', stderr: '', exitCode: 0 };
-    if (input.startsWith('false')) return { stdout: '', stderr: 'fail', exitCode: 1 };
-    return { stdout: '', stderr: '', exitCode: 0 };
-  },
-};
+    expect(provider.name).toBe('workspace');
+    expect(provider.kind).toBe('workspace');
+    expect(provider.capabilities.has('shell')).toBe(true);
 
-// ── 1. Sandbox composition test ──────────────────────────────────────
-
-describe('v2 e2e: sandbox + adapter + registry', () => {
-  test('VirtualSandbox roundtrips through ExecutorProvider adapter', async () => {
-    const sb = createVirtualSandbox({ id: 'e2e-virtual', vfs: makeMemoryVFS(), shell: passthroughShell });
-    const provider = sandboxToExecutorProvider(sb, 'workspace');
-    const reg = new DefaultSandboxRegistry();
-    reg.register('workspace', sb);
-
-    // Round-trip a file via the provider tools.
     await provider.tools.writeFile.execute('/a.txt', 'hello');
     expect(await provider.tools.readFile.execute('/a.txt')).toBe('hello');
-
-    // Shell exec → string return contract.
-    expect(await provider.tools.exec.execute('echo hello')).toBe('hello\n');
-    expect(String(await provider.tools.exec.execute('false'))).toContain('Exit 1');
-
-    // Registry view.
-    expect(reg.available().map((e) => e.namespace)).toEqual(['workspace']);
-    expect(reg.get('workspace')?.id).toBe('e2e-virtual');
+    expect(await provider.tools.exec.execute('echo hi')).toBe('hi\n');
   });
 });
 
@@ -163,9 +104,7 @@ describe('v2 e2e: branching heads → merge', () => {
         const taskKey = input.task.split(' ')[0];
         return {
           id: input.id,
-          async run() {
-            return { ...(headReports[taskKey] ?? headReports.survey), id: input.id };
-          },
+          async run() { return { ...(headReports[taskKey] ?? headReports.survey), id: input.id }; },
           async abort() { /* nop */ },
         };
       },
@@ -208,7 +147,6 @@ describe('v2 e2e: branching heads → merge', () => {
     expect(result.costSummary.headCount).toBe(3);
     expect(result.evidenceAggregate.length).toBe(3);
 
-    // Journal persisted.
     const rows = sql<{ status: string; summary: string | null }>`SELECT status, summary FROM head_journal`;
     expect(rows.length).toBe(3);
     for (const r of rows) {
@@ -216,7 +154,6 @@ describe('v2 e2e: branching heads → merge', () => {
       expect(r.summary).not.toBeNull();
     }
 
-    // Merge cache round-trip.
     const cached = journal.readCachedMerge('root-1');
     expect(cached).not.toBeNull();
     expect(cached!.mergedNarrative).toBe(result.mergedNarrative);
@@ -228,9 +165,6 @@ describe('v2 e2e: branching heads → merge', () => {
 describe('v2 e2e: scaffold shadow rollout', () => {
   test('pending wins → promote; statuses flip correctly', async () => {
     const { rt } = createTestRuntime();
-    // Set up: scaffold_versions exists + status column. Insert v0 (current)
-    // and v1 (pending) directly — bootstrap's scaffold.exists() is a stub
-    // in the test runtime so it short-circuits the v0 INSERT.
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
@@ -238,9 +172,9 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (1, ${Date.now()}, 'try alternate loop with retry', 'pending')`;
 
-    // Record 6 trials: pending wins 4, current wins 2 — promote.
     const judge = (winner: 'pending' | 'current') => ({
-      winner, rationale: 'mock', currentScore: winner === 'current' ? 0.8 : 0.5,
+      winner, rationale: 'mock',
+      currentScore: winner === 'current' ? 0.8 : 0.5,
       pendingScore: winner === 'pending' ? 0.8 : 0.5,
     });
     for (let i = 0; i < 4; i++) {
@@ -271,7 +205,6 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(applied.action).toBe('promote');
     expect(applied.newCurrentVersion).toBe(1);
 
-    // Statuses flipped.
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions ORDER BY version`;
     const byVersion = new Map(statuses.map((s) => [s.version, s.status]));
@@ -280,7 +213,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
   });
 });
 
-// ── 4. Durable event log + SSE-resume semantics ──────────────────────
+// ── 4. Durable event log ─────────────────────────────────────────────
 
 describe('v2 e2e: durable event log', () => {
   test('emit through a turn lifecycle; replay via readSince', () => {
@@ -297,7 +230,6 @@ describe('v2 e2e: durable event log', () => {
     recorder.emit(runId, { type: 'turn_end', turnIndex: 0 });
     recorder.emit(runId, { type: 'run_end', reason: 'completed' });
 
-    // Full replay.
     const all = recorder.read(runId);
     expect(all.length).toBe(7);
     expect(all.map((e) => e.type)).toEqual([
@@ -307,54 +239,17 @@ describe('v2 e2e: durable event log', () => {
     expect(all[0].eventIndex).toBe(0);
     expect(all[6].eventIndex).toBe(6);
 
-    // SSE-resume: simulate client reconnect after seeing index 3.
     const resumed = recorder.readSince(runId, 3);
     expect(resumed.length).toBe(3);
     expect(resumed[0].eventIndex).toBe(4);
 
-    // Type filter.
     const tools = recorder.read(runId, { types: ['tool_call_end'] });
     expect(tools.length).toBe(1);
     expect(tools[0].type).toBe('tool_call_end');
   });
 });
 
-// ── 5. Compaction over a long conversation ───────────────────────────
-
-describe('v2 e2e: compaction', () => {
-  test('drops middle, preserves head + tail, calls summarizer', async () => {
-    const messages: CompactableMessage[] = [
-      { role: 'system', content: 'You are an assistant.' },
-      { role: 'user', content: 'task' },
-      { role: 'assistant', content: 'answer' },
-      // 8 long middle turns
-      ...Array.from({ length: 16 }, (_, i) => ({
-        role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: `mid ${i}: ${'a'.repeat(300)}`,
-      })),
-      { role: 'user', content: 'recent q' },
-      { role: 'assistant', content: 'recent a' },
-    ];
-
-    let calls = 0;
-    const r = await compactMessages(
-      messages,
-      async () => { calls++; return 'Compacted earlier turns.'; },
-      { keepFirstMessages: 3, keepRecentTokens: 20 },
-    );
-
-    expect(calls).toBe(1);
-    expect(r.droppedCount).toBe(16);
-    expect(r.summary).toBe('Compacted earlier turns.');
-    // First 3 + summary + 2 tail = 6
-    expect(r.messages.length).toBe(6);
-    expect(r.messages[0].content).toBe('You are an assistant.');
-    expect(r.messages[3].content).toContain('Compacted earlier turns.');
-    expect(r.messages[5].content).toBe('recent a');
-  });
-});
-
-// ── 6. Approval gate wraps an exec ───────────────────────────────────
+// ── 5. Approval gate ─────────────────────────────────────────────────
 
 describe('v2 e2e: approval gate', () => {
   test('classifies and routes correctly with withApprovalGate', async () => {
@@ -362,22 +257,17 @@ describe('v2 e2e: approval gate', () => {
     const gated = withApprovalGate(
       async (cmd) => { seen.push(cmd); return `ran:${cmd}`; },
       (msg) => `DENIED:${msg}`,
-      async () => true, // auto-approve gated commands for the test
+      async () => true,
     );
 
-    // allow
     expect(await gated('ls')).toBe('ran:ls');
     expect(reviewCommand('ls').decision).toBe('allow');
-
-    // warn → still runs
     expect(await gated('printenv')).toContain('ran:');
-
-    // gate → approver returns true → runs
     expect(await gated('sudo apt-get install nginx')).toContain('ran:');
 
-    // deny → never runs
     const result = await gated('rm -rf /');
     expect(result).toContain('DENIED');
+    expect(result).toContain('rm-rf-root');
     expect(seen.includes('rm -rf /')).toBe(false);
   });
 });

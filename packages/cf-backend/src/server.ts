@@ -17,15 +17,11 @@ import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
 
 export { OrchestratorAgent } from "./orchestrator.js";
+// ExplorationAgent is the single Facet class for parallel sub-agent work.
+// MCTS mode: explore() / evaluate() / generateReflection() — short rollouts.
+// Head mode: initHead() / runAsHead() / abortHead() — multi-step branching heads.
 export { ExplorationAgent } from "./exploration.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
-// v2: branching-heads Facet — spawned via OrchestratorAgent.subAgent(HeadAgent, id).
-// Must be exported from the worker entry so workerd can resolve the class via
-// ctx.exports during facet construction (Agent SDK Sub-Agent RFC).
-export { HeadAgent } from "./heads/head-agent.js";
-// v2: Hermes-style background-review fork — spawned fire-and-forget after
-// each turn to consider whether a memory lesson or skill update is warranted.
-export { ReviewAgent } from "./heads/review-agent.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {

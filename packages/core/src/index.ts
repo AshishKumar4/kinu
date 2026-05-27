@@ -127,7 +127,7 @@ export {
   createSandboxExecutor, type SandboxHandle,
   createSSHTunnelExecutor,
   // Legacy (shelved) — kept for type imports only.
-  createNimbusExecutor, type NimbusStub,
+  createNimbusExecutor, type NimbusExecutorOpts,
   createContainerExecutor, type ContainerStub,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
@@ -176,20 +176,6 @@ export {
   type ApprovalResult,
 } from './safety/index.js';
 
-// v2: context compaction (Hermes/Flue-style, model-agnostic)
-export {
-  DEFAULT_COMPACTION_CONFIG,
-  shouldCompact,
-  estimateTokens,
-  compactMessages,
-} from './compaction.js';
-export type {
-  CompactableMessage,
-  CompactionConfig,
-  CompactionResult,
-  SummarizeFn,
-} from './types/compaction.js';
-
 // Utils
 export { nanoid } from './utils/nanoid.js';
 export { isoDate, today, nowMs } from './utils/date.js';
@@ -215,21 +201,3 @@ export {
   createSplitHeadsTool, type SplitHeadsInput, type SplitHeadsToolDeps,
 } from './heads/index.js';
 
-// ── v2: unified sandbox abstraction (SandboxApi + impls) ──────────
-// Strict typed contract for any execution environment. Each implementation
-// (Virtual/Cloudflare/Nimbus/SSH) is one file; `sandboxToExecutorProvider`
-// bridges to the existing codemode ExecutorProvider surface so legacy
-// callers keep working.
-export type {
-  SandboxApi, SandboxFactory, SandboxRegistry, SandboxBuildContext,
-  SandboxKind, SandboxCapability,
-  ShellResult, ExecOptions, DirEntry, Stat, PortInfo,
-  SpawnOptions, ProcessHandle, PtyHandle,
-} from './sandbox/index.js';
-export { SandboxError, isSandboxError, DefaultSandboxRegistry, sandboxToExecutorProvider } from './sandbox/index.js';
-export {
-  createVirtualSandbox, type VirtualSandboxDeps,
-  createCloudflareSandbox, type CloudflareSandboxDeps,
-  createNimbusSandbox, type NimbusSandboxOpts,
-  createSSHSandbox, type SSHSandboxApi,
-} from './sandbox/index.js';

@@ -70,7 +70,6 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
-import { ReviewAgent } from "./heads/review-agent.js";
 
 const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
@@ -534,6 +533,10 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   configureSession(session: Session): Session {
+    // Built-in Think compaction — auto-fires when accumulated message
+    // tokens cross the threshold. Kimi K2.6's window is large; we compact
+    // at ~96k input tokens to leave headroom for the response + tools.
+    // Think.Session owns the summarization LLM call internally.
     return session
       .withContext("memory", {
         description:
@@ -541,7 +544,8 @@ export class OrchestratorAgent extends Think<Env> {
           "discovered patterns, and crafted tool descriptions.",
         maxTokens: 32000,
       })
-      .withCachedPrompt();
+      .withCachedPrompt()
+      .compactAfter(96_000);
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -765,34 +769,14 @@ export class OrchestratorAgent extends Think<Env> {
       );
     }
 
-    // Fire turn-level evolution in background (does NOT block the TurnQueue)
+    // Fire turn-level evolution in background (does NOT block the TurnQueue).
+    // EvolutionEngine.onTurnCompleteAsync already does Hermes-style reflection:
+    //   • quality assessment + threshold check
+    //   • generateTurnReflection → append `### Lesson` to MEMORY.md
+    //   • pattern extraction → upsertCraftedTool with Jaccard conflict guard
+    //   • session-level reflection every N turns → maybeEvolveScaffold
+    // No separate ReviewAgent Facet — this single hook handles all of it.
     this.engine.onTurnCompleteAsync(turn);
-
-    // v2: Hermes-style background-review fork. Spawn a ReviewAgent Facet
-    // that runs the SKILL_REVIEW_PROMPT against this turn and writes any
-    // worthwhile memory lessons back to MEMORY.md. Fire-and-forget — the
-    // facet is its own DO so eviction-independent + no SQLite contention.
-    const chatHadError = result.status === 'error';
-    void (async () => {
-      try {
-        const stub = await this.subAgent(ReviewAgent, `review-${nanoid(8)}`);
-        const review = await stub.reviewTurn({
-          userText: userText.slice(0, 4000),
-          assistantText: assistantText.slice(0, 4000),
-          toolCallsSummary: JSON.stringify(this._turnToolCalls).slice(0, 2000),
-          hadError: this._turnHadError || chatHadError,
-        });
-        if (review.status === 'wrote_lesson' && review.lesson) {
-          await this.rt.memory.append(
-            'memory/MEMORY.md',
-            `\n### Background review (${new Date().toISOString().split('T')[0]})\n${review.lesson}\n`,
-          );
-          await this.rt.memory.index('memory/MEMORY.md');
-        }
-      } catch (err) {
-        console.warn('[proteus] background review failed:', err);
-      }
-    })();
   }
 
   // ── DO initialization ──────────────────────────────────────────

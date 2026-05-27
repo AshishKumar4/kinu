@@ -1,7 +1,9 @@
 /**
  * Branching heads — cf-backend public surface.
+ *
+ * Heads no longer have their own Facet class — they're a mode of
+ * ExplorationAgent (initHead / runAsHead / abortHead). This module
+ * just exports the CF-side runtime wrapper for HeadController.
  */
 
-export { HeadAgent } from "./head-agent.js";
 export { createCFHeadRuntime } from "./head-runtime.js";
-export { ReviewAgent, type ReviewInput, type ReviewResult } from "./review-agent.js";

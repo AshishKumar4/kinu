@@ -1,12 +1,12 @@
 /**
- * CFHeadRuntime — concrete HeadRuntime that spawns Facets and runs the
- * merge LLM via Workers AI / AI Gateway.
+ * CFHeadRuntime — concrete HeadRuntime for the branching-heads primitive.
  *
- * The orchestrator constructs this once and passes it into HeadController.
- * Each split:
- *   • spawnHead(input) → subAgent(HeadAgent, input.id) → stub.init(input)
- *     → returns SpawnedHead with run() = stub.run() and abort() = stub.abort()
- *   • mergeLLM(prompt, schema) → generateObject with the Zod merge schema
+ * Heads run as ExplorationAgent Facets in head mode (initHead + runAsHead).
+ * The same Facet class powers MCTS branches in MCTS mode (explore + evaluate);
+ * head mode is a different ToolSet + a multi-step inference loop on top of
+ * the same parallel-spawn infrastructure.
+ *
+ * Constructed once per chat agent; passed into HeadController.
  */
 
 import { generateObject } from "ai";
@@ -18,7 +18,7 @@ import type {
 } from "@proteus/core";
 import { MergeOutputSchema, type MergeOutput } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
-import { HeadAgent } from "./head-agent.js";
+import { ExplorationAgent } from "../exploration.js";
 
 const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
 
@@ -50,25 +50,16 @@ export function createCFHeadRuntime(orchestrator: Think<Env>): HeadRuntime {
 
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
-      // Facet stubs are obtained via subAgent(Class, name) on the parent agent.
-      const stub = await orchestrator.subAgent(HeadAgent, input.id);
-      await stub.init(input);
+      const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
+      await stub.initHead(input);
       return {
         id: input.id,
         async run(): Promise<HeadReport> {
-          return (await stub.run()) as HeadReport;
+          return (await stub.runAsHead()) as HeadReport;
         },
         async abort(reason: string): Promise<void> {
-          try {
-            await stub.abort(reason);
-          } catch {
-            // best-effort
-          }
-          try {
-            await orchestrator.abortSubAgent(HeadAgent, input.id);
-          } catch {
-            // best-effort
-          }
+          try { await stub.abortHead(reason); } catch { /* nop */ }
+          try { await orchestrator.abortSubAgent(ExplorationAgent, input.id); } catch { /* nop */ }
         },
       };
     },
