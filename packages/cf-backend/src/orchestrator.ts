@@ -51,6 +51,8 @@ import {
   // v2: branching heads
   HeadController, HeadJournal, initHeadsTables, createSplitHeadsTool,
   type SerializedMessage,
+  // v2: single canonical memory-note write primitive
+  appendMemoryNote,
   // v2: scaffold-loop closure (scaffold-driven inference + shadow rollout)
   runScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
@@ -466,6 +468,9 @@ export class OrchestratorAgent extends Think<Env> {
         preBuiltExecuteTool: this.getExecuteToolsTool(),
         // v2: branching-heads tool — lazy-built once, then reused across turns.
         splitHeadsTool: this.getSplitHeadsTool(),
+        // v2: Vectorize-backed semantic memory. search_memory auto-uses
+        // hybrid retrieval when this is provided + available; FTS5-only fallback.
+        vectorStore: this.rt.vectorStore,
         onMctsProgress: (phase, iteration, budget) => this.broadcastMctsProgress(phase, iteration, budget),
         createMctsSession: () => this.createMCTSSession(),
         onExplorePhase: (phase, task) => {
@@ -507,6 +512,30 @@ export class OrchestratorAgent extends Think<Env> {
     const orchestrator = this;
     this._splitHeadsTool = createSplitHeadsTool({
       controller: this._headController,
+      // v2: stream head_split / head_merge into the durable event log so
+      // SSE subscribers + MCP `list_run_events` see the split lifecycle.
+      onPhase: (event) => {
+        try {
+          if (!this._currentRunId) return;
+          if (event.kind === 'split') {
+            this.eventRecorder.emit(this._currentRunId, {
+              type: 'head_split',
+              rootId: event.rootId,
+              headIds: [...event.headIds],
+              rationale: event.rationale,
+            });
+          } else {
+            this.eventRecorder.emit(this._currentRunId, {
+              type: 'head_merge',
+              rootId: event.rootId,
+              headCount: event.headCount,
+              mergedNarrative: event.mergedNarrative,
+            });
+          }
+        } catch (err) {
+          console.warn('[proteus] event emit failed at split-heads onPhase:', err);
+        }
+      },
       getInheritedContext(): SerializedMessage[] {
         try {
           type Row = { id: string; role: string; content: string; created_at: string };
@@ -668,6 +697,19 @@ export class OrchestratorAgent extends Think<Env> {
       `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
       `in=${inTok} out=${outTok}${extrasStr}`,
     );
+    // v2: mirror into the durable run-event log so external SSE subscribers
+    // see per-step progress (UI Last-Event-ID resume + MCP/HTTP consumers).
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'step_finish',
+          stepIndex: this._turnStepCount,
+          reason: typeof ctx.finishReason === 'string' ? ctx.finishReason : undefined,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at onStepFinish:', err);
+    }
   }
 
   async onChatResponse(result: ChatResponseResult) {
@@ -1091,7 +1133,20 @@ export class OrchestratorAgent extends Think<Env> {
     } else {
       decision = mode;
     }
+    const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
     const result = await applyPromotionDecision(this.rt, pending, decision);
+    // v2: emit the promotion/rollback into the durable event log so SSE
+    // subscribers + MCP `list_run_events` see the decision in-band.
+    try {
+      const runId = this._currentRunId || `scaffold-${nanoid()}`;
+      this.eventRecorder.emit(runId, {
+        type: decision === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+        fromVersion,
+        toVersion: result.newCurrentVersion,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at applyScaffoldDecision:', err);
+    }
     return { ok: true, ...result };
   }
 
@@ -1128,12 +1183,11 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   // ── v2: MCP server bridge — small RPCs the MCP handler needs ──
-  /** Used by /mcp/v1/<name> save_note tool. */
+  /** Used by /mcp/v1/<name> save_note tool. Routes through the same
+   *  appendMemoryNote primitive as workspace.saveNote + save_note builtin. */
   @callable()
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
-    const ts = new Date().toISOString().split('T')[0];
-    await this.rt.memory.append('memory/MEMORY.md', `\n### Note (${ts})\n${content}\n`);
-    await this.rt.memory.index('memory/MEMORY.md');
+    await appendMemoryNote(this.rt.memory, content);
     return { ok: true };
   }
 

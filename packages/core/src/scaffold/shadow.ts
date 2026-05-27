@@ -102,16 +102,8 @@ export function initShadowTables(execRaw: RawSqlExec): void {
     evaluated_at INTEGER NOT NULL
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_eval_pending ON scaffold_evaluations(pending_version)`);
-
-  // Extend scaffold_versions with `status` if missing.
-  try {
-    // Probe — this may fail if scaffold_versions doesn't exist yet.
-    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN status TEXT DEFAULT 'current'`);
-  } catch {
-    // Either column already exists or table doesn't yet — bootstrap will
-    // handle creation, and the next call after bootstrap will succeed on a
-    // fresh schema (no-op if already present).
-  }
+  // scaffold_versions.status is now created natively by initScaffoldTables
+  // (in scaffold/schemas.ts); no ALTER fallback needed here.
 }
 
 /**

@@ -128,7 +128,6 @@ export {
   createSSHTunnelExecutor,
   // Legacy (shelved) — kept for type imports only.
   createNimbusExecutor, type NimbusExecutorOpts,
-  createContainerExecutor, type ContainerStub,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
@@ -154,6 +153,10 @@ export {
   type LexicalSearchFn,
   type HybridSearchOptions,
 } from './memory/hybrid-search.js';
+
+// Memory write primitive — single canonical "save a note to MEMORY.md".
+// Used by workspace.saveNote, save_note builtin tool, and MCP saveNoteFromMcp.
+export { appendMemoryNote } from './memory/note.js';
 
 // v2: durable run-event log (Flue-style, SSE-resumable)
 export type {

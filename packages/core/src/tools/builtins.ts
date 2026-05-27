@@ -27,6 +27,8 @@ import type { CraftedToolExecute } from './crafted-executor.js';
 import { effectiveScore } from '../craft/ema.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { nanoid } from '../utils/nanoid.js';
+import { appendMemoryNote } from '../memory/note.js';
+import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
 
 /**
  * Narrow local shape of @cloudflare/think/tools/execute#createExecuteTool.
@@ -101,6 +103,13 @@ export interface BuiltinToolDeps {
    * into the ToolSet so the LLM can call it. Absent → no split_heads tool.
    */
   splitHeadsTool?: ToolSet[string];
+  /**
+   * v2: optional Vectorize-backed VectorStore for semantic memory recall.
+   * When provided, search_memory does hybrid retrieval (FTS5 + Vectorize via
+   * RRF) instead of FTS5-only. Falls back gracefully when not provided OR
+   * when the underlying binding is unavailable.
+   */
+  vectorStore?: import('../memory/vector-store.js').VectorStore;
 }
 
 /**
@@ -327,15 +336,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       properties: { content: { type: 'string', description: 'Note content' } },
       required: ['content'],
     }),
-    execute: async (args: { content: string }) => {
-      const ts = new Date().toISOString().split('T')[0];
-      await memory.append('memory/MEMORY.md', `\n### Note (${ts})\n${args.content}\n`);
-      await memory.index('memory/MEMORY.md');
-      return 'Note saved to memory.';
-    },
+    execute: async (args: { content: string }) => appendMemoryNote(memory, args.content),
   });
 
   // ── 6. search_memory ─────────────────────────────────────────────────────
+  // Auto-hybrid: if a Vectorize-backed VectorStore is wired AND available,
+  // run lexical + semantic in parallel and merge via RRF. Otherwise fall
+  // back to pure FTS5. Same surface — caller doesn't need to feature-detect.
+  const vs = deps.vectorStore;
   tools.search_memory = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.search_memory,
     inputSchema: jsonSchema<{ query: string }>({
@@ -344,6 +352,22 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       required: ['query'],
     }),
     execute: async (args: { query: string }) => {
+      if (vs && vs.available) {
+        const lexicalFn = async (q: string, k: number): Promise<LexicalHit[]> => {
+          const results = await memory.search(q, k);
+          return results.map((r) => ({
+            id: `${r.path}#${r.startLine}-${r.endLine}`,
+            path: r.path, startLine: r.startLine, endLine: r.endLine,
+            score: r.score, snippet: r.snippet,
+          }));
+        };
+        const hits = await hybridSearch(args.query, lexicalFn, vs, { finalK: 10 });
+        if (hits.length === 0) return 'No results found.';
+        return hits.map((h) =>
+          `[${h.path}:${h.startLine}-${h.endLine}] ` +
+          `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
+        ).join('\n\n');
+      }
       const results = await memory.search(args.query, 10);
       if (results.length === 0) return 'No results found.';
       return results

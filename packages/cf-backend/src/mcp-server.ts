@@ -67,16 +67,25 @@ function buildServer(env: Env, agentName: string): McpServer {
   server.registerTool(
     "search_memory",
     {
-      description: "Full-text search over the agent's long-term memory. Returns matching passages with scores.",
-      inputSchema: { query: z.string().describe("Search query (FTS5 syntax accepted).") },
+      description:
+        "Hybrid search over the agent's long-term memory — FTS5 (lexical) + Vectorize " +
+        "(semantic) merged via Reciprocal Rank Fusion when Vectorize is configured; " +
+        "FTS5-only otherwise. Returns matching passages with merged scores.",
+      inputSchema: {
+        query: z.string().describe("Search query (natural language or FTS5 syntax)."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)."),
+      },
     },
-    async ({ query }) => {
+    async ({ query, limit }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        const results = await agent.doSearchMemory(query);
-        const text = results.length === 0
+        const hits = await agent.searchMemoryHybrid(query, limit ?? 10);
+        const text = hits.length === 0
           ? "(no matches)"
-          : results.map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`).join("\n\n");
+          : hits.map((h) =>
+              `[${h.path}:${h.startLine}-${h.endLine}] ` +
+              `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
+            ).join("\n\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `search_memory error: ${(err as Error).message}` }] };

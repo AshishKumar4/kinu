@@ -116,6 +116,14 @@ export interface SplitHeadsToolDeps {
   defaultModel?: string;
   /** Optional: the parent budget (root-head budget). Default DEFAULT_HEAD_BUDGET. */
   defaultBudget?: Partial<HeadBudget>;
+  /**
+   * Optional: invoked on split / merge so the host can fan out events
+   * (SSE, telemetry, UI nested timelines). One call per phase per split.
+   */
+  onPhase?: (event:
+    | { kind: 'split'; rootId: string; headIds: readonly string[]; rationale: string }
+    | { kind: 'merge'; rootId: string; headCount: number; mergedNarrative: string },
+  ) => void;
 }
 
 /**
@@ -162,6 +170,12 @@ export function createSplitHeadsTool(deps: SplitHeadsToolDeps): Tool<SplitHeadsI
       const rootId = `split-${nanoid()}`;
 
       try {
+        deps.onPhase?.({
+          kind: 'split',
+          rootId,
+          headIds: input.heads.map((_h, i) => `${rootId}-d1-${i}`),
+          rationale: input.rationale,
+        });
         const result: MergeResult = await deps.controller.run({
           parentHeadId: null,
           rootId,
@@ -169,6 +183,12 @@ export function createSplitHeadsTool(deps: SplitHeadsToolDeps): Tool<SplitHeadsI
           request,
           parentBudget,
           model: deps.defaultModel,
+        });
+        deps.onPhase?.({
+          kind: 'merge',
+          rootId,
+          headCount: result.costSummary.headCount,
+          mergedNarrative: result.mergedNarrative,
         });
         return formatMergeResult(result, strategy);
       } catch (err) {

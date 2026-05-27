@@ -17,6 +17,7 @@
 import { tool, jsonSchema } from 'ai';
 import type { VFS, Memory } from '@proteus/core';
 import type { ExecutorProvider } from '@proteus/core';
+import { appendMemoryNote } from '@proteus/core';
 
 interface ShellLike {
   exec(command: string, stdin?: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -89,12 +90,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
               const results = await memory.search(query, 10);
               return results.map((r) => `[${r.path}] ${r.snippet}`).join('\n') || 'No results.';
             },
-            saveNote: async (content: string) => {
-              const ts = new Date().toISOString().split('T')[0];
-              await memory.append('memory/MEMORY.md', `\n### Note (${ts})\n${content}\n`);
-              await memory.index('memory/MEMORY.md');
-              return 'Note saved.';
-            },
+            saveNote: async (content: string) => appendMemoryNote(memory, content),
           };
           // Merge workspace provider bindings over the inline workspaceApi
           // so `workspace.createTool` etc from the execution router also work.
