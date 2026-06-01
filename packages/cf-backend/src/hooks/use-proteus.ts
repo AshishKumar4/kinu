@@ -37,49 +37,29 @@ export interface AgentStatus {
   forkLineage: ForkLineage | null;
 }
 
-export interface EvolutionEventRow {
-  id: string;
-  type: string;
-  message: string;
-  data: string | null;
-  created_at: number;
-}
-
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
- * Fetches all tab data via @callable RPCs on connect.
+ * Fetches all surface data via @callable RPCs on connect. The unified Run
+ * Timeline (getRunTimeline) is the single activity feed — it subsumes the
+ * former evolution-events + activity-log streams, so the hook no longer
+ * maintains those separately.
  */
-export interface LogEntry {
-  id: string;
-  time: number;
-  type: "connection" | "tool" | "evolution" | "error" | "info";
-  message: string;
-  detail?: string;
-}
-
 export function useProteus(agentId?: string) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTree, setMctsTree] = useState<MCTSNode | null>(null);
-  const [evolutionEvents, setEvolutionEvents] = useState<EvolutionEventRow[]>([]);
   // The unified Run Timeline spine — one server-merged, ordered span stream
   // (getRunTimeline). Single source; no client-side merge of three RPCs.
   const [runTimeline, setRunTimeline] = useState<TimelineSpan[]>([]);
   const [memoryContent, setMemoryContent] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [executors, setExecutors] = useState<Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
-  // Pinned (exposed) ports for the sandbox executor — polled hook-level so
-  // a count badge on the Executors tab updates regardless of which tab is
-  // currently visible. (STABILITY-AUDIT §C4.)
+  // Pinned (exposed) ports for the sandbox executor — polled hook-level so the
+  // Output/Devices port badge updates regardless of the active surface.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
-
-  const addLog = useCallback((type: LogEntry["type"], message: string, detail?: string) => {
-    setLogs(prev => [...prev.slice(-99), { id: crypto.randomUUID(), time: Date.now(), type, message, detail }]);
-  }, []);
 
   const agent = useAgent({
     agent: "orchestrator-agent",
@@ -88,20 +68,11 @@ export function useProteus(agentId?: string) {
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
     // banner forever (STABILITY-AUDIT §A1).
-    onOpen: useCallback(() => {
-      setConnectionStatus("connected");
-      addLog("connection", "WebSocket connected");
-    }, [addLog]),
-    onClose: useCallback(() => {
-      setConnectionStatus("disconnected");
-      addLog("connection", "WebSocket disconnected");
-    }, [addLog]),
-    onError: useCallback(() => {
-      // Don't clobber a healthy status; partysocket auto-reconnects in the
-      // background. Treat onError as a transient signal — the next onOpen
-      // will recover. Logging only.
-      addLog("error", "WebSocket error (auto-reconnecting)");
-    }, [addLog]),
+    onOpen: useCallback(() => setConnectionStatus("connected"), []),
+    onClose: useCallback(() => setConnectionStatus("disconnected"), []),
+    // Don't clobber a healthy status; partysocket auto-reconnects in the
+    // background and the next onOpen recovers. onError is a transient no-op.
+    onError: useCallback(() => {}, []),
   });
 
   const {
@@ -175,20 +146,18 @@ export function useProteus(agentId?: string) {
     loadAllData();
   }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh evolution events + logs when streaming ends (a turn completed)
+  // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
   useEffect(() => {
     if (isStreaming) {
       wasStreaming.current = true;
-      addLog("info", "Streaming started");
     } else if (wasStreaming.current) {
       wasStreaming.current = false;
-      addLog("info", "Streaming ended — refreshing data");
       refreshLiveData();
     }
-  }, [isStreaming, agent, addLog]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isStreaming, agent]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Adaptive polling: 1s during streaming for near-real-time logs, 5s when idle
+  // Adaptive polling: 1s during streaming for near-real-time spans, 5s when idle
   useEffect(() => {
     if (!isConnected) return;
     const ms = isStreaming ? 1000 : 5000;
@@ -207,28 +176,21 @@ export function useProteus(agentId?: string) {
       try {
         const msg = JSON.parse(typeof data === "string" ? data : "");
         if (msg.type === "mcts-progress") {
-          addLog("evolution", `MCTS ${msg.phase}: ${msg.nodeCount ?? 0} nodes (iter ${msg.iteration ?? "?"})`);
           if (msg.nodes && msg.nodes.length > 0) {
             setMctsTree(buildTree(msg.nodes));
           }
-          agent.call("getEvolutionEvents", [200])
-            .then(events => setEvolutionEvents((events as EvolutionEventRow[]).reverse()))
+          // Pull the freshest timeline so the new MCTS spans land promptly.
+          agent.call("getRunTimeline", [{ limit: 250 }])
+            .then(spans => setRunTimeline(spans as TimelineSpan[]))
             .catch(() => {});
         }
-        // activity-log events are NOT handled here — getLogs() polling is the
-        // single source of truth for activity entries. Handling them via both
-        // WS and polling caused triple-counting (WS IDs are UUIDs, SQL IDs are
-        // hex strings — the dedup logic could never match them).
       } catch { /* not JSON or not our message */ }
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent, addLog]);
+  }, [agent]);
 
   function refreshLiveData() {
-    agent.call("getEvolutionEvents", [200])
-      .then(events => setEvolutionEvents((events as EvolutionEventRow[]).reverse()))
-      .catch(() => {});
     agent.call("getRunTimeline", [{ limit: 250 }])
       .then(spans => setRunTimeline(spans as TimelineSpan[]))
       .catch(() => {});
@@ -264,40 +226,7 @@ export function useProteus(agentId?: string) {
         setTools([...builtInTools, ...craftedTools]);
       })
       .catch(() => {});
-    // Server is the single source of truth for activity + evolution logs.
-    // Only client-generated entries (connection lifecycle) are preserved.
-    agent.call("getLogs", [100])
-      .then((serverLogs) => {
-        const sl = serverLogs as Array<{ id: string; time: number; type: string; message: string; detail?: string }>;
-        setLogs(prev => {
-          const clientOnly = prev.filter(l => l.type === "connection");
-          const merged = [...clientOnly, ...sl.map(s => ({ ...s, type: s.type as LogEntry["type"] }))];
-          merged.sort((a, b) => a.time - b.time);
-          return merged.slice(-100);
-        });
-      })
-      .catch(() => {});
   }
-
-  // Log tool calls as they appear in messages
-  const seenToolCalls = useRef(new Set<string>());
-  useEffect(() => {
-    for (const msg of messages) {
-      for (const part of msg.parts) {
-        if ("toolCallId" in part) {
-          const tcId = (part as { toolCallId: string }).toolCallId;
-          const toolName = (part as { toolName?: string }).toolName ?? "tool";
-          const state = (part as { state?: string }).state;
-          if (!seenToolCalls.current.has(tcId)) {
-            seenToolCalls.current.add(tcId);
-            addLog("tool", `Tool called: ${toolName}`, `state: ${state}`);
-          } else if (state === "output-available" || state === "output-error") {
-            addLog("tool", `Tool ${state === "output-available" ? "completed" : "failed"}: ${toolName}`);
-          }
-        }
-      }
-    }
-  }, [messages, addLog]);
 
   function loadAllData() {
     agent.call("getAgentStatus", [])
@@ -374,13 +303,6 @@ export function useProteus(agentId?: string) {
       })
       .catch(() => {});
 
-    // Evolution events
-    agent.call("getEvolutionEvents", [50])
-      .then((events) => {
-        setEvolutionEvents((events as EvolutionEventRow[]).reverse()); // oldest first for timeline
-      })
-      .catch(() => {});
-
     // Unified run timeline spine.
     agent.call("getRunTimeline", [{ limit: 250 }])
       .then(spans => setRunTimeline(spans as TimelineSpan[]))
@@ -413,11 +335,8 @@ export function useProteus(agentId?: string) {
     setMemory([]);
     setMemoryContent("");
     setMctsTree(null);
-    setEvolutionEvents([]);
     setRunTimeline([]);
     setError(null);
-    setLogs([]);
-    seenToolCalls.current.clear();
   }, [agentId]);
 
   useEffect(() => {
@@ -453,12 +372,6 @@ export function useProteus(agentId?: string) {
       .catch(() => {});
   }, [agent, memoryContent]);
 
-  const refreshEvolution = useCallback(() => {
-    agent.call("getEvolutionEvents", [50])
-      .then((events) => setEvolutionEvents((events as EvolutionEventRow[]).reverse()))
-      .catch(() => {});
-  }, [agent]);
-
   const setModel = useCallback((modelId: string) => {
     // Optimistically reflect in the UI so the dropdown doesn't snap back
     // while the RPC is in flight.
@@ -471,14 +384,13 @@ export function useProteus(agentId?: string) {
       // Surface to the user, never swallow. Roll the UI back so the select
       // reflects the actually-stored value.
       console.error('[setModel] failed:', err);
-      addLog('error', `setModel failed: ${(err as Error).message ?? String(err)}`);
       // Re-fetch the authoritative stored spec.
       agent.call("getStoredModelSpec", []).then((r) => {
         const stored = (r as { spec?: string | null }).spec ?? '';
         setAgentStatus(prev => prev ? { ...prev, model: stored } : prev);
       }).catch(() => {});
     });
-  }, [agent, addLog]);
+  }, [agent]);
 
   // Single source of truth: the server-side broadcast. executeInExecutor ONLY
   // fires the RPC; the broadcast handler below renders the row. This prevents
@@ -551,13 +463,10 @@ export function useProteus(agentId?: string) {
     memory,
     memoryContent,
     mctsTree,
-    evolutionEvents,
     runTimeline,
-    logs,
     sendChat,
     abortChat: stop,
     searchMemory,
-    refreshEvolution,
     refreshTools: () => loadAllData(),
     clearHistory,
     setModel,
