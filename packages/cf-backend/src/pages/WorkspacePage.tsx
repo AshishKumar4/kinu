@@ -1,100 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { Button, Badge, Empty, InputArea, Loader } from "@cloudflare/kumo";
-import { Code } from "@cloudflare/kumo/components/code";
+import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import {
-  PaperPlaneRightIcon, StopIcon, WrenchIcon, SparkleIcon,
-  CaretDownIcon, CaretRightIcon, MagnifyingGlassIcon,
-  FingerprintIcon, PackageIcon, DatabaseIcon, TreeStructureIcon,
-  ClockIcon, WifiSlashIcon, ArrowsClockwiseIcon, BrainIcon,
-  FolderOpenIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
-  CopyIcon, TerminalIcon, GearIcon, ArrowSquareOutIcon,
-  GearSixIcon, TimerIcon,
+  PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
+  ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
+  GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon,
 } from "@phosphor-icons/react";
-import { ScoreBar } from "@/components/ui/score-bar";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { useProteus, type EvolutionEventRow, type LogEntry } from "@/hooks/use-proteus";
+import { useProteus } from "@/hooks/use-proteus";
 import { touchAgent } from "@/lib/user-api";
-import { MCTSTree } from "@/components/mcts-tree";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import ExecutorsPanel from "@/components/ExecutorsPanel";
-import { ExecutorTerminal } from "@/components/ExecutorTerminal";
 import { ConnectionIndicator } from "@/components/connection-indicator";
-import type { MCTSNode } from "@/lib/protocol";
-
-const TABS = ["Identity", "Tools", "Memory", "MCTS Tree", "Evolution", "Executors", "Logs"] as const;
-type Tab = (typeof TABS)[number];
+import { MarkdownContent, extractPreviewUrl } from "@/components/surfaces/shared";
+import { RunTimeline } from "@/components/surfaces/RunTimeline";
+import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import type { TimelineSpan, TimelineKind } from "@/lib/protocol";
 // MODELS are pulled dynamically from /api/user/models (which unions the
 // connected providers' menus). The picker re-fetches on every page mount.
-
-/* ── Code block ───────────────────────────────────────────────── */
-
-function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
-  const [copied, setCopied] = useState(false);
-  const code = String(children).replace(/\n$/, "");
-  const lang = className?.replace(/^language-/, "") ?? "";
-  return (
-    <div className="relative group my-2">
-      <div className="flex items-center justify-between px-3 py-1 rounded-t-lg p-elevated border border-b-0 p-border text-[10px] p-text-3">
-        <span>{lang || "code"}</span>
-        <button onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-          className="flex items-center gap-1 hover:p-text transition-colors">
-          <CopyIcon size={12} />{copied ? "Copied!" : "Copy"}
-        </button>
-      </div>
-      <div className="rounded-b-lg border border-t-0 p-border overflow-hidden">
-        <Code code={code} lang={(lang || "text") as React.ComponentProps<typeof Code>["lang"]} />
-      </div>
-    </div>
-  );
-}
-
-/**
- * Detect a Proteus path-style preview URL anywhere inside a tool result.
- * Tool outputs are usually strings (e.g. `https://.../_preview/8080/.../`)
- * but can also be objects with a `url` field (the exposeSandboxPort RPC
- * returns `{url}`). Returns the URL or null.
- */
-function extractPreviewUrl(output: unknown): string | null {
-  const re = /https:\/\/[^\s"']+\/_preview\/\d+\/[^/\s"']+\/[a-z0-9_]+\/?[^\s"']*/i;
-  if (typeof output === "string") {
-    const m = output.match(re);
-    return m ? m[0] : null;
-  }
-  if (output && typeof output === "object") {
-    const url = (output as { url?: unknown }).url;
-    if (typeof url === "string") {
-      const m = url.match(re);
-      return m ? m[0] : null;
-    }
-    // Last-resort: serialise + scan (covers nested fields).
-    try {
-      const m = JSON.stringify(output).match(re);
-      return m ? m[0] : null;
-    } catch { return null; }
-  }
-  return null;
-}
-
-function MarkdownContent({ content }: { content: string }) {
-  return (
-    <Markdown remarkPlugins={[remarkGfm]} components={{
-      code({ className, children, ...props }) {
-        if (!className) return <code className="p-elevated px-1.5 py-0.5 rounded text-xs font-mono" {...props}>{children}</code>;
-        return <CodeBlock className={className}>{children}</CodeBlock>;
-      },
-      a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
-      table({ children }) { return <div className="overflow-x-auto my-2"><table className="w-full text-xs border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border p-border px-2 py-1 text-left font-medium p-elevated">{children}</th>; },
-      td({ children }) { return <td className="border p-border px-2 py-1">{children}</td>; },
-      pre({ children }) { return <>{children}</>; },
-    }}>{content}</Markdown>
-  );
-}
 
 /* ── Message rendering ────────────────────────────────────────── */
 
@@ -210,7 +134,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
             <div className="p-text-3">
-              See the <span className="font-medium">Executors</span> tab to provision it.
+              Open the <span className="font-medium">Devices</span> surface to provision it.
             </div>
           </div>
         </div>
@@ -320,9 +244,8 @@ function MessageView({
                 isRunning={part.state === "input-available" || part.state === "input-streaming"}
                 isError={part.state === "output-error"} />
               {/* Inline preview card — when a tool returns a /_preview/ URL,
-                  surface a live iframe under the tool block so the user
-                  doesn't have to switch to the Executors tab.
-                  (STABILITY-AUDIT §C4.) */}
+                  surface a live iframe under the tool block so the user sees
+                  the running app inline (also promoted to the Output surface). */}
               {previewUrl && (
                 <div className="mt-2 rounded-md p-bg border p-border overflow-hidden">
                   <div className="px-2 py-1 flex items-center gap-2 text-[11px] p-text-2">
@@ -480,161 +403,6 @@ function ForkModal({
   );
 }
 
-/* ── Sidebar components ───────────────────────────────────────── */
-
-const EVO_COLORS: Record<string, string> = {
-  turn_complete: "bg-cyan-500", craft_discovered: "bg-green-500", mcts_complete: "bg-green-500",
-  reflection: "bg-blue-500", consolidation: "bg-amber-500", scaffold_proposed: "bg-purple-500",
-  mcts_started: "bg-gray-500",
-};
-
-function EvolutionItem({ event }: { event: EvolutionEventRow }) {
-  return (
-    <div className="flex gap-3 animate-fade-in">
-      <div className="flex flex-col items-center">
-        <div className={`size-2 rounded-full mt-1.5 ${EVO_COLORS[event.type] ?? "bg-[var(--c-text-3)]"}`} />
-        <div className="flex-1 w-px" style={{ background: "var(--c-border)" }} />
-      </div>
-      <div className="pb-4">
-        <div className="flex items-center gap-2 text-xs p-text-2 mb-0.5">
-          <span className="font-mono text-[11px]">{new Date(event.created_at).toLocaleTimeString()}</span>
-          <Badge variant="secondary">{event.type}</Badge>
-        </div>
-        <span className="text-sm p-text block">{event.message}</span>
-      </div>
-    </div>
-  );
-}
-
-const TIMESCALE_MAP: Record<string, "turn" | "session" | "lifetime"> = {
-  turn_complete: "turn", reflection: "turn", craft_discovered: "turn",
-  consolidation: "session",
-  scaffold_proposed: "lifetime", mcts_complete: "lifetime", mcts_started: "lifetime",
-};
-const TIMESCALE_LABEL: Record<string, string> = { turn: "Turn", session: "Session", lifetime: "Lifetime" };
-const TIMESCALE_BORDER: Record<string, string> = { turn: "border-l-blue-400", session: "border-l-amber-400", lifetime: "border-l-purple-400" };
-type EvoFilter = "all" | "turn" | "session" | "lifetime";
-
-function EvolutionTab({ events, onRefresh }: { events: EvolutionEventRow[]; onRefresh: () => void }) {
-  const [filter, setFilter] = useState<EvoFilter>("all");
-  const filtered = filter === "all" ? events : events.filter(e => TIMESCALE_MAP[e.type] === filter);
-
-  return (
-    <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <ClockIcon size={14} className="p-text-2" />
-          <span className="text-sm font-medium p-text">Evolution Timeline</span>
-          {events.length > 0 && <Badge variant="secondary">{events.length}</Badge>}
-        </div>
-        <Button variant="secondary" size="sm" onClick={onRefresh}>Refresh</Button>
-      </div>
-      {events.length > 0 && (
-        <div className="flex items-center gap-1 mb-3">
-          {(["all", "turn", "session", "lifetime"] as const).map(f => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`px-2 py-1 text-[11px] rounded-md transition-colors ${filter === f ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
-              {f === "all" ? "All" : TIMESCALE_LABEL[f]}
-            </button>
-          ))}
-        </div>
-      )}
-      {filtered.length === 0 ? (
-        <EmptyTab icon={<SparkleIcon size={28} />} title={events.length === 0 ? "No evolution events yet" : "No events match filter"} hint={events.length === 0 ? EMPTY_HINTS.evolution : undefined} />
-      ) : filtered.map(e => {
-        const scale = TIMESCALE_MAP[e.type] ?? "turn";
-        return (
-          <div key={e.id} className={`flex gap-3 animate-fade-in border-l-2 ${TIMESCALE_BORDER[scale]} pl-3 mb-3`}>
-            <div className="pb-1">
-              <div className="flex items-center gap-2 text-xs p-text-2 mb-0.5">
-                <span className="font-mono text-[11px]">{new Date(e.created_at).toLocaleTimeString()}</span>
-                <Badge variant="secondary">{e.type}</Badge>
-                <span className="text-[10px] p-text-3">{TIMESCALE_LABEL[scale]}</span>
-              </div>
-              <span className="text-sm p-text block">{e.message}</span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function EmptyTab({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="p-text-3 mb-3 opacity-60">{icon}</div>
-      <p className="text-sm p-text-2">{title}</p>
-      {hint && <p className="text-xs p-text-3 mt-1.5 max-w-xs leading-relaxed">{hint}</p>}
-    </div>
-  );
-}
-
-/* Default hints for each empty pane */
-const EMPTY_HINTS: Record<string, string> = {
-  memory: "Your agent will remember important information here. Ask it to remember something!",
-  tools: "Tools your agent learns will appear here. They're extracted from successful conversations.",
-  evolution: "Evolution events will appear as your agent improves over time through MCTS exploration.",
-  mcts: "Exploration trees will appear when the agent uses the explore tool to investigate subproblems.",
-  logs: "Activity from the agent's Durable Object will appear here.",
-};
-
-function MCTSTreeTab({ mctsTree }: { mctsTree: MCTSNode | null }) {
-  const [selectedNode, setSelectedNode] = useState<MCTSNode | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState({ w: 700, h: 400 });
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setDims({ w: el.clientWidth, h: Math.max(350, el.clientHeight - (selectedNode ? 200 : 0)) }));
-    ro.observe(el); setDims({ w: el.clientWidth, h: Math.max(350, el.clientHeight - (selectedNode ? 200 : 0)) });
-    return () => ro.disconnect();
-  }, [selectedNode]);
-
-  if (!mctsTree) return <EmptyTab icon={<GitBranchIcon size={28} />} title="No exploration history" hint={EMPTY_HINTS.mcts} />;
-  function countN(n: MCTSNode): number { return 1 + n.children.reduce((s, c) => s + countN(c), 0); }
-  function maxD(n: MCTSNode): number { return n.children.length === 0 ? n.depth : Math.max(...n.children.map(maxD)); }
-  return (
-    <div ref={containerRef} className="animate-fade-in h-full flex flex-col">
-      <div className="flex items-center gap-4 mb-2 text-xs p-text-2">
-        <span>Nodes: <span className="p-text font-mono">{countN(mctsTree)}</span></span>
-        <span>Depth: <span className="p-text font-mono">{maxD(mctsTree)}</span></span>
-        <span>Root: <span className="p-text font-mono">{mctsTree.value.toFixed(3)}</span></span>
-      </div>
-      <div className="flex-1 min-h-0">{dims.w > 0 && <MCTSTree root={mctsTree} width={dims.w} height={dims.h} onNodeClick={setSelectedNode} selectedNode={selectedNode} />}</div>
-      {selectedNode && (
-        <div className="p-card rounded-lg p-3 mt-2 animate-fade-in">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium p-text">Node Details</span>
-            <Button variant="ghost" size="sm" onClick={() => setSelectedNode(null)}>Close</Button>
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-            {(() => {
-              const parentVisits = mctsTree?.visits ?? selectedNode.visits;
-              const uct = selectedNode.visits > 0
-                ? selectedNode.value + 1.414 * Math.sqrt(Math.log(parentVisits) / selectedNode.visits)
-                : Infinity;
-              const scoreColor = selectedNode.value >= 0.7 ? "p-success" : selectedNode.value >= 0.4 ? "p-warning" : "p-danger";
-              return ([
-                ["Action", selectedNode.action || "(root)"],
-                ["Avg Reward", <span className={scoreColor}>{selectedNode.value.toFixed(4)}</span>],
-                ["UCT Score", isFinite(uct) ? uct.toFixed(4) : "\u221e"],
-                ["Visits", selectedNode.visits],
-                ["Status", selectedNode.status],
-                ["Depth", selectedNode.depth],
-                ["Children", selectedNode.children.length],
-                ...(selectedNode.observation ? [["Observation", selectedNode.observation.slice(0, 80) + (selectedNode.observation.length > 80 ? "..." : "")]] : []),
-              ] as [string, React.ReactNode][]).map(([k, v]) => (
-                <div key={k} className="contents"><span className="p-text-2">{k}</span><span className="p-text font-mono">{typeof v === "string" || typeof v === "number" ? String(v) : v}</span></div>
-              ));
-            })()}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ModelSelector({ current, onChange }: { current: string; onChange: (id: string) => void }) {
   const [models, setModels] = useState<Array<{ spec: string; label: string }>>([]);
   useEffect(() => {
@@ -652,44 +420,15 @@ function ModelSelector({ current, onChange }: { current: string; onChange: (id: 
   );
 }
 
-/* ── Executors tab ──────────────────────────────────────────────── */
-
-// (ExecutorOutput type + executor label maps live in the ExecutorsPanel
-// component now — removed from this file as part of the executors UI
-// extraction.)
-
-function LogsTab({ logs, connectionStatus }: { logs: LogEntry[]; connectionStatus: string }) {
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logs.length]);
-  // info = fast (<1s, green), tool = slow (1-5s, amber), error = very slow (>5s, red)
-  const C: Record<string, string> = { connection: "bg-blue-500", tool: "bg-amber-500", evolution: "bg-purple-500", error: "bg-red-500", info: "bg-emerald-500" };
-  return (
-    <div className="animate-fade-in space-y-1">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <TerminalIcon size={14} className="p-text-2" />
-          <span className="text-sm font-medium p-text">Activity Log</span>
-          <Badge variant="secondary">{logs.length}</Badge>
-        </div>
-        <ConnectionIndicator status={connectionStatus as "connected" | "connecting" | "disconnected" | "error"} />
-      </div>
-      {logs.length === 0 ? <EmptyTab icon={<TerminalIcon size={28} />} title="No activity yet" hint={EMPTY_HINTS.logs} /> : (
-        <div className="space-y-1 max-h-[calc(100vh-200px)] overflow-y-auto">
-          {logs.map(log => (
-            <div key={log.id} className="rounded border p-border p-elevated px-2.5 py-1.5 text-xs font-mono">
-              <div className="flex items-center gap-2">
-                <span className={`size-1.5 rounded-full shrink-0 ${C[log.type] ?? "bg-gray-500"}`} />
-                <span className="p-text-3">{new Date(log.time).toLocaleTimeString()}</span>
-                <span className="p-text-2">{log.message}</span>
-              </div>
-              {log.detail && <p className="mt-0.5 ml-4 p-text-3">{log.detail}</p>}
-            </div>
-          ))}
-          <div ref={endRef} />
-        </div>
-      )}
-    </div>
-  );
+/** Which work surface a clicked timeline span should reveal. Returns null for
+ *  spans with no specific home (the surface stays put; only the selection moves). */
+function surfaceForKind(kind: TimelineKind): SurfaceKind | null {
+  switch (kind) {
+    case "mcts": case "head-split": case "head-merge": case "gepa": return "Reasoning";
+    case "scaffold": case "shadow-eval": case "craft": case "reflection": case "curriculum": case "skills": return "Brain";
+    case "runtime-exec": return "Devices";
+    default: return null;
+  }
 }
 
 /* ── Main page ────────────────────────────────────────────────── */
@@ -699,27 +438,35 @@ export default function WorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = useProteus(agentId);
-  const [activeTab, setActiveTab] = useState<Tab>("Identity");
+  const [surface, setSurface] = useState<SurfaceKind>("Brain");
   const [chatInput, setChatInput] = useState("");
-  const [memorySearch, setMemorySearch] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
+  const [follow, setFollow] = useState(true);
+  const [selectedRef, setSelectedRef] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialPromptSent = useRef(false);
 
   useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [state.messages]);
 
-  // Auto-focus the Executors tab whenever a new sandbox port is exposed.
-  // The user wants the running app to be the centre of attention the moment
-  // it goes live — no clicking through tabs.
+  // Auto-switch the work surface to the live Preview the moment a new sandbox
+  // port is exposed — the running app becomes the centre of attention.
   const prevPortCountRef = useRef(0);
   useEffect(() => {
     const n = state.pinnedPorts.length;
-    if (n > prevPortCountRef.current) {
-      setActiveTab("Executors");
-    }
+    if (n > prevPortCountRef.current) setSurface("Output");
     prevPortCountRef.current = n;
   }, [state.pinnedPorts.length]);
+
+  // A timeline span drives the work surface (Column C): pin the selection and,
+  // when the span maps to a specific surface, switch to it. Turning off Follow
+  // so the spine stops auto-scrolling while the user inspects.
+  const onTimelineSelect = useCallback((span: TimelineSpan) => {
+    setFollow(false);
+    if (span.refId) setSelectedRef(span.refId);
+    const s = surfaceForKind(span.kind);
+    if (s) setSurface(s);
+  }, []);
 
   useEffect(() => {
     if (initialPromptSent.current) return;
@@ -753,8 +500,8 @@ export default function WorkspacePage() {
         </div>
       )}
       <PanelGroup className="flex-1">
-        {/* ── Chat Panel ──────────────────────────────────────── */}
-        <Panel minSize={30} defaultSize={42}>
+        {/* ── Column A — Chat / Steer ─────────────────────────── */}
+        <Panel minSize={24} defaultSize={34}>
           <div className="flex flex-col h-full border-r p-border">
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
@@ -833,154 +580,43 @@ export default function WorkspacePage() {
 
         <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
 
-        {/* ── Right Panel ─────────────────────────────────────── */}
-        <Panel minSize={25} defaultSize={58}>
-          <div className="flex flex-col h-full">
-            {/* Tabs — thin accent underline */}
-            <div className="flex items-center border-b p-border px-2 gap-0.5">
-              {TABS.map(tab => {
-                // Show a port-count badge on the Executors tab so the user
-                // knows a preview is ready even from another tab.
-                // (STABILITY-AUDIT §C4.)
-                const portCount = tab === "Executors" ? state.pinnedPorts.length : 0;
-                return (
-                  <button key={tab} onClick={() => setActiveTab(tab)}
-                    className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px flex items-center gap-1.5 ${
-                      activeTab === tab ? "p-tab-active border-b-[1.5px]" : "p-text-2 border-transparent hover:p-text"
-                    }`}>
-                    <span>{tab}</span>
-                    {portCount > 0 && (
-                      <span className="inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">
-                        {portCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5">
-              {/* Each tab is wrapped in its own ErrorBoundary keyed by tab
-                  name so a render-time throw doesn't whitescreen the whole
-                  workspace. The boundary resets on tab switch because the
-                  key changes. (STABILITY-AUDIT §D2.) */}
-              <ErrorBoundary key={activeTab} label={activeTab}>
-              {/* Identity */}
-              {activeTab === "Identity" && (as ? (
-                <div className="space-y-4 animate-fade-in">
-                  <div className="flex items-center gap-3 mb-5">
-                    <div className="size-11 rounded-xl flex items-center justify-center p-elevated border p-border">
-                      <FingerprintIcon size={22} className="p-accent" />
-                    </div>
-                    <div>
-                      <div className="font-medium p-text">{as.name}</div>
-                      <div className="text-[11px] p-text-3 font-mono">{as.id.slice(0, 20)}...</div>
-                    </div>
-                  </div>
-                  <div className="space-y-0">
-                    {([
-                      ["Purpose", as.purpose],
-                      ["Model", as.model],
-                      ["Scaffold", `v${as.scaffoldVersion}`],
-                      ["MCTS Nodes", String(as.searchNodeCount)],
-                      ["Crafted Tools", String(as.craftedToolCount)],
-                      ["Messages", String(as.messageCount)],
-                      ["Created", new Date(as.createdAt).toLocaleString()],
-                    ]).map(([l, v]) => (
-                      <div key={l} className="flex items-center justify-between py-2.5 border-b p-border last:border-0">
-                        <span className="text-sm p-text-2">{l}</span>
-                        <span className="text-sm p-text max-w-[60%] text-right">{v}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>)}
-
-              {/* Tools */}
-              {activeTab === "Tools" && (
-                <div className="space-y-2 animate-fade-in">
-                  {state.tools.length === 0 ? (
-                    <EmptyTab icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />
-                  ) : state.tools.map(tool => {
-                    const isLearned = tool.scope === "global";
-                    return (
-                      <div key={tool.name} className="p-card rounded-lg p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <PackageIcon size={13} className="p-accent" />
-                          <span className="text-sm font-medium font-mono p-text">{tool.name}</span>
-                          <Badge variant={isLearned ? "primary" : "secondary"}>
-                            {isLearned ? "Learned" : "Built-in"}
-                          </Badge>
-                          {tool.usageCount > 0 && (
-                            <span className="text-[10px] p-text-3 ml-auto">{tool.usageCount} uses</span>
-                          )}
-                        </div>
-                        <span className="text-xs p-text-2 block leading-relaxed mb-1.5">{tool.description}</span>
-                        {isLearned && <ScoreBar value={tool.qualityScore} className="mt-1" />}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Memory */}
-              {activeTab === "Memory" && (
-                <div className="space-y-3 animate-fade-in">
-                  <div className="relative">
-                    <MagnifyingGlassIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 p-text-3" />
-                    <input value={memorySearch} onChange={e => { setMemorySearch(e.target.value); state.searchMemory(e.target.value); }}
-                      placeholder="Search memory..." className="w-full rounded-lg border p-border p-elevated pl-9 pr-3 py-2 text-sm p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)] placeholder:p-text-3 transition-all" />
-                  </div>
-                  {!memorySearch && state.memoryContent ? (
-                    <div className="p-card rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <DatabaseIcon size={13} className="p-accent" />
-                        <span className="text-xs font-mono p-accent">memory/MEMORY.md</span>
-                        <span className="text-[10px] p-text-3 ml-auto">{state.memoryContent.length} chars</span>
-                      </div>
-                      <div className="prose-chat p-text max-h-[500px] overflow-y-auto">
-                        <MarkdownContent content={state.memoryContent} />
-                      </div>
-                    </div>
-                  ) : !memorySearch ? (
-                    <EmptyTab icon={<FolderOpenIcon size={28} />} title="No memories yet" hint={EMPTY_HINTS.memory} />
-                  ) : state.memory.length === 0 ? (
-                    <EmptyTab icon={<MagnifyingGlassIcon size={28} />} title="No results" />
-                  ) : state.memory.map((entry, i) => (
-                    <div key={i} className="p-card rounded-lg p-3">
-                      <span className="text-[11px] font-mono p-accent">{entry.updatedAt}</span>
-                      <p className="text-xs p-text-2 line-clamp-4 whitespace-pre-wrap mt-1 leading-relaxed">{entry.content}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {activeTab === "MCTS Tree" && <MCTSTreeTab mctsTree={state.mctsTree} />}
-
-              {/* Evolution */}
-              {activeTab === "Evolution" && (
-                <EvolutionTab events={state.evolutionEvents} onRefresh={state.refreshEvolution} />
-              )}
-
-              {activeTab === "Executors" && (
-                <div className="h-full -m-5">
-                  <ExecutorsPanel
-                    executors={state.executors}
-                    outputs={state.executorOutputs}
-                    onExecute={state.executeInExecutor}
-                    onBrowse={(id: string, path: string) => state.rpc("getExecutorFiles", [id, path])}
-                    agentName={agentId}
-                    rpc={state.rpc}
-                    pinnedPorts={state.pinnedPorts}
-                  />
-                </div>
-              )}
-
-              {activeTab === "Logs" && <LogsTab logs={state.logs} connectionStatus={state.connectionStatus} />}
-              </ErrorBoundary>
-            </div>
+        {/* ── Column B — Run Timeline (the spine) ─────────────── */}
+        <Panel minSize={14} defaultSize={22}>
+          <div className="flex flex-col h-full border-r p-border">
+            <ErrorBoundary label="Timeline">
+              <RunTimeline
+                spans={state.runTimeline}
+                selectedRef={selectedRef}
+                onSelect={onTimelineSelect}
+                follow={follow}
+                onToggleFollow={() => setFollow(f => !f)}
+              />
+            </ErrorBoundary>
           </div>
         </Panel>
+
+        <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
+
+        {/* ── Column C — Work Surface ─────────────────────────── */}
+        <Panel minSize={28} defaultSize={44}>
+          <WorkSurface
+            surface={surface}
+            onSurface={setSurface}
+            pinnedPorts={state.pinnedPorts}
+            agentStatus={state.agentStatus}
+            tools={state.tools}
+            memory={state.memory}
+            memoryContent={state.memoryContent}
+            onSearchMemory={state.searchMemory}
+            mctsTree={state.mctsTree}
+            executors={state.executors}
+            executorOutputs={state.executorOutputs}
+            onExecute={state.executeInExecutor}
+            agentName={agentId}
+            rpc={state.rpc}
+          />
+        </Panel>
+
       </PanelGroup>
 
       {forkFor && (
