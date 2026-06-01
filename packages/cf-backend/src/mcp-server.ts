@@ -35,6 +35,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { getAgentByName } from "agents";
+import type { ScaffoldRunResult } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 
 const corsHeaders: Record<string, string> = {
@@ -164,7 +165,11 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ task, useShadowOverride }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        const result = await agent.runScaffoldOnce(task, useShadowOverride ? { useShadowOverride: true } : undefined);
+        // The agents-SDK stub doesn't resolve the @callable's return type, so
+        // annotate from the source-of-truth ScaffoldRunResult shape.
+        const result: ScaffoldRunResult = await agent.runScaffoldOnce(
+          task, useShadowOverride ? { useShadowOverride: true } : undefined,
+        );
         const summary = [
           `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
           result.error ? `error: ${result.error}` : '',

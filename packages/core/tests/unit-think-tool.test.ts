@@ -55,7 +55,7 @@ describe('createThinkTool — strategy dispatch', () => {
     expect(result.error).toMatch(/kaboom/);
   });
 
-  test('merges defaultOptions with caller-supplied options', async () => {
+  test('deep-merges caller options under injected infra (host deps survive)', async () => {
     const reg = createStrategyRegistry();
     let observedOpts: StrategyContext['options'] | undefined;
     reg.register({
@@ -71,17 +71,57 @@ describe('createThinkTool — strategy dispatch', () => {
       },
     });
     const { rt } = createTestRuntime();
+    const controller = { __infra: true };
     const tool = createThinkTool({
       registry: reg, rt, model: rt.llm as never,
-      defaultOptions: () => ({ mcts: { iterations: 7 }, heads: { count: 3 } }),
+      defaultOptions: () => ({ mcts: { iterations: 7 }, heads: { controller, count: 3 } }),
     });
     await tool.execute(
       { strategy: 'inspect', task: 't', options: { heads: { count: 5 } } },
       {} as never,
     );
-    // defaultOptions is spread first; caller options override per-key
+    // Untouched strategy bag passes through verbatim.
     expect(observedOpts?.mcts).toEqual({ iterations: 7 });
-    expect(observedOpts?.heads).toEqual({ count: 5 });
+    // One-level deep merge: caller's `count` overrides, but the host-injected
+    // `controller` is NOT clobbered. This is the bug the shallow spread had.
+    expect(observedOpts?.heads).toEqual({ controller, count: 5 });
+  });
+
+  test('folds typed heads / merge_strategy input into options.heads', async () => {
+    const reg = createStrategyRegistry();
+    let observedOpts: StrategyContext['options'] | undefined;
+    reg.register({
+      id: 'heads',
+      async explore(ctx) {
+        observedOpts = ctx.options;
+        return {
+          strategy: 'heads',
+          best: { text: '', score: 1, source: '' },
+          all: [],
+          cost: { durationMs: 0 },
+        };
+      },
+    });
+    const { rt } = createTestRuntime();
+    const controller = { __infra: true };
+    const tool = createThinkTool({
+      registry: reg, rt, model: rt.llm as never,
+      defaultOptions: () => ({ heads: { controller } }),
+    });
+    const specs = [
+      { task: 'survey prior art', rationale: 'establish baseline' },
+      { task: 'sketch design', rationale: 'exercise constraints' },
+    ];
+    await tool.execute(
+      { strategy: 'heads', task: 't', heads: specs, merge_strategy: 'consensus' },
+      {} as never,
+    );
+    // Injected controller + LLM-supplied specs coexist under options.heads.
+    expect(observedOpts?.heads).toEqual({
+      controller,
+      heads: specs,
+      mergeStrategy: 'consensus',
+    });
   });
 
   test('passes through budget to strategy context', async () => {

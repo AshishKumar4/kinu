@@ -8,13 +8,13 @@ export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/op
 export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
 
 // Evolution engine (3-timescale auto-evolution)
-export { EvolutionEngine } from './evolution/engine.js';
+export { EvolutionEngine, feedbackToQuality } from './evolution/engine.js';
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types.js';
-// Canonical `buildBuiltinTools` is exported below. The legacy 6-tool
+// Canonical `buildBuiltinTools` is exported below. The legacy
 // `buildAgentTools` surface has been removed.
 
 // Configuration
@@ -101,16 +101,20 @@ export {
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from './scaffold/executor.js';
+export { scaffoldEventsToUIStream } from './scaffold/ui-stream.js';
 export {
   initShadowTables,
   getPendingScaffold,
   readScaffoldVersion,
+  readShadowVerdict,
   recordShadowEvaluation,
   decidePromotion,
   applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG,
   type PendingScaffold,
   type ShadowEvaluationRow,
+  type ShadowVerdict,
+  type ShadowVerdictTrial,
   type ShadowConfig,
   type ScaffoldStatus,
   type JudgeFn,
@@ -182,7 +186,7 @@ export {
 } from './memory/hybrid-search.js';
 
 // Memory write primitive — single canonical "save a note to MEMORY.md".
-// Used by workspace.saveNote, save_note builtin tool, and MCP saveNoteFromMcp.
+// Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
 export { appendMemoryNote } from './memory/note.js';
 
 // agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
@@ -200,6 +204,9 @@ export {
 } from './memory/sleep-time-compute.js';
 
 // durable run-event log (Flue-style, SSE-resumable)
+// NOTE: superseded by the unified `events/hub/agent_log` table. The
+// RunEventRecorder API stays as a thin façade over `agent_log` writes for
+// SSE-stream compatibility. New code uses the EventsHub directly.
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,
 } from './events/index.js';
@@ -209,6 +216,12 @@ export {
   type RunEventListener,
   type RunEventQuery,
 } from './events/index.js';
+
+// EventsHub — events / triggers / turn runner / reply channels.
+// Spec: docs/EVENTS-HUB-SPEC.md. Builds the single agent_log ledger and the
+// six load-bearing primitives (trust, reactor, channels, triggers, budget,
+// turn orchestration).
+export * from './events/hub/index.js';
 
 // InferenceLoop — universal contract for "run a turn." Adapts Think /
 // scaffold / Heads / RLM behind one AsyncIterable<RunEvent> stream.
@@ -266,7 +279,48 @@ export {
   initHeadsTables,
   HeadJournal, type HeadJournalRow,
   HeadController, type HeadRuntime, type SpawnedHead, type MergeLLMFn,
+  type SplitPhaseEvent,
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
-  createSplitHeadsTool, type SplitHeadsInput, type SplitHeadsToolDeps,
 } from './heads/index.js';
+
+// ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
+// VFS-backed under /workspace/skills/. A skill is natural-language workflow
+// instructions + a tool-surface restriction (allowed_tools). Distinct from
+// CraftedTools (executable JS): a skill steers the LLM; a crafted tool runs.
+export {
+  parseSkillFile, stringifySkillFile, validateSkillName,
+  discoverSkills, skillPath, BUILTIN_SKILLS,
+  resolveActiveSkills, extractExplicitInvocations,
+  renderActiveSkillsSection, unionAllowedTools, toolAllowedBySkills,
+  runSkillsAction, SkillError, SKILLS_DIR,
+} from './skills/index.js';
+export type {
+  ParsedSkill, SkillSource, SkillIndexEntry, ActiveSkillSet,
+  ActivationReason, SkillsAction, SkillParseResult, SkillErrorCode,
+  SkillsVfs, DiscoverOpts, LoadActiveSkillsOpts,
+  SkillsToolDeps, SkillsToolOutcome,
+} from './skills/index.js';
+
+// ── GEPA (Genetic-Pareto Prompt Evolution) ──
+// Offline batch optimisation of any string-addressable agent artifact —
+// scaffold sources, crafted tool implementations, system-prompt sections.
+// Complementary to the runtime mutable-scaffold loop. Paper: Agrawal et
+// al., ICLR 2026 (arxiv 2507.19457).
+// Only the entry points + persistence + types are public; the algorithm
+// internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
+export {
+  runGepa, runScaffoldGepa, runCraftedToolGepa,
+  DEFAULT_GEPA_BUDGET,
+  // SQL persistence — needed by the orchestrator to create tables + run.
+  initGepaTables, startGepaRun, finishGepaRun,
+  listGepaRuns, loadGepaCandidates, makePersistingHook,
+} from './evolution/gepa/index.js';
+export type {
+  EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
+  GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
+  GepaIterationState, GepaResult,
+  RunScaffoldGepaOpts, RunScaffoldGepaResult,
+  RunCraftedToolGepaOpts, RunCraftedToolGepaResult,
+  GepaRunSummary,
+} from './evolution/gepa/index.js';
 

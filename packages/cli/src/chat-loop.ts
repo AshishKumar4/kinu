@@ -51,14 +51,16 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const engine = new EvolutionEngine(rt, { enabled: !noAutoEvolve });
   engine.onEvent(event => printEvolutionEvent(event.type, event.message));
 
-  // v2.0: same 5-tool surface as CF.
+  // CLI tool surface: execute_tools + run + memory (the always-on builtins).
+  // think / fact / skills are CF-only (they need a HeadController / FactsStore /
+  // SkillsVfs the CLI doesn't provision). `engine` drives auto-evolution on
+  // session end, not a tool.
   // v2.1(B): craftedToolExecute supplies a Node-side compiler for crafted tools.
   // v2.1(E): createExecuteTool is the Node execute-tools factory — core no
   // longer ships an in-process fallback. A sentinel loader keeps the factory
   // branch active in buildBuiltinTools.
   const tools: ToolSet = buildBuiltinTools({
     rt,
-    engine,
     craftedToolExecute: createNodeCraftedExecute(),
     createExecuteTool: createNodeExecuteToolFactory({
       vfs: rt.storage.vfs,

@@ -1,14 +1,17 @@
 /**
- * Unit tests for the canonical 6-tool surface (v2.1 — added split_heads).
+ * Unit tests for the canonical tool surface.
  *
- * v2.0 surface (CLI / always): execute_tools, run, explore, save_note, search_memory.
- * v2.1 addition (CF only when splitHeadsTool is supplied): split_heads.
+ * The agent's tool surface is deliberately SMALL (fewer tools → better LLM
+ * selection). Always-on (no extra deps): execute_tools, run, memory.
+ * Conditional (needs a specific dep in BuiltinToolDeps):
+ *   - skills           ← skills (SkillsToolDeps — vfs + invoke tracker)
+ *   - think            ← thinkTool (StrategyRegistry; subsumes the old bare
+ *                        `explore` + `split_heads` tools via strategy ids)
+ *   - fact             ← facts (FactsStore; remember/recall/forget actions)
  *
- * The split_heads tool is conditional because it requires a HeadController +
- * HeadRuntime — CF supplies them via createSplitHeadsTool; CLI doesn't have
- * Facets and omits the tool. BUILTIN_TOOLS lists all 6 canonical names so
- * crafted-tool filtering (BUILT_IN_TOOL_NAMES) excludes split_heads from
- * craft suggestions.
+ * BUILTIN_TOOLS lists every canonical name so crafted-tool filtering
+ * (BUILT_IN_TOOL_NAMES) excludes them all from craft suggestions, regardless
+ * of whether the runtime happens to wire the conditional dep.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -18,7 +21,6 @@ import {
   buildBuiltinTools,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS,
-  EvolutionEngine,
   type CraftedToolExecute,
 } from '../src/index.js';
 
@@ -61,24 +63,22 @@ const nodeExecFactory = (opts: {
 };
 
 function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
-  const engine = new EvolutionEngine(rt, { enabled: false });
   return buildBuiltinTools({
-    rt, engine,
+    rt,
     craftedToolExecute: nodeCraftedExecute,
     createExecuteTool: nodeExecFactory as never,
     codemodeLoader: { __test: true } as unknown,
   });
 }
 
-// split_heads, think, and the fact tools (remember/recall/forget_fact) are
-// conditional on their deps. Base = everything else. Full surface = all
-// canonical tools.
-const CONDITIONAL_TOOLS = ['split_heads', 'think', 'remember_fact', 'recall_fact', 'forget_fact'] as const;
+// skills, think, and fact are conditional on their deps. Base = everything
+// else. Full surface = all canonical tools.
+const CONDITIONAL_TOOLS = ['skills', 'think', 'fact'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
 
-describe('Agent tools (canonical surface — split_heads/think/facts conditional)', () => {
+describe('Agent tools (canonical surface — skills/think/fact conditional)', () => {
   test('without conditional deps: base tools only', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
@@ -91,14 +91,6 @@ describe('Agent tools (canonical surface — split_heads/think/facts conditional
 
   test('with all conditional deps: full canonical surface present', () => {
     const { rt } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, { enabled: false });
-    const stubSplitHeads = tool({
-      description: 'stub split_heads',
-      inputSchema: jsonSchema<{ rationale: string }>({
-        type: 'object', properties: { rationale: { type: 'string' } }, required: ['rationale'],
-      }),
-      execute: async () => 'stub',
-    });
     const stubThink = tool({
       description: 'stub think',
       inputSchema: jsonSchema<{ strategy: string; task: string }>({
@@ -111,14 +103,26 @@ describe('Agent tools (canonical surface — split_heads/think/facts conditional
       upsert: () => {}, recall: () => null, forget: () => {},
       recentTopK: () => [], all: () => [],
     };
+    const stubSkillsDeps = {
+      vfs: {
+        async exists() { return false; },
+        async readFile() { return ''; },
+        async writeFile() { /* nop */ },
+        async readdir() { return []; },
+        async unlink() { /* nop */ },
+        async mkdir() { /* nop */ },
+      },
+      recordInvoke() { /* nop */ },
+      currentlyInvoked: () => [],
+    };
     const t = buildBuiltinTools({
-      rt, engine,
+      rt,
       craftedToolExecute: nodeCraftedExecute,
       createExecuteTool: nodeExecFactory as never,
       codemodeLoader: { __test: true } as unknown,
-      splitHeadsTool: stubSplitHeads,
       thinkTool: stubThink,
       facts: stubFacts,
+      skills: stubSkillsDeps,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
@@ -145,27 +149,31 @@ describe('Agent tools (canonical surface — split_heads/think/facts conditional
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('tools.');
   });
 
-  test('save_note appends to MEMORY.md', async () => {
+  test('memory action=save appends to MEMORY.md', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = t.save_note as { execute: (args: { content: string }) => Promise<string> };
+    const memoryTool = t.memory as {
+      execute: (args: { action: 'save' | 'search'; content?: string; query?: string }) => Promise<string>;
+    };
 
-    const result = await tool.execute({ content: 'Remember: Python prefers snake_case' });
+    const result = await memoryTool.execute({ action: 'save', content: 'Remember: Python prefers snake_case' });
     expect(result).toContain('saved');
 
     const memory = await rt.memory.read('memory/MEMORY.md');
     expect(memory).toContain('snake_case');
   });
 
-  test('search_memory returns a string', async () => {
+  test('memory action=search returns a string', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
 
     await rt.memory.write('memory/test.md', 'This is about machine learning');
     await rt.memory.index('memory/test.md');
 
-    const tool = t.search_memory as { execute: (args: { query: string }) => Promise<string> };
-    const result = await tool.execute({ query: 'machine learning' });
+    const memoryTool = t.memory as {
+      execute: (args: { action: 'save' | 'search'; content?: string; query?: string }) => Promise<string>;
+    };
+    const result = await memoryTool.execute({ action: 'search', query: 'machine learning' });
     expect(typeof result).toBe('string');
   });
 
@@ -179,6 +187,24 @@ describe('Agent tools (canonical surface — split_heads/think/facts conditional
     const result = await tool.execute({ command: 'echo hi' });
     expect(typeof result).toBe('string');
     expect(result).toContain('Error');
+  });
+
+  test('run with an unprovisioned runtime returns structured runtime_not_provisioned', async () => {
+    // The UI parses this exact JSON shape (parseProvisionError in
+    // WorkspacePage.tsx) to render the amber install-card. Silent fallback to
+    // workspace would defeat the install-card flow, so the contract is:
+    // `{error:'runtime_not_provisioned', runtime, message}`.
+    const { rt } = createTestRuntime();
+    const t = tools(rt);
+    const tool = t.run as { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+    for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
+      const result = await tool.execute({ command: 'echo hi', runtime });
+      const parsed = JSON.parse(result) as { error: string; runtime: string; message: string };
+      expect(parsed.error).toBe('runtime_not_provisioned');
+      expect(parsed.runtime).toBe(runtime);
+      expect(typeof parsed.message).toBe('string');
+      expect(parsed.message.length).toBeGreaterThan(0);
+    }
   });
 
   test('execute_tools exposes workspace and codemode globals', async () => {

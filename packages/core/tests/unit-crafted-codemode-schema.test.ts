@@ -27,7 +27,6 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
-  EvolutionEngine,
   type CraftedToolExecute,
 } from '../src/index.js';
 
@@ -46,7 +45,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       scope: 'local',
     });
 
-    const engine = new EvolutionEngine(rt, { enabled: false });
     let factoryCallCount = 0;
     const factory: CraftedToolExecute = () => {
       factoryCallCount++;
@@ -66,7 +64,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
 
     buildBuiltinTools({
       rt,
-      engine,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: factory,
       createExecuteTool: captureFactory,
@@ -103,7 +100,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       scope: 'local',
     });
 
-    const engine = new EvolutionEngine(rt, { enabled: false });
     let execCalls = 0;
     const factory: CraftedToolExecute = (tool) => async (arg) => {
       execCalls++;
@@ -118,7 +114,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     } | null = null;
     buildBuiltinTools({
       rt,
-      engine,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: factory,
       createExecuteTool: ((opts) => {
@@ -147,7 +142,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     });
     rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('forgotten', 0.01, ${Date.now()})`;
 
-    const engine = new EvolutionEngine(rt, { enabled: false });
     let factoryCalls = 0;
     const factory: CraftedToolExecute = () => {
       factoryCalls++;
@@ -156,7 +150,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     let captured: { tools: Record<string, unknown> } | null = null;
     buildBuiltinTools({
       rt,
-      engine,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: factory,
       createExecuteTool: ((opts) => {

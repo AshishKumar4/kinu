@@ -146,11 +146,119 @@ export async function proxyPreviewRequest(request: Request, env: Env): Promise<R
   try {
     return await sandbox.containerFetch(forwardedReq, port);
   } catch (err) {
-    return new Response(
-      `preview proxy error: ${(err as Error).message}`,
-      { status: 502 },
-    );
+    const msg = (err as Error).message ?? '';
+    // The sandbox SDK surfaces "container is not listening" when the
+    // exposed port has nothing serving it. Render a clear, actionable
+    // page instead of dumping the raw error.
+    if (/not listening/i.test(msg) || /ECONNREFUSED/i.test(msg)) {
+      return renderNotListeningPage({ port, sandboxId, hostname: url.hostname });
+    }
+    return renderProxyErrorPage({ port, sandboxId, message: msg });
   }
+}
+
+// ── User-facing error pages ──────────────────────────────────────
+
+function renderNotListeningPage(opts: {
+  port: number; sandboxId: string; hostname: string;
+}): Response {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Preview not ready · :${opts.port}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #0b0b0c; color: #e4e4e7;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 2rem;
+  }
+  .card {
+    max-width: 640px; width: 100%;
+    background: #18181b; border: 1px solid #27272a; border-radius: 12px;
+    padding: 2rem; box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; }
+  p { line-height: 1.6; color: #a1a1aa; font-size: 0.95rem; margin: 0.5rem 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #27272a; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+  pre {
+    background: #0a0a0b; border: 1px solid #27272a; border-radius: 6px;
+    padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #d4d4d8; white-space: pre-wrap; word-break: break-word;
+  }
+  .hint { color: #71717a; font-size: 0.85rem; margin-top: 1rem; }
+  .meta { color: #52525b; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #27272a; }
+  button {
+    background: #3b82f6; color: white; border: 0; border-radius: 6px;
+    padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 500; cursor: pointer;
+    margin-top: 1rem;
+  }
+  button:hover { background: #2563eb; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1><span class="dot"></span> Preview not ready</h1>
+  <p>Port <code>${opts.port}</code> is exposed publicly but <strong>nothing is listening on it inside the sandbox container yet</strong>.</p>
+  <p>This usually means the agent exposed the port before starting a server on it. Ask the agent:</p>
+  <pre>You exposed port ${opts.port} but the container isn't serving anything on it. Please start a server first (e.g. <code>nohup python3 -m http.server ${opts.port} --directory /workspace/&lt;app&gt; &gt; /tmp/srv.log 2>&amp;1 &amp;</code> for static sites, or <code>nohup node server.js &gt; /tmp/srv.log 2&gt;&amp;1 &amp;</code> for Node), wait ~1s for it to bind, then verify with <code>sandbox.listPorts()</code>.</pre>
+  <p class="hint">Once the agent starts a listener, refresh this page and the preview will appear.</p>
+  <button onclick="location.reload()">Reload preview</button>
+  <div class="meta">sandbox=${opts.sandboxId} · port=${opts.port}</div>
+</div>
+</body>
+</html>`;
+  return new Response(html, {
+    status: 503,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
+function renderProxyErrorPage(opts: { port: number; sandboxId: string; message: string }): Response {
+  // Escape HTML in the message to prevent any reflected injection.
+  const safeMsg = String(opts.message).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!),
+  );
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Preview error · :${opts.port}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #0b0b0c; color: #e4e4e7;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 2rem;
+  }
+  .card { max-width: 640px; background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 2rem; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; margin-right: 0.5rem; }
+  pre { background: #0a0a0b; border: 1px solid #27272a; border-radius: 6px; padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8rem; color: #fca5a5; white-space: pre-wrap; word-break: break-word; }
+  .meta { color: #52525b; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #27272a; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1><span class="dot"></span> Preview proxy error</h1>
+  <pre>${safeMsg}</pre>
+  <div class="meta">sandbox=${opts.sandboxId} · port=${opts.port}</div>
+</div>
+</body>
+</html>`;
+  return new Response(html, {
+    status: 502,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }
 
 /** Minimal surface of the Sandbox DO we depend on (avoid importing the class). */

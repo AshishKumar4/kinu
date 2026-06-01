@@ -10,7 +10,7 @@
  *                           produces a failure post-mortem.
  *
  *   HEAD mode         — long-form multi-step inference used by the
- *                           branching-heads primitive (split_heads tool).
+ *                           branching-heads primitive (think strategy=heads).
  *                           @callable init() / runAsHead() / abort() drive
  *                           an agentic loop with a restricted tool surface
  *                           (record_evidence, record_decision, sandbox_*).
@@ -31,6 +31,7 @@ import { Agent, callable } from "agents";
 import { generateText, generateObject, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { aiSchema } from "./ai-schema.js";
 import type { UserDO } from "./user/user-do.js";
 import {
   type CraftedTool,
@@ -546,11 +547,11 @@ export class ExplorationAgent extends Agent<Env> {
       async mergeLLM(prompt: string, _schema: typeof MergeOutputSchema): Promise<MergeOutput> {
         const { object } = await generateObject({
           model: facet.getModel(parentInput.model),
-          schema: MergeOutputSchema,
+          schema: aiSchema<MergeOutput>(MergeOutputSchema),
           prompt,
           maxOutputTokens: 2048,
         });
-        return object as MergeOutput;
+        return object;
       },
     };
 
@@ -576,10 +577,7 @@ export class ExplorationAgent extends Agent<Env> {
   // ── Head-mode prompt + helpers ──────────────────────────────────
 
   private recordHeadToolCall(name: string, args: Record<string, unknown>, summary: string) {
-    this.headToolCalls.push({
-      id: `tc-${nanoid(6)}`, toolName: name, args,
-      result: summary, timestamp: Date.now(),
-    });
+    this.headToolCalls.push({ name, args, result: summary });
   }
 
   private buildHeadSystemPrompt(input: HeadInput): string {

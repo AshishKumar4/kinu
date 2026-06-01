@@ -141,19 +141,86 @@ export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
   }
 }
 
-/** Read the scaffold code for a specific version (from the versioned backup file). */
+export interface ShadowVerdictTrial {
+  id: string;
+  task: string;
+  currentScore: number | null;
+  pendingScore: number | null;
+  winner: 'current' | 'pending' | 'tie' | null;
+  rationale: string | null;
+  evaluatedAt: number;
+}
+
+export interface ShadowVerdict {
+  version: number | null;
+  trials: ShadowVerdictTrial[];
+  summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number };
+}
+
+/**
+ * The per-trial shadow-eval verdict for a pending version — the data behind the
+ * promote/rollback decision grid. Reads `scaffold_evaluations` (the table
+ * shadow-mode actually populates), ordered regressions-first (current beat
+ * pending → top) so the operator sees risk first. `winRate` is over decisive
+ * (non-tie) trials. Returns an empty verdict when no pending version is given.
+ */
+export function readShadowVerdict(sql: SqlExecutor, version: number | null): ShadowVerdict {
+  if (version == null) {
+    return { version: null, trials: [], summary: { trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 } };
+  }
+  type Row = {
+    id: string; task: string; current_score: number | null; pending_score: number | null;
+    winner: 'current' | 'pending' | 'tie' | null; judge_rationale: string | null; evaluated_at: number;
+  };
+  const rows = sql<Row>`
+    SELECT id, task, current_score, pending_score, winner, judge_rationale, evaluated_at
+    FROM scaffold_evaluations WHERE pending_version = ${version}
+    ORDER BY CASE winner WHEN 'current' THEN 0 WHEN 'tie' THEN 1 ELSE 2 END, evaluated_at DESC`;
+  let pendingWins = 0, currentWins = 0, ties = 0;
+  for (const r of rows) {
+    if (r.winner === 'pending') pendingWins++;
+    else if (r.winner === 'current') currentWins++;
+    else if (r.winner === 'tie') ties++;
+  }
+  const decisive = pendingWins + currentWins;
+  return {
+    version,
+    trials: rows.map((r) => ({
+      id: r.id, task: r.task,
+      currentScore: r.current_score, pendingScore: r.pending_score,
+      winner: r.winner, rationale: r.judge_rationale, evaluatedAt: r.evaluated_at,
+    })),
+    summary: { trials: rows.length, pendingWins, currentWins, ties, winRate: decisive === 0 ? 0 : pendingWins / decisive },
+  };
+}
+
+/** Read the scaffold code for a specific version.
+ *
+ * Prefers the versioned backup file `scaffold/agent.js.v{N}` because it's the
+ * canonical per-version source — the live `scaffold/agent.js` is just an
+ * alias for whatever version currently has status='current'. Falls back to
+ * the live file only when no versioned backup exists (cold-start v0). This
+ * ordering matters: after `modifyScaffold` writes a pending v{N+1}, the live
+ * file still holds the current's content, so `readScaffoldVersion(rt, N+1)`
+ * MUST read the versioned file to recover the pending code (used by
+ * `applyPromotionDecision('promote')` to swap the live file).
+ */
 export async function readScaffoldVersion(
   rt: AgentRuntime,
   version: number,
 ): Promise<string | null> {
   try {
-    if (version === (await rt.identity.scaffold.version())) {
-      return await rt.identity.scaffold.read();
-    }
-    // Versioned backups live at scaffold/agent.js.v{N}
     const content = await rt.storage.vfs.readFile(`scaffold/agent.js.v${version}`, { encoding: 'utf8' });
     return typeof content === 'string' ? content : new TextDecoder().decode(content);
   } catch {
+    // No versioned backup — happens for v0 (the bootstrap writes the live
+    // file but not a versioned backup). Fall back to live ONLY when the
+    // requested version matches what `rt.identity.scaffold.version()` reports.
+    try {
+      if (version === (await rt.identity.scaffold.version())) {
+        return await rt.identity.scaffold.read();
+      }
+    } catch { /* nop */ }
     return null;
   }
 }
@@ -235,24 +302,36 @@ export async function applyPromotionDecision(
 ): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback' }> {
   const sql = rt.storage.sql;
   if (decision === 'promote') {
-    // The pending version's code is already at scaffold/agent.js (it was
-    // written by modifyScaffold's gate 4). Its predecessor was archived at
-    // scaffold/agent.js.v{pending-1}. Just flip statuses.
+    // Copy the pending version's code (versioned file written by
+    // modifyScaffold gate 4) into the live `scaffold/agent.js`. The previous
+    // current's content is already archived at `scaffold/agent.js.v{pending-1}`,
+    // so rollback can recover.
+    const pendingCode = await readScaffoldVersion(rt, pending.version);
+    if (pendingCode == null) {
+      throw new Error(`promote failed: no scaffold code found for v${pending.version}`);
+    }
+    await rt.identity.scaffold.write(pendingCode);
     sql`UPDATE scaffold_versions SET status = 'historical'
         WHERE status = 'current' AND version != ${pending.version}`;
     sql`UPDATE scaffold_versions SET status = 'current'
         WHERE version = ${pending.version}`;
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
-  // Rollback: restore the previous version's code into scaffold/agent.js.
-  const prevVersion = pending.version - 1;
-  const prev = await readScaffoldVersion(rt, prevVersion);
-  if (prev != null) {
-    await rt.identity.scaffold.write(prev);
+  // Rollback: the live `scaffold/agent.js` already holds the current version's
+  // code (modifyScaffold no longer overwrites it on proposal), so flipping the
+  // pending to rolled_back reverts the user-visible behaviour. Derive the
+  // version to keep from the status='current' row — robust to non-contiguous
+  // numbering (after rollback cycles the pending is NOT necessarily current+1).
+  const currentRows = sql<{ version: number }>`
+    SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
+  const currentVersion = currentRows[0]?.version ?? (pending.version - 1);
+  // Re-write the live file from the current version defensively, in case it
+  // was tampered with mid-trial.
+  const currentCode = await readScaffoldVersion(rt, currentVersion);
+  if (currentCode != null) {
+    await rt.identity.scaffold.write(currentCode);
   }
   sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE version = ${pending.version}`;
-  sql`UPDATE scaffold_versions SET status = 'current'
-      WHERE version = ${prevVersion}`;
-  return { newCurrentVersion: prevVersion, action: 'rollback' };
+  return { newCurrentVersion: currentVersion, action: 'rollback' };
 }

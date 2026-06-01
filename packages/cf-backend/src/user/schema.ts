@@ -66,4 +66,26 @@ export function initUserTables(sql: SqlExec): void {
       started_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+
+  // User-level MCP server registry. Tokens + dynamic client registrations
+  // live under separate keys written by DurableObjectOAuthClientProvider into
+  // the same DO storage; this table holds only the user-visible config.
+  //
+  // `transport` is one of: 'auto' (streamable-http with SSE fallback) | 'sse'
+  // | 'streamable-http'. `headers` is an optional JSON object of static
+  // request headers (e.g. CF Access service tokens, Bearer for self-hosted).
+  // `allowed_tools` is a JSON array of MCP tool names; null = expose all.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_mcp_servers (
+      id            TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      server_url    TEXT NOT NULL,
+      transport     TEXT NOT NULL,
+      headers       TEXT,
+      allowed_tools TEXT,
+      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_name ON user_mcp_servers (name)`);
 }

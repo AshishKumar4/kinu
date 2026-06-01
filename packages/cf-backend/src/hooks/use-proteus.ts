@@ -5,10 +5,23 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
-import type { ToolInfo, MemoryEntry, MCTSNode } from "../lib/protocol";
+import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan } from "../lib/protocol";
 import { touchAgent, registerAgent } from "../lib/user-api";
 
+export interface ExecutorOutput {
+  id: string; command: string; stdout: string; stderr: string;
+  exit_code: number; created_at: number;
+}
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export interface ForkLineage {
+  sourceAgentId: string;
+  sourceAgentName: string;
+  sourceMessageId: string;
+  sourceMessageCreatedAt: number;
+  forkedAt: number;
+}
 
 export interface AgentStatus {
   id: string;
@@ -21,6 +34,7 @@ export interface AgentStatus {
   craftedToolCount: number;
   messageCount: number;
   model: string;
+  forkLineage: ForkLineage | null;
 }
 
 export interface EvolutionEventRow {
@@ -50,11 +64,14 @@ export function useProteus(agentId?: string) {
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTree, setMctsTree] = useState<MCTSNode | null>(null);
   const [evolutionEvents, setEvolutionEvents] = useState<EvolutionEventRow[]>([]);
+  // The unified Run Timeline spine — one server-merged, ordered span stream
+  // (getRunTimeline). Single source; no client-side merge of three RPCs.
+  const [runTimeline, setRunTimeline] = useState<TimelineSpan[]>([]);
   const [memoryContent, setMemoryContent] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [executors, setExecutors] = useState<Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>>([]);
-  const [executorOutputs, setExecutorOutputs] = useState<Map<string, Array<{ id: string; command: string; stdout: string; stderr: string; exit_code: number; created_at: number }>>>(new Map());
+  const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   // Pinned (exposed) ports for the sandbox executor — polled hook-level so
   // a count badge on the Executors tab updates regardless of which tab is
   // currently visible. (STABILITY-AUDIT §C4.)
@@ -212,6 +229,9 @@ export function useProteus(agentId?: string) {
     agent.call("getEvolutionEvents", [200])
       .then(events => setEvolutionEvents((events as EvolutionEventRow[]).reverse()))
       .catch(() => {});
+    agent.call("getRunTimeline", [{ limit: 250 }])
+      .then(spans => setRunTimeline(spans as TimelineSpan[]))
+      .catch(() => {});
     agent.call("getMctsTree", [])
       .then((nodes) => {
         const list = nodes as Array<{
@@ -361,6 +381,11 @@ export function useProteus(agentId?: string) {
       })
       .catch(() => {});
 
+    // Unified run timeline spine.
+    agent.call("getRunTimeline", [{ limit: 250 }])
+      .then(spans => setRunTimeline(spans as TimelineSpan[]))
+      .catch(() => {});
+
     // Executors
     agent.call("getExecutors", [])
       .then((list) => {
@@ -389,6 +414,7 @@ export function useProteus(agentId?: string) {
     setMemoryContent("");
     setMctsTree(null);
     setEvolutionEvents([]);
+    setRunTimeline([]);
     setError(null);
     setLogs([]);
     seenToolCalls.current.clear();
@@ -434,10 +460,25 @@ export function useProteus(agentId?: string) {
   }, [agent]);
 
   const setModel = useCallback((modelId: string) => {
-    agent.call("setModel", [modelId]).then(() => {
-      setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
-    }).catch(() => {});
-  }, [agent]);
+    // Optimistically reflect in the UI so the dropdown doesn't snap back
+    // while the RPC is in flight.
+    setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
+    agent.call("setModel", [modelId]).then((result) => {
+      // Server may have normalized the spec — sync the UI to authoritative value.
+      const r = result as { ok?: boolean; spec?: string };
+      if (r?.spec) setAgentStatus(prev => prev ? { ...prev, model: r.spec! } : prev);
+    }).catch((err) => {
+      // Surface to the user, never swallow. Roll the UI back so the select
+      // reflects the actually-stored value.
+      console.error('[setModel] failed:', err);
+      addLog('error', `setModel failed: ${(err as Error).message ?? String(err)}`);
+      // Re-fetch the authoritative stored spec.
+      agent.call("getStoredModelSpec", []).then((r) => {
+        const stored = (r as { spec?: string | null }).spec ?? '';
+        setAgentStatus(prev => prev ? { ...prev, model: stored } : prev);
+      }).catch(() => {});
+    });
+  }, [agent, addLog]);
 
   // Single source of truth: the server-side broadcast. executeInExecutor ONLY
   // fires the RPC; the broadcast handler below renders the row. This prevents
@@ -511,6 +552,7 @@ export function useProteus(agentId?: string) {
     memoryContent,
     mctsTree,
     evolutionEvents,
+    runTimeline,
     logs,
     sendChat,
     abortChat: stop,

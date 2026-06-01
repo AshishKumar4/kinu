@@ -3,12 +3,14 @@
 // Wraps HeadController.run behind the StrategyContext/StrategyResult shape.
 // Per-strategy options (StrategyContext.options.heads):
 //   { controller: HeadController, heads: SplitRequest['heads'],
-//     mergeStrategy?, mergeModel?, maxDepth?, inheritedContext? }
-import type { HeadController } from '../heads/controller.js';
+//     mergeStrategy?, mergeModel?, maxDepth?, inheritedContext?, onPhase? }
+// `controller`, `inheritedContext` and `onPhase` are host-injected (via the
+// think tool's defaultOptions); `heads` / `mergeStrategy` come from the LLM.
+import type { HeadController, SplitPhaseEvent } from '../heads/controller.js';
 import type {
-  HeadBudget, SerializedMessage, SplitRequest, MergeStrategy,
+  HeadBudget, SerializedMessage, SplitRequest, MergeStrategy, MergeResult,
 } from '../heads/types.js';
-import { DEFAULT_HEAD_BUDGET } from '../heads/types.js';
+import { DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY } from '../heads/types.js';
 import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
 
 interface HeadsStrategyOptions {
@@ -21,6 +23,8 @@ interface HeadsStrategyOptions {
   maxWallClockMs?: number;
   inheritedContext?: SerializedMessage[];
   defaultModel?: string;
+  /** Host event sink — fires once on split (real head ids) and once on merge. */
+  onPhase?: (event: SplitPhaseEvent) => void;
 }
 
 export function createHeadsStrategy(): ExplorationStrategy {
@@ -37,9 +41,10 @@ export function createHeadsStrategy(): ExplorationStrategy {
         throw new Error('Heads strategy requires options.heads.controller (HeadController).');
       }
       if (!o.heads || o.heads.length === 0) {
-        throw new Error('Heads strategy requires options.heads.heads (array of head specs).');
+        throw new Error('Heads strategy requires `heads` (an array of 2–6 head specs).');
       }
 
+      const strategy: MergeStrategy = o.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
       const parentBudget: HeadBudget = {
         ...DEFAULT_HEAD_BUDGET,
         maxDepth: o.maxDepth ?? DEFAULT_HEAD_BUDGET.maxDepth,
@@ -54,13 +59,15 @@ export function createHeadsStrategy(): ExplorationStrategy {
         request: {
           rationale: ctx.task,
           heads: o.heads,
-          mergeStrategy: o.mergeStrategy,
+          mergeStrategy: strategy,
           mergeModel: o.mergeModel,
         },
         parentBudget,
         model: o.defaultModel,
+        onPhase: o.onPhase,
       });
 
+      const formatted = formatMergeResult(merge, strategy);
       const candidates = merge.headIds.map((id) => ({
         text: merge.mergedNarrative,
         payload: { headId: id, recommendations: merge.recommendations, unresolved: merge.unresolvedQuestions },
@@ -71,7 +78,7 @@ export function createHeadsStrategy(): ExplorationStrategy {
       return {
         strategy: 'heads',
         best: {
-          text: merge.mergedNarrative,
+          text: formatted,
           payload: merge,
           score: candidates[0]?.score ?? 1,
           source: 'merge',
@@ -82,8 +89,41 @@ export function createHeadsStrategy(): ExplorationStrategy {
           durationMs: Date.now() - t0,
           iterations: merge.costSummary.headCount,
         },
-        trace: `Heads(n=${merge.headIds.length}) → merge(strategy=${o.mergeStrategy ?? 'synthesize'})`,
+        trace: `Heads(n=${merge.headIds.length}) → merge(strategy=${strategy})`,
       };
     },
   };
+}
+
+/** Render a MergeResult into the agent-readable narrative the LLM continues
+ *  its turn from: the synthesized narrative plus selected decisions, open
+ *  questions, recommendations, and a one-line cost summary. */
+function formatMergeResult(result: MergeResult, strategy: MergeStrategy): string {
+  const lines: string[] = [];
+  lines.push(result.mergedNarrative);
+  if (result.selectedDecisions.length > 0) {
+    lines.push('');
+    lines.push('### Selected decisions');
+    for (const d of result.selectedDecisions) {
+      lines.push(`- **${d.question}** → ${d.choice} _(${d.rationale})_`);
+    }
+  }
+  if (result.unresolvedQuestions.length > 0) {
+    lines.push('');
+    lines.push('### Unresolved questions');
+    for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
+  }
+  if (result.recommendations.length > 0) {
+    lines.push('');
+    lines.push('### Recommendations');
+    for (const r of result.recommendations) lines.push(`- ${r}`);
+  }
+  lines.push('');
+  lines.push(
+    `_(merge=${strategy}, heads=${result.costSummary.headCount}, ` +
+    `tokens=${result.costSummary.totalTokens}, ` +
+    `wall=${Math.round(result.costSummary.totalWallClockMs / 100) / 10}s, ` +
+    `depth=${result.costSummary.maxDepth})_`,
+  );
+  return lines.join('\n');
 }

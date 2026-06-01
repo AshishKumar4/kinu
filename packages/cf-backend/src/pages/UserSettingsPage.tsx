@@ -59,17 +59,17 @@ export default function UserSettingsPage() {
     try {
       setErr(null);
       const [p, c, k, m, defaultModel] = await Promise.all([
-        getProfile(),
-        listCredentials(),
-        codexStatus(),
-        listAvailableModels(),
+        getProfile().catch(() => null),
+        listCredentials().catch(() => []),
+        codexStatus().catch(() => null),
+        listAvailableModels().catch(() => []),
         getConfig('default_model').catch(() => ({ key: 'default_model', value: null })),
       ]);
       setProfile(p);
-      setCreds(c);
+      setCreds(c ?? []);
       setCodex(k);
-      setModels(m);
-      setDefaults({ model: defaultModel.value });
+      setModels(m ?? []);
+      setDefaults({ model: defaultModel?.value ?? null });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -80,7 +80,7 @@ export default function UserSettingsPage() {
   useEffect(() => { refresh(); }, [refresh]);
 
   if (loading) {
-    return <div className="h-full flex items-center justify-center"><Loader size="md" /></div>;
+    return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
   }
 
   return (
@@ -120,6 +120,21 @@ export default function UserSettingsPage() {
         {/* BYO API keys */}
         <Card title="API keys" icon={KeyIcon}>
           <ApiKeyManager creds={creds} onChanged={refresh} />
+        </Card>
+
+        {/* MCP servers */}
+        <Card title="MCP servers" icon={PlugIcon}>
+          <div className="space-y-2 text-xs">
+            <p className="p-text-2">
+              Connect Model Context Protocol servers (GitHub, Notion, your own…) so every agent
+              you own can call their tools. One OAuth grant per server; shared across all your
+              agents.
+            </p>
+            <Link
+              to="/user/settings/mcp"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md p-card hover:p-card-hover"
+            >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
+          </div>
         </Card>
 
         {/* Defaults */}

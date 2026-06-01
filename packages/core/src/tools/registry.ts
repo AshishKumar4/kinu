@@ -1,7 +1,7 @@
 /**
  * Canonical tool registry — the single source of truth for Proteus's built-in
  * tool names and descriptions. Consumed by:
- *   - tools/builtins.ts      (factory for the 5-tool ToolSet)
+ *   - tools/builtins.ts      (factory for the built-in ToolSet)
  *   - evolution/engine.ts    (crafted-tool filter — BUILT_IN_TOOL_NAMES)
  *   - cf-backend/orchestrator.ts  (getToolList, getToolDescriptions, beforeTurn)
  *   - cli surfaces           (chat-loop, tui)
@@ -12,14 +12,10 @@
 export const BUILTIN_TOOLS = [
   'execute_tools',
   'run',
-  'explore',
-  'split_heads',
+  'skills',
   'think',
-  'save_note',
-  'search_memory',
-  'remember_fact',
-  'recall_fact',
-  'forget_fact',
+  'memory',
+  'fact',
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
@@ -58,33 +54,39 @@ export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
     'as a live iframe in the chat and on the Executors tab. Agent-crafted tools are reachable ' +
     'as tools.<name>(args) and their bodies may call workspace.*, sandbox.*, codemode.*, ' +
     'tools.* freely. Runs in sandboxed Worker.',
-  run: 'Run a POSIX shell command (cat, grep, find, sed, ls, etc.). Pipes and redirects work. Optional executor param routes to nimbus/sandbox/laptop.',
-  explore:
-    'MCTS tree search — direct engine call. Prefer think({strategy: "mcts", ...}); ' +
-    'this tool is kept for back-compat and parity with the bare runMCTS engine.',
-  split_heads:
-    'Parallel heads — direct controller call. Prefer think({strategy: "heads", ...}); ' +
-    'use this tool when you need per-head model overrides or custom merge strategies ' +
-    'not exposed by think(). 2-6 heads, each with its own scratch, merged via LLM ' +
-    'synthesis. Heads may recursively split under a depth budget (default 3).',
+  run:
+    'Run a shell command. Pipes, redirects, env vars all work. The `runtime` ' +
+    'parameter chooses where it runs: "workspace" (default — the agent\'s own ' +
+    'VFS-backed virtual shell, no external resources), "nimbus" (lightweight DO ' +
+    'sandbox, good for most one-shot tasks), "sandbox" (full Cloudflare Sandbox ' +
+    'with a real Linux userland, needed for long-running servers and heavy ' +
+    'installs), or "laptop" (the user\'s own machine via the PC daemon, only ' +
+    'available once the user has installed it). If you need a runtime that ' +
+    'isn\'t provisioned yet, just call execute with the runtime you want — the ' +
+    'UI will surface the install card to the user.',
+  skills:
+    'Workflow skills — Claude-Code / Hermes-compatible SKILL.md files that ' +
+    'restrict your tool surface and inject task-specific instructions. One ' +
+    'tool, six actions: list (catalogue), read (one skill\'s body), invoke ' +
+    '(activate for this turn), create / edit / delete (CRUD on VFS-stored ' +
+    'skills). Skills live at /workspace/skills/<name>.md. Invoke when the ' +
+    'user asks for a workflow you\'ve previously codified or one of the ' +
+    'built-in skills (e.g. /audit-implementation) applies.',
   think:
-    'Unified exploration dispatcher. Pick a registered strategy by id and run it. ' +
-    'Available strategies today: "single-shot" (one LLM call, baseline), "mcts" ' +
-    '(tree search with parallel rollouts), "heads" (parallel reasoning streams + ' +
-    'LLM merge). Pick the cheapest strategy that fits the task — single-shot for ' +
-    'simple questions, mcts for multi-step planning where the right approach is ' +
-    'not obvious, heads when sub-questions are known upfront.',
-  save_note:
-    'Save a note to long-term memory (memory/MEMORY.md). FTS-indexed so future turns can retrieve it via search_memory.',
-  search_memory:
-    'Full-text search over long-term memory. Returns matching passages with scores.',
-  remember_fact:
-    "Upsert a typed fact into the agent's world model (idempotent, keyed). Use this when a value " +
-    "is going to be referenced again across turns: user preferences, project state, dates, names, " +
-    "URLs, current configuration. Value may be any JSON. Beats save_note for re-readable state.",
-  recall_fact:
-    'Read a previously remembered fact by key. Returns null if not set. Top-recent facts are ' +
-    'auto-surfaced in your system prompt — recall_fact is for explicit lookups by key.',
-  forget_fact:
-    'Delete a fact from the world model. Use when state becomes stale or wrong.',
+    'Unified exploration dispatcher — the single entry point for deeper reasoning. ' +
+    'Pick a strategy by id: "single-shot" (one LLM call, baseline), "mcts" (tree ' +
+    'search with parallel rollouts — for multi-step planning where the right ' +
+    'approach is not obvious), "heads" (parallel reasoning streams + LLM merge — ' +
+    'when sub-questions are known upfront). Pick the cheapest strategy that fits.',
+  memory:
+    'Long-term prose memory (memory/MEMORY.md, FTS-indexed). One tool, two actions: ' +
+    '"save" (append a note for future turns to retrieve) and "search" (full-text ' +
+    'lookup, returns matching passages with scores). For keyed/typed state that ' +
+    'you\'ll reference by name, prefer `fact` instead.',
+  fact:
+    "The agent's typed, keyed world model — idempotent facts you reference across " +
+    'turns (user preferences, project state, dates, names, URLs, configuration). ' +
+    'One tool, three actions: "remember" (upsert key→value, value is any JSON, ' +
+    'optional confidence), "recall" (read by key; top-recent facts are also ' +
+    'auto-surfaced in your system prompt), "forget" (delete a stale/wrong fact).',
 };

@@ -103,3 +103,116 @@ export const setConfig        = (key: string, value: string) =>
 export const listAvailableModels    = () => api<ModelMenuEntry[]>('GET', '/models');
 export const listConnectedProviders = () =>
   api<Array<{ id: string; label: string; credentialKeys: string[] }>>('GET', '/providers');
+
+// ── MCP servers ────────────────────────────────────────────────────
+
+export type McpTransport = 'auto' | 'sse' | 'streamable-http';
+export type McpConnectionStatus =
+  | 'connecting' | 'authenticating' | 'connected'
+  | 'ready' | 'discovering' | 'failed' | 'unknown';
+
+export interface McpServerSummary {
+  id: string;
+  name: string;
+  serverUrl: string;
+  transport: McpTransport;
+  status: McpConnectionStatus;
+  error: string | null;
+  toolsCount: number;
+  authUrl: string | null;
+  allowedTools: string[] | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface McpServerInput {
+  name: string;
+  serverUrl: string;
+  transport?: McpTransport;
+  headers?: Record<string, string>;
+  allowedTools?: string[];
+}
+
+export const listMcpServers = () => api<McpServerSummary[]>('GET', '/mcp/servers');
+export const addMcpServer   = (input: McpServerInput) =>
+  api<{ id: string; authUrl: string | null }>('POST', '/mcp/servers', input);
+export const removeMcpServer = (id: string) =>
+  api<{ ok: boolean }>('DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
+export const updateMcpServer = (id: string, patch: Partial<Pick<McpServerInput, 'name' | 'headers' | 'allowedTools'>>) =>
+  api<{ ok: boolean }>('PATCH', `/mcp/servers/${encodeURIComponent(id)}`, patch);
+
+// ── EventsHub: triggers + events (per-agent endpoints) ─────────────
+
+export interface TriggerSummary {
+  id: string;
+  kind: 'webhook_durable' | 'webhook_ephemeral' | 'timer_oneshot' | 'timer_cron'
+      | 'process_watch' | 'file_watch' | 'peer_inbox' | 'mcp_route';
+  spec: Record<string, unknown>;
+  creator_trust: 'external' | 'authenticated' | 'owner' | 'self';
+  state: 'active' | 'paused' | 'revoked';
+  created_at: number;
+  paused_at: number | null;
+  revoked_at: number | null;
+  rate_limit_per_min: number;
+}
+
+export interface CreateWebhookOpts {
+  label: string;
+  auth_mode: 'hmac' | 'bearer' | 'mtls';
+  secret?: string;
+  accepted_content_type?: string;
+  rate_limit_per_min?: number;
+}
+
+export interface CreateWebhookResult {
+  trigger_id: string;
+  url: string;
+  auth_mode: 'hmac' | 'bearer' | 'mtls';
+  secret: string | null;       // returned once at creation; never again
+}
+
+export interface EventRow {
+  id: string;
+  trace_id: string;
+  caused_by: string | null;
+  ingress: string;
+  variant: string;
+  trust: 'external' | 'authenticated' | 'owner' | 'self';
+  priority: 'urgent' | 'normal' | 'background';
+  payload_visibility: 'full' | 'redact' | 'hash' | 'hmac' | 'opaque_handle';
+  payload: unknown;
+  received_at: number;
+}
+
+/** Agent-scoped HTTP fetch; same auth as the user routes. */
+async function agentApi<T>(method: string, agentName: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}${path}`, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { const j = await res.json() as { error?: string }; detail = j?.error ?? ''; } catch { /* nop */ }
+    throw new Error(`${method} /api/agents/${agentName}${path} → ${res.status} ${detail}`);
+  }
+  return await res.json() as T;
+}
+
+export const listTriggers = (agentName: string) =>
+  agentApi<{ triggers: TriggerSummary[] }>('GET', agentName, '/triggers');
+
+export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts) =>
+  agentApi<CreateWebhookResult>('POST', agentName, '/triggers', opts);
+
+export const cancelTrigger = (agentName: string, trigger_id: string) =>
+  agentApi<{ ok: boolean; changed: boolean }>('DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);
+
+export const listAgentEvents = (agentName: string, opts?: { variant?: string; since?: number; limit?: number }) => {
+  const qs = new URLSearchParams();
+  if (opts?.variant) qs.set('variant', opts.variant);
+  if (opts?.since)   qs.set('since', String(opts.since));
+  if (opts?.limit)   qs.set('limit', String(opts.limit));
+  const tail = qs.toString();
+  return agentApi<{ events: EventRow[] }>('GET', agentName, `/events${tail ? '?' + tail : ''}`);
+};

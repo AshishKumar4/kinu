@@ -7,6 +7,10 @@
 
 /** MCTS search parameters */
 export interface MCTSDefaults {
+  /** Default search iterations when the caller doesn't supply a budget. */
+  budget: number;
+  /** Default number of parallel branches expanded per node. */
+  branches: number;
   maxDepth: number;
   explorationWeight: number;
   pruneThreshold: number;
@@ -67,6 +71,8 @@ export const DEFAULT_MAX_STEPS = 500;
 export const DEFAULT_CONFIG: AgentConfig = {
   maxSteps: DEFAULT_MAX_STEPS,
   mcts: {
+    budget: 5,
+    branches: 3,
     maxDepth: 20,
     explorationWeight: Math.SQRT2,
     pruneThreshold: 0.25,

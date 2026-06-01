@@ -10,6 +10,8 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS,
   type BuiltinToolName,
 } from './tools/registry.js';
+import { renderActiveSkillsSection } from './skills/render.js';
+import type { ActiveSkillSet } from './skills/types.js';
 
 export interface SystemPromptOptions {
   /** Executor provider names currently registered (e.g. ['workspace', 'nimbus']). */
@@ -18,19 +20,23 @@ export interface SystemPromptOptions {
   extraKnowledge?: string;
   /** Override the soul/purpose lookup. If omitted, reads from agent_soul. */
   purposeOverride?: string;
+  /** Active skills for this turn — body injected into prompt, tool surface
+   *  restricted to the union of their `allowed_tools`. Resolved at turn
+   *  start by `skills/loader.resolveActiveSkills`. */
+  activeSkills?: ActiveSkillSet;
 }
 
 const FALLBACK_PURPOSE = 'You are Proteus, a self-evolving coding agent with a persistent ' +
-  'world model (remember_fact / recall_fact), a mutable tool surface (codemode crafted ' +
-  'tools), parallel exploration (think / split_heads), and the ability to spawn sub-LLM ' +
-  'calls inside the codemode sandbox (llm.query).';
+  'world model (the `fact` tool), a mutable tool surface (codemode crafted tools), ' +
+  'parallel exploration (the `think` tool — mcts / heads strategies), and the ability ' +
+  'to spawn sub-LLM calls inside the codemode sandbox (llm.query).';
 
 function renderExecutorSection(names: string[]): string {
   if (names.length === 0) return '';
   const lines = names.map((n) => {
     switch (n) {
       case 'workspace':
-        return '  **workspace.*** — local VFS + shell (readFile, writeFile, readdir, exists, exec, listTools, createTool). For memory use the top-level `save_note` / `search_memory` tools, not workspace.*.';
+        return '  **workspace.*** — local VFS + shell (readFile, writeFile, readdir, exists, exec, listTools, createTool). For memory use the top-level `memory` tool (save / search), not workspace.*.';
       case 'nimbus':
         return '  **nimbus.*** — full dev env over DO RPC';
       case 'sandbox':
@@ -47,17 +53,50 @@ function renderExecutorSection(names: string[]): string {
   // and on the Executors tab. (STABILITY-AUDIT §C1.)
   const showingApps = names.includes('sandbox')
     ? `\n### Showing a running app to the user
-For the user to *see* a running web app, you MUST call \`sandbox.exposePort(port)\`
-after starting the server. The returned URL renders as a live iframe both
-inline in the chat (next to the tool result) and on the Executors tab. A
-server running inside the sandbox without exposePort is invisible to the
-user. Typical flow:
+For the user to *see* a running web app, the flow is strict and in this order:
+
+  1. Write your files into \`/workspace/<app-dir>/\`.
+  2. **Start a server listening on a TCP port** inside the sandbox. The server
+     MUST be running before step 3 or \`exposePort\` returns an error.
+  3. Call \`sandbox.exposePort(port)\` to get the public preview URL. The UI
+     auto-renders it as a live iframe in the chat and on the Executors tab.
+
+Concrete examples — pick the one matching your app type:
+
+**Static site (HTML / CSS / JS only):**
 \`\`\`
-await sandbox.exec("cd /workspace && nohup node server.js > out.log 2>&1 &")
-const url = await sandbox.exposePort(8080)   // returns the preview URL
+await sandbox.writeFile("/workspace/myapp/index.html", "<!doctype html>...")
+await sandbox.exec("cd /workspace/myapp && nohup python3 -m http.server 8080 > /tmp/srv-8080.log 2>&1 &")
+await new Promise(r => setTimeout(r, 800))     // let the server bind
+const url = await sandbox.exposePort(8080)
 \`\`\`
-Background the dev server (trailing \`&\` + \`nohup\`) so \`exec\` returns; the
-container keeps the process alive across subsequent calls.\n`
+
+**Node server:**
+\`\`\`
+await sandbox.exec("cd /workspace/myapp && nohup node server.js > /tmp/srv-8080.log 2>&1 &")
+await new Promise(r => setTimeout(r, 1500))    // node + framework boot is slower
+const url = await sandbox.exposePort(8080)
+\`\`\`
+
+**Dev server (Vite/Next/etc.):**
+\`\`\`
+await sandbox.exec("cd /workspace/myapp && npm install && nohup npx vite --host 0.0.0.0 --port 5173 > /tmp/srv-5173.log 2>&1 &")
+await new Promise(r => setTimeout(r, 5000))    // npm install + bundler boot
+const url = await sandbox.exposePort(5173)
+\`\`\`
+
+Rules:
+  - Always background the process: \`nohup ... > /tmp/srv.log 2>&1 &\` so \`exec\`
+    returns immediately.
+  - **Bind to \`0.0.0.0\` (or omit host), never just \`127.0.0.1\`** — the proxy
+    reaches the container over its internal network.
+  - Wait briefly (\`await new Promise(r => setTimeout(r, 800-5000))\`) after
+    starting the server so it has time to bind before \`exposePort\` probes.
+  - \`exposePort\` verifies the port is responsive before returning a URL. If
+    nothing is listening, you get an error telling you to start a server first;
+    do that, then call \`exposePort\` again.
+  - If your server takes a while to boot (e.g. Next.js), inspect
+    \`sandbox.readFile("/tmp/srv-<port>.log")\` to see what's happening.\n`
     : '';
   return `\n### Executor namespaces inside execute_tools\n${lines.join('\n')}\n${showingApps}`;
 }
@@ -124,12 +163,13 @@ The agent also has three writable context blocks managed by Think Session:
 - \`working_set\` (writable, 4k, persistent LRU) — last-N items actively in
   play (files, URLs, ids). \`set_context('working_set', text)\` to update.
 
-${executorSection}
+${executorSection}${opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills) : ''}
 ## World model (agent_facts)
 Stable, keyed facts you've remembered appear at the bottom of this prompt.
-Use \`remember_fact\` for re-readable state: user preferences, project state,
-dates, names, URLs, configuration values. Prefer it over \`save_note\` when
-the value is keyed; prefer \`save_note\` for prose / lessons / narratives.
+Use \`fact\` (action=remember) for re-readable keyed state: user preferences,
+project state, dates, names, URLs, configuration values. Prefer it over
+\`memory\` when the value is keyed; prefer \`memory\` (action=save) for prose /
+lessons / narratives.
 
 ## Evolution
 After each turn the system scores tool usage, extracts successful patterns into

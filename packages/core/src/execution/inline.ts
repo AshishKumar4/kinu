@@ -214,5 +214,18 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     tools,
     types,
     positionalArgs: true,
+    // workspace executor runs INSIDE the Worker — no inbound TCP port
+    // surface available. The agent should use `sandbox` for anything
+    // that needs to expose an HTTP server.
+    async exposePort(port) {
+      return {
+        supported: false,
+        reason:
+          `workspace executor runs in the Worker and cannot expose inbound ports. ` +
+          `Use the 'sandbox' executor for any server you want to preview (port ${port}).`,
+      };
+    },
+    async unexposePort() { /* nothing to do */ },
+    async listExposedPorts() { return []; },
   };
 }

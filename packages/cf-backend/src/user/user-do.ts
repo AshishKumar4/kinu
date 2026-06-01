@@ -13,7 +13,12 @@
  * Token refresh (Codex OAuth) happens atomically inside this DO.
  */
 import { Agent, callable } from "agents";
-import type { Credential } from '@proteus/core';
+import { MCPClientManager } from "agents/mcp/client";
+import {
+  DurableObjectOAuthClientProvider,
+  type AgentMcpOAuthProvider,
+} from "agents/mcp/do-oauth-client-provider";
+import { nanoid, type Credential } from '@proteus/core';
 import { initUserTables } from './schema.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
@@ -21,8 +26,20 @@ import {
   createCodexOAuthClient, tokensToCredential, CODEX_DEVICE_PORTAL,
   type DeviceCodeStart,
 } from './codex-oauth.js';
+import {
+  validateMcpServerInput, mcpToolKey, parseAllowedTools, mapConnectionStatus,
+  type McpServerSummary, type McpTransport,
+  type SerializableToolDescriptor,
+} from './mcp.js';
 
 const CODEX_CRED_KEY = 'codex.oauth';
+
+/** Stable per-user OAuth callback path. The full URL is built from the
+ *  request origin at add-time so it works in any environment without
+ *  configuration. NOT the SDK's per-agent default (`/agents/.../callback`)
+ *  — every server uses this single per-user endpoint so callback routing
+ *  is uniform regardless of which agent triggered the addition. */
+const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
 
 interface SqlRow extends Record<string, unknown> {}
 
@@ -65,6 +82,16 @@ export interface ConnectedProvider {
 
 export class UserDO extends Agent<Env> {
   private _initialized = false;
+
+  /** Per-user MCP manager. NOTE: distinct from the inherited `Agent.mcp`
+   *  — that field is the SDK's agent-scoped manager (we don't use it).
+   *  This one is per-user and stores its config in `user_mcp_servers`. */
+  private _userMcp: MCPClientManager | null = null;
+
+  /** Monotonic watermark bumped on every MCP config mutation. The
+   *  orchestrator's per-turn cache compares this against its last-seen value
+   *  to decide whether to refetch tool descriptors. */
+  private _userMcpUpdatedAt = 0;
 
   private ensureInit(): void {
     if (this._initialized) return;
@@ -228,8 +255,11 @@ export class UserDO extends Agent<Env> {
   @callable()
   async getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
     validateCredentialKey(key);
-    let cred = this.getCredentialRow(key);
-    if (!cred) return null;
+    const stored = this.getCredentialRow(key);
+    if (!stored) return null;
+    // Explicitly-typed non-null so the conditional refresh-reassignment below
+    // doesn't re-widen back to `Credential | null`.
+    let cred: Credential = stored;
 
     // Codex OAuth — auto-refresh if expiring or forced.
     if (key === CODEX_CRED_KEY && cred.kind === 'oauth') {
@@ -380,6 +410,338 @@ export class UserDO extends Agent<Env> {
     return out;
   }
 
+  // ── MCP servers ────────────────────────────────────────────────────
+
+  /** Lazy MCPClientManager construction. The callback URL is built per-add
+   *  (it depends on the request origin) so we don't bake it in here. */
+  private userMcp(): MCPClientManager {
+    if (this._userMcp) return this._userMcp;
+    this.ensureInit();
+    this._userMcp = new MCPClientManager('proteus-user-mcp', '0.1.0', {
+      storage: this.ctx.storage,
+      // Override so EVERY server (regardless of when added) uses the same
+      // per-user callback URL pattern. The SDK calls this for new connect()s
+      // and for restoreConnectionsFromStorage(). The stored callback_url is
+      // the source of truth for which path the IdP is told to redirect to,
+      // so we pass it through verbatim.
+      createAuthProvider: (callbackUrl: string): AgentMcpOAuthProvider =>
+        new DurableObjectOAuthClientProvider(
+          this.ctx.storage,
+          'proteus-user-mcp',
+          callbackUrl,
+        ),
+    });
+    return this._userMcp;
+  }
+
+  /** Idempotent boot warmup. Called by the routes layer on first hit per
+   *  process so MCP connections can re-establish in parallel with the user's
+   *  first orchestrator turn, not on its critical path. Fire-and-forget. */
+  @callable()
+  async userMcp_warmConnections(): Promise<{ servers: number }> {
+    this.ensureInit();
+    const rows = this.sqlx(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0] as { n: number };
+    if (!rows || rows.n === 0) return { servers: 0 };
+    try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
+    catch (err) { console.warn('[user-do] userMcp_warmConnections failed:', (err as Error).message); }
+    return { servers: rows.n };
+  }
+
+  @callable()
+  async userMcp_list(): Promise<McpServerSummary[]> {
+    this.ensureInit();
+    const rows = this.sqlx<{
+      id: string; name: string; server_url: string; transport: string;
+      allowed_tools: string | null; created_at: number; updated_at: number;
+    }>(
+      `SELECT id, name, server_url, transport, allowed_tools, created_at, updated_at
+       FROM user_mcp_servers ORDER BY name`,
+    );
+    // Touch the manager so the live view of connection state is hydrated.
+    // Cheap on cold start (storage scan); idempotent.
+    if (rows.length > 0) {
+      try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
+      catch { /* connection failures don't block the list */ }
+    }
+    const connections = this._userMcp?.mcpConnections ?? {};
+    return rows.map((r): McpServerSummary => {
+      const conn = connections[r.id];
+      const status = mapConnectionStatus(conn?.connectionState);
+      const allowed = parseAllowedTools(r.allowed_tools);
+      const toolsCount = conn?.tools
+        ? (allowed
+            ? conn.tools.filter((t: { name: string }) => allowed.includes(t.name)).length
+            : conn.tools.length)
+        : 0;
+      // authUrl is set on the auth provider while AUTHENTICATING. The SDK
+      // also persists it on the storage row; expose only if currently
+      // pending so the UI knows whether to render the "Open authorize" link.
+      const authUrl = status === 'authenticating'
+        ? (conn?.options?.transport?.authProvider?.authUrl ?? null)
+        : null;
+      return {
+        id: r.id,
+        name: r.name,
+        serverUrl: r.server_url,
+        transport: (r.transport as McpTransport),
+        status,
+        error: conn?.connectionError ?? null,
+        toolsCount,
+        authUrl,
+        allowedTools: allowed,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      };
+    });
+  }
+
+  /** Add a new MCP server. `publicOrigin` is the user-facing origin the
+   *  Worker should redirect OAuth callbacks to (e.g. `https://proteus.example`).
+   *  The routes layer derives it from the inbound request's `Origin` /
+   *  `Host` header — UserDO doesn't see the request. */
+  @callable()
+  async userMcp_add(
+    input: unknown,
+    publicOrigin: string,
+  ): Promise<{ id: string; authUrl: string | null }> {
+    this.ensureInit();
+    const cfg = validateMcpServerInput(input);
+    if (typeof publicOrigin !== 'string' || !/^https?:\/\//.test(publicOrigin)) {
+      throw new Error('publicOrigin must be a full https?:// origin.');
+    }
+    const id = nanoid(8);
+    const now = Date.now();
+    const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
+    const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
+
+    this.sqlx(
+      `INSERT INTO user_mcp_servers
+         (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
+      headersJson, allowedJson, now, now,
+    );
+    this._userMcpUpdatedAt = now;
+
+    const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
+    const authProvider = new DurableObjectOAuthClientProvider(
+      this.ctx.storage, 'proteus-user-mcp', callbackUrl,
+    );
+    authProvider.serverId = id;
+
+    // Header passthrough for non-OAuth servers behind CF Access / Bearer.
+    // Set both eventSourceInit (SSE path) and requestInit (Streamable HTTP)
+    // so `transport: 'auto'` works either way.
+    const headerOpts = cfg.headers
+      ? {
+          eventSourceInit: {
+            fetch: (url: string | URL, init?: RequestInit) =>
+              fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...cfg.headers } }),
+          },
+          requestInit: { headers: cfg.headers },
+        }
+      : {};
+
+    let authUrl: string | null = null;
+    try {
+      const mgr = this.userMcp();
+      await mgr.registerServer(id, {
+        url: cfg.serverUrl,
+        name: cfg.name,
+        callbackUrl,
+        transport: {
+          ...headerOpts,
+          authProvider,
+          type: cfg.transport ?? 'auto',
+        },
+      });
+      const result = await mgr.connectToServer(id);
+      if (result.state === 'failed') {
+        throw new Error(result.error ?? 'connection failed');
+      }
+      if (result.state === 'authenticating') {
+        authUrl = result.authUrl ?? null;
+      } else {
+        // Discovery is async; fire-and-forget so the response returns quickly.
+        // The next userMcp_list() poll surfaces the discovered tool count.
+        void mgr.discoverIfConnected(id).catch(() => undefined);
+      }
+    } catch (err) {
+      // Rollback both our row AND the SDK's storage entry so the user can
+      // retry with a corrected URL rather than have a stuck failed entry.
+      try { await this.userMcp().removeServer(id); } catch { /* nop */ }
+      this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
+      this._userMcpUpdatedAt = Date.now();
+      throw new Error(`MCP connect failed: ${(err as Error).message}`);
+    }
+    return { id, authUrl };
+  }
+
+  @callable()
+  async userMcp_remove(id: string): Promise<void> {
+    this.ensureInit();
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
+    try { await this.userMcp().removeServer(id); }
+    catch (err) { console.warn('[user-do] removeServer (live):', (err as Error).message); }
+    this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
+    this._userMcpUpdatedAt = Date.now();
+  }
+
+  /** Patch-update editable fields. `name`, `allowedTools`, and `headers` are
+   *  safe to change without reconnecting. `serverUrl` / `transport` changes
+   *  require remove + re-add (the SDK doesn't support live re-targeting). */
+  @callable()
+  async userMcp_update(id: string, patch: unknown): Promise<void> {
+    this.ensureInit();
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
+    if (!patch || typeof patch !== 'object') throw new Error('patch must be a JSON object.');
+    const p = patch as Record<string, unknown>;
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (typeof p.name === 'string') {
+      if (!p.name.trim() || p.name.length > 64) throw new Error('name must be 1..64 chars.');
+      sets.push('name = ?'); args.push(p.name.trim());
+    }
+    if (p.allowedTools !== undefined) {
+      if (p.allowedTools === null) {
+        sets.push('allowed_tools = ?'); args.push(null);
+      } else if (Array.isArray(p.allowedTools) && p.allowedTools.every((t) => typeof t === 'string')) {
+        sets.push('allowed_tools = ?'); args.push(JSON.stringify(p.allowedTools));
+      } else {
+        throw new Error('allowedTools must be string[] or null.');
+      }
+    }
+    if (p.headers !== undefined) {
+      if (p.headers === null) {
+        sets.push('headers = ?'); args.push(null);
+      } else if (
+        typeof p.headers === 'object' && !Array.isArray(p.headers)
+        && Object.values(p.headers as Record<string, unknown>).every((v) => typeof v === 'string')
+      ) {
+        sets.push('headers = ?'); args.push(JSON.stringify(p.headers));
+      } else {
+        throw new Error('headers must be Record<string,string> or null.');
+      }
+    }
+    if (sets.length === 0) return;
+    const now = Date.now();
+    sets.push('updated_at = ?'); args.push(now);
+    args.push(id);
+    this.sqlx(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
+    this._userMcpUpdatedAt = now;
+  }
+
+  /** Monotonic watermark — the orchestrator caches by this value. */
+  @callable()
+  async userMcp_updatedAt(): Promise<number> {
+    this.ensureInit();
+    return this._userMcpUpdatedAt;
+  }
+
+  /** Serializable tool descriptors for every connected MCP server, filtered
+   *  by per-server `allowed_tools`. The orchestrator wraps each into an
+   *  AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`. */
+  @callable()
+  async userMcp_toolDescriptors(): Promise<SerializableToolDescriptor[]> {
+    this.ensureInit();
+    const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
+      `SELECT id, name, allowed_tools FROM user_mcp_servers`,
+    );
+    if (rows.length === 0) return [];
+
+    // Ensure connections are restored. Don't await failures — partial
+    // descriptors are better than none.
+    try {
+      await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp');
+      // Cap at 5s so a single slow server can't block a turn indefinitely.
+      await this.userMcp().waitForConnections({ timeout: 5_000 });
+    } catch (err) {
+      console.warn('[user-do] userMcp_toolDescriptors warmup:', (err as Error).message);
+    }
+
+    const out: SerializableToolDescriptor[] = [];
+    const allowedById = new Map<string, ReadonlySet<string> | null>();
+    for (const r of rows) {
+      const allowed = parseAllowedTools(r.allowed_tools);
+      allowedById.set(r.id, allowed ? new Set(allowed) : null);
+    }
+    const connections = this._userMcp?.mcpConnections ?? {};
+    for (const [id, conn] of Object.entries(connections)) {
+      const allowed = allowedById.get(id);
+      if (allowed === undefined) continue; // server was just deleted
+      const meta = rows.find((r) => r.id === id);
+      if (!meta) continue;
+      for (const tool of conn.tools) {
+        if (allowed && !allowed.has(tool.name)) continue;
+        out.push({
+          serverId: id,
+          serverName: meta.name,
+          name: tool.name,
+          toolKey: mcpToolKey(id, tool.name),
+          description: tool.description,
+          title: (tool as { title?: string }).title
+            ?? (tool as { annotations?: { title?: string } }).annotations?.title,
+          inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
+          outputSchema: (tool as { outputSchema?: Record<string, unknown> }).outputSchema,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Execute a single MCP tool call. Called over RPC by the orchestrator's
+   *  per-tool closure. The result must be JSON-serializable; the SDK already
+   *  guarantees this (no closures in CallToolResult). */
+  @callable()
+  async userMcp_callTool(
+    serverId: string,
+    name: string,
+    args: unknown,
+  ): Promise<unknown> {
+    this.ensureInit();
+    if (!this._userMcp) {
+      // Cold start: hydrate the manager before dispatching.
+      this.userMcp();
+      try { await this._userMcp!.restoreConnectionsFromStorage('proteus-user-mcp'); }
+      catch (err) { throw new Error(`MCP not ready: ${(err as Error).message}`); }
+    }
+    // Type-check the server membership inside our SQL so a stale orchestrator
+    // closure can't dispatch to a server the user just deleted.
+    const row = this.sqlx<{ allowed_tools: string | null }>(
+      `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
+    )[0];
+    if (!row) throw new Error(`Unknown MCP server: ${serverId}`);
+    const allowed = parseAllowedTools(row.allowed_tools);
+    if (allowed && !allowed.includes(name)) {
+      throw new Error(`Tool '${name}' is not in the allowed_tools list for this server.`);
+    }
+    const params = (args && typeof args === 'object') ? args as Record<string, unknown> : {};
+    const result = await this._userMcp!.callTool({
+      serverId, name, arguments: params,
+    });
+    return result;
+  }
+
+  /** OAuth callback receiver. The routes layer matches the incoming
+   *  `/api/user/mcp/callback` request and forwards it here verbatim. */
+  @callable()
+  async userMcp_handleOAuthCallback(url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
+    this.ensureInit();
+    try {
+      const req = new Request(url);
+      const result = await this.userMcp().handleCallbackRequest(req);
+      this._userMcpUpdatedAt = Date.now();
+      if (result.authSuccess) {
+        // Background-establish the connection now that tokens are saved.
+        void this.userMcp().establishConnection(result.serverId);
+        return { ok: true, serverId: result.serverId, error: null };
+      }
+      return { ok: false, serverId: result.serverId ?? null, error: result.authError };
+    } catch (err) {
+      return { ok: false, serverId: null, error: (err as Error).message };
+    }
+  }
+
   // ── Provider/model surface ─────────────────────────────────────────
 
   /** Which providers does this user have credentials for? Used by the UI's
@@ -405,3 +767,4 @@ export class UserDO extends Agent<Env> {
     return out;
   }
 }
+

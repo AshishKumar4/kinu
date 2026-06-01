@@ -21,6 +21,7 @@ import { useProteus, type EvolutionEventRow, type LogEntry } from "@/hooks/use-p
 import { touchAgent } from "@/lib/user-api";
 import { MCTSTree } from "@/components/mcts-tree";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import ExecutorsPanel from "@/components/ExecutorsPanel";
 import { ExecutorTerminal } from "@/components/ExecutorTerminal";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import type { MCTSNode } from "@/lib/protocol";
@@ -46,7 +47,7 @@ function CodeBlock({ children, className }: { children: React.ReactNode; classNa
         </button>
       </div>
       <div className="rounded-b-lg border border-t-0 p-border overflow-hidden">
-        <Code language={lang || "text"} theme="auto">{code}</Code>
+        <Code code={code} lang={(lang || "text") as React.ComponentProps<typeof Code>["lang"]} />
       </div>
     </div>
   );
@@ -128,6 +129,29 @@ function ReasoningBlock({ text }: { text: string }) {
   );
 }
 
+/** Color-coded badge for the runtime a `run` tool call dispatched on. */
+const RUNTIME_COLORS: Record<string, string> = {
+  workspace: 'bg-zinc-700/60 text-zinc-200',
+  nimbus:    'bg-sky-700/60 text-sky-100',
+  sandbox:   'bg-emerald-700/60 text-emerald-100',
+  laptop:    'bg-violet-700/60 text-violet-100',
+};
+
+/** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
+ *  string-ified tool output. Returns null if the output doesn't match. */
+function parseProvisionError(output: unknown):
+  { runtime: string; message: string } | null {
+  if (typeof output !== 'string') return null;
+  if (!output.includes('runtime_not_provisioned')) return null;
+  try {
+    const obj = JSON.parse(output) as { error?: string; runtime?: string; message?: string };
+    if (obj.error === 'runtime_not_provisioned' && typeof obj.runtime === 'string') {
+      return { runtime: obj.runtime, message: obj.message ?? 'Runtime not available.' };
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
 function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   toolName: string; input?: Record<string, unknown>; output?: unknown; isRunning: boolean; isError: boolean;
 }) {
@@ -153,15 +177,44 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
 
   const durationLabel = elapsed !== null && elapsed > 100 ? `${(elapsed / 1000).toFixed(1)}s` : null;
 
+  // Surface the runtime the `run` tool dispatched on so the user can see
+  // at a glance whether the agent ran something in workspace / nimbus /
+  // sandbox / laptop. Default = workspace.
+  const runtime = toolName === 'run'
+    ? (typeof input?.runtime === 'string' ? input.runtime : 'workspace')
+    : null;
+  const provisionErr = parseProvisionError(output);
+
   return (
     <div className="my-1.5">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs p-text-2 hover:p-text transition-colors">
-        {isRunning ? <Loader size="sm" /> : isError ? <WrenchIcon size={12} className="text-red-400" /> : <CheckCircleIcon size={12} className="text-green-400" />}
+        {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="text-red-400" /> : <CheckCircleIcon size={12} className="text-green-400" />}
         <span className="font-mono">{toolName}</span>
+        {runtime && (
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'bg-zinc-700/60 text-zinc-200'}`}
+                title={`Runtime: ${runtime}`}>
+            {runtime}
+          </span>
+        )}
         {isRunning && <span className="text-amber-400/80 text-[11px]">running...</span>}
         {durationLabel && !isRunning && <span className="p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
         {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
       </button>
+      {provisionErr && (
+        <div className="mt-1.5 ml-5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs p-text-2 flex items-start gap-2">
+          <WrenchIcon size={12} className="text-amber-400 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <div>
+              The agent asked for the <code className="font-mono bg-amber-500/10 px-1 rounded">{provisionErr.runtime}</code> runtime
+              but it isn't provisioned yet.
+            </div>
+            <div className="p-text-3">{provisionErr.message}</div>
+            <div className="p-text-3">
+              See the <span className="font-medium">Executors</span> tab to provision it.
+            </div>
+          </div>
+        </div>
+      )}
       {expanded && (
         <div className="mt-1.5 ml-5 space-y-1 animate-scale-in">
           {input != null && <pre className="rounded-lg p-elevated border p-border p-2.5 text-xs font-mono p-text-2 max-h-40 overflow-auto">{JSON.stringify(input, null, 2)}</pre>}
@@ -173,13 +226,16 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
 }
 
 function MessageView({
-  message, isLast, isStreaming, onFork,
+  message, isLast, isStreaming, onFork, onFeedback,
 }: {
   message: UIMessage;
   isLast: boolean;
   isStreaming: boolean;
   /** Called with the message id when user clicks "Fork from here". */
   onFork?: (messageId: string) => void;
+  /** Called with the message id + new feedback when user clicks 👍 / 👎.
+   *  Pass null to clear. */
+  onFeedback?: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
 }) {
   const isUser = message.role === "user";
   const isLive = isLast && isStreaming && !isUser;
@@ -284,7 +340,61 @@ function MessageView({
         }
         return null;
       })}
-      {!isLive && <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />}
+      {!isLive && (
+        <div className="flex items-center gap-2">
+          <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />
+          {!isUser && message.id && onFeedback && (
+            <MessageFeedback
+              messageId={message.id}
+              onFeedback={onFeedback}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageFeedback({
+  messageId, onFeedback,
+}: {
+  messageId: string;
+  onFeedback: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
+}) {
+  const [current, setCurrent] = useState<'positive' | 'negative' | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toggle = useCallback(async (next: 'positive' | 'negative') => {
+    if (busy) return;
+    setBusy(true);
+    const apply = current === next ? null : next; // click again to clear
+    try {
+      await onFeedback(messageId, apply);
+      setCurrent(apply);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, current, messageId, onFeedback]);
+
+  return (
+    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <button
+        type="button"
+        onClick={() => toggle('positive')}
+        disabled={busy}
+        className={`text-[11px] p-1 rounded hover:p-card-hover transition-colors ${
+          current === 'positive' ? 'p-text' : 'p-text-3'
+        }`}
+        title="Mark this response as helpful (feeds evolution scoring)"
+      >👍</button>
+      <button
+        type="button"
+        onClick={() => toggle('negative')}
+        disabled={busy}
+        className={`text-[11px] p-1 rounded hover:p-card-hover transition-colors ${
+          current === 'negative' ? 'p-text' : 'p-text-3'
+        }`}
+        title="Mark this response as poor (feeds evolution scoring)"
+      >👎</button>
     </div>
   );
 }
@@ -544,231 +654,9 @@ function ModelSelector({ current, onChange }: { current: string; onChange: (id: 
 
 /* ── Executors tab ──────────────────────────────────────────────── */
 
-interface ExecutorOutput {
-  id: string; command: string; stdout: string; stderr: string; exit_code: number; created_at: number;
-}
-
-// Executor-name → display-name map. "workspace" was a confusing label to users
-// (they expected a code editor), and "laptop" is friendlier as "Your PC".
-const EXECUTOR_LABELS: Record<string, string> = {
-  workspace: "Local",
-  sandbox: "Sandbox",
-  nimbus: "Nimbus",
-  laptop: "Your PC",
-};
-
-function labelFor(name: string): string {
-  return EXECUTOR_LABELS[name] ?? name;
-}
-
-function ExecutorsTab({ executors, outputs, onExecute, onBrowse, agentName, rpc, pinnedPorts }: {
-  executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
-  outputs: Map<string, ExecutorOutput[]>;
-  onExecute: (id: string, cmd: string) => Promise<unknown>;
-  onBrowse: (id: string, path: string) => Promise<unknown>;
-  agentName?: string;
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
-  pinnedPorts: Array<{ port: number; url: string; name?: string }>;
-}) {
-  // Sandbox-first ordering. We show every executor (available or not) as a tab;
-  // unavailable ones render a connection card instead of the terminal so the
-  // user sees a clear "how do I enable this?" path.
-  const ORDER = ["sandbox", "laptop", "workspace"];
-  const sorted = [...executors].sort((a, b) => {
-    const ia = ORDER.indexOf(a.name), ib = ORDER.indexOf(b.name);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-  });
-
-  const [activeExec, setActiveExec] = useState(
-    sorted.find(e => e.available)?.name ?? sorted[0]?.name ?? "sandbox",
-  );
-  const [fileEntries, setFileEntries] = useState<string[]>([]);
-  const [filePath, setFilePath] = useState("/");
-  const [pcInstall, setPcInstall] = useState<string | null>(null);
-  const [pcIssuing, setPcIssuing] = useState(false);
-
-  const activeExecInfo = sorted.find(e => e.name === activeExec);
-  const activeExecAvailable = activeExecInfo?.available ?? false;
-
-  // Terminal is an xterm component; it manages its own scroll.
-
-  // pinnedPorts is now hoisted into useProteus and provided via props so the
-  // Executors-tab badge updates regardless of which tab is active.
-  // (STABILITY-AUDIT §C4.)
-
-  const issuePcToken = useCallback(async () => {
-    setPcIssuing(true);
-    try {
-      const r = await rpc("issuePcToken", []) as { installCommand?: string };
-      if (r.installCommand) setPcInstall(r.installCommand);
-    } finally {
-      setPcIssuing(false);
-    }
-  }, [rpc]);
-
-  const browseTo = useCallback(async (path: string) => {
-    setFilePath(path);
-    try {
-      const result = await onBrowse(activeExec, path) as { entries?: unknown; error?: string };
-      if (result.entries) {
-        const entries = Array.isArray(result.entries) ? result.entries.map(String) : String(result.entries).split('\n').filter(Boolean);
-        setFileEntries(entries);
-      }
-    } catch { setFileEntries(["(error loading files)"]); }
-  }, [activeExec, onBrowse]);
-
-  useEffect(() => { browseTo("/"); }, [activeExec]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const activeOutputs = outputs.get(activeExec) ?? [];
-
-  return (
-    <div className="animate-fade-in h-full flex flex-col gap-3">
-      {/* Executor tabs — ALL executors, dot colour = availability */}
-      <div className="flex items-center gap-1 flex-wrap">
-        {sorted.map(exec => (
-          <button key={exec.name} onClick={() => setActiveExec(exec.name)}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              activeExec === exec.name ? "p-elevated p-text" : "p-text-2 hover:p-elevated/50"
-            }`}
-            title={exec.available ? `${exec.name} — connected` : `${exec.name} — not connected`}
-          >
-            <span className={`size-1.5 rounded-full ${exec.available ? "bg-green-500" : "bg-zinc-500"}`} />
-            {labelFor(exec.name)}
-          </button>
-        ))}
-      </div>
-
-      {/* Not-available state: show a connection card instead of the terminal */}
-      {!activeExecAvailable && activeExec === "laptop" && (
-        <div className="flex-1 rounded-lg p-elevated border p-border p-4 flex flex-col gap-3">
-          <div className="flex items-center gap-2 text-sm font-medium p-text">
-            <TerminalIcon size={16} className="p-text-2" />
-            Connect Your PC
-          </div>
-          <p className="text-xs p-text-2 leading-relaxed">
-            Install the Proteus PC daemon to let this agent run commands on your local machine.
-            The daemon opens one outbound WebSocket — no inbound ports required.
-          </p>
-          {!pcInstall ? (
-            <button
-              onClick={issuePcToken}
-              disabled={pcIssuing}
-              className="self-start px-3 py-1.5 rounded-lg text-xs font-medium p-bg-accent p-text-on-accent hover:opacity-90 disabled:opacity-50 transition-opacity"
-            >
-              {pcIssuing ? "Generating…" : "Generate install command"}
-            </button>
-          ) : (
-            <>
-              <div className="rounded-md p-bg border p-border p-3 font-mono text-[11px] p-text select-all break-all leading-relaxed">
-                {pcInstall}
-              </div>
-              <div className="flex items-center gap-2 text-[11px]">
-                <button
-                  onClick={() => { navigator.clipboard.writeText(pcInstall).catch(() => {}); }}
-                  className="p-text-2 hover:p-text transition-colors"
-                >
-                  Copy
-                </button>
-                <button
-                  onClick={issuePcToken}
-                  className="p-text-3 hover:p-text-2 transition-colors"
-                >
-                  Regenerate (revokes previous)
-                </button>
-                <span className="ml-auto p-text-3">
-                  Agent: <span className="font-mono p-text-2">{agentName ?? "?"}</span>
-                </span>
-              </div>
-            </>
-          )}
-          <p className="text-[11px] p-text-3 mt-1">
-            Paste the command in your terminal. Daemon runs as your user (never root).
-            Token is one-shot — regenerating revokes the previous.
-          </p>
-        </div>
-      )}
-      {!activeExecAvailable && activeExec !== "laptop" && (
-        <div className="flex-1 rounded-lg p-elevated border p-border p-4 flex flex-col gap-2">
-          <div className="text-sm font-medium p-text">{labelFor(activeExec)} — not connected</div>
-          <p className="text-xs p-text-2">
-            This executor needs a binding in <span className="font-mono">wrangler.jsonc</span>. See
-            <span className="font-mono"> docs/EXECUTION.md</span>.
-          </p>
-        </div>
-      )}
-
-      {/* Pinned previews — exposed ports from the sandbox show here */}
-      {activeExecAvailable && pinnedPorts.length > 0 && (
-        <div className="rounded-lg p-elevated border p-border p-2">
-          <div className="text-xs font-medium p-text mb-2">Exposed ports</div>
-          <div className="grid grid-cols-2 gap-2 max-h-64 overflow-auto">
-            {pinnedPorts.map(p => (
-              <div key={p.port} className="rounded-md p-bg border p-border overflow-hidden">
-                <div className="px-2 py-1 flex items-center gap-2 text-[11px] p-text">
-                  <span className="size-1.5 rounded-full bg-green-500" />
-                  <span className="font-mono">:{p.port}</span>
-                  <a href={p.url} target="_blank" rel="noreferrer" className="ml-auto p-text-2 hover:underline">
-                    open
-                  </a>
-                </div>
-                <iframe src={p.url} className="w-full h-48 bg-white" title={`port-${p.port}`} />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Terminal + Files split (only when connected) */}
-      <div className={`flex-1 flex gap-3 min-h-0 ${activeExecAvailable ? "" : "hidden"}`}>
-        {/* Terminal — xterm.js */}
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center gap-2 mb-2">
-            <TerminalIcon size={14} className="p-text-2" />
-            <span className="text-xs font-medium p-text">Terminal</span>
-            <Badge variant="secondary">{activeOutputs.length}</Badge>
-            <span className="ml-auto text-[10px] p-text-3">{activeExec}</span>
-          </div>
-          <div className="flex-1 min-h-[240px]">
-            <ExecutorTerminal
-              executor={activeExec}
-              outputs={activeOutputs}
-              onExecute={(cmd) => onExecute(activeExec, cmd)}
-            />
-          </div>
-        </div>
-
-        {/* File browser */}
-        <div className="w-48 flex flex-col min-h-0">
-          <div className="flex items-center gap-2 mb-2">
-            <FolderOpenIcon size={14} className="p-text-2" />
-            <span className="text-xs font-medium p-text">Files</span>
-          </div>
-          <div className="flex-1 overflow-y-auto rounded-lg p-elevated border p-border p-2 text-xs space-y-0.5">
-            <button onClick={() => browseTo("/")} className="p-text-2 hover:p-text text-[11px] block mb-1">/</button>
-            {filePath !== "/" && (
-              <button onClick={() => browseTo(filePath.split("/").slice(0, -1).join("/") || "/")}
-                className="p-text-3 hover:p-text text-[11px] block">..</button>
-            )}
-            {fileEntries.map((entry, i) => {
-              const isDir = entry.startsWith("d ") || entry.endsWith("/");
-              const name = entry.replace(/^[d-] /, "").replace(/\/$/, "");
-              return (
-                <button key={i}
-                  onClick={() => isDir ? browseTo(`${filePath === "/" ? "" : filePath}/${name}`) : undefined}
-                  className={`block w-full text-left truncate text-[11px] ${isDir ? "p-text hover:underline cursor-pointer" : "p-text-2"}`}
-                >
-                  {isDir ? "📁 " : "📄 "}{name}
-                </button>
-              );
-            })}
-            {fileEntries.length === 0 && <span className="p-text-3">(empty)</span>}
-          </div>
-        </div>
-      </div>
-
-    </div>
-  );
-}
+// (ExecutorOutput type + executor label maps live in the ExecutorsPanel
+// component now — removed from this file as part of the executors UI
+// extraction.)
 
 function LogsTab({ logs, connectionStatus }: { logs: LogEntry[]; connectionStatus: string }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -820,6 +708,18 @@ export default function WorkspacePage() {
 
   useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [state.messages]);
+
+  // Auto-focus the Executors tab whenever a new sandbox port is exposed.
+  // The user wants the running app to be the centre of attention the moment
+  // it goes live — no clicking through tabs.
+  const prevPortCountRef = useRef(0);
+  useEffect(() => {
+    const n = state.pinnedPorts.length;
+    if (n > prevPortCountRef.current) {
+      setActiveTab("Executors");
+    }
+    prevPortCountRef.current = n;
+  }, [state.pinnedPorts.length]);
 
   useEffect(() => {
     if (initialPromptSent.current) return;
@@ -905,6 +805,10 @@ export default function WorkspacePage() {
                   isLast={i === state.messages.length - 1}
                   isStreaming={state.isStreaming}
                   onFork={(mid) => setForkFor(mid)}
+                  onFeedback={async (mid, fb) => {
+                    try { await state.rpc('setTurnFeedback', [mid, fb]); }
+                    catch (e) { console.warn('[feedback] rpc failed:', e); }
+                  }}
                 />
               ))}
               <div ref={messagesEndRef} />
@@ -990,7 +894,7 @@ export default function WorkspacePage() {
                     ))}
                   </div>
                 </div>
-              ) : <div className="flex items-center justify-center h-32"><Loader /></div>)}
+              ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>)}
 
               {/* Tools */}
               {activeTab === "Tools" && (
@@ -1059,15 +963,17 @@ export default function WorkspacePage() {
               )}
 
               {activeTab === "Executors" && (
-                <ExecutorsTab
-                  executors={state.executors}
-                  outputs={state.executorOutputs}
-                  onExecute={state.executeInExecutor}
-                  onBrowse={(id: string, path: string) => state.rpc("getExecutorFiles", [id, path])}
-                  agentName={agentId}
-                  rpc={state.rpc}
-                  pinnedPorts={state.pinnedPorts}
-                />
+                <div className="h-full -m-5">
+                  <ExecutorsPanel
+                    executors={state.executors}
+                    outputs={state.executorOutputs}
+                    onExecute={state.executeInExecutor}
+                    onBrowse={(id: string, path: string) => state.rpc("getExecutorFiles", [id, path])}
+                    agentName={agentId}
+                    rpc={state.rpc}
+                    pinnedPorts={state.pinnedPorts}
+                  />
+                </div>
               )}
 
               {activeTab === "Logs" && <LogsTab logs={state.logs} connectionStatus={state.connectionStatus} />}

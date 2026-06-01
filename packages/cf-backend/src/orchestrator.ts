@@ -1,16 +1,16 @@
 /**
  * OrchestratorAgent — self-evolving chat agent extending Think.
  *
- * Tool surface (constructed in @proteus/core/tools/builtins):
+ * Tool surface (constructed in @proteus/core/tools/builtins) — kept small so
+ * the LLM selects well:
  *   execute_tools — codemode sandbox: workspace.* + sandbox.* + codemode.*
  *                   (crafted) + llm.query (Recursive Language Models)
- *   run           — POSIX shell command (with approval-gate review)
- *   think         — unified strategy dispatcher (single-shot / mcts / heads / …)
- *   split_heads   — direct branching heads (parallel + merge)
- *   explore       — direct MCTS (legacy; think({strategy:'mcts'}) preferred)
- *   save_note     — append to MEMORY.md (FTS-indexed)
- *   search_memory — hybrid FTS5 + Vectorize lexical/semantic retrieval
- *   remember_fact / recall_fact / forget_fact — typed world model (agent_facts)
+ *   run           — shell command, runtime-dispatched (workspace / nimbus / sandbox / laptop)
+ *   skills        — Claude-Code/Hermes-compatible SKILL.md store, one tool / multiple actions
+ *   think         — unified exploration dispatcher (single-shot / mcts / heads);
+ *                   subsumes the old bare `explore` (MCTS) + `split_heads` (heads) tools
+ *   memory        — long-term prose notes: save / search (hybrid FTS5 + Vectorize)
+ *   fact          — typed keyed world model: remember / recall / forget (agent_facts)
  *
  * This file is a THIN ADAPTER: tool factory, system prompt, and crafted-tool
  * injection all live in @proteus/core so the CLI surface shares them verbatim.
@@ -24,11 +24,16 @@ import { Think, Session } from "@cloudflare/think";
 // preamble into the LLM's sandbox arrow, so mid-turn additions are visible
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
-import { streamText, generateObject } from "ai";
-import type { LanguageModel, ToolSet } from "ai";
+import { streamText, generateObject, generateText, tool, jsonSchema, stepCountIs } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import * as v from "valibot";
+import type { SerializableToolDescriptor } from "./user/mcp.js";
+import type { TimelineSpan } from "./lib/protocol.js";
+import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
+import { aiSchema } from "./ai-schema.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
-  ToolCallResultContext, StepContext, ChunkContext,
+  ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
 } from "@cloudflare/think";
 import {
   EvolutionEngine,
@@ -39,24 +44,27 @@ import {
   buildBuiltinTools,
   buildSystemPromptSync,
   BUILTIN_TOOLS,
+  BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   ACTIVE_TOOLS,
+  updateCraftScores,
+  feedbackToQuality,
   migrateCraftedToolDuplicates,
   // Fork feature
   forkAgentStorage, readForkLineage,
   nanoid,
   // Branching heads
-  HeadController, HeadJournal, initHeadsTables, createSplitHeadsTool,
-  type SerializedMessage,
+  HeadController, HeadJournal, initHeadsTables,
+  type SerializedMessage, type SplitPhaseEvent,
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldEventsToUIStream, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
-  readScaffoldVersion, DEFAULT_SHADOW_CONFIG,
+  readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
   // Auto-judge shadow eval — sampled per-turn shadow rollout closure
   runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
-  type StructuredJudgeFn,
+  type StructuredJudgeFn, type JudgeOutput,
   // Durable run-event log
   initRunEventTables, RunEventRecorder,
   type RunEvent, type RunEventQuery,
@@ -78,6 +86,20 @@ import {
   // Unified strategy dispatch
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
+  // EventsHub primitives (spec §1)
+  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore,
+  initEventsHubTables,
+  type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
+  type RevisitCondition,
+  // Skills (Claude-Code / Hermes SKILL.md spec, VFS-backed)
+  discoverSkills, resolveActiveSkills, extractExplicitInvocations,
+  unionAllowedTools, toolAllowedBySkills, BUILTIN_SKILLS,
+  type ActiveSkillSet, type SkillsVfs,
+  // GEPA offline optimisation (scaffold + crafted-tool)
+  runScaffoldGepa, runCraftedToolGepa,
+  initGepaTables, startGepaRun, finishGepaRun, makePersistingHook, listGepaRuns,
+  loadGepaCandidates,
+  type EvalInstance, type MetricOutcome, type GepaRunSummary,
 } from "@proteus/core";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
@@ -88,6 +110,26 @@ import { createRLMProvider } from "./rlm.js";
 import type { UserDO } from "./user/user-do.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
+
+/** Extract plain text from the last user message in a ModelMessage[]. Used
+ *  by skills resolution to look for `/skill-name` invocations and keyword
+ *  matches without needing to know the AI SDK content-part union shape. */
+function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    const c = m.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c
+        .map((p) => (p && typeof p === 'object' && 'text' in p ? String((p as { text: unknown }).text ?? '') : ''))
+        .filter(Boolean)
+        .join('\n');
+    }
+    return '';
+  }
+  return '';
+}
 
 // ── Fork payload types ────────────────────────────────────────────
 // The source DO assembles this and sends it to the fork DO's rawCopyFromFork.
@@ -208,9 +250,17 @@ export class OrchestratorAgent extends Think<Env> {
   private _sessionTurns: CompletedTurn[] = [];
   private _sessionStartedAt = Date.now();
 
-  // ── Tool cache: avoid rebuilding 5-tool ToolSet + codemode types every turn ──
+  // ── Tool cache: avoid rebuilding the built-in ToolSet + codemode types every turn ──
   private _cachedTools: ToolSet | null = null;
   private _cachedToolsKey: string = "";
+
+  // ── User MCP tools cache ─────────────────────────────────────────────
+  // Per-user MCP tools live in UserDO. Per turn we ask UserDO for the
+  // current tool descriptors (cheap RPC) and cache them against UserDO's
+  // monotonic mcp_updated_at watermark so we only rebuild closures when
+  // the user has actually added/removed/edited a server.
+  private _cachedMcpTools: ToolSet = {};
+  private _cachedMcpToolsKey: number = -1;
 
   // Preamble-injection: the codemode tool is built once per DO lifetime.
   // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
@@ -218,20 +268,108 @@ export class OrchestratorAgent extends Think<Env> {
   // invocation without any registry or cache coherence work.
   private _craftExecTool: unknown = null;
 
-  // Branching-heads controller and tool — lazily built once per DO lifetime.
-  // The controller wraps a HeadJournal + HeadRuntime (Facet spawner + merge LLM).
-  // The split_heads tool reads inheritedContext lazily via assistant_messages.
+  // Branching-heads controller — lazily built once per DO lifetime. Wraps a
+  // HeadJournal + HeadRuntime (Facet spawner + merge LLM). The `think` tool's
+  // heads strategy drives it, injecting inheritedContext + an onPhase event
+  // sink via defaultOptions().
   private _headController: HeadController | null = null;
-  private _splitHeadsTool: ReturnType<typeof createSplitHeadsTool> | null = null;
 
   // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
-  // Initialized lazily on first event so onStart can wire the table before use.
+  // Backed by `agent_log` rows of kind in {step, tool_call, tool_result,
+  // reactor_decision}. The RunEventRecorder shim adapts the existing emit()
+  // API to the unified log so the SSE stream and the events sidebar share
+  // one source of truth.
   private _eventRecorder: RunEventRecorder | null = null;
   private get eventRecorder(): RunEventRecorder {
     if (!this._eventRecorder) {
       this._eventRecorder = new RunEventRecorder(this.boundSql);
     }
     return this._eventRecorder;
+  }
+
+  // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
+  // Six load-bearing primitives (spec §1):
+  //   - `agent_log`     unified append-only ledger (initEventsHubTables)
+  //   - EventLog        publish/pending/defer/dismiss/query
+  //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
+  //   - ReactorBudget   per-turn/-trace/-hour caps on reactor invocations
+  //   - ReplyChannelStore  durable reply-channel rows + dispatchers
+  //   - TurnRunner      phase machine; built but currently unused (chat
+  //                     flows through Think; webhook/timer/etc. publish
+  //                     events that wake the agent via Think's chat
+  //                     injection mechanism)
+  // Spec: docs/EVENTS-HUB-SPEC.md
+  private _eventLog: import('@proteus/core').EventLog | null = null;
+  private _triggerRegistry: import('@proteus/core').TriggerRegistry | null = null;
+  private _reactorBudget: import('@proteus/core').ReactorBudget | null = null;
+  private _replyChannels: import('@proteus/core').ReplyChannelStore | null = null;
+
+  protected get eventLog(): EventLog {
+    if (!this._eventLog) {
+      this._eventLog = new EventLog(this.ctx.storage.sql);
+    }
+    return this._eventLog;
+  }
+  protected get triggerRegistry(): TriggerRegistry {
+    if (!this._triggerRegistry) {
+      const orchestrator = this;
+      const alarmScheduler: AlarmScheduler = {
+        scheduleAt(ts: number) {
+          // Idempotent: pick the soonest of (existing alarm, new ts).
+          void Promise.resolve(orchestrator.ctx.storage.getAlarm()).then((c) => {
+            if (c === null || ts < c) {
+              orchestrator.ctx.storage.setAlarm(ts);
+            }
+          }).catch(() => orchestrator.ctx.storage.setAlarm(ts));
+        },
+        currentAlarm(): number | null { return null; },
+      };
+      this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
+    }
+    return this._triggerRegistry;
+  }
+  protected get reactorBudget(): ReactorBudget {
+    if (!this._reactorBudget) {
+      this._reactorBudget = new ReactorBudget(this.ctx.storage.sql);
+    }
+    return this._reactorBudget;
+  }
+  protected get replyChannels(): ReplyChannelStore {
+    if (!this._replyChannels) {
+      const orchestrator = this;
+      // ws_session dispatcher: push the reply back through Think's chat
+      // broadcast. The reply() tool's content becomes a synthetic assistant
+      // message visible to connected WS clients.
+      const wsDispatcher: ReplyDispatcher = {
+        async dispatch(_channel: ReplyChannelRow, payload: unknown) {
+          try {
+            const text = typeof payload === 'string'
+              ? payload
+              : JSON.stringify((payload as { content?: unknown })?.content ?? payload);
+            const broadcast = (orchestrator as unknown as {
+              broadcastChatMessage?: (msg: {
+                role: 'assistant';
+                parts: Array<{ type: 'text'; text: string }>;
+              }) => Promise<void> | void;
+            }).broadcastChatMessage;
+            if (broadcast) {
+              await broadcast({
+                role: 'assistant',
+                parts: [{ type: 'text', text }],
+              });
+              return { delivered: true };
+            }
+            return { delivered: false, detail: 'no broadcast channel' };
+          } catch (err) {
+            return { delivered: false, detail: (err as Error).message };
+          }
+        },
+      };
+      this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
+        ws_session: wsDispatcher,
+      });
+    }
+    return this._replyChannels;
   }
 
   // agent_facts world model — typed, idempotent, keyed.
@@ -269,28 +407,47 @@ export class OrchestratorAgent extends Think<Env> {
       registry: this.strategyRegistry,
       rt: this.rt,
       model: this.getModel(),
+      // Host-injected infrastructure the LLM must not set. Recomputed per
+      // think() call: MCTS gets a fresh SessionWriter; heads get the shared
+      // controller, the live conversation as inheritedContext, and an onPhase
+      // sink that streams head_split / head_merge into the durable event log.
       defaultOptions: () => ({
-        // MCTS needs a SessionWriter — orchestrator provides one. Heads
-        // needs the controller from getSplitHeadsTool's pipeline.
         mcts: { session: this.createMCTSSession() },
-        heads: { controller: this.getHeadController() },
+        heads: {
+          controller: this.getHeadController(),
+          inheritedContext: this.readInheritedContext(),
+          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+        },
       }),
     });
     return this._thinkTool;
   }
 
-  private getHeadController(): HeadController {
-    // The split-heads tool also builds one; reuse if present so both tools
-    // share the same journal + runtime.
-    void this.getSplitHeadsTool();
-    if (!this._headController) {
-      throw new Error('HeadController not initialized — getSplitHeadsTool() must run first.');
-    }
-    return this._headController;
-  }
-
   /** Convenience: current runId for event emission. One run per turn. */
   private _currentRunId = '';
+
+  // ── Skills (turn-scoped) ───────────────────────────────────────
+  /** Skill names invoked this turn (via /name or skills({action:'invoke'})).
+   *  Cleared at beforeTurn; closures from the skills tool mutate via .add(). */
+  private readonly _turnInvokedSkills = new Set<string>();
+  /** Resolved active set for the current turn. Built in beforeTurn, read by
+   *  the system-prompt assembly via TurnConfig.system override. */
+  private _turnActiveSkills: ActiveSkillSet | null = null;
+  /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
+  private _skillsVfs: SkillsVfs | null = null;
+  private getSkillsVfs(): SkillsVfs {
+    if (this._skillsVfs) return this._skillsVfs;
+    const vfs = this.rt.storage.vfs;
+    this._skillsVfs = {
+      exists: (p) => vfs.exists(p),
+      readFile: (p, opts) => vfs.readFile(p, opts),
+      writeFile: (p, data) => vfs.writeFile(p, data),
+      readdir: (p) => vfs.readdir(p),
+      unlink: (p) => vfs.unlink(p),
+      mkdir: (p, opts) => vfs.mkdir(p, opts),
+    };
+    return this._skillsVfs;
+  }
 
   // ── Activity logging: persisted + broadcast to Logs pane ──
   private _turnT0 = 0;
@@ -328,12 +485,14 @@ export class OrchestratorAgent extends Think<Env> {
     } catch { /* table may not exist on very first start */ }
   }
 
-  private get rt(): AgentRuntime {
+  private get rt(): CFRuntime {
     if (!this._rt) {
       // No onToolRegistered hook: PreambleCraftedExecutor reads craftStore.list()
       // fresh on every execute_tools call, so mid-turn saves propagate
       // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
-      this._rt = createCFRuntime(this);
+      // `this` (a subclass) DOES have access to its protected env/ctx; cast to
+      // the AgentHost view createCFRuntime needs.
+      this._rt = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0]);
     }
     return this._rt;
   }
@@ -450,10 +609,24 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Worker calls this on every authenticated request before any other RPC.
-   *  Claims the agent for `userId` if unclaimed; 403s on cross-user collision. */
+   *  Claims the agent for `userId` if unclaimed; 403s on cross-user collision.
+   *
+   *  Defensive: claimOwner can fire BEFORE onStart() completes on a fresh DO
+   *  activation (the agents SDK doesn't strictly guarantee onStart→RPC order).
+   *  We initialize all required tables here so the SELECT/UPDATE never hits
+   *  a missing table or missing column. initAllTables is idempotent and the
+   *  agent_soul ALTER inside it is the migration that adds owner_user_id to
+   *  pre-v3 DOs.
+   */
   @callable()
   async claimOwner(userId: string): Promise<{ owner: string }> {
     if (!userId) throw new Error('userId required');
+    try {
+      const execRaw = (q: string) => { this.ctx.storage.sql.exec(q); };
+      initAllTables(execRaw);
+    } catch (err) {
+      console.error('[orchestrator] claimOwner initAllTables failed:', (err as Error).message);
+    }
     const current = this.getOwnerUserId();
     if (current === null) {
       // Unclaimed — first touch. Ensure agent_soul has at least one row.
@@ -463,13 +636,11 @@ export class OrchestratorAgent extends Think<Env> {
       } else {
         this.sql`UPDATE agent_soul SET owner_user_id = ${userId}`;
       }
-      // Invalidate any provider registry the agent might have constructed
-      // before ownership was set (defensive — should be null at this point).
       this.invalidateModelCaches();
       return { owner: userId };
     }
     if (current !== userId) {
-      throw new Error(`Agent owned by a different user`);
+      throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
     return { owner: current };
   }
@@ -525,6 +696,12 @@ export class OrchestratorAgent extends Think<Env> {
       base = this._cachedSystemPrompt;
       this.logActivity("getsystemprompt_end", "cache hit");
     } else {
+      // Always build the BASE prompt here — no turn-scoped skills section.
+      // Active skills are layered on by `beforeTurn` via TurnConfig.system,
+      // which is the authoritative path. Mixing them in here would poison
+      // the cache (Think calls getSystemPrompt() BEFORE beforeTurn(); a
+      // stale `_turnActiveSkills` from the prior turn would otherwise leak
+      // into _cachedSystemPrompt and be re-served on every later turn).
       base = buildSystemPromptSync(this.rt, { registeredExecutors: execs });
       this._cachedSystemPrompt = base;
       this._cachedSystemPromptKey = key;
@@ -582,39 +759,30 @@ export class OrchestratorAgent extends Think<Env> {
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
 
-      type FiberCtx = { stash(data: unknown): void };
-      const activeFiberCtx: { current: FiberCtx | null } = { current: null };
       const shellApprovalMode = this.config.getShellApprovalMode();
 
       const tools = buildBuiltinTools({
         rt: this.rt,
-        engine: this.engine,
         preBuiltExecuteTool: this.getExecuteToolsTool(),
-        // Branching-heads tool — lazy-built once, then reused across turns.
-        splitHeadsTool: this.getSplitHeadsTool(),
-        // Unified strategy dispatcher (single-shot / mcts / heads / …).
+        // Unified strategy dispatcher (single-shot / mcts / heads). Internally
+        // owns the HeadController + MCTS session — the bare `explore` /
+        // `split_heads` tools were folded into this single entry point.
         thinkTool: this.getThinkTool(),
-        // Vectorize-backed semantic memory. search_memory auto-uses
+        // Vectorize-backed semantic memory. memory.search auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
         // Per-agent approval policy for shell exec.
         shellApprovalMode,
-        // Typed, keyed world-model store — exposes remember/recall/forget_fact.
+        // Typed, keyed world-model store — exposes the `fact` tool.
         facts: this.facts,
-        onMctsProgress: (phase, iteration, budget) => this.broadcastMctsProgress(phase, iteration, budget),
-        createMctsSession: () => this.createMCTSSession(),
-        onExplorePhase: (phase, task) => {
-          activeFiberCtx.current?.stash({ task, phase });
-        },
-        wrapExplore: (fn) => async (args) => {
-          return orchestrator.runFiber(`explore-${Date.now()}`, async (ctx) => {
-            activeFiberCtx.current = ctx;
-            try {
-              return await fn(args);
-            } finally {
-              activeFiberCtx.current = null;
-            }
-          });
+        // Single `skills` tool — list/read/invoke/create/edit/delete actions.
+        // Per-turn invocation state lives on the orchestrator; closures here
+        // mutate / read it without ever recreating the Set, so the binding
+        // stays stable across the cached toolset.
+        skills: {
+          vfs: orchestrator.getSkillsVfs(),
+          recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
+          currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
       });
 
@@ -629,79 +797,144 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /**
-   * Lazily build the split_heads tool wired to a HeadController that spawns
-   * ExplorationAgent Facets in head mode (initHead / runAsHead / abortHead).
-   * Inherited context is read fresh from assistant_messages at every tool
-   * invocation so each head sees the full conversation.
+   * Lazily build the HeadController that spawns ExplorationAgent Facets in
+   * head mode (initHead / runAsHead / abortHead). Driven by the `think` tool's
+   * heads strategy; inheritedContext + the onPhase event sink are injected
+   * per call via readInheritedContext() / emitHeadPhase().
    */
-  private getSplitHeadsTool() {
-    if (this._splitHeadsTool) return this._splitHeadsTool;
+  private getHeadController(): HeadController {
+    if (this._headController) return this._headController;
     const sqlForJournal = this.sql.bind(this) as unknown as SqlExecutor;
     const journal = new HeadJournal(sqlForJournal);
     const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) throw new Error('Agent has no owner — split_heads needs UserDO access for auth.');
-    const runtime = createCFHeadRuntime(this, ownerUserId);
+    if (!ownerUserId) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
+    const runtime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId);
     this._headController = new HeadController(runtime, journal);
-    const orchestrator = this;
-    this._splitHeadsTool = createSplitHeadsTool({
-      controller: this._headController,
-      // Stream head_split / head_merge into the durable event log so
-      // SSE subscribers + MCP `list_run_events` see the split lifecycle.
-      onPhase: (event) => {
-        try {
-          if (!this._currentRunId) return;
-          if (event.kind === 'split') {
-            this.eventRecorder.emit(this._currentRunId, {
-              type: 'head_split',
-              rootId: event.rootId,
-              headIds: [...event.headIds],
-              rationale: event.rationale,
-            });
-          } else {
-            this.eventRecorder.emit(this._currentRunId, {
-              type: 'head_merge',
-              rootId: event.rootId,
-              headCount: event.headCount,
-              mergedNarrative: event.mergedNarrative,
-            });
-          }
-        } catch (err) {
-          console.warn('[proteus] event emit failed at split-heads onPhase:', err);
-        }
-      },
-      getInheritedContext(): SerializedMessage[] {
-        // Cap to the last N messages to keep head LLM context bounded over
-        // long sessions. Think Session already runs compactAfter(96k) on
-        // the assistant_messages table at the orchestrator level; this is
-        // a second safety net specifically for head spawns.
-        const INHERITED_CONTEXT_CAP = 50;
-        try {
-          type Row = { id: string; role: string; content: string; created_at: string };
-          const rows = orchestrator.sql<Row>`
-            SELECT id, role, content, created_at
-            FROM (
-              SELECT id, role, content, created_at
-              FROM assistant_messages
-              ORDER BY created_at DESC
-              LIMIT ${INHERITED_CONTEXT_CAP}
-            ) sub
-            ORDER BY created_at ASC`;
-          return rows.map((r) => ({
-            id: r.id,
-            role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
-              ? r.role
-              : 'assistant',
-            content: r.content,
-            createdAt: Date.parse(r.created_at) || 0,
-          }));
-        } catch {
-          // assistant_messages table may not yet exist on a fresh agent.
-          return [];
-        }
-      },
-      defaultModel: undefined, // heads inherit the chat agent's resolved model
-    });
-    return this._splitHeadsTool;
+    return this._headController;
+  }
+
+  /**
+   * The parent's recent conversation, handed to each spawned head so it sees
+   * the full context. Capped to the last N messages to bound head LLM context
+   * over long sessions (Think Session already compacts the table at the
+   * orchestrator level; this is a second safety net for head spawns).
+   */
+  private readInheritedContext(): SerializedMessage[] {
+    const INHERITED_CONTEXT_CAP = 50;
+    try {
+      type Row = { id: string; role: string; content: string; created_at: string };
+      const rows = this.sql<Row>`
+        SELECT id, role, content, created_at
+        FROM (
+          SELECT id, role, content, created_at
+          FROM assistant_messages
+          ORDER BY created_at DESC
+          LIMIT ${INHERITED_CONTEXT_CAP}
+        ) sub
+        ORDER BY created_at ASC`;
+      return rows.map((r) => ({
+        id: r.id,
+        role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
+          ? r.role
+          : 'assistant',
+        content: r.content,
+        createdAt: Date.parse(r.created_at) || 0,
+      }));
+    } catch {
+      // assistant_messages table may not yet exist on a fresh agent.
+      return [];
+    }
+  }
+
+  /** Stream head_split / head_merge into the durable event log so SSE
+   *  subscribers + MCP `list_run_events` see the split lifecycle. */
+  private emitHeadPhase(event: SplitPhaseEvent): void {
+    try {
+      if (!this._currentRunId) return;
+      if (event.kind === 'split') {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'head_split',
+          rootId: event.rootId,
+          headIds: [...event.headIds],
+          rationale: event.rationale,
+        });
+      } else {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'head_merge',
+          rootId: event.rootId,
+          headCount: event.headCount,
+          mergedNarrative: event.mergedNarrative,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at head onPhase:', err);
+    }
+  }
+
+  /**
+   * Fetch the user's MCP tool descriptors and reconstruct AI-SDK Tool
+   * adapters whose `execute` closures dispatch back to UserDO via RPC.
+   *
+   * Cache invalidation:
+   *   - UserDO holds a monotonic `mcp_updated_at` watermark, bumped on
+   *     add/remove/edit + on OAuth-callback completion.
+   *   - We cache descriptors + closures by that integer; rebuild only when
+   *     it changes. Result is stable across turns until the user actually
+   *     reconfigures something.
+   *
+   * Closure boundary: the descriptor that crosses RPC carries only the JSON
+   * Schema + name + serverId; we re-construct the AI-SDK `Tool` here so the
+   * `execute` arrow can capture `userDOStub`, `serverId`, and `name` lexically.
+   */
+  private async buildUserMcpTools(): Promise<ToolSet> {
+    const userId = this.getOwnerUserId();
+    if (!userId) return {};
+    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+
+    let watermark: number;
+    try { watermark = await userDOStub.userMcp_updatedAt(); }
+    catch (err) {
+      console.warn('[proteus] mcp watermark fetch failed:', (err as Error).message);
+      return this._cachedMcpTools;
+    }
+    if (watermark === this._cachedMcpToolsKey && Object.keys(this._cachedMcpTools).length > 0) {
+      return this._cachedMcpTools;
+    }
+    // Watermark = 0 means UserDO has never seen an MCP mutation. Skip the
+    // descriptor fetch entirely so cold UserDOs don't pay for MCP plumbing.
+    if (watermark === 0) {
+      this._cachedMcpTools = {};
+      this._cachedMcpToolsKey = 0;
+      return this._cachedMcpTools;
+    }
+
+    let descriptors: SerializableToolDescriptor[];
+    try { descriptors = await userDOStub.userMcp_toolDescriptors(); }
+    catch (err) {
+      console.warn('[proteus] mcp descriptor fetch failed:', (err as Error).message);
+      return this._cachedMcpTools;
+    }
+
+    const tools: ToolSet = {};
+    for (const d of descriptors) {
+      const serverId = d.serverId;
+      const mcpName = d.name;
+      tools[d.toolKey] = tool({
+        description: d.description ?? `${d.serverName}/${mcpName}`,
+        inputSchema: jsonSchema<Record<string, unknown>>(
+          (d.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0],
+        ),
+        execute: async (args: unknown) => {
+          try { return await userDOStub.userMcp_callTool(serverId, mcpName, args); }
+          catch (err) { return { isError: true, error: (err as Error).message }; }
+        },
+      });
+    }
+
+    this._cachedMcpTools = tools;
+    this._cachedMcpToolsKey = watermark;
+    this.logActivity('mcp_tools_rebuilt', `${Object.keys(tools).length} tools @ wm=${watermark}`);
+    return tools;
   }
 
   configureSession(session: Session): Session {
@@ -738,10 +971,10 @@ export class OrchestratorAgent extends Think<Env> {
 
   // Tools the model is allowed to call. Think merges workspace tools (read, write,
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
-  // activeTools restricts the model to only our 5 tools + session context tools,
+  // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
-  beforeTurn(_ctx: TurnContext): TurnConfig | void {
+  async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this._turnToolCalls = [];
     this._turnStepCount = 0;
     this._turnStartedAt = Date.now();
@@ -763,7 +996,98 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       console.warn('[proteus] event emit failed at beforeTurn:', err);
     }
-    return { activeTools: [...ACTIVE_TOOLS] };
+
+    // ── Skills resolution for this turn ──────────────────────────
+    // Reset per-turn invocation set (don't reassign — closures from the
+    // skills tool hold a stable reference).
+    this._turnInvokedSkills.clear();
+    this._turnActiveSkills = null;
+    const activeTools: string[] = [...ACTIVE_TOOLS];
+    let systemOverride: string | undefined;
+    try {
+      const lastUserText = extractLastUserText(ctx.messages);
+      const explicit = extractExplicitInvocations(lastUserText);
+      const alwaysActive = this.config.getAlwaysActiveSkills();
+
+      // Only do the (async) VFS scan when there's a real chance a skill
+      // activates — explicit invocation, always_active config, OR any
+      // built-in that auto_activates on keywords. Avoids a per-turn
+      // filesystem walk for vanilla turns.
+      const anyAutoActivate = BUILTIN_SKILLS.some(s => s.auto_activate);
+      const mightActivate = explicit.length > 0 || alwaysActive.length > 0 || anyAutoActivate;
+
+      if (mightActivate) {
+        const available = await discoverSkills(this.getSkillsVfs());
+        const activeSet = resolveActiveSkills({
+          available, explicit, userMessage: lastUserText, alwaysActive,
+        });
+        if (activeSet.active.length > 0) {
+          this._turnActiveSkills = activeSet;
+          // Mirror the resolved explicit set onto the turn-invoked tracker so
+          // skills.list reflects what's active right now.
+          for (const r of activeSet.reasons) this._turnInvokedSkills.add(r.name);
+
+          // Override the assembled system prompt with one that includes the
+          // active-skills section. Reuse the SAME execs list Think already
+          // assembled into ctx.system isn't safe (it's the assembled string,
+          // not raw inputs), so we re-render the prompt with the same
+          // registered-executors source we use in getSystemPrompt.
+          const execs = (this.rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
+          systemOverride = buildSystemPromptSync(this.rt, {
+            registeredExecutors: execs,
+            activeSkills: activeSet,
+          });
+          // Append the same recent-facts block getSystemPrompt does.
+          try {
+            const factsBlock = renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 });
+            if (factsBlock) {
+              systemOverride = `${systemOverride}\n\n## World model (facts you remembered):\n${factsBlock}`;
+            }
+          } catch { /* facts table not yet initialized */ }
+
+          // Intersect activeTools with the union of allowed_tools across the
+          // active skills. Empty union (skills don't restrict) = leave the
+          // base set untouched. Glob-suffix matching is owned by
+          // `toolAllowedBySkills` — orchestrator + render share the same impl.
+          const allowedUnion = unionAllowedTools(activeSet.active);
+          if (allowedUnion.length > 0) {
+            const filtered = activeTools.filter(t => toolAllowedBySkills(t, allowedUnion));
+            // Always keep the skills tool itself reachable so the LLM can
+            // list / read / invoke more skills mid-turn. Filtering it out
+            // would lock the agent into the first activation.
+            if (!filtered.includes('skills')) filtered.push('skills');
+            activeTools.length = 0;
+            activeTools.push(...filtered);
+          }
+          this.logActivity('skills_active',
+            activeSet.active.map(s => s.name).join(',') || '(none)');
+        }
+      }
+    } catch (err) {
+      console.warn('[proteus] skills resolution failed:', (err as Error).message);
+      // Don't fail the turn — vanilla path is fine.
+    }
+
+    // Per-user MCP tools — fetched from UserDO, dispatched back via RPC.
+    // Failure is non-fatal; the turn proceeds with builtins only and the UI
+    // surfaces the broken-server status via /api/user/mcp/servers polling.
+    let mcpTools: ToolSet = {};
+    try { mcpTools = await this.buildUserMcpTools(); }
+    catch (err) { console.warn('[proteus] buildUserMcpTools failed:', (err as Error).message); }
+
+    // Expose MCP tool keys to the active-tools allowlist so Think doesn't
+    // strip them out. Builtin names + MCP `tool_<id>_<name>` keys are
+    // disjoint by construction (assertion above).
+    const mcpToolNames = Object.keys(mcpTools);
+    const effectiveActiveTools = mcpToolNames.length > 0
+      ? [...activeTools, ...mcpToolNames]
+      : activeTools;
+    const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
+
+    const cfg: TurnConfig = { activeTools: effectiveActiveTools };
+    if (systemOverride) cfg.system = systemOverride;
+    if (effectiveTools) cfg.tools = effectiveTools;
+    return cfg;
   }
 
   onChunk(_ctx: ChunkContext): void {
@@ -929,6 +1253,24 @@ export class OrchestratorAgent extends Think<Env> {
       console.warn("[proteus] mirror-to-messages failed:", err);
     }
 
+    // Record which crafted tools this turn used, keyed by the assistant
+    // message id, so async thumbs feedback (setTurnFeedback) can re-score
+    // exactly those tools. Feedback is inherently asynchronous — it arrives
+    // after the turn completes — so turn.feedback stays null here and the
+    // heuristic in assessTurnQuality scores the turn at completion time.
+    const msgId = (result.message as { id?: string } | null | undefined)?.id;
+    if (msgId) {
+      const craftNames = this._turnToolCalls
+        .map(tc => tc.name)
+        .filter(name => !BUILTIN_TOOL_NAMES.has(name));
+      if (craftNames.length > 0) {
+        this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
+                 VALUES (${msgId}, ${JSON.stringify(craftNames)}, ${Date.now()})
+                 ON CONFLICT(message_id) DO UPDATE SET
+                   tool_names = excluded.tool_names, created_at = excluded.created_at`;
+      }
+    }
+
     const turn: CompletedTurn = {
       userMessage: userText,
       assistantResponse: assistantText,
@@ -936,7 +1278,9 @@ export class OrchestratorAgent extends Think<Env> {
       steps: this._turnStepCount,
       durationMs: this._turnStartedAt > 0 ? Date.now() - this._turnStartedAt : 0,
       feedback: null,
-      hadError: this._turnHadError || result.status === "error",
+      // status is "completed" here (the !== "completed" early-return above),
+      // so turn errors are tracked via the per-step _turnHadError flag.
+      hadError: this._turnHadError,
     };
 
     // CRITICAL: Evolution hooks make LLM calls (reflection, extraction, session
@@ -1031,7 +1375,7 @@ export class OrchestratorAgent extends Think<Env> {
       const judge: StructuredJudgeFn = async (prompt) => {
         const { object } = await generateObject({
           model: this.getModelForReview(),
-          schema: JudgeOutputSchema,
+          schema: aiSchema<JudgeOutput>(JudgeOutputSchema),
           prompt,
           maxOutputTokens: 512,
           ...effortFor('judge'),
@@ -1039,12 +1383,27 @@ export class OrchestratorAgent extends Think<Env> {
         return object;
       };
 
+      const judgeTask = task.slice(0, 2000);
       const result = await runAutoShadowEval({
         rt: this.rt,
-        task: task.slice(0, 2000),
+        task: judgeTask,
         currentOutput: currentOutput.slice(0, 4000),
         judge,
         llmStream: this.makeScaffoldLLMStream(),
+        // Pass the same tool dispatcher the production chat path uses, so the
+        // pending scaffold runs with the real tool surface — not the stubbed
+        // disabled-tools path that used to penalise any tool-using pending.
+        callTool: this.makeScaffoldCallTool(),
+        // host.defaultInference for the pending: run the standard inference for
+        // the shadow task so a pending that delegates to the default loop is
+        // judged fairly (its output ≈ current's, → tie, → not promoted).
+        defaultInference: () => streamText({
+          model: this.getModel(),
+          messages: [{ role: 'user', content: judgeTask }],
+          tools: this.getTools(),
+          stopWhen: stepCountIs(50),
+          ...effortFor('scaffold_mutation'),
+        }).toUIMessageStream(),
         config: {
           ...DEFAULT_AUTO_JUDGE_CONFIG,
           sampleRate,
@@ -1150,6 +1509,9 @@ export class OrchestratorAgent extends Think<Env> {
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);
+    // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
+    // + reactor_budget_log + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
+    initEventsHubTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
     initHeadsTables(execRaw);
     // Scaffold shadow-mode tables (scaffold_evaluations + status col)
@@ -1160,9 +1522,30 @@ export class OrchestratorAgent extends Think<Env> {
     initFactsTable(execRaw);
     // Voyager curriculum proposed-tasks queue (UI + autonomous loop consume).
     initCurriculumTable(execRaw);
+    // GEPA offline-optimisation run + candidate history (gepa_runs, gepa_candidates,
+    // gepa_pareto_membership). Populated by runScaffoldGepaOptimization.
+    initGepaTables(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
+    )`);
+
+    // Per-turn user feedback (thumbs up/down). The chat UI's thumbs button
+    // writes here via setTurnFeedback, which re-scores the crafted tools used
+    // in that turn — feedback is inherently asynchronous (it arrives after the
+    // turn completes), so it can't be read at turn time.
+    execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
+      message_id TEXT PRIMARY KEY,
+      feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
+      created_at INTEGER NOT NULL
+    )`);
+    // Records which crafted tools each assistant turn used, keyed by the
+    // assistant message id, so async thumbs feedback can re-score exactly
+    // those tools' EMA. Only crafted tools are stored (built-ins aren't scored).
+    execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
+      message_id TEXT PRIMARY KEY,
+      tool_names TEXT NOT NULL,
+      created_at INTEGER NOT NULL
     )`);
 
     // one-time per-agent migration that merges case-collision
@@ -1211,6 +1594,111 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       console.error("[proteus] onStart init failed:", err);
     }
+  }
+
+  // ── DO alarm → Timer ingress ───────────────────────────────────
+  //
+  // The TriggerRegistry schedules alarms; this handler fires for every
+  // due trigger (cron + one-shot), publishes Timer events via the hub,
+  // re-arms cron, revokes one-shot, and schedules the next alarm.
+  //
+  // Crash-safe: dedupe via `(trigger_id, scheduled_fire_at)` means a
+  // re-fire after DO eviction is a no-op publish.
+  async alarm() {
+    const now = Date.now();
+    try {
+      const due = this.triggerRegistry.due(now);
+      for (const trigger of due) {
+        const spec = trigger.spec as {
+          label?: string; payload?: unknown; cron?: string;
+        };
+        const scheduled_fire_at = (trigger as typeof trigger & { next_fire_at?: number }).next_fire_at ?? now;
+
+        this.eventLog.publish({
+          descriptor: {
+            ingress: 'timer_alarm',
+            variant: 'timer',
+            payload: {
+              trigger_id: trigger.id,
+              scheduled_fire_at,
+              label: spec.label,
+              user_payload: spec.payload,
+            },
+            trigger_creator_trust: trigger.creator_trust,
+          },
+          now,
+        });
+
+        if (trigger.kind === 'timer_cron') {
+          const next = spec.cron ? this.nextCronFire(spec.cron, now) : null;
+          this.triggerRegistry.markFired(trigger.id, now, next);
+        } else {
+          this.triggerRegistry.markFired(trigger.id, now, null);
+          this.triggerRegistry.revoke(trigger.id, now);
+        }
+      }
+
+      // Wake any operator-visible WS clients so they re-fetch the events
+      // sidebar (non-blocking; tolerates absent broadcast surface).
+      if (due.length > 0) {
+        const broadcast = (this as unknown as {
+          broadcastChatMessage?: (msg: unknown) => Promise<void> | void;
+        }).broadcastChatMessage;
+        try {
+          await broadcast?.({
+            role: 'system',
+            parts: [{ type: 'text', text: `[hub] ${due.length} timer event(s) fired` }],
+          });
+        } catch { /* best-effort */ }
+      }
+    } catch (err) {
+      console.error('[proteus] alarm handler failed:', (err as Error).message);
+    }
+
+    // Reschedule the next-soonest alarm.
+    try {
+      const all = this.triggerRegistry.list({ state: 'active' });
+      const upcoming = all
+        .map(t => (t as typeof t & { next_fire_at?: number }).next_fire_at)
+        .filter((t): t is number => typeof t === 'number' && t > now)
+        .sort((a, b) => a - b)[0];
+      if (upcoming) this.ctx.storage.setAlarm(upcoming);
+    } catch (err) {
+      console.warn('[proteus] alarm reschedule failed:', (err as Error).message);
+    }
+  }
+
+  /** Compute the next firing time for a cron expression after `from`.
+   *  Simple implementation: supports `*\/n * * * *` (every n minutes) and
+   *  `m h * * *` (daily at hh:mm UTC); enough for v1 schedules. Full cron
+   *  parsing arrives with the Triggers UI. */
+  private nextCronFire(cron: string, from: number): number | null {
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return null;
+    const [min, hour] = parts;
+    const d = new Date(from);
+    // every-n-minutes: `*\/n * * * *`
+    if (min.startsWith('*/')) {
+      const n = parseInt(min.slice(2), 10);
+      if (Number.isFinite(n) && n > 0) {
+        const cur = d.getUTCMinutes();
+        const next = (Math.floor(cur / n) + 1) * n;
+        const nd = new Date(d);
+        nd.setUTCMinutes(next, 0, 0);
+        if (next >= 60) { nd.setUTCMinutes(next - 60, 0, 0); nd.setUTCHours(nd.getUTCHours() + 1); }
+        return nd.getTime();
+      }
+    }
+    // daily at hh:mm
+    const m = parseInt(min, 10);
+    const h = parseInt(hour, 10);
+    if (Number.isFinite(m) && Number.isFinite(h)) {
+      const nd = new Date(d);
+      nd.setUTCHours(h, m, 0, 0);
+      if (nd.getTime() <= from) nd.setUTCDate(nd.getUTCDate() + 1);
+      return nd.getTime();
+    }
+    return null;
   }
 
   // ── Callable RPC methods ───────────────────────────────────────
@@ -1282,13 +1770,69 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async doSearchMemory(query: string) { return this.rt.memory.search(query, 10); }
 
   @callable() async getMctsTree() {
-    return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, created_at
+    return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, created_at
       FROM search_nodes ORDER BY depth, created_at`;
   }
 
   @callable() async getEvolutionEvents(limit: number = 50) {
     return this.sql`SELECT id, type, message, data, created_at
       FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
+  }
+
+  /**
+   * The unified Run Timeline spine. ONE server-side merge of the durable
+   * per-run event log (run_events: tool/step/head/scaffold/turn) + the
+   * agent-level evolution stream (evolution_events, `data` preserved) + the
+   * MCTS search nodes — normalized into ordered TimelineSpans. The client
+   * renders this single source, so there is no fragile client-side merge of
+   * three RPCs. Defaults to the active run, else the most recent recorded run.
+   */
+  @callable()
+  async getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<TimelineSpan[]> {
+    const limit = opts?.limit ?? 200;
+    const recent = (() => {
+      try { return this.sql<{ run_id: string }>`SELECT run_id FROM run_events ORDER BY ts DESC LIMIT 1`[0]?.run_id; }
+      catch { return undefined; }
+    })();
+    const runId = opts?.runId || this._currentRunId || recent;
+    const spans: TimelineSpan[] = [];
+
+    // 1) Durable per-run events for the focused run (skip noisy text_delta).
+    if (runId) {
+      try {
+        for (const e of this.eventRecorder.read(runId, { limit })) {
+          if (e.type === 'text_delta') continue;
+          spans.push(runEventToSpan(e));
+        }
+      } catch { /* run_events may not exist yet */ }
+    }
+    // 2) Agent-level evolution events — PRESERVE the `data` payload.
+    try {
+      const rows = this.sql<{ id: string; type: string; message: string; data: string | null; created_at: number }>`
+        SELECT id, type, message, data, created_at FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
+      for (const r of rows) {
+        spans.push({
+          ts: r.created_at, kind: classifyEvolutionType(r.type), label: r.message || r.type,
+          data: r.data ? safeJsonParse(r.data) : undefined,
+          source: 'evolution', refId: r.id, rawType: r.type,
+        });
+      }
+    } catch { /* table may not exist */ }
+    // 3) MCTS search nodes.
+    try {
+      const nodes = this.sql<{ id: string; action: string; value: number; status: string; created_at: number }>`
+        SELECT id, action, value, status, created_at FROM search_nodes ORDER BY created_at DESC LIMIT ${limit}`;
+      for (const n of nodes) {
+        spans.push({
+          ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
+          detail: `value ${Number(n.value).toFixed(2)} · ${n.status}`,
+          source: 'mcts', refId: n.id,
+        });
+      }
+    } catch { /* table may not exist */ }
+
+    spans.sort((a, b) => a.ts - b.ts);
+    return spans.slice(-limit);
   }
 
   // ── Fiber recovery — durable execution surviving DO eviction ──
@@ -1411,6 +1955,45 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /**
+   * The per-trial shadow-eval verdict grid that drives the promote/rollback
+   * decision — the moat surface's data source. Thin wrapper over core's
+   * `readShadowVerdict` (reads `scaffold_evaluations`, regressions-first;
+   * NOT `task_history`/`canary_score`, which are never written).
+   */
+  @callable()
+  async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
+    const pendingVersion = version ?? getPendingScaffold(this.boundSql)?.version ?? null;
+    return readShadowVerdict(this.boundSql, pendingVersion);
+  }
+
+  /**
+   * Run an arbitrary scaffold version against a task and return its captured
+   * result — so the user can PREVIEW a candidate scaffold live before
+   * promoting it. Reuses the existing runScaffold path with an explicit code
+   * override (same mechanism runScaffoldOnce uses for the pending), reading
+   * the version's source from the VFS `agent.js.vN` backup.
+   */
+  @callable()
+  async previewScaffoldLive(
+    version: number,
+    task: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<ScaffoldRunResult> {
+    const codeOverride = (await readScaffoldVersion(this.rt, version)) ?? undefined;
+    if (codeOverride === undefined) {
+      throw new Error(`previewScaffoldLive: no scaffold code found for v${version}`);
+    }
+    return runScaffold({
+      rt: this.rt, task,
+      emit: () => undefined,
+      llmStream: this.makeScaffoldLLMStream(),
+      callTool: this.makeScaffoldCallTool(),
+      scaffoldCodeOverride: codeOverride,
+      timeoutMs: opts?.timeoutMs,
+    });
+  }
+
+  /**
    * Change how the `run` builtin handles 'gate' decisions from the
    * approval-gate review. Stored in agent_config; effective on the NEXT
    * turn (the tool cache rebuilds when CraftStore changes — and on cold-
@@ -1437,6 +2020,90 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async getShellApprovalMode(): Promise<{ mode: 'strict' | 'allow_all' | 'deny_all' }> {
     return { mode: this.config.getShellApprovalMode() };
+  }
+
+  /**
+   * Pin a set of skills as always-active for this agent. Empty array clears
+   * the pin. Operators use this from the Settings page; without an RPC the
+   * only way to set `always_active_skills` is direct SQL, which the spec
+   * explicitly wants to avoid.
+   */
+  @callable()
+  async setAlwaysActiveSkills(names: string[]): Promise<{ ok: true; names: string[] }> {
+    if (!Array.isArray(names)) throw new Error('names must be a string array');
+    for (const n of names) {
+      if (typeof n !== 'string') throw new Error('names must contain only strings');
+    }
+    this.config.setAlwaysActiveSkills(names);
+    return { ok: true, names: this.config.getAlwaysActiveSkills() };
+  }
+
+  /** Current pinned always-active skill names. Empty array means none. */
+  @callable()
+  async getAlwaysActiveSkills(): Promise<{ names: string[] }> {
+    return { names: this.config.getAlwaysActiveSkills() };
+  }
+
+  /**
+   * Record thumbs-up/down feedback for a completed assistant message and
+   * re-score the crafted tools that turn used. Pass `feedback: null` to clear.
+   *
+   * Feedback is inherently asynchronous (the user clicks after the turn ends),
+   * so it can't flow through the turn-time heuristic. Instead, this applies a
+   * fresh EMA observation — derived from the feedback via the same mapping the
+   * turn-time path uses (feedbackToQuality) — to exactly the crafted tools
+   * recorded for this message in turn_craft_usage. That makes the thumbs a
+   * real, load-bearing learning signal rather than a stored-but-ignored value.
+   */
+  @callable()
+  async setTurnFeedback(
+    messageId: string,
+    feedback: 'positive' | 'negative' | null,
+  ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null; rescored: number }> {
+    if (typeof messageId !== 'string' || messageId.length === 0) {
+      throw new Error('messageId must be a non-empty string');
+    }
+    if (feedback === null) {
+      this.sql`DELETE FROM turn_feedback WHERE message_id = ${messageId}`;
+      return { ok: true, messageId, feedback: null, rescored: 0 };
+    }
+    if (feedback !== 'positive' && feedback !== 'negative') {
+      throw new Error(`feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
+    }
+    this.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
+             VALUES (${messageId}, ${feedback}, ${Date.now()})
+             ON CONFLICT(message_id) DO UPDATE SET
+               feedback   = excluded.feedback,
+               created_at = excluded.created_at`;
+
+    // Re-score the crafted tools this turn used with the feedback-derived
+    // quality. No-op when the turn used no crafted tools.
+    let rescored = 0;
+    const usageRows = this.sql<{ tool_names: string }>`
+      SELECT tool_names FROM turn_craft_usage WHERE message_id = ${messageId} LIMIT 1`;
+    if (usageRows[0]?.tool_names) {
+      const names = JSON.parse(usageRows[0].tool_names) as string[];
+      if (names.length > 0) {
+        updateCraftScores(this.boundSql, names, feedbackToQuality(feedback));
+        rescored = names.length;
+        // The next getTools() should reflect the new scores.
+        this._cachedTools = null;
+        this._cachedToolsKey = '';
+      }
+    }
+    return { ok: true, messageId, feedback, rescored };
+  }
+
+  /** Read recorded feedback for a message. Returns null if none. */
+  @callable()
+  async getTurnFeedback(messageId: string): Promise<{ feedback: 'positive' | 'negative' | null }> {
+    try {
+      const rows = this.sql<{ feedback: 'positive' | 'negative' }>`
+        SELECT feedback FROM turn_feedback WHERE message_id = ${messageId} LIMIT 1`;
+      return { feedback: rows[0]?.feedback ?? null };
+    } catch {
+      return { feedback: null };
+    }
   }
 
   /**
@@ -1475,6 +2142,246 @@ export class OrchestratorAgent extends Think<Env> {
       ORDER BY version DESC LIMIT ${limit}`;
   }
 
+  // ── GEPA offline scaffold optimisation ─────────────────────────
+
+  /**
+   * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
+   * Offline + batch: builds an eval set from the agent's own recent tasks,
+   * runs the current scaffold + reflection-mutated candidates against them,
+   * scores each with a judge LLM, and — if a strictly-better candidate is
+   * found — hands the winner to modifyScaffold so it enters the normal shadow-
+   * eval → promote pipeline. Persisted to gepa_runs/gepa_candidates so the
+   * UI can show lineage.
+   *
+   * Cost-bounded: small default budget (each metric call runs a full scaffold
+   * + a judge call). Tune via opts.
+   */
+  @callable()
+  async runScaffoldGepaOptimization(opts?: {
+    maxIterations?: number;
+    evalSize?: number;
+    maxMetricCalls?: number;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    runId?: string;
+    proposed?: boolean;
+    pendingVersion?: number | null;
+    skipReason?: string;
+    bestScore?: number;
+    seedScore?: number;
+    iterations?: number;
+  }> {
+    const evalSize = Math.max(1, Math.min(opts?.evalSize ?? 5, 20));
+    const budget = {
+      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
+      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 40, 200)),
+      minibatchSize: 1,
+    };
+
+    // 1. Eval set from the agent's recent distinct user tasks.
+    const taskRows = this.sql<{ content: string }>`
+      SELECT DISTINCT content FROM messages
+      WHERE role = 'user' AND length(content) > 0
+      ORDER BY created_at DESC LIMIT ${evalSize}`;
+    const evalSet: EvalInstance<string>[] = taskRows
+      .map((r, i) => ({ id: `task-${i}`, input: r.content.slice(0, 2000) }))
+      .filter(e => e.input.trim().length > 0);
+    if (evalSet.length === 0) {
+      return { ok: false, error: 'no eval tasks yet — chat with the agent first' };
+    }
+
+    const model = this.getModel();
+
+    // 2. Metric: run the candidate scaffold against a task, judge the output.
+    const metric = async (candidate: string, instance: EvalInstance<string>): Promise<MetricOutcome> => {
+      let output: string;
+      try {
+        output = await this.runScaffoldCaptureText(candidate, instance.input);
+      } catch (err) {
+        return { score: 0, feedback: `scaffold execution failed: ${(err as Error).message}` };
+      }
+      try {
+        const judged = await generateObject({
+          model,
+          schema: aiSchema<{ score: number; feedback: string }>(v.object({
+            score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
+            feedback: v.pipe(v.string(), v.minLength(1)),
+          })),
+          prompt:
+            `Rate this agent response to the task on a 0..1 scale (correctness, ` +
+            `helpfulness, clarity) and give one sentence of specific, actionable ` +
+            `feedback on how the agent's behaviour could improve.\n\n` +
+            `Task:\n${instance.input}\n\nResponse:\n${output.slice(0, 4000)}\n\n` +
+            `Respond as {score, feedback}.`,
+          ...effortFor('judge'),
+        });
+        const obj = judged.object;
+        return { score: obj.score, feedback: obj.feedback };
+      } catch (err) {
+        return { score: 0.5, feedback: `judge unavailable: ${(err as Error).message}` };
+      }
+    };
+
+    // 3. Reflection LM — rewrites the scaffold from the failure feedback.
+    const reflectionLm = async (prompt: string): Promise<string> => {
+      const { text } = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
+      return text;
+    };
+
+    // 4. Run GEPA, persisting every candidate + Pareto snapshot.
+    const runId = startGepaRun(this.boundSql, { target: 'scaffold', budget });
+    const persisted = new Set<string>();
+    let result;
+    try {
+      result = await runScaffoldGepa({
+        rt: this.rt,
+        evalSet,
+        metric,
+        reflectionLm,
+        budget,
+        onIteration: makePersistingHook({ sql: this.boundSql, runId, evalSet, persisted }),
+      });
+    } catch (err) {
+      finishGepaRun(this.boundSql, {
+        runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
+      });
+      return { ok: false, error: (err as Error).message, runId };
+    }
+
+    finishGepaRun(this.boundSql, {
+      runId,
+      status: 'completed',
+      stopReason: result.gepa.stopReason,
+      winnerId: result.gepa.winner.id,
+      metricCalls: result.gepa.metricCallsUsed,
+      iterations: result.gepa.iterationsRun,
+    });
+
+    return {
+      ok: true,
+      runId,
+      proposed: result.proposed,
+      pendingVersion: result.pendingVersion,
+      skipReason: result.skipReason,
+      bestScore: result.gepa.winner.aggregateScore,
+      seedScore: result.gepa.history[0]?.aggregateScore,
+      iterations: result.gepa.iterationsRun,
+    };
+  }
+
+  /** List recent GEPA optimisation runs for the UI. */
+  @callable()
+  async getGepaRuns(limit: number = 20): Promise<GepaRunSummary[]> {
+    try { return listGepaRuns(this.boundSql, limit); }
+    catch { return []; }
+  }
+
+  /** One GEPA run in full: its candidates (scores/feedback per instance) +
+   *  the Pareto-front membership — drives the Reasoning surface's Pareto
+   *  scatter + ancestry tree. Maps are flattened to plain objects for RPC. */
+  @callable()
+  async getGepaRun(runId: string): Promise<{
+    run: GepaRunSummary | null;
+    candidates: Array<{
+      id: string; parentId: string | null; source: string;
+      scores: Record<string, number>; feedback: Record<string, string>;
+      aggregateScore: number; createdAt: number;
+    }>;
+    pareto: Array<{ candidateId: string; instanceId: string; score: number }>;
+  }> {
+    try {
+      const run = listGepaRuns(this.boundSql, 200).find((r) => r.runId === runId) ?? null;
+      const candidates = loadGepaCandidates(this.boundSql, runId).map((c) => ({
+        id: c.id, parentId: c.parentId, source: c.source,
+        scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
+        aggregateScore: c.aggregateScore, createdAt: c.createdAt,
+      }));
+      const pareto = this.sql<{ candidate_id: string; instance_id: string; score: number }>`
+        SELECT candidate_id, instance_id, score FROM gepa_pareto_membership WHERE run_id = ${runId}`
+        .map((r) => ({ candidateId: r.candidate_id, instanceId: r.instance_id, score: r.score }));
+      return { run, candidates, pareto };
+    } catch { return { run: null, candidates: [], pareto: [] }; }
+  }
+
+  /** Recent branching-head runs (think strategy=heads): each root spawn with
+   *  its child heads + the merged synthesis — drives the Reasoning surface's
+   *  Branches strip. Reads head_journal + head_merge_results directly. */
+  @callable()
+  async getHeadRuns(limit: number = 20): Promise<Array<{
+    rootId: string; task: string; rationale: string; status: string; spawnedAt: number;
+    heads: Array<{ id: string; task: string; rationale: string; status: string; summary: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number }>;
+    merge: { narrative: string; headCount: number; totalTokens: number } | null;
+  }>> {
+    try {
+      const roots = this.sql<{ id: string; task: string; rationale: string; status: string; spawned_at: number }>`
+        SELECT id, task, rationale, status, spawned_at FROM head_journal
+        WHERE parent_id IS NULL OR parent_id = ''
+        ORDER BY spawned_at DESC LIMIT ${limit}`;
+      return roots.map((root) => {
+        const heads = this.sql<{ id: string; task: string; rationale: string; status: string; summary: string | null; token_input: number; token_output: number; wall_clock_ms: number }>`
+          SELECT id, task, rationale, status, summary, token_input, token_output, wall_clock_ms
+          FROM head_journal WHERE root_id = ${root.id} ORDER BY depth, spawned_at`
+          .map((h) => ({
+            id: h.id, task: h.task, rationale: h.rationale, status: h.status,
+            summary: h.summary, tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
+          }));
+        const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number }>`
+          SELECT merged_narrative, cost_head_count, cost_total_tokens
+          FROM head_merge_results WHERE root_id = ${root.id}`[0];
+        return {
+          rootId: root.id, task: root.task, rationale: root.rationale, status: root.status, spawnedAt: root.spawned_at,
+          heads,
+          merge: mergeRow ? { narrative: mergeRow.merged_narrative, headCount: mergeRow.cost_head_count, totalTokens: mergeRow.cost_total_tokens } : null,
+        };
+      });
+    } catch { return []; }
+  }
+
+  /** The agent's world model — keyed agent_facts, most-recent first — for the
+   *  Brain surface. Wraps FactsStore (otherwise consumed only internally for
+   *  prompt injection). */
+  @callable()
+  async getFacts(limit: number = 100): Promise<Array<{
+    key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
+  }>> {
+    try {
+      return this.facts.recentTopK(limit).map((f) => ({
+        key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
+      }));
+    } catch { return []; }
+  }
+
+  /** Run a candidate scaffold against a task and return the concatenated
+   *  text it produced. Used as the GEPA metric's rollout. */
+  private async runScaffoldCaptureText(candidateCode: string, task: string): Promise<string> {
+    let text = '';
+    const result = await runScaffold({
+      rt: this.rt,
+      task,
+      scaffoldCodeOverride: candidateCode,
+      emit: (ev) => {
+        if (ev.type === 'text_delta') text += ev.text;
+        else if (ev.type === 'ui_chunk') {
+          const c = ev.chunk as { type?: string; delta?: string } | undefined;
+          if (c?.type === 'text-delta' && typeof c.delta === 'string') text += c.delta;
+        }
+      },
+      llmStream: this.makeScaffoldLLMStream(),
+      callTool: this.makeScaffoldCallTool(),
+      defaultInference: () => streamText({
+        model: this.getModel(),
+        messages: [{ role: 'user', content: task }],
+        tools: this.getTools(),
+        stopWhen: stepCountIs(50),
+        ...effortFor('scaffold_mutation'),
+      }).toUIMessageStream(),
+      timeoutMs: 2 * 60 * 1000,
+    });
+    if (!result.ok && result.error) throw new Error(result.error);
+    return text;
+  }
+
   // ── Durable run-event log — read endpoints + run listing ──
 
   /**
@@ -1500,8 +2407,8 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   // ── MCP server bridge — small RPCs the MCP handler needs ──
-  /** Used by /mcp/v1/<name> save_note tool. Routes through the same
-   *  appendMemoryNote primitive as workspace.saveNote + save_note builtin. */
+  /** Used by the /mcp/v1/<name> save_note tool. Routes through the same
+   *  appendMemoryNote primitive as workspace.saveNote + the `memory` builtin. */
   @callable()
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
     await appendMemoryNote(this.rt.memory, content);
@@ -1549,7 +2456,7 @@ export class OrchestratorAgent extends Think<Env> {
    */
   @callable()
   async exportSkillsToVfs(dir?: string): Promise<ExportSkillsResult> {
-    return exportAllSkillsToVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
+    return exportAllSkillsToVfs(this.rt.storage.vfs, this.rt.craftStore, { dir });
   }
 
   /**
@@ -1559,20 +2466,28 @@ export class OrchestratorAgent extends Think<Env> {
    */
   @callable()
   async importSkillsFromVfs(dir?: string): Promise<ImportSkillsResult> {
-    return importSkillsFromVfs(this.rt.storage.vfs as never, this.rt.craftStore as never, { dir });
+    return importSkillsFromVfs(this.rt.storage.vfs, this.rt.craftStore, { dir });
   }
 
   /** Build a streaming LLM callback the scaffold executor calls via
-   *  `host.llmStream(opts)` — chunks come back as 'text_delta' events. */
-  private makeScaffoldLLMStream() {
-    const model = this.getModelForReview();
-    return async function* (opts: { system?: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> }) {
+   *  `host.llmStream(opts)` — text chunks come back as 'text_delta' events.
+   *  `tools` is a list of tool names from the agent's surface; we resolve them
+   *  to the real executables and run a multi-step loop bounded by `maxSteps`,
+   *  so a scaffold's model call has genuine tool access (not a one-shot). */
+  private makeScaffoldLLMStream(): import('@proteus/core').ScaffoldRunOptions['llmStream'] {
+    const orchestrator = this;
+    const model = this.getModel();
+    return async function* (opts) {
+      const all = orchestrator.getTools();
+      const toolSet: ToolSet = (opts.tools && opts.tools.length > 0)
+        ? Object.fromEntries(opts.tools.filter(n => all[n]).map(n => [n, all[n]]))
+        : all;
       const result = streamText({
         model,
         system: opts.system,
-        messages: opts.messages,
-        maxOutputTokens: 2048,
-        // Scaffold authors its own controller — high effort for careful output.
+        messages: opts.messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+        tools: toolSet,
+        stopWhen: stepCountIs(opts.maxSteps ?? 50),
         ...effortFor('scaffold_mutation'),
       });
       for await (const chunk of result.textStream) yield chunk;
@@ -1582,7 +2497,7 @@ export class OrchestratorAgent extends Think<Env> {
   /**
    * Internal: build a callTool callback that dispatches to the parent's
    * ToolSet. Used by the scaffold to invoke any tool the orchestrator has
-   * (e.g. save_note, search_memory).
+   * (e.g. memory, fact, run).
    */
   private makeScaffoldCallTool() {
     const orchestrator = this;
@@ -1593,9 +2508,14 @@ export class OrchestratorAgent extends Think<Env> {
         return { error: `tool not found: ${name}` };
       }
       try {
-        return await t.execute(args as never, {
+        // `args as never` is the legitimate dynamic-dispatch escape: the tool
+        // is selected by string name at runtime, so its input type is unknown
+        // here. The options object IS statically known — type it precisely so
+        // a future required ToolCallOptions field can't silently slip through.
+        const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
           messages: [], toolCallId: `scaffold-${Date.now()}`,
-        } as never);
+        };
+        return await t.execute(args as never, options);
       } catch (err) {
         return { error: err instanceof Error ? err.message : String(err) };
       }
@@ -1829,13 +2749,20 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable() async setModel(spec: string) {
-    const reg = this.providerRegistry();
-    // Validate before storing — surfaces unknown-provider / invalid-spec
-    // errors at config time, not on the next chat turn.
-    const normalized = reg.normalizeSpecSync(spec);
-    this.config.setModel(normalized);
-    this.invalidateModelCaches();
-    return { ok: true, spec: normalized };
+    try {
+      const reg = this.providerRegistry();
+      // Validate before storing — surfaces unknown-provider / invalid-spec
+      // errors at config time, not on the next chat turn.
+      const normalized = reg.normalizeSpecSync(spec);
+      this.config.setModel(normalized);
+      this.invalidateModelCaches();
+      console.log(`[orchestrator] setModel: ${spec} → ${normalized}`);
+      return { ok: true, spec: normalized };
+    } catch (err) {
+      const msg = (err as Error).message ?? String(err);
+      console.error(`[orchestrator] setModel(${spec}) failed:`, msg);
+      throw new Error(`setModel(${spec}) failed: ${msg}`);
+    }
   }
 
   /** Invalidate every cache that depends on the resolved model so the next
@@ -1968,131 +2895,48 @@ export class OrchestratorAgent extends Think<Env> {
    * Called after each MCTS iteration so the UI updates in real-time.
    */
   /**
-   * Scaffold-driven chat entry point.
+   * Inference seam override — THE single production chat path.
    *
-   * Runs the agent's current scaffold for a one-shot task with FULL host
-   * bridges (LLM stream, tool dispatch from getTools(), event emit). Streams
-   * progress via `this.broadcast()` so any subscribed client sees text
-   * deltas + tool-call markers in real time. Persists the final assistant
-   * message into `assistant_messages` so fork + Session.getHistory pick it up.
+   * Think calls this from `_runInferenceLoop` with the fully-prepared
+   * streamText options. We route through the agent's mutable scaffold IFF it
+   * has evolved one (current version > 0). An un-evolved agent (still on the
+   * bootstrap v0) uses the standard `streamText` directly — same behaviour as
+   * before, zero overhead — until the evolution loop proves + promotes a
+   * better scaffold via shadow eval. Once promoted, that scaffold becomes the
+   * agent's live inference loop. One method, one decision, no parallel paths.
    *
-   * This is NOT a takeover of Think's onChatMessage — that's gated by
-   * `_runInferenceLoop` which is private. Instead, it's an explicit
-   * scaffold-execution endpoint the UI/CLI can call when scaffold-driven
-   * chat is wanted (vs the standard streamText path).
-   *
-   * Returns the assembled assistant text + emitted events for telemetry.
+   * The scaffold runs in the codemode sandbox and reaches the model/tools/
+   * memory only through the `host.*` bridge (the live opts/model object can't
+   * cross the boundary). `host.defaultInference()` runs exactly THIS streamText
+   * and streams its chunks back, so a delegating scaffold is faithful to the
+   * default; a custom scaffold can wrap or replace it.
    */
-  @callable()
-  async chatViaScaffold(task: string): Promise<{
-    ok: boolean;
-    text: string;
-    emitCount: number;
-    error?: string;
-    messageId?: string;
-  }> {
-    const startedAt = Date.now();
-    let accumulated = '';
-    let emitCount = 0;
-    const runId = `scaffold-chat-${nanoid()}`;
-
-    // Mark run start in the event log so SSE subscribers see the lifecycle.
+  protected runStreamText(
+    opts: Parameters<typeof streamText>[0],
+  ): StreamableResult {
+    let version = 0;
     try {
-      this.eventRecorder.emit(runId, { type: 'run_start', agentId: this.name, userMessage: task.slice(0, 400) });
-      this.eventRecorder.emit(runId, { type: 'turn_start', turnIndex: this._sessionTurnCount });
-    } catch { /* nop */ }
+      version = this.sql<{ v: number }>`
+        SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
+    } catch { /* table not initialized yet → treat as un-evolved */ }
 
-    const emit = (ev: import('@proteus/core').ScaffoldEvent) => {
-      emitCount++;
-      try {
-        if (ev.type === 'text_delta') {
-          accumulated += ev.text;
-          this.broadcast(JSON.stringify({
-            type: 'scaffold-chat',
-            subtype: 'text_delta',
-            runId,
-            text: ev.text,
-          }));
-          this.eventRecorder.emit(runId, { type: 'text_delta', text: ev.text });
-        } else if (ev.type === 'tool_call_start') {
-          this.broadcast(JSON.stringify({
-            type: 'scaffold-chat',
-            subtype: 'tool_call_start',
-            runId,
-            name: ev.name,
-            args: ev.args,
-            toolCallId: ev.toolCallId,
-          }));
-          this.eventRecorder.emit(runId, {
-            type: 'tool_call_start', name: ev.name, args: ev.args, toolCallId: ev.toolCallId,
-          });
-        } else if (ev.type === 'tool_call_end' || ev.type === 'tool_result') {
-          const tc = ev as { toolCallId: string; result?: unknown; error?: string };
-          this.broadcast(JSON.stringify({
-            type: 'scaffold-chat',
-            subtype: 'tool_result',
-            runId,
-            toolCallId: tc.toolCallId,
-            result: tc.result,
-            error: tc.error,
-          }));
-          this.eventRecorder.emit(runId, {
-            type: 'tool_call_end', name: 'scaffold', toolCallId: tc.toolCallId,
-            result: tc.result, error: tc.error,
-          });
-        } else if (ev.type === 'error') {
-          this.broadcast(JSON.stringify({
-            type: 'scaffold-chat', subtype: 'error', runId, message: ev.message,
-          }));
-          this.eventRecorder.emit(runId, { type: 'error', message: ev.message });
-        }
-      } catch (err) {
-        console.warn('[proteus] chatViaScaffold emit failed:', err);
-      }
-    };
+    if (version <= 0) return streamText(opts);
 
-    let result: import('@proteus/core').ScaffoldRunResult;
-    try {
-      result = await runScaffold({
-        rt: this.rt, task, emit,
-        llmStream: this.makeScaffoldLLMStream(),
-        callTool: this.makeScaffoldCallTool(),
-        timeoutMs: 5 * 60 * 1000,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      try {
-        this.eventRecorder.emit(runId, { type: 'error', message: msg });
-        this.eventRecorder.emit(runId, { type: 'run_end', reason: 'errored' });
-      } catch { /* nop */ }
-      return { ok: false, text: accumulated, emitCount, error: msg };
-    }
-
-    // Persist the final message into assistant_messages so the chat UI's
-    // recursive-CTE history view + the fork pipeline include it.
-    const messageId = `scaffold-${nanoid()}`;
-    try {
-      const finalText = accumulated || (typeof result.finalResult === 'string' ? result.finalResult : '');
-      if (finalText) {
-        this.sql`INSERT OR IGNORE INTO assistant_messages
-          (id, session_id, parent_id, role, content, created_at)
-          VALUES (${messageId}, ${'default'}, ${null}, ${'assistant'}, ${finalText}, ${new Date().toISOString()})`;
-      }
-    } catch (err) {
-      console.warn('[proteus] chatViaScaffold persist failed:', err);
-    }
-
-    try {
-      this.eventRecorder.emit(runId, { type: 'turn_end', turnIndex: this._sessionTurnCount });
-      this.eventRecorder.emit(runId, { type: 'run_end', reason: result.ok ? 'completed' : 'errored' });
-    } catch { /* nop */ }
-
+    // Evolved scaffold is live — run it as the inference loop.
+    const orchestrator = this;
+    const task = extractLastUserText((opts.messages ?? []) as ModelMessage[]);
     return {
-      ok: result.ok,
-      text: accumulated,
-      emitCount,
-      error: result.error,
-      messageId,
+      toUIMessageStream: () => scaffoldEventsToUIStream(
+        (emit) => runScaffold({
+          rt: orchestrator.rt,
+          task,
+          emit,
+          llmStream: orchestrator.makeScaffoldLLMStream(),
+          callTool: orchestrator.makeScaffoldCallTool(),
+          defaultInference: () => streamText(opts).toUIMessageStream(),
+          timeoutMs: 5 * 60 * 1000,
+        }),
+      ),
     };
   }
 
@@ -2322,6 +3166,307 @@ export class OrchestratorAgent extends Think<Env> {
     };
   }
 
+  // ── EventsHub RPCs — triggers + events for UI ──────────────────
+
+  /** List triggers (webhooks, timers, watches, mcp routes). UI uses this
+   *  for the per-agent Triggers tab. */
+  @callable()
+  async listTriggers() {
+    return {
+      triggers: this.triggerRegistry.list().map((t) => ({
+        id: t.id,
+        kind: t.kind,
+        spec: t.spec,
+        creator_trust: t.creator_trust,
+        state: t.state,
+        created_at: t.created_at,
+        paused_at: t.paused_at,
+        revoked_at: t.revoked_at,
+        rate_limit_per_min: t.rate_limit_per_min,
+      })),
+    };
+  }
+
+  /** Create a durable webhook trigger. Returns the public URL. Operator
+   *  UI calls this through `/api/agents/<name>/triggers` (step-up auth +
+   *  CSRF enforced at the HTTP layer). */
+  @callable()
+  async createDurableWebhook(opts: {
+    label: string;
+    auth_mode: 'hmac' | 'bearer' | 'mtls';
+    secret?: string;
+    accepted_content_type?: string;
+    rate_limit_per_min?: number;
+  }) {
+    // Secret stored opaquely; lookup later by trigger id.
+    const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
+    const id = this.triggerRegistry.register({
+      kind: 'webhook_durable',
+      spec: {
+        label: opts.label,
+        auth_mode: opts.auth_mode,
+        secret_id,
+        accepted_content_type: opts.accepted_content_type ?? 'application/json',
+      },
+      creator_trust: 'owner',
+      rate_limit_per_min: opts.rate_limit_per_min ?? 60,
+    }, Date.now());
+
+    // Store the secret in the per-agent webhook_secrets table (kept
+    // separate from the trigger row so it's never returned by listTriggers).
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS webhook_secrets (
+        secret_id TEXT PRIMARY KEY,
+        trigger_id TEXT NOT NULL,
+        secret TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`);
+    if (opts.secret) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO webhook_secrets (secret_id, trigger_id, secret, created_at) VALUES (?, ?, ?, ?)`,
+        secret_id, id, opts.secret, Date.now(),
+      );
+    }
+
+    return {
+      trigger_id: id,
+      url: `/api/agents/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
+      auth_mode: opts.auth_mode,
+      // For HMAC/bearer modes, the operator needs the secret once to give
+      // to the external system; we return it inline now and never again.
+      secret: opts.secret ?? null,
+    };
+  }
+
+  /** Cancel a trigger (revoke). Idempotent. */
+  @callable()
+  async cancelTrigger(trigger_id: string) {
+    const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
+    return { ok: true, changed };
+  }
+
+  /** Run a webhook delivery through the hub from within the agent DO. This
+   *  RPC is invoked by the top-level webhook route (`handleHubRequest`) so
+   *  the publish + dedupe + reply channel open run atomically in the agent's
+   *  storage context. */
+  @callable()
+  async acceptWebhookDelivery(opts: {
+    trigger_id: string;
+    method: string;
+    headers: Record<string, string>;
+    body_text: string;
+    cf_mtls_verified: boolean;
+    delivery_id: string | null;
+    hmac_signature: string | null;
+    hmac_timestamp: string | null;
+    bearer_header: string | null;
+    content_type: string | null;
+    now: number;
+  }): Promise<{
+    status: 'admitted' | 'rejected';
+    http_status?: number;
+    reason?: string;
+    event_id?: string;
+    admitted?: boolean;
+  }> {
+    // Validate trigger.
+    const trigger = this.triggerRegistry.get(opts.trigger_id);
+    if (!trigger) return { status: 'rejected', http_status: 404, reason: 'trigger not found' };
+    if (trigger.state !== 'active') {
+      return { status: 'rejected', http_status: 503, reason: `trigger ${trigger.state}` };
+    }
+    if (trigger.kind !== 'webhook_durable' && trigger.kind !== 'webhook_ephemeral') {
+      return { status: 'rejected', http_status: 400, reason: 'not a webhook trigger' };
+    }
+
+    const spec = trigger.spec as {
+      accepted_content_type?: string;
+      auth_mode: 'hmac' | 'bearer' | 'mtls';
+      secret_id?: string;
+    };
+
+    // Content-type pin.
+    const receivedCT = opts.content_type?.split(';')[0].trim() ?? '';
+    if (spec.accepted_content_type && spec.accepted_content_type !== receivedCT) {
+      return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
+    }
+
+    // Auth.
+    let ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
+    if (spec.auth_mode === 'hmac') {
+      if (!spec.secret_id) return { status: 'rejected', http_status: 401, reason: 'no hmac secret configured' };
+      const secret = (await this.getWebhookSecret(opts.trigger_id)).secret;
+      if (!secret) return { status: 'rejected', http_status: 401, reason: 'secret revoked' };
+      if (!opts.hmac_signature || !opts.hmac_timestamp) {
+        return { status: 'rejected', http_status: 401, reason: 'missing hmac headers' };
+      }
+      const ts = parseInt(opts.hmac_timestamp, 10);
+      if (!Number.isFinite(ts) || Math.abs(opts.now - ts) > 5 * 60 * 1000) {
+        return { status: 'rejected', http_status: 401, reason: 'timestamp out of window' };
+      }
+      const expected = await this.computeHmacSha256(secret, `${ts}.${opts.body_text}`);
+      if (!timingSafeEqual(expected, opts.hmac_signature)) {
+        return { status: 'rejected', http_status: 401, reason: 'signature mismatch' };
+      }
+      ingress = 'webhook_hmac';
+    } else if (spec.auth_mode === 'bearer') {
+      if (!spec.secret_id) return { status: 'rejected', http_status: 401, reason: 'no bearer secret' };
+      const stored = (await this.getWebhookSecret(opts.trigger_id)).secret;
+      if (!stored) return { status: 'rejected', http_status: 401, reason: 'secret revoked' };
+      if (!opts.bearer_header || !opts.bearer_header.startsWith('Bearer ')) {
+        return { status: 'rejected', http_status: 401, reason: 'missing bearer' };
+      }
+      const presented = opts.bearer_header.slice('Bearer '.length).trim();
+      if (!timingSafeEqual(stored, presented)) {
+        return { status: 'rejected', http_status: 401, reason: 'bearer mismatch' };
+      }
+      ingress = 'webhook_bearer';
+    } else {
+      if (!opts.cf_mtls_verified) {
+        return { status: 'rejected', http_status: 401, reason: 'client cert not verified' };
+      }
+      ingress = 'webhook_mtls';
+    }
+
+    // Parse body.
+    let parsedBody: unknown;
+    try {
+      parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
+    } catch { parsedBody = opts.body_text; }
+
+    const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
+
+    // Open reply channel (http_pending). v1: we always return 202 immediately
+    // so the channel is opened-then-immediately-aborted; v2 will hold the
+    // HTTP request open against this channel.
+    const reply_channel_id = this.replyChannels.open({
+      event_id: 'pending',
+      kind: 'http_pending',
+      holder_addr: `delivery:${delivery_id}`,
+      payload_policy: 'redact',
+      ttl_ms_override: 30_000,
+    }, opts.now);
+
+    // Publish.
+    const { id, admitted } = this.eventLog.publish({
+      descriptor: {
+        ingress,
+        variant: 'webhook',
+        payload: {
+          webhook_id: opts.trigger_id,
+          http_method: opts.method,
+          http_headers: opts.headers,
+          body: parsedBody,
+          delivery_id,
+        },
+        auth_outcome: 'verified',
+        webhook_id: opts.trigger_id,
+      },
+      now: opts.now,
+      reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
+    });
+
+    // Wake the agent so the next chat turn drains the new event. The
+    // operator's WS client (if any) sees a system note.
+    try {
+      const broadcast = (this as unknown as {
+        broadcastChatMessage?: (msg: unknown) => Promise<void> | void;
+      }).broadcastChatMessage;
+      await broadcast?.({
+        role: 'system',
+        parts: [{
+          type: 'text',
+          text: `[hub] webhook event admitted: ${opts.trigger_id} → ${id} (${admitted ? 'new' : 'duplicate'})`,
+        }],
+      });
+    } catch { /* best-effort */ }
+
+    return { status: 'admitted', event_id: id, admitted };
+  }
+
+  private async computeHmacSha256(secret: string, message: string): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /** Look up a webhook secret by trigger id. Used by the webhook ingress at
+   *  request time. Returns null if the trigger has no secret or doesn't exist. */
+  @callable()
+  async getWebhookSecret(trigger_id: string): Promise<{ secret: string | null }> {
+    try {
+      const rows = this.ctx.storage.sql.exec(
+        `SELECT secret FROM webhook_secrets WHERE trigger_id = ? ORDER BY created_at DESC LIMIT 1`,
+        trigger_id,
+      ).toArray() as Array<{ secret: string }>;
+      return { secret: rows[0]?.secret ?? null };
+    } catch {
+      return { secret: null };
+    }
+  }
+
+  /** Recent events for the operator UI's events sidebar. Mirrors
+   *  events_v ordering (received_at desc). */
+  @callable()
+  async listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }) {
+    const events = this.eventLog.query({
+      variant: opts?.variant as never,
+      since: opts?.since,
+      limit: opts?.limit ?? 100,
+    });
+    return {
+      events: events.map((e) => ({
+        id: e.id,
+        trace_id: e.trace_id,
+        caused_by: e.caused_by,
+        ingress: e.ingress,
+        variant: e.variant,
+        trust: e.trust,
+        priority: e.priority,
+        payload_visibility: e.payload_visibility,
+        payload: e.payload,
+        received_at: e.received_at,
+      })),
+    };
+  }
+
+  /** Currently-pending (unbound) events. The agent's LLM calls this via
+   *  the `list_pending_events` tool. */
+  @callable()
+  async listPendingEvents() {
+    const events = this.eventLog.pending({ limit: 50 });
+    return {
+      events: events.map((e) => ({
+        id: e.id,
+        variant: e.variant,
+        trust: e.trust,
+        priority: e.priority,
+        triggered_by: e.ingress,
+        received_at: e.received_at,
+      })),
+    };
+  }
+
+  /** Defer an event with an enumerated revisit condition (LLM-facing). */
+  @callable()
+  async deferEvent(event_id: string, revisit_at: RevisitCondition) {
+    this.eventLog.defer(event_id, revisit_at);
+    return { ok: true };
+  }
+
+  /** Explicit drop (LLM-facing). */
+  @callable()
+  async dismissEvent(event_id: string, reason: string = 'agent dismissed') {
+    this.eventLog.dismiss(event_id, reason, 'tool');
+    return { ok: true };
+  }
+
   @callable()
   async triggerEvolution(budget = 5) {
     // Outer fiber for durability + checkpointing. Nested fibers are supported
@@ -2337,6 +3482,10 @@ export class OrchestratorAgent extends Think<Env> {
       return { status: "completed", budget };
     });
   }
+
+  // ── Internal: timing-safe string compare for webhook auth ──────
+
+  // (Defined at module scope at the bottom of the file.)
 
   // ── Internal: MCTS session writer ──────────────────────────────
 
@@ -2366,3 +3515,15 @@ export class OrchestratorAgent extends Think<Env> {
     };
   }
 }
+
+// ── Module-scope helpers (referenced by OrchestratorAgent) ────────
+
+/** Constant-time string compare. Same as core utilities; inlined here to
+ *  keep the orchestrator self-contained for the webhook-auth path. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+

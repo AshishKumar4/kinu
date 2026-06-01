@@ -42,7 +42,10 @@ export type ScaffoldEvent =
   | { type: 'tool_result'; toolCallId: string; result: unknown }
   | { type: 'step_finish'; stepIndex: number; reason?: string }
   | { type: 'done'; result?: unknown }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /** A ready-made AI-SDK UI message stream chunk, emitted by
+   *  `host.defaultInference()`. Passed through verbatim by the adapter. */
+  | { type: 'ui_chunk'; chunk: unknown };
 
 /** Callback the host provides — every scaffold emit is forwarded through here. */
 export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
@@ -73,13 +76,15 @@ export interface ScaffoldRunOptions {
   /** Per-event callback. Called synchronously from inside the scaffold's execution. */
   emit: ScaffoldEmitFn;
   /**
-   * Host-side LLM stream — invoked when the scaffold calls rt.llm.stream(opts).
-   * Yields text deltas; the wrapper batches them into 'text_delta' events.
+   * Host-side LLM stream — invoked when the scaffold calls host.llmStream(opts).
+   * Yields text deltas; the host batches them into 'text_delta' events. `tools`
+   * is a list of tool NAMES from the agent's surface; the host resolves them to
+   * executables (closures can't cross the sandbox boundary).
    */
   llmStream: (opts: {
     system: string;
     messages: Array<{ role: string; content: string }>;
-    tools?: Record<string, unknown>;
+    tools?: string[];
     maxSteps?: number;
   }) => AsyncIterable<string>;
   /**
@@ -88,6 +93,15 @@ export interface ScaffoldRunOptions {
    * result. The host emits both 'tool_call' and 'tool_result' events.
    */
   callTool?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Default-inference bridge — when the scaffold calls host.defaultInference(),
+   * this runs the standard host inference (the AI SDK streamText the agent
+   * would otherwise use) and streams its UI message chunks back as
+   * 'ui_chunk' events. Lets a scaffold delegate to / wrap the default loop
+   * instead of reimplementing the tool-call loop. Absent → host.defaultInference
+   * returns an error.
+   */
+  defaultInference?: () => AsyncIterable<unknown>;
   /** Hard timeout in milliseconds. Default 5 min. */
   timeoutMs?: number;
   /** Optional: override the scaffold code (for shadow-mode A/B). Default: rt.identity.scaffold.read(). */
@@ -99,10 +113,13 @@ function buildHostProvider(opts: {
   emit: ScaffoldEmitFn;
   llmStream: ScaffoldRunOptions['llmStream'];
   callTool?: ScaffoldRunOptions['callTool'];
+  defaultInference?: ScaffoldRunOptions['defaultInference'];
+  readMemory: (path: string) => Promise<string>;
+  appendMemory: (path: string, content: string) => Promise<void>;
   capturedEvents: ScaffoldEvent[];
   state: { doneEmitted: boolean; finalResult: unknown };
 }): { name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>>; types: string } {
-  const { emit, llmStream, callTool, capturedEvents, state } = opts;
+  const { emit, llmStream, callTool, defaultInference, readMemory, appendMemory, capturedEvents, state } = opts;
 
   async function pushEvent(ev: ScaffoldEvent): Promise<void> {
     capturedEvents.push(ev);
@@ -155,20 +172,55 @@ function buildHostProvider(opts: {
         return { error: msg };
       }
     },
+    defaultInference: async () => {
+      // Run the agent's standard inference and stream its UI message chunks
+      // back as 'ui_chunk' events. Lets a scaffold delegate to (or wrap) the
+      // default loop without reimplementing it. The chunks are emitted
+      // host-side — they do NOT round-trip through the sandbox per chunk.
+      if (!defaultInference) {
+        return { error: 'host.defaultInference: not wired on this runtime' };
+      }
+      try {
+        for await (const chunk of defaultInference()) {
+          await pushEvent({ type: 'ui_chunk', chunk });
+        }
+        return 'done';
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await pushEvent({ type: 'error', message: `defaultInference failed: ${msg}` });
+        return { error: msg };
+      }
+    },
+    readMemory: async (path: unknown) => {
+      try { return await readMemory(String(path)); }
+      catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
+    },
+    appendMemory: async (path: unknown, content: unknown) => {
+      try { await appendMemory(String(path), String(content)); return 'appended'; }
+      catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
+    },
   };
 
   const types = `declare namespace host {
-  /** Emit an event back to the chat client. Events: text_delta, tool_call, tool_result, step_finish, done, error. */
+  /** Emit an event back to the chat client. Events: text_delta, tool_call, tool_result, step_finish, done, error, ui_chunk. */
   function emit(event: { type: string; [k: string]: unknown }): Promise<string>;
   /** Invoke a tool from the parent's ToolSet by name with JSON args. */
   function callTool(name: string, args: object): Promise<unknown>;
-  /** Stream an LLM completion. Returns the concatenated text; chunks are emitted as text_delta events. */
+  /** Stream an LLM completion. Returns the concatenated text; chunks are emitted as text_delta events.
+   *  Pass tool NAMES (from the agent's tool surface) in \`tools\`; the host wires the executables. */
   function llmStream(opts: {
-    system?: string;
+    system: string;
     messages: Array<{ role: string; content: string }>;
-    tools?: Record<string, unknown>;
+    tools?: string[];
     maxSteps?: number;
   }): Promise<string>;
+  /** Run the agent's standard inference (full tools + multi-step) and stream its
+   *  output to the user. Delegate here to reuse the default loop. */
+  function defaultInference(): Promise<string>;
+  /** Read a memory file (e.g. "memory/MEMORY.md"). Returns "" if absent. */
+  function readMemory(path: string): Promise<string>;
+  /** Append content to a memory file. */
+  function appendMemory(path: string, content: string): Promise<string>;
 }`;
 
   return { name: 'host', fns, types };
@@ -211,20 +263,23 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
     };
   }
 
-  // 2. Build host provider (LLM bridge + emit + callTool).
+  // 2. Build host provider (LLM bridge + emit + callTool + memory + default
+  // inference). Memory is bridged to rt.memory on the host side; the scaffold
+  // reaches it only through host.* (the live `rt` object can't cross the
+  // codemode sandbox boundary).
   const hostProvider = buildHostProvider({
-    emit, llmStream, callTool, capturedEvents, state,
+    emit, llmStream, callTool,
+    defaultInference: opts.defaultInference,
+    readMemory: async (path) => (await rt.memory.read(path)) ?? '',
+    appendMemory: async (path, content) => { await rt.memory.append(path, content); },
+    capturedEvents, state,
   });
 
   // 3. Build the wrapper code that defines `run` (from scaffold) and invokes
-  // it with the task, passing rt + host as named globals.
-  //
-  // The scaffold contract: `async function run({ rt, task, host, tools })`
-  // OR the legacy contract: `async function* run(rt, task)`.
-  //
-  // We try the modern signature first; if the scaffold is the legacy
-  // generator form, we adapt it by iterating and emitting yields.
-  const wrapperCode = buildScaffoldWrapperCode(code);
+  // it with the task (injected as a literal) and the `host` global.
+  // Scaffolds use `host.*` for all host interaction — `rt` is NOT a sandbox
+  // global (the live object can't cross the boundary).
+  const wrapperCode = buildScaffoldWrapperCode(code, task);
 
   // 4. Execute through the platform executor (codemode/DynamicWorkerExecutor on CF).
   const exec: Executor = rt.executor;
@@ -278,31 +333,29 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
  * generator scaffolds, we iterate the generator and forward each yield
  * to host.emit (mapping `{type:'chunk', data}` → text_delta).
  */
-function buildScaffoldWrapperCode(scaffoldSource: string): string {
+function buildScaffoldWrapperCode(scaffoldSource: string, task: string): string {
   // The scaffold source declares `async function run(...)` or
   // `async function* run(...)`. We append a driver that invokes it and
   // handles both shapes uniformly.
   //
-  // `__taskInput` is injected by the executor — see how we pass task below.
-  // Codemode providers don't carry arbitrary data; we read task from rt
-  // (it'll be stashed there before exec).
+  // The task is injected as a JSON literal (the live `rt` object cannot cross
+  // the codemode sandbox boundary, so the scaffold uses `host.*` + this task).
+  // `rt` is passed as the literal task string for the legacy 2-arg generator
+  // signature `run(rt, task)` — both params receive the task so a scaffold
+  // can read it from either; neither is the host `rt` object.
   //
-  // For codemode sandboxes, the LLM-written code expects to be one async
-  // arrow — but DynamicWorkerExecutor wraps the user code in
-  // `(async () => { <code> })()`, so top-level `async function run(...)`
-  // declarations would be inside the IIFE. That's fine.
+  // DynamicWorkerExecutor wraps the user code in `(async () => { <code> })()`,
+  // so top-level `async function run(...)` declarations live inside the IIFE.
   return `
 ${scaffoldSource}
 
-// Driver: invoke run() with both legacy (generator) and modern (object-arg) shapes.
-const __task = (typeof rt !== 'undefined' && rt && rt.__currentTask) ? rt.__currentTask : '';
+const __task = ${JSON.stringify(task)};
 let __result;
 try {
-  // Probe: is run a generator function?
   const __isGen = run && run.constructor && run.constructor.name === 'AsyncGeneratorFunction';
   if (__isGen) {
-    // Legacy: async function* run(rt, task)
-    const __gen = run(rt, __task);
+    // Generator form: async function* run(rt, task) — uses host.* + task.
+    const __gen = run(__task, __task);
     let __step = 0;
     for await (const __ev of __gen) {
       if (__ev && typeof __ev === 'object') {
@@ -316,8 +369,8 @@ try {
     }
     await host.emit({ type: 'done', result: { generatorSteps: __step } });
   } else {
-    // Modern: async function run({ rt, task, host, tools })
-    __result = await run({ rt, task: __task, host, tools: (typeof tools !== 'undefined' ? tools : {}) });
+    // Object-arg form: async function run({ task, host }).
+    __result = await run({ task: __task, host });
     await host.emit({ type: 'done', result: __result });
   }
 } catch (e) {

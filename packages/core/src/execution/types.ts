@@ -74,6 +74,49 @@ export interface ExecutorProvider {
 
   /** Whether tool functions take positional args vs single object */
   readonly positionalArgs?: boolean;
+
+  /**
+   * Generic port-exposure surface. Returns the public preview URL when
+   * supported, or a `{supported: false}` rejection with a clear reason
+   * for executors that can't open inbound ports (workspace, nimbus,
+   * laptop).
+   *
+   * Real implementation: sandbox (via @cloudflare/sandbox SDK).
+   *
+   * Pre-flight: the sandbox impl verifies a server is responsive on the
+   * port BEFORE returning the URL — exposing a port with no listener
+   * yields a clear error pointing to `start a server first`, not a
+   * broken-iframe failure mode.
+   */
+  exposePort?(port: number, opts?: { name?: string }): Promise<PortExposureResult>;
+
+  /** Stop exposing a port. No-op if the port wasn't exposed. */
+  unexposePort?(port: number): Promise<void>;
+
+  /** List currently-exposed ports for this executor. */
+  listExposedPorts?(): Promise<ExposedPortInfo[]>;
+}
+
+/** Result of attempting to expose a port. Discriminated by `supported`. */
+export type PortExposureResult =
+  | {
+      supported: true;
+      url: string;
+      port: number;
+      name?: string;
+      /** True if a server is verified listening on the port before exposure. */
+      verified_listening: boolean;
+    }
+  | {
+      supported: false;
+      reason: string;
+    };
+
+export interface ExposedPortInfo {
+  port: number;
+  url: string;
+  name?: string;
+  status: 'listening' | 'unknown' | 'unreachable';
 }
 
 export interface ExecutorInfo {

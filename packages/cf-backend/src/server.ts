@@ -22,10 +22,18 @@ import { handleRunEventsRequest } from "./run-events-routes.js";
 import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
 import { handleUserRequest } from "./user/routes.js";
+import { handleHubRequest } from "./events/routes.js";
 import {
   authenticateRequest, AccessAuthError, isPublicPath,
   type AccessIdentity,
 } from "./auth/access.js";
+
+/** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
+ *  the only `/api/agents/<name>/...` route that bypasses CF Access (it has
+ *  its own per-trigger HMAC / Bearer / mTLS gate). */
+function isWebhookDeliveryPath(pathname: string): boolean {
+  return /^\/api\/agents\/[^/]+\/webhook\/[^/]+$/.test(pathname);
+}
 
 export { OrchestratorAgent } from "./orchestrator.js";
 // ExplorationAgent is the single Facet class for parallel sub-agent work.
@@ -69,14 +77,18 @@ async function ensureAgentOwnership(
   }
   // Claim ownership on the orchestrator's own agent_soul. Idempotent;
   // throws if the agent is already owned by a different user — translate
-  // to 403 for the caller.
+  // to 403 for the caller, surfacing the real error so we can diagnose
+  // boot/schema issues rather than masking them as "name taken".
   const orchestrator = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
   try {
     await orchestrator.claimOwner(identity.userId);
   } catch (e) {
-    return new Response(JSON.stringify({
-      error: `Agent ${agentName} is owned by a different user — pick a unique name.`,
-    }), { status: 403, headers: { 'content-type': 'application/json' } });
+    const msg = (e as Error).message ?? '';
+    const status = /owned by a different user/i.test(msg) ? 403 : 500;
+    console.error(`[server] claimOwner(${agentName}) failed:`, msg);
+    return new Response(JSON.stringify({ error: msg }), {
+      status, headers: { 'content-type': 'application/json' },
+    });
   }
   return null;
 }
@@ -116,6 +128,16 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
+    // 4b. Webhook delivery — public-but-per-trigger-authenticated. The
+    //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
+    if (isWebhookDeliveryPath(url.pathname)) {
+      const m = url.pathname.match(/^\/api\/agents\/([^/]+)\/webhook\//);
+      if (m) {
+        const hubResp = await handleHubRequest(request, env, decodeURIComponent(m[1]));
+        if (hubResp) return hubResp;
+      }
+    }
+
     // 5. Auth gate. Everything below requires an authenticated identity.
     let identity: AccessIdentity;
     try { identity = await authenticateRequest(request, env); }
@@ -145,6 +167,9 @@ export default {
       if (runEventsResp) return runEventsResp;
       const mcpResp = await handleMcpRequest(reqWithId, env);
       if (mcpResp) return mcpResp;
+      // EventsHub authenticated routes: /triggers, /events
+      const hubResp = await handleHubRequest(reqWithId, env, agentName);
+      if (hubResp) return hubResp;
       const agentResp = await routeAgentRequest(reqWithId, env);
       if (agentResp) return agentResp;
     }

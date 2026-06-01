@@ -1,0 +1,504 @@
+/**
+ * Executors panel — per-executor view with previews-as-tabs + right-aligned
+ * Files + Terminal tabs.
+ *
+ * Layout:
+ *
+ *   ┌─────────────────────────────────────────────────────────────────────┐
+ *   │ ● Sandbox  ○ Your PC  ○ Local                                       │ <- executor sub-tabs
+ *   ├─────────────────────────────────────────────────────────────────────┤
+ *   │ :8080 hello-world  :3000 api               │  Files    Terminal     │ <- preview tabs LEFT, utility RIGHT
+ *   ├─────────────────────────────────────────────────────────────────────┤
+ *   │                                                                     │
+ *   │            [ active tab content — full-size iframe                  │
+ *   │              or files tree or xterm terminal ]                      │
+ *   │                                                                     │
+ *   └─────────────────────────────────────────────────────────────────────┘
+ *
+ * Auto-focus on new previews: when a fresh port appears in `pinnedPorts`
+ * (length increases), the panel auto-switches to that preview tab.
+ *
+ * The "not connected" states (your PC, etc.) are shown when the executor
+ * is unavailable, with inline action buttons (e.g. "Generate install
+ * command" for the PC daemon).
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  TerminalIcon, FolderOpenIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon,
+  CopyIcon, EyeIcon, WarningIcon, PlugIcon,
+} from "@phosphor-icons/react";
+import { Badge } from "@cloudflare/kumo";
+import { ExecutorTerminal } from "./ExecutorTerminal";
+import type { ExecutorOutput } from "../hooks/use-proteus";
+
+const EXECUTOR_LABELS: Record<string, string> = {
+  sandbox:   "Sandbox",
+  laptop:    "Your PC",
+  workspace: "Local",
+  nimbus:    "Nimbus",
+};
+
+const EXECUTOR_ORDER = ["sandbox", "laptop", "workspace", "nimbus"];
+
+export interface ExecutorsPanelProps {
+  executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
+  outputs: Map<string, ExecutorOutput[]>;
+  onExecute: (id: string, cmd: string) => Promise<unknown>;
+  onBrowse: (id: string, path: string) => Promise<unknown>;
+  agentName?: string;
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  pinnedPorts: Array<{ port: number; url: string; name?: string }>;
+}
+
+export default function ExecutorsPanel(props: ExecutorsPanelProps) {
+  const sorted = useMemo(() => {
+    const arr = [...props.executors];
+    arr.sort((a, b) => {
+      const ia = EXECUTOR_ORDER.indexOf(a.name);
+      const ib = EXECUTOR_ORDER.indexOf(b.name);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+    return arr;
+  }, [props.executors]);
+
+  const [activeExec, setActiveExec] = useState<string>(
+    () => sorted.find(e => e.available)?.name ?? sorted[0]?.name ?? "sandbox",
+  );
+
+  // Keep activeExec valid if executors list changes.
+  useEffect(() => {
+    if (!sorted.find(e => e.name === activeExec)) {
+      setActiveExec(sorted.find(e => e.available)?.name ?? sorted[0]?.name ?? "sandbox");
+    }
+  }, [sorted, activeExec]);
+
+  const activeInfo = sorted.find(e => e.name === activeExec);
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Executor sub-tabs (Sandbox / Your PC / Local) */}
+      <div className="flex items-center gap-1 px-3 pt-2 pb-2 border-b p-border">
+        {sorted.map(exec => (
+          <button
+            key={exec.name}
+            onClick={() => setActiveExec(exec.name)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              activeExec === exec.name ? "p-card p-text" : "p-text-2 hover:p-card-hover"
+            }`}
+            title={exec.available ? `${exec.name} — connected` : `${exec.name} — not connected`}
+          >
+            <span className={`size-1.5 rounded-full ${exec.available ? "bg-green-500" : "bg-zinc-500"}`} />
+            {EXECUTOR_LABELS[exec.name] ?? exec.name}
+          </button>
+        ))}
+      </div>
+
+      {/* Per-executor view */}
+      <div className="flex-1 min-h-0">
+        {activeInfo && (
+          <PerExecutorView
+            exec={activeInfo}
+            outputs={props.outputs.get(activeInfo.name) ?? []}
+            onExecute={(cmd) => props.onExecute(activeInfo.name, cmd)}
+            onBrowse={(path) => props.onBrowse(activeInfo.name, path)}
+            rpc={props.rpc}
+            agentName={props.agentName}
+            pinnedPorts={activeInfo.name === "sandbox" ? props.pinnedPorts : []}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Per-executor view ────────────────────────────────────────────
+
+interface PerExecutorViewProps {
+  exec: { name: string; kind: string; capabilities: string[]; available: boolean };
+  outputs: ExecutorOutput[];
+  onExecute: (cmd: string) => Promise<unknown>;
+  onBrowse: (path: string) => Promise<unknown>;
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  agentName?: string;
+  pinnedPorts: Array<{ port: number; url: string; name?: string }>;
+}
+
+type TabSelection =
+  | { kind: 'preview'; port: number }
+  | { kind: 'files' }
+  | { kind: 'terminal' };
+
+function PerExecutorView(props: PerExecutorViewProps) {
+  const { exec, outputs, onExecute, onBrowse, rpc, agentName, pinnedPorts } = props;
+
+  // Initial tab: first preview if any, else terminal.
+  const [active, setActive] = useState<TabSelection>(() =>
+    pinnedPorts.length > 0
+      ? { kind: 'preview', port: pinnedPorts[0].port }
+      : { kind: 'terminal' },
+  );
+
+  // Auto-focus newly-exposed ports. When the port set grows, switch to the
+  // newest one; when the active port disappears, fall back gracefully.
+  const prevPortsRef = useRef<number[]>([]);
+  useEffect(() => {
+    const cur = pinnedPorts.map(p => p.port);
+    const prev = prevPortsRef.current;
+    const added = cur.filter(p => !prev.includes(p));
+    if (added.length > 0) {
+      // Focus the newest port.
+      setActive({ kind: 'preview', port: added[added.length - 1] });
+    } else if (active.kind === 'preview' && !cur.includes(active.port)) {
+      // Active port was removed; pick another or fall back to terminal.
+      setActive(cur.length > 0 ? { kind: 'preview', port: cur[0] } : { kind: 'terminal' });
+    }
+    prevPortsRef.current = cur;
+  }, [pinnedPorts, active]);
+
+  // Not connected → connection-help card
+  if (!exec.available) {
+    return <ConnectionHelp exec={exec} rpc={rpc} agentName={agentName} />;
+  }
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Tabs row: previews on left, Files + Terminal right-aligned */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b p-border overflow-x-auto">
+        {pinnedPorts.length === 0 && (
+          <div className="text-[11px] p-text-3 italic">No exposed ports yet — when the agent calls <code className="font-mono p-elevated px-1 rounded">sandbox.exposePort(N)</code>, the preview will open here.</div>
+        )}
+        {pinnedPorts.map(p => (
+          <PreviewTabButton
+            key={p.port}
+            port={p.port}
+            label={p.name}
+            active={active.kind === 'preview' && active.port === p.port}
+            onClick={() => setActive({ kind: 'preview', port: p.port })}
+          />
+        ))}
+
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          <UtilityTabButton
+            icon={FolderOpenIcon}
+            label="Files"
+            active={active.kind === 'files'}
+            onClick={() => setActive({ kind: 'files' })}
+          />
+          <UtilityTabButton
+            icon={TerminalIcon}
+            label="Terminal"
+            active={active.kind === 'terminal'}
+            badge={outputs.length || undefined}
+            onClick={() => setActive({ kind: 'terminal' })}
+          />
+        </div>
+      </div>
+
+      {/* Body — full-size active-tab content */}
+      <div className="flex-1 min-h-0 relative">
+        {active.kind === 'preview' && (() => {
+          const p = pinnedPorts.find(x => x.port === active.port);
+          if (!p) return <div className="p-6 text-xs p-text-3">Preview no longer available.</div>;
+          return <PreviewPane port={p.port} url={p.url} name={p.name} />;
+        })()}
+        {active.kind === 'files' && (
+          <FilesPane execName={exec.name} onBrowse={onBrowse} />
+        )}
+        {active.kind === 'terminal' && (
+          <TerminalPane execName={exec.name} outputs={outputs} onExecute={onExecute} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Tab buttons ──────────────────────────────────────────────────
+
+function PreviewTabButton({ port, label, active, onClick }: {
+  port: number; label?: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors group ${
+        active ? "p-card p-text" : "p-text-2 hover:p-card-hover"
+      }`}
+      title={label ? `:${port} (${label})` : `:${port}`}
+    >
+      <span className="size-1.5 rounded-full bg-green-500" />
+      <span className="font-mono">:{port}</span>
+      {label && <span className="p-text-3 truncate max-w-[100px]">{label}</span>}
+    </button>
+  );
+}
+
+function UtilityTabButton({ icon: Icon, label, active, badge, onClick }: {
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  active: boolean;
+  badge?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
+        active ? "p-card p-text" : "p-text-2 hover:p-card-hover"
+      }`}
+    >
+      <Icon size={12} className="opacity-70" />
+      <span>{label}</span>
+      {badge !== undefined && badge > 0 && (
+        <Badge variant="secondary">{badge}</Badge>
+      )}
+    </button>
+  );
+}
+
+// ── Panes ────────────────────────────────────────────────────────
+
+function PreviewPane({ port, url, name }: { port: number; url: string; name?: string }) {
+  const [reloadKey, setReloadKey] = useState(0);
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="h-full flex flex-col bg-zinc-950">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border bg-[var(--c-elevated,#18181b)]">
+        <span className="size-1.5 rounded-full bg-green-500" />
+        <span className="font-mono text-[11px] p-text-2">:{port}{name ? ` · ${name}` : ''}</span>
+        <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
+        <button
+          onClick={() => { navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
+          className="p-text-3 hover:p-text p-1 shrink-0"
+          title="Copy URL"
+        >{copied ? <span className="text-[10px]">copied</span> : <CopyIcon size={11} />}</button>
+        <button
+          onClick={() => setReloadKey(k => k + 1)}
+          className="p-text-3 hover:p-text p-1 shrink-0"
+          title="Reload"
+        ><ArrowsClockwiseIcon size={11} /></button>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-text-3 hover:p-text p-1 shrink-0"
+          title="Open in new tab"
+        ><ArrowSquareOutIcon size={11} /></a>
+      </div>
+      <iframe
+        key={reloadKey}
+        src={url}
+        className="flex-1 w-full bg-white"
+        title={`port-${port}`}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+      />
+    </div>
+  );
+}
+
+function TerminalPane({ execName, outputs, onExecute }: {
+  execName: string;
+  outputs: ExecutorOutput[];
+  onExecute: (cmd: string) => Promise<unknown>;
+}) {
+  return (
+    <div className="h-full">
+      <ExecutorTerminal executor={execName} outputs={outputs} onExecute={onExecute} />
+    </div>
+  );
+}
+
+function FilesPane({ execName, onBrowse }: {
+  execName: string; onBrowse: (path: string) => Promise<unknown>;
+}) {
+  const [path, setPath] = useState("/");
+  const [entries, setEntries] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async (p: string) => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await onBrowse(p) as { entries?: unknown; error?: string };
+      if (r.error) { setErr(r.error); setEntries([]); }
+      else {
+        const arr = Array.isArray(r.entries)
+          ? (r.entries as unknown[]).map(String)
+          : String(r.entries ?? '').split('\n').filter(Boolean);
+        setEntries(arr);
+      }
+    } catch (e) { setErr((e as Error).message); setEntries([]); }
+    finally { setLoading(false); }
+  }, [onBrowse]);
+
+  useEffect(() => { refresh(path); }, [path, refresh, execName]);
+
+  const segments = path === "/" ? [] : path.split("/").filter(Boolean);
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono">
+        <button onClick={() => setPath("/")} className="p-text-2 hover:p-text">/</button>
+        {segments.map((seg, i) => (
+          <span key={i} className="flex items-center gap-1">
+            <button
+              onClick={() => setPath('/' + segments.slice(0, i + 1).join('/'))}
+              className="p-text-2 hover:p-text"
+            >{seg}</button>
+            {i < segments.length - 1 && <span className="p-text-3">/</span>}
+          </span>
+        ))}
+        <button
+          onClick={() => refresh(path)}
+          className="ml-auto p-text-3 hover:p-text p-1"
+          title="Refresh"
+        ><ArrowsClockwiseIcon size={11} /></button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-3 py-2 text-xs space-y-0.5">
+        {err && <div className="text-red-400">{err}</div>}
+        {loading && <div className="p-text-3">Loading…</div>}
+        {!loading && segments.length > 0 && (
+          <button
+            onClick={() => setPath('/' + segments.slice(0, -1).join('/'))}
+            className="p-text-3 hover:p-text font-mono"
+          >📁 ..</button>
+        )}
+        {entries.map((entry, i) => {
+          const isDir = entry.startsWith("d ") || entry.endsWith("/");
+          const name = entry.replace(/^[d-] /, "").replace(/\/$/, "");
+          return (
+            <button
+              key={i}
+              onClick={() => isDir ? setPath((path === "/" ? "" : path) + "/" + name) : undefined}
+              className={`block w-full text-left truncate font-mono ${
+                isDir ? "p-text hover:underline cursor-pointer" : "p-text-2 cursor-default"
+              }`}
+            >
+              {isDir ? "📁 " : "📄 "}{name}
+            </button>
+          );
+        })}
+        {!loading && entries.length === 0 && !err && (
+          <div className="p-text-3 italic">(empty)</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── "Not connected" states ───────────────────────────────────────
+
+function ConnectionHelp({ exec, rpc, agentName }: {
+  exec: { name: string; kind: string };
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  agentName?: string;
+}) {
+  if (exec.name === "laptop") {
+    return <YourPcConnect rpc={rpc} agentName={agentName} />;
+  }
+  if (exec.name === "nimbus") {
+    return (
+      <div className="h-full flex items-center justify-center p-6">
+        <div className="max-w-md text-center space-y-3">
+          <PlugIcon size={28} className="p-text-3 mx-auto" />
+          <div className="text-sm font-medium p-text">Nimbus not configured</div>
+          <p className="text-xs p-text-2 leading-relaxed">
+            Nimbus is a lightweight DO-backed Linux env. To enable it, set{" "}
+            <code className="font-mono p-elevated px-1 rounded">NIMBUS_ENDPOINT</code>
+            {" "}in <code className="font-mono p-elevated px-1 rounded">wrangler.jsonc</code>{" "}
+            (and optionally{" "}
+            <code className="font-mono p-elevated px-1 rounded">NIMBUS_TOKEN</code>
+            {" "}as a wrangler secret). The agent can still use{" "}
+            <code className="font-mono p-elevated px-1 rounded">sandbox</code> or{" "}
+            <code className="font-mono p-elevated px-1 rounded">workspace</code> in the meantime.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (exec.name === "sandbox") {
+    return (
+      <div className="h-full flex items-center justify-center p-6">
+        <div className="max-w-md text-center space-y-3">
+          <PlugIcon size={28} className="p-text-3 mx-auto" />
+          <div className="text-sm font-medium p-text">Sandbox not provisioned</div>
+          <p className="text-xs p-text-2 leading-relaxed">
+            The full Cloudflare Sandbox needs a{" "}
+            <code className="font-mono p-elevated px-1 rounded">Sandbox</code> DO binding plus a{" "}
+            <code className="font-mono p-elevated px-1 rounded">PREVIEW_HOSTNAME</code>{" "}
+            with wildcard DNS so preview URLs round-trip. Without it the agent can
+            still use Nimbus (if configured) or the in-VFS workspace shell.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="h-full flex items-center justify-center p-6">
+      <div className="max-w-md text-center space-y-3">
+        <PlugIcon size={28} className="p-text-3 mx-auto" />
+        <div className="text-sm font-medium p-text">{EXECUTOR_LABELS[exec.name] ?? exec.name} not connected</div>
+        <p className="text-xs p-text-2 leading-relaxed">
+          This executor needs a binding in <code className="font-mono p-elevated px-1 rounded">wrangler.jsonc</code>.
+          See <code className="font-mono p-elevated px-1 rounded">docs/EXECUTION.md</code>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function YourPcConnect({ rpc, agentName }: {
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  agentName?: string;
+}) {
+  const [install, setInstall] = useState<string | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const issue = useCallback(async () => {
+    setIssuing(true);
+    try {
+      const r = await rpc("issuePcToken", []) as { installCommand?: string };
+      if (r.installCommand) setInstall(r.installCommand);
+    } finally { setIssuing(false); }
+  }, [rpc]);
+
+  return (
+    <div className="h-full overflow-y-auto p-6">
+      <div className="max-w-2xl mx-auto space-y-4">
+        <div className="flex items-center gap-2">
+          <TerminalIcon size={20} className="p-accent" />
+          <h2 className="text-base font-semibold">Connect Your PC</h2>
+        </div>
+        <p className="text-sm p-text-2">
+          Install the Proteus PC daemon to let this agent run commands on your local machine.
+          The daemon opens one outbound WebSocket — no inbound ports required.
+        </p>
+        {!install ? (
+          <button
+            onClick={issue}
+            disabled={issuing}
+            className="px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 disabled:opacity-50"
+          >{issuing ? "Generating…" : "Generate install command"}</button>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-md p-elevated border p-border p-3 font-mono text-[11px] p-text break-all select-all leading-relaxed">
+              {install}
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => { navigator.clipboard.writeText(install).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
+                className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 p-text-2"
+              ><CopyIcon size={11} />{copied ? "copied" : "Copy"}</button>
+              <button onClick={issue} className="p-text-3 hover:p-text">Regenerate (revokes previous)</button>
+              {agentName && <span className="ml-auto p-text-3">Agent: <span className="font-mono">{agentName}</span></span>}
+            </div>
+            <p className="text-[11px] p-text-3 mt-1 flex items-center gap-1.5">
+              <WarningIcon size={11} /> Paste in your terminal. Daemon runs as your user, never root. Token is one-shot.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

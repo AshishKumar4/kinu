@@ -73,12 +73,13 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
     });
   }
 
-  // v2.0/v2.1: same 5-tool surface as CF. CLI wires the Node execute-tools
-  // factory and the Node crafted-tool executor; codemodeLoader is a sentinel
-  // so the factory branch is selected.
+  // CLI tool surface: execute_tools + run + memory (the always-on builtins).
+  // think / fact / skills are CF-only (they need a HeadController / FactsStore /
+  // SkillsVfs the CLI doesn't provision). The CLI wires the Node execute-tools
+  // factory and the Node crafted-tool executor; codemodeLoader is a sentinel so
+  // the factory branch is selected. `engine` drives auto-evolution, not a tool.
   const tools: ToolSet = buildBuiltinTools({
     rt,
-    engine: engineRef.current,
     craftedToolExecute: createNodeCraftedExecute(),
     createExecuteTool: createNodeExecuteToolFactory({
       vfs: rt.storage.vfs,

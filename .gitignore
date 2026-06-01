@@ -15,3 +15,9 @@ dist/
 # Reference clones (symlinked to parent repo's external/) — not part of the project
 /external
 /external/
+
+# Compiled test artifacts (sources are .ts)
+packages/core/tests/helpers.js
+packages/core/tests/helpers.js.map
+packages/core/tests/helpers.d.ts
+packages/core/tests/helpers.d.ts.map

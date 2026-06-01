@@ -34,9 +34,3 @@ export {
   type MergeLLMFn,
   type SplitPhaseEvent,
 } from './controller.js';
-
-export {
-  createSplitHeadsTool,
-  type SplitHeadsInput,
-  type SplitHeadsToolDeps,
-} from './split-heads-tool.js';

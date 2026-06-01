@@ -11,13 +11,18 @@ import { generateObject } from "ai";
 import type {
   HeadRuntime, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
 } from "@proteus/core";
-import { MergeOutputSchema, type MergeOutput, effortFor, createAgentConfigStore } from "@proteus/core";
+import { type MergeOutput, effortFor, createAgentConfigStore } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
+import { aiSchema } from "../ai-schema.js";
 import type { UserDO } from "../user/user-do.js";
 
-export function createCFHeadRuntime(orchestrator: Think<Env>, ownerUserId: string): HeadRuntime {
+/** Agent surface this head runtime needs — `env` is protected on the DO base
+ *  but the orchestrator (a subclass) passes `this` cast to this view. */
+type HeadHost = Think<Env> & { readonly env: Env };
+
+export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
   // is read once from agent_soul by the orchestrator and threaded down.
   const userDOStub = orchestrator.env.UserDO.get(
@@ -37,12 +42,12 @@ export function createCFHeadRuntime(orchestrator: Think<Env>, ownerUserId: strin
     const model = reg.resolveModel(reg.normalizeSpecSync(stored));
     const { object } = await generateObject({
       model,
-      schema: schema as typeof MergeOutputSchema,
+      schema: aiSchema<MergeOutput>(schema),
       prompt,
       maxOutputTokens: 4096,
       ...effortFor('head_merge'),
     });
-    return object as MergeOutput;
+    return object;
   };
 
   return {

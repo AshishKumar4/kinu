@@ -1,7 +1,10 @@
 // GET /api/health — build-info JSON. Useful for confirming a deploy went out:
-// hit the URL, see the feature list + endpoint map.
+// hit the URL, see the feature list + endpoint map. Public — no auth required.
 
 const FEATURES: ReadonlyArray<string> = [
+  'cf-access-auth',
+  'user-do',
+  'multi-tenant',
   'multi-provider-registry',
   'codex-oauth',
   'branching-heads',
@@ -13,7 +16,6 @@ const FEATURES: ReadonlyArray<string> = [
   'background-review',
   'compaction',
   'approval-gate',
-  'fiber-recovery',
 ];
 
 export function handleHealthRequest(request: Request): Response | null {
@@ -24,22 +26,22 @@ export function handleHealthRequest(request: Request): Response | null {
     ok: true,
     features: FEATURES,
     endpoints: {
-      // Run events
-      'GET /api/agents/<name>/runs': 'list recent runs w/ event counts',
-      'GET /api/agents/<name>/runs/<id>/events?since=&limit=&types=': 'paginated event query',
+      // User-scoped (auth required)
+      'GET /api/user/profile': 'caller identity',
+      'GET/POST/DELETE /api/user/agents[/<name>]': 'agent registry',
+      'GET/POST/DELETE /api/user/credentials[/<key>]': 'BYO API keys',
+      'POST /api/user/codex/start | /codex/poll': 'ChatGPT device-flow',
+      'GET/DELETE /api/user/codex': 'Codex status / disconnect',
+      'GET /api/user/models': 'available models (union of connected providers)',
+      // Per-agent (auth + ownership required)
+      'GET /api/agents/<name>/runs': 'list recent runs',
+      'GET /api/agents/<name>/runs/<id>/events': 'paginated event query',
       'GET /api/agents/<name>/runs/<id>/stream': 'SSE w/ Last-Event-ID resume',
-      // Auth / credentials
-      'POST /api/agents/<name>/auth/codex/start | /codex/poll': 'ChatGPT OAuth device-code flow',
-      'GET/DELETE /api/agents/<name>/auth/codex': 'Codex connection status / disconnect',
-      'POST/DELETE /api/agents/<name>/auth/credentials/<key>': 'BYO API key for openai / openrouter / openai-compat',
-      // MCP
       'POST/GET/DELETE /mcp/v1/<agentName>': 'MCP streamable-HTTP server',
-      // Chat (Think SDK)
-      '/agents/orchestrator-agent/<name>/...': 'chat WebSocket',
-      // Preview
+      '/agents/orchestrator-agent/<name>/...': 'chat WebSocket (Think SDK)',
+      // Public
       '/_preview/<port>/<sandbox>/<token>/': 'sandbox container preview proxy',
-      // PC tunnel
-      '/pc/connect': 'reverse-WebSocket tunnel for SSH/laptop sandbox',
+      '/pc/connect': 'reverse-WebSocket tunnel',
     },
     timestamp: new Date().toISOString(),
   }, {

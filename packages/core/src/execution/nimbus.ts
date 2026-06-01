@@ -426,6 +426,19 @@ export function createNimbusExecutor(opts?: NimbusExecutorOpts): ExecutorProvide
   function rm(path: string): Promise<string>;
 }`,
     positionalArgs: true,
+    // Nimbus runs over a WebSocket-tunnelled DO session — there's no
+    // inbound-port surface to expose. Use `sandbox` for anything that
+    // needs a previewable URL.
+    async exposePort(port: number) {
+      return {
+        supported: false,
+        reason:
+          `nimbus executor uses a WebSocket-tunnelled session and cannot expose inbound TCP ports. ` +
+          `Use the 'sandbox' executor instead for port ${port}.`,
+      };
+    },
+    async unexposePort() { /* nothing to do */ },
+    async listExposedPorts() { return []; },
   };
 }
 

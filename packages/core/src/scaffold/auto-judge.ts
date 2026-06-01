@@ -70,6 +70,24 @@ export interface RunAutoShadowEvalOpts {
   judge: StructuredJudgeFn;
   /** Optional: an llmStream for the pending scaffold's host.llmStream bridge. */
   llmStream: Parameters<typeof runScaffold>[0]['llmStream'];
+  /**
+   * Tool-call dispatcher for the pending scaffold. When provided, the
+   * pending runs with the same tool surface the live scaffold would —
+   * which is the fair comparison the judge needs. When omitted, the
+   * pending's tool calls return the legacy "disabled" error, which
+   * unfairly penalises tool-using scaffolds.
+   *
+   * Side-effect note: enabling this lets the pending mutate VFS / SQL
+   * the same way the live did this turn (e.g., both append to memory).
+   * The pending's writes will appear in the agent's state. This is the
+   * accepted cost of accurate evaluation; autoApply stays off by default
+   * so the operator still gates promotion.
+   */
+  callTool?: Parameters<typeof runScaffold>[0]['callTool'];
+  /** Default-inference bridge for the pending scaffold (host.defaultInference).
+   *  When the pending delegates to the default loop, this runs it for the
+   *  shadow task. Omitted → host.defaultInference returns an error. */
+  defaultInference?: Parameters<typeof runScaffold>[0]['defaultInference'];
   config?: Partial<AutoJudgeConfig>;
   /** Deterministic sampling override (used by tests). Default Math.random. */
   random?: () => number;
@@ -130,9 +148,14 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
         if (event.type === 'text_delta') pendingEvents.push(event.text);
       },
       llmStream: opts.llmStream,
-      // No callTool — shadow eval is observation-only; running the pending
-      // scaffold's tool dispatch in the live env would cause side-effects.
-      callTool: async () => ({ error: 'tool calls disabled during shadow eval' }),
+      // Pass the caller's dispatcher straight through so the pending scaffold
+      // runs against the same tool surface the live turn did — the fix behind
+      // `proteus-scaffold-gap`. When omitted, runScaffold's own guard
+      // (executor.ts) returns the "no callTool wired" error; no second stub
+      // needed here. Side-effect note: the pending's tool calls hit the live
+      // env; autoApply stays off by default so promotion is still gated.
+      callTool: opts.callTool,
+      defaultInference: opts.defaultInference,
       scaffoldCodeOverride: pendingCode,
       timeoutMs: config.scaffoldTimeoutMs,
     });

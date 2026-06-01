@@ -210,6 +210,20 @@ export function createSSHTunnelExecutor(): ExecutorProvider & {
   function exists(path: string): Promise<boolean>;
 }`,
     positionalArgs: true,
+    // The user's PC is behind their NAT — we don't open inbound ports
+    // back to them. The user can already point their local browser at
+    // any URL their machine serves. Use `sandbox` for previewable URLs.
+    async exposePort(port: number) {
+      return {
+        supported: false,
+        reason:
+          `laptop executor reverse-tunnels outbound from your PC; there's no inbound port to expose ` +
+          `from this side. Point your local browser at the address your server uses (port ${port}), ` +
+          `or use the 'sandbox' executor if you want a public URL.`,
+      };
+    },
+    async unexposePort() { /* nothing to do */ },
+    async listExposedPorts() { return []; },
 
     setSocket(ws: TunnelSocket) { socket = ws; },
     clearSocket() { socket = null; },

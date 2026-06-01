@@ -21,6 +21,11 @@
  *   PUT    /api/user/config/:key                   — set default
  *   GET    /api/user/models                        — union of available models
  *   GET    /api/user/providers                     — connected provider summary
+ *   GET    /api/user/mcp/servers                   — list configured MCP servers
+ *   POST   /api/user/mcp/servers                   — add a new MCP server
+ *   DELETE /api/user/mcp/servers/:id               — remove an MCP server
+ *   PATCH  /api/user/mcp/servers/:id               — edit name / headers / allowed_tools
+ *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
 import type { AccessIdentity } from '../auth/access.js';
 import type { UserDO } from './user-do.js';
@@ -147,7 +152,60 @@ export async function handleUserRequest(
     return json(await listAvailableModels(env, identity.userId));
   }
 
+  // ── MCP servers ────────────────────────────────────────────────────
+  if (path === '/mcp/servers' && method === 'GET') {
+    try { return json(await stub.userMcp_list()); }
+    catch (e) { return err(500, (e as Error).message); }
+  }
+  if (path === '/mcp/servers' && method === 'POST') {
+    const body = await safeJson(request);
+    if (body === null) return err(400, 'Body must be JSON');
+    const origin = publicOrigin(request);
+    try { return json(await stub.userMcp_add(body, origin), { status: 201 }); }
+    catch (e) { return err(400, (e as Error).message); }
+  }
+  const mcpIdMatch = path.match(/^\/mcp\/servers\/([^/]+)$/);
+  if (mcpIdMatch) {
+    const id = decodeURIComponent(mcpIdMatch[1]);
+    if (method === 'DELETE') {
+      try { await stub.userMcp_remove(id); return json({ ok: true }); }
+      catch (e) { return err(400, (e as Error).message); }
+    }
+    if (method === 'PATCH') {
+      const body = await safeJson(request);
+      if (body === null) return err(400, 'Body must be JSON');
+      try { await stub.userMcp_update(id, body); return json({ ok: true }); }
+      catch (e) { return err(400, (e as Error).message); }
+    }
+  }
+  if (path === '/mcp/callback' && method === 'GET') {
+    // The OAuth provider stamps `<nonce>.<serverId>` in `state`; we don't
+    // need to extract it here — `userMcp_handleOAuthCallback` does the validation
+    // inside UserDO. The Worker's CF Access middleware (above) already
+    // resolved the caller's identity from the browser cookie, so we know
+    // which UserDO to dispatch to.
+    const result = await stub.userMcp_handleOAuthCallback(request.url);
+    // Redirect the browser back to the settings page regardless of outcome.
+    // The page polls userMcp_list and the per-server status surfaces the
+    // result. We include `?mcp_auth=ok|failed&error=...` for UX clarity.
+    const settingsUrl = new URL('/user/settings/mcp', publicOrigin(request));
+    settingsUrl.searchParams.set('mcp_auth', result.ok ? 'ok' : 'failed');
+    if (result.error) settingsUrl.searchParams.set('error', result.error.slice(0, 200));
+    if (result.serverId) settingsUrl.searchParams.set('server_id', result.serverId);
+    return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
+  }
+
   return err(404, `No such user route: ${method} ${path}`);
+}
+
+/** Derive the public origin the client sees. CF puts the canonical host
+ *  in the Host header for direct-zone routes; the Worker's own URL is
+ *  also a fine fallback (it matches the publicly-exposed origin). */
+function publicOrigin(request: Request): string {
+  // CF-Connecting-IP and similar headers don't help; the safest source is
+  // the request URL itself because Workers preserves the visitor's scheme
+  // and host in `request.url` for proxied requests.
+  return new URL(request.url).origin;
 }
 
 async function safeJson<T = unknown>(request: Request): Promise<T | null> {

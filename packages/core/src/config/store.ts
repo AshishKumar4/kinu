@@ -21,6 +21,8 @@ export const AGENT_CONFIG_KEYS = {
   shadowSampleRate: 'shadow_sample_rate',
   toolSurfacingMode: 'tool_surfacing_mode',
   reviewModel: 'review_model',
+  /** Comma-separated list of skill names the operator wants always-on. */
+  alwaysActiveSkills: 'always_active_skills',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -48,6 +50,9 @@ export interface AgentConfigStore {
   getShadowSampleRate(): number;
   getToolSurfacingMode(): 'all' | 'relevant';
   getReviewModel(): string | null;
+  /** Skills the operator has pinned as always-active for this agent. */
+  getAlwaysActiveSkills(): string[];
+  setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -108,5 +113,15 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return v === 'relevant' ? 'relevant' : 'all';
     },
     getReviewModel() { return get(AGENT_CONFIG_KEYS.reviewModel); },
+    getAlwaysActiveSkills() {
+      const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+      if (!v) return [];
+      return v.split(',').map(s => s.trim()).filter(Boolean);
+    },
+    setAlwaysActiveSkills(names) {
+      const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
+      if (v.length === 0) sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.alwaysActiveSkills}`;
+      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
+    },
   };
 }

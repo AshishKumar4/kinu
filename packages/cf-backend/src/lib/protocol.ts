@@ -67,6 +67,30 @@ export interface MemoryEntry {
 	updatedAt: string;
 }
 
+/** One typed span on the unified Run Timeline spine (getRunTimeline). The
+ *  server merges run_events + evolution_events + search_nodes into this single
+ *  ordered shape so the client never re-merges three sources (no drift). */
+export type TimelineKind =
+	| "llm-turn" | "tool-call" | "runtime-exec" | "mcts" | "scaffold" | "shadow-eval"
+	| "craft" | "reflection" | "head-split" | "head-merge" | "gepa" | "skills"
+	| "curriculum" | "trigger" | "event-ingress" | "error" | "abort" | "recovery" | "other";
+
+export interface TimelineSpan {
+	ts: number;
+	kind: TimelineKind;
+	label: string;
+	detail?: string;
+	/** Latency in ms when known (tool calls, activity timings). */
+	elapsedMs?: number;
+	/** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
+	data?: unknown;
+	source: "run" | "evolution" | "mcts";
+	/** Id for driving the work surface (node id, run-event id, root id…). */
+	refId?: string;
+	/** Original backend event type, for finer UI affordances. */
+	rawType?: string;
+}
+
 export interface EvolutionEvent {
 	id: string;
 	timestamp: string;

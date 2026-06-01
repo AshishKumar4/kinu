@@ -14,7 +14,6 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
-  EvolutionEngine,
   type CraftedToolExecute,
 } from '../src/index.js';
 import { tool, jsonSchema } from 'ai';
@@ -81,10 +80,8 @@ describe('Phase B — Node crafted-tool executor', () => {
       scope: 'local',
     });
 
-    const engine = new EvolutionEngine(rt, { enabled: false });
     const tools = buildBuiltinTools({
       rt,
-      engine,
       craftedToolExecute: createNodeCraftedExecute(),
       // Phase E: core no longer ships a fallback. The caller supplies the
       // Node execute-tools factory just like cli-backend does in production.
@@ -121,8 +118,7 @@ describe('Phase B — Node crafted-tool executor', () => {
       return async (arg) => `${tool.name}:${JSON.stringify(arg)}`;
     };
 
-    const engine = new EvolutionEngine(rt, { enabled: false });
-    buildBuiltinTools({ rt, engine, craftedToolExecute: factory });
+    buildBuiltinTools({ rt, craftedToolExecute: factory });
     expect(factoryCalls).toBe(1);
   });
 
@@ -146,8 +142,7 @@ describe('Phase B — Node crafted-tool executor', () => {
       factoryCalls++;
       return async () => 'never';
     };
-    const engine = new EvolutionEngine(rt, { enabled: false });
-    buildBuiltinTools({ rt, engine, craftedToolExecute: factory });
+    buildBuiltinTools({ rt, craftedToolExecute: factory });
     expect(factoryCalls).toBe(0);
   });
 });

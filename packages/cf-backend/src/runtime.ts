@@ -23,6 +23,7 @@ import type {
 import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor,
+  createNimbusExecutor,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
   createAgentConfigStore,
@@ -42,8 +43,20 @@ import { ExplorationAgent } from "./exploration.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import type { UserDO } from "./user/user-do.js";
 
+/**
+ * The agent surface these runtime builders need. `env`/`ctx` are `protected`
+ * on the DurableObject base (not reachable by these free functions), but the
+ * runtime is conceptually an extension of the agent and legitimately needs
+ * them. The orchestrator (a subclass that DOES have access) passes `this`
+ * cast to this view — so the access is sound, just opened to these helpers.
+ */
+type AgentHost = Think<Env> & {
+  readonly env: Env;
+  readonly ctx: DurableObjectState;
+};
+
 /** Read owner_user_id from the orchestrator's agent_soul. Empty/missing → null. */
-function readOwnerUserId(agent: Think<Env>): string | null {
+function readOwnerUserId(agent: AgentHost): string | null {
   try {
     const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_soul LIMIT 1`;
     const v = rows[0]?.owner_user_id;
@@ -51,7 +64,7 @@ function readOwnerUserId(agent: Think<Env>): string | null {
   } catch { return null; }
 }
 
-function userDOStubFor(agent: Think<Env>): DurableObjectStub<UserDO> | null {
+function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
   const userId = readOwnerUserId(agent);
   if (!userId) return null;
   return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
@@ -81,7 +94,7 @@ export interface CFRuntimeHooks {
 /**
  * Build a full AgentRuntime from a Think agent's DO context.
  */
-export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): CFRuntime {
+export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): CFRuntime {
   const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
@@ -154,6 +167,30 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
     executionRouter.register(createSandboxExecutor());
   }
 
+  // Register Nimbus — the default lightweight sandbox. Registered for every
+  // agent when NIMBUS_ENDPOINT is set so the `run({runtime:'nimbus'})` call
+  // works without operator intervention. Token is optional (Nimbus enforces
+  // it only when its deployment is in 'enforce' mode); we forward whatever
+  // we have. Same lazy connect() semantics as the other executors — the WS
+  // session opens on first use, not at runtime construction.
+  const nimbusEndpoint = typeof env.NIMBUS_ENDPOINT === 'string' && env.NIMBUS_ENDPOINT.length > 0
+    ? env.NIMBUS_ENDPOINT
+    : undefined;
+  const nimbusToken = typeof env.NIMBUS_TOKEN === 'string' && env.NIMBUS_TOKEN.length > 0
+    ? env.NIMBUS_TOKEN
+    : undefined;
+  if (nimbusEndpoint) {
+    try {
+      executionRouter.register(createNimbusExecutor({
+        endpoint: nimbusEndpoint,
+        token: nimbusToken,
+      }));
+      console.log(`[proteus] NimbusExecutor registered (endpoint=${nimbusEndpoint}, token=${nimbusToken ? 'set' : 'absent'})`);
+    } catch (err) {
+      console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
+    }
+  }
+
   // Register SSH tunnel executor — always available as a target, but only
   // "connected" when a user's tunnel WebSocket attaches via setSocket().
   const sshExecutor = createSSHTunnelExecutor();
@@ -203,7 +240,9 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
 
 function adaptVFS(fs: SqliteFS): CoreVFS {
   return {
-    readFile: (path, opts) => fs.readFile(path, opts),
+    // SqliteFS narrows encoding to the "utf8" literal; CoreVFS allows any
+    // string. Only "utf8" selects text mode — anything else is binary.
+    readFile: (path, opts) => fs.readFile(path, opts?.encoding === 'utf8' ? { encoding: 'utf8' } : undefined),
     writeFile: (path, data) => fs.writeFile(path, data),
     readdir: (path) => fs.readdir(path),
     async stat(path) {
@@ -292,14 +331,14 @@ function createExecutor(loader: unknown): Executor {
 // LLM for evolution reflections. Uses the agent's configured provider via
 // the registry — picks up Codex/OpenRouter/etc. automatically when the user
 // has switched providers.
-function readStoredModelSpec(agent: Think<Env>): string | null {
+function readStoredModelSpec(agent: AgentHost): string | null {
   // Single canonical path through the typed config store — no raw SQL.
   return createAgentConfigStore(
     agent.sql.bind(agent) as unknown as CoreSqlExecutor,
   ).getModel();
 }
 
-function createDualPathLLM(agent: Think<Env>): LLM {
+function createDualPathLLM(agent: AgentHost): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
@@ -322,7 +361,7 @@ function createDualPathLLM(agent: Think<Env>): LLM {
 
 // ── Schedule: real runFiber from Agent base class ────────────────
 
-function createRealSchedule(agent: Think<Env>): Schedule {
+function createRealSchedule(agent: AgentHost): Schedule {
   return {
     after: async (ms, fn) => { setTimeout(fn, ms); },
     cron: async () => {},
@@ -336,7 +375,7 @@ function createRealSchedule(agent: Think<Env>): Schedule {
 
 // ── Identity ─────────────────────────────────────────────────────
 
-function createIdentity(agent: Think<Env>, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
+function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
   return {
     id: agent.ctx.id.toString(),
     name: agent.name,
@@ -352,7 +391,7 @@ function createIdentity(agent: Think<Env>, vfs: CoreVFS, sql: CoreSqlExecutor): 
 
 // ── MCTS branches via real Facets (subAgent) ─────────────────────
 
-function createFacetSpawner(agent: Think<Env>): (branchId: string) => Promise<BranchHandle> {
+function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
       const stub = await agent.subAgent(ExplorationAgent, branchId);
@@ -370,7 +409,7 @@ function createFacetSpawner(agent: Think<Env>): (branchId: string) => Promise<Br
   };
 }
 
-function createFacetAborter(agent: Think<Env>): (branchId: string) => Promise<void> {
+function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
   return async (branchId: string) => {
     try { agent.abortSubAgent(ExplorationAgent, branchId); } catch {}
   };
@@ -384,7 +423,7 @@ function createFacetAborter(agent: Think<Env>): (branchId: string) => Promise<vo
  * STRUCTURALLY by capturing only the LLM config, never the agent reference
  * or its storage. The closure has no path to agent.sql or agent.ctx.storage.
  */
-function createInlineBranch(agent: Think<Env>): BranchHandle {
+function createInlineBranch(agent: AgentHost): BranchHandle {
   // Capture only env (not agent.sql / agent.ctx.storage) so the branch
   // closure satisfies StorageIsolation. Stored credentials are not available
   // here — inline branches use the env-bound providers (workers-ai or

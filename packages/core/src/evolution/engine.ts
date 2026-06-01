@@ -40,6 +40,13 @@ import { BUILTIN_TOOL_NAMES as BUILT_IN_TOOL_NAMES } from '../tools/registry.js'
 import { modifyScaffold } from '../scaffold/modify.js';
 import { runMCTS } from '../mcts/engine.js';
 
+/** Single source for the explicit-feedback → turn-quality mapping. Used by
+ *  the turn-time assessment AND by the async setTurnFeedback re-scoring path
+ *  (cf-backend), so the 0.9/0.2 constants can't drift between them. */
+export function feedbackToQuality(feedback: 'positive' | 'negative'): number {
+  return feedback === 'positive' ? 0.9 : 0.2;
+}
+
 export class EvolutionEngine {
   private rt: AgentRuntime;
   private config: EvolutionConfig;
@@ -321,8 +328,7 @@ export class EvolutionEngine {
   /** Assess turn quality using judge model or heuristics */
   private async assessTurnQuality(turn: CompletedTurn): Promise<number> {
     if (turn.hadError) return 0.1;
-    if (turn.feedback === 'negative') return 0.2;
-    if (turn.feedback === 'positive') return 0.9;
+    if (turn.feedback) return feedbackToQuality(turn.feedback);
 
     // No explicit feedback — use heuristic: length, tool usage, error-free
     const hasSubstance = turn.assistantResponse.length > 50;
@@ -356,10 +362,14 @@ export class EvolutionEngine {
   }
 
   /** Extract a successful tool usage pattern into a reusable crafted tool.
-   *  search_memory is skipped because it's a pure lookup; no pattern to extract.
+   *  Pure-lookup calls (memory.search, fact.recall) are skipped — they read
+   *  state but encode no reusable pattern.
    */
   private async extractPattern(turn: CompletedTurn, quality: number = 0.7): Promise<void> {
-    const meaningfulCalls = turn.toolCalls.filter(tc => tc.name !== 'search_memory');
+    const isPureLookup = (tc: { name: string; args: Record<string, unknown> }): boolean =>
+      (tc.name === 'memory' && tc.args.action === 'search') ||
+      (tc.name === 'fact' && tc.args.action === 'recall');
+    const meaningfulCalls = turn.toolCalls.filter(tc => !isPureLookup(tc));
     if (meaningfulCalls.length === 0) return;
 
     const callSummary = meaningfulCalls

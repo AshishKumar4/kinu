@@ -2,12 +2,10 @@
 // score them, return the best." MCTS, Heads, Tree-of-Thoughts, Reflexion,
 // single-shot — all fit this shape.
 //
-// Today MCTS and Heads are exposed as two separate tools (`explore` and
-// `split_heads`); the LLM has to pick by name and learn each one's args. By
-// hiding them behind one `think(strategy, task, budget)` tool dispatching
-// over a strategy registry, the agent surface stays stable while new
-// strategies (ToT, GoT, Reflexion, RLM-on-subtask) drop in as registry
-// entries — no orchestrator changes.
+// All strategies hide behind one `think(strategy, task, budget)` tool
+// dispatching over a strategy registry, so the agent surface stays small and
+// stable while new strategies (ToT, GoT, Reflexion, RLM-on-subtask) drop in as
+// registry entries — no tool/UI/orchestrator changes.
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LanguageModel } from 'ai';
