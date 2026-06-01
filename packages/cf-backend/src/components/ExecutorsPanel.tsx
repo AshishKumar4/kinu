@@ -194,6 +194,17 @@ function PerExecutorView(props: PerExecutorViewProps) {
         </div>
       </div>
 
+      {/* Capabilities — what this runtime can actually do, so "which runtime
+          for this job" isn't guesswork (npm / git / docker / net / …). */}
+      {exec.capabilities.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap px-3 py-1 border-b p-border">
+          <span className="text-[10px] p-text-3 mr-1">{exec.kind}</span>
+          {exec.capabilities.map((c) => (
+            <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-full p-elevated p-text-3 font-mono">{c}</span>
+          ))}
+        </div>
+      )}
+
       {/* Body — full-size active-tab content */}
       <div className="flex-1 min-h-0 relative">
         {active.kind === 'preview' && (() => {
