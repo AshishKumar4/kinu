@@ -30,7 +30,7 @@ import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
-import { diffLines, type DiffLine } from "./lib/diff.js";
+import { diffLines, computeWorkspaceDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { aiSchema } from "./ai-schema.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -1530,6 +1530,9 @@ export class OrchestratorAgent extends Think<Env> {
     // GEPA offline-optimisation run + candidate history (gepa_runs, gepa_candidates,
     // gepa_pareto_membership). Populated by runScaffoldGepaOptimization.
     initGepaTables(execRaw);
+    // Workspace-diff baseline (path → content snapshot) for the Output surface's
+    // cumulative change-set. Captured lazily / re-markable via resetWorkspaceBaseline.
+    execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (path TEXT PRIMARY KEY, content TEXT)`);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -2328,6 +2331,72 @@ export class OrchestratorAgent extends Think<Env> {
         .map((r) => ({ candidateId: r.candidate_id, instanceId: r.instance_id, score: r.score }));
       return { run, candidates, pareto };
     } catch { return { run: null, candidates: [], pareto: [] }; }
+  }
+
+  /**
+   * Read the current workspace text files (path → content) for diffing. Skips
+   * directories, binary files (NUL byte), and anything over 256 KB; caps at 400
+   * files. Backs the Output cumulative change-set.
+   */
+  private async readWorkspaceFiles(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    let paths: string[];
+    try {
+      paths = this.sql<{ path: string }>`
+        SELECT DISTINCT path FROM vfs_files WHERE is_dir = 0 AND path != '' LIMIT 400`.map((r) => r.path);
+    } catch { return out; }
+    for (const path of paths) {
+      try {
+        const stat = await this.rt.storage.vfs.stat(path);
+        if (stat && stat.size > 256 * 1024) continue;
+        const content = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+        const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
+        if (text.includes(String.fromCharCode(0))) continue; // binary (NUL byte = binary)
+        out[path] = text;
+      } catch { /* unreadable — skip */ }
+    }
+    return out;
+  }
+
+  /**
+   * The cumulative workspace change-set since the baseline — what the agent has
+   * created/changed/deleted, for review on the Output surface. The baseline is
+   * captured lazily on first call (returns empty + baselineJustCaptured) and
+   * re-markable via resetWorkspaceBaseline ("mark reviewed").
+   */
+  @callable()
+  async getWorkspaceDiff(): Promise<{ files: FileDiff[]; baselineJustCaptured: boolean }> {
+    const current = await this.readWorkspaceFiles();
+    let baselineRows: Array<{ path: string; content: string }> = [];
+    try {
+      baselineRows = this.sql<{ path: string; content: string }>`SELECT path, content FROM vfs_baseline`;
+    } catch { baselineRows = []; }
+    if (baselineRows.length === 0) {
+      // No baseline yet → capture the current state as the baseline.
+      this.captureWorkspaceBaseline(current);
+      return { files: [], baselineJustCaptured: true };
+    }
+    const baseline: Record<string, string> = {};
+    for (const r of baselineRows) baseline[r.path] = r.content;
+    return { files: computeWorkspaceDiff(baseline, current), baselineJustCaptured: false };
+  }
+
+  /** Mark the current workspace as the new baseline ("reviewed" — the diff
+   *  resets to empty and accrues from here). */
+  @callable()
+  async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
+    const current = await this.readWorkspaceFiles();
+    this.captureWorkspaceBaseline(current);
+    return { ok: true, files: Object.keys(current).length };
+  }
+
+  private captureWorkspaceBaseline(files: Record<string, string>): void {
+    try {
+      this.sql`DELETE FROM vfs_baseline`;
+      for (const [path, content] of Object.entries(files)) {
+        this.sql`INSERT OR REPLACE INTO vfs_baseline (path, content) VALUES (${path}, ${content})`;
+      }
+    } catch { /* table may not exist on very first start */ }
   }
 
   /** Recent branching-head runs (think strategy=heads): each root spawn with

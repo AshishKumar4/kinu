@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { diffLines } from "../src/lib/diff.ts";
+import { diffLines, computeWorkspaceDiff } from "../src/lib/diff.ts";
 
 describe("diffLines", () => {
   test("identical input is all context, zero changes", () => {
@@ -35,5 +35,27 @@ describe("diffLines", () => {
     expect(diffLines("", "x\ny")).toMatchObject({ added: 2, removed: 0 });
     expect(diffLines("x\ny", "")).toMatchObject({ added: 0, removed: 2 });
     expect(diffLines("", "")).toMatchObject({ added: 0, removed: 0, lines: [] });
+  });
+});
+
+describe("computeWorkspaceDiff", () => {
+  test("classifies added / removed / changed and omits unchanged, sorted by path", () => {
+    const baseline = { "a.ts": "x", "b.ts": "old", "c.ts": "same" };
+    const current = { "a.ts": "x\ny", "c.ts": "same", "d.ts": "new" };
+    const diff = computeWorkspaceDiff(baseline, current);
+    expect(diff.map((f) => [f.path, f.status])).toEqual([
+      ["a.ts", "changed"],   // x → x\ny
+      ["b.ts", "removed"],   // gone from current
+      ["d.ts", "added"],     // new in current
+    ]);
+    // c.ts unchanged → omitted.
+    expect(diff.find((f) => f.path === "c.ts")).toBeUndefined();
+    expect(diff.find((f) => f.path === "a.ts")!.added).toBe(1);
+    expect(diff.find((f) => f.path === "d.ts")!.added).toBe(1);
+    expect(diff.find((f) => f.path === "b.ts")!.removed).toBe(1);
+  });
+
+  test("identical baseline/current = no changes", () => {
+    expect(computeWorkspaceDiff({ "a": "1" }, { "a": "1" })).toEqual([]);
   });
 });

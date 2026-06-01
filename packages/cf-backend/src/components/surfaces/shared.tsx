@@ -8,6 +8,21 @@ import { Code } from "@cloudflare/kumo/components/code";
 import { CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { DiffLine } from "@/lib/diff";
+
+/** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
+ *  scaffold-version diff (Brain) and the workspace change-set (Output). */
+export function DiffLines({ lines }: { lines: DiffLine[] }) {
+  return (
+    <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto max-h-[360px] overflow-y-auto m-0">
+      {lines.map((l, i) => (
+        <div key={i} className={l.kind === "add" ? "bg-emerald-500/10 text-emerald-300 px-3" : l.kind === "del" ? "bg-red-500/10 text-red-300 px-3" : "p-text-3 px-3"}>
+          <span className="select-none opacity-40 mr-2">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>{l.text || " "}
+        </div>
+      ))}
+    </pre>
+  );
+}
 
 export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
   const [copied, setCopied] = useState(false);

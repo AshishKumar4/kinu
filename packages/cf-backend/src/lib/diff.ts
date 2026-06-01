@@ -35,3 +35,31 @@ export function diffLines(before: string, after: string): LineDiff {
   for (const l of lines) { if (l.kind === "add") added++; else if (l.kind === "del") removed++; }
   return { lines, added, removed };
 }
+
+export type FileStatus = "added" | "removed" | "changed";
+export interface FileDiff { path: string; status: FileStatus; added: number; removed: number; lines: DiffLine[] }
+
+/** Diff a workspace baseline against its current state — the cumulative
+ *  change-set the Output surface reviews. Pure: the orchestrator supplies the
+ *  before/after path→content maps. Unchanged files are omitted; result sorted
+ *  by path. */
+export function computeWorkspaceDiff(baseline: Record<string, string>, current: Record<string, string>): FileDiff[] {
+  const paths = new Set([...Object.keys(baseline), ...Object.keys(current)]);
+  const out: FileDiff[] = [];
+  for (const path of paths) {
+    const before = baseline[path];
+    const after = current[path];
+    if (before === after) continue;
+    if (before === undefined) {
+      const d = diffLines("", after!);
+      out.push({ path, status: "added", added: d.added, removed: 0, lines: d.lines });
+    } else if (after === undefined) {
+      const d = diffLines(before, "");
+      out.push({ path, status: "removed", added: 0, removed: d.removed, lines: d.lines });
+    } else {
+      const d = diffLines(before, after);
+      out.push({ path, status: "changed", added: d.added, removed: d.removed, lines: d.lines });
+    }
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}

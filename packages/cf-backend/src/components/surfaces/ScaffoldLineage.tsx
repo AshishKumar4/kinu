@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
+import { DiffLines } from "./shared";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
@@ -32,13 +33,7 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
         <span className="text-emerald-400">+{diff.added}</span>
         <span className="text-red-400">−{diff.removed}</span>
       </div>
-      <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto max-h-[360px] overflow-y-auto m-0">
-        {diff.lines.map((l, i) => (
-          <div key={i} className={l.kind === "add" ? "bg-emerald-500/10 text-emerald-300 px-3" : l.kind === "del" ? "bg-red-500/10 text-red-300 px-3" : "p-text-3 px-3"}>
-            <span className="select-none opacity-40 mr-2">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>{l.text || " "}
-          </div>
-        ))}
-      </pre>
+      <DiffLines lines={diff.lines} />
     </div>
   );
 }
