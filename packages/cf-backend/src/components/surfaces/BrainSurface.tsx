@@ -3,15 +3,18 @@
  * and long-term memory. The scaffold version-lineage + shadow-eval verdict +
  * promote/rollback (the moat) and agent_facts are layered in by the Brain phase.
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon,
+  FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ToolInfo, MemoryEntry } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS } from "./shared";
+import { ScaffoldLineage } from "./ScaffoldLineage";
+
+interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
 export interface BrainSurfaceProps {
   agentStatus: AgentStatus | null;
@@ -19,10 +22,13 @@ export interface BrainSurfaceProps {
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
 }
 
-export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory }: BrainSurfaceProps) {
+export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc }: BrainSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
+  const [facts, setFacts] = useState<Fact[]>([]);
+  useEffect(() => { rpc("getFacts", [100]).then((f) => setFacts(f as Fact[])).catch(() => {}); }, [rpc]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -56,6 +62,9 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
           </div>
         </section>
       ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>}
+
+      {/* Scaffold evolution — the moat: lineage + diff + shadow verdict + promote/rollback. */}
+      {as && <ScaffoldLineage rpc={rpc} currentVersion={as.scaffoldVersion} />}
 
       {/* Tools (CraftStore + builtins) */}
       <section>
@@ -120,6 +129,26 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
           ))}
         </div>
       </section>
+
+      {/* World model — keyed agent_facts the agent remembers across turns. */}
+      {facts.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-2.5">
+            <BrainIcon size={14} className="p-text-2" />
+            <span className="text-sm font-medium p-text">World model</span>
+            <Badge variant="secondary">{facts.length}</Badge>
+          </div>
+          <div className="rounded-md border p-border overflow-hidden text-xs">
+            {facts.map((f) => (
+              <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0">
+                <span className="font-mono p-accent shrink-0">{f.key}</span>
+                <span className="p-text-2 truncate flex-1 text-right">{typeof f.value === "string" ? f.value : JSON.stringify(f.value)}</span>
+                {f.confidence < 1 && <span className="text-[10px] p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

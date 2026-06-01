@@ -30,6 +30,7 @@ import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
+import { diffLines, type DiffLine } from "./lib/diff.js";
 import { aiSchema } from "./ai-schema.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -1964,6 +1965,27 @@ export class OrchestratorAgent extends Think<Env> {
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
     const pendingVersion = version ?? getPendingScaffold(this.boundSql)?.version ?? null;
     return readShadowVerdict(this.boundSql, pendingVersion);
+  }
+
+  /**
+   * Line diff of a scaffold version against its predecessor — what the agent
+   * actually rewrote in its own inference loop. Reads the versioned VFS backups
+   * (`scaffold/agent.js.vN`); `previousVersion` is the highest existing version
+   * below `version` (robust to non-contiguous numbering after rollbacks). v0 /
+   * no-predecessor diffs render as all-additions.
+   */
+  @callable()
+  async getScaffoldDiff(version: number): Promise<{
+    version: number; previousVersion: number | null;
+    added: number; removed: number; lines: DiffLine[];
+  }> {
+    const after = (await readScaffoldVersion(this.rt, version)) ?? "";
+    const prevRow = this.sql<{ version: number }>`
+      SELECT version FROM scaffold_versions WHERE version < ${version} ORDER BY version DESC LIMIT 1`;
+    const previousVersion = prevRow[0]?.version ?? null;
+    const before = previousVersion != null ? (await readScaffoldVersion(this.rt, previousVersion)) ?? "" : "";
+    const d = diffLines(before, after);
+    return { version, previousVersion, added: d.added, removed: d.removed, lines: d.lines };
   }
 
   /**

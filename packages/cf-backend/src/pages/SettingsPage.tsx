@@ -1,14 +1,15 @@
 /**
  * Per-agent settings page. Credentials + defaults live in /user/settings;
  * this page covers concerns scoped to ONE agent: identity, model choice,
- * MCTS knobs, scaffold/shadow status, shell-approval mode.
+ * MCTS knobs, shell-approval mode, GEPA optimisation, pinned skills.
+ * (Scaffold promote/rollback + the per-trial verdict live on the Brain surface.)
  */
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, TreeStructureIcon, GitBranchIcon, KeyIcon, PlugIcon, SparkleIcon,
+  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import { useProteus } from "@/hooks/use-proteus";
 import { listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
@@ -35,16 +36,6 @@ function Card({ title, icon: Icon, children }: {
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
-interface ShadowStatus {
-  hasPending: boolean;
-  pending?: {
-    version: number; writtenAt: number; rationale: string;
-    trialsSoFar: number; pendingWins: number; currentWins: number; ties: number;
-  };
-  decision?: { decision: "promote" | "rollback" | "continue"; winRate: number };
-  versions?: Array<{ version: number; status: string; rationale: string; written_at: number }>;
-}
-
 export default function SettingsPage() {
   const { agentId } = useParams();
   const state = useProteus(agentId);
@@ -58,7 +49,6 @@ export default function SettingsPage() {
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
   const [currentSpec, setCurrentSpec] = useState<string>("");
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("strict");
-  const [shadow, setShadow] = useState<ShadowStatus | null>(null);
   const [mcts, setMcts] = useState({ explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 });
 
   useEffect(() => {
@@ -72,17 +62,15 @@ export default function SettingsPage() {
     if (state.connectionStatus !== "connected") return;
     setErr(null);
     try {
-      const [m, current, mode, sh, mc] = await Promise.all([
+      const [m, current, mode, mc] = await Promise.all([
         listAvailableModels().catch(() => []),
         (state.rpc("getStoredModelSpec", []) as Promise<{ spec: string | null }>).catch(() => ({ spec: null })),
         (state.rpc("getShellApprovalMode", []) as Promise<{ mode: ApprovalMode }>).catch(() => ({ mode: 'strict' as ApprovalMode })),
-        (state.rpc("getShadowStatus", []) as Promise<ShadowStatus>).catch(() => ({ hasPending: false } as ShadowStatus)),
         (state.rpc("getMctsConfig", []) as Promise<typeof mcts>).catch(() => mcts),
       ]);
       setModels(m ?? []);
       setCurrentSpec(current?.spec ?? "");
       setApprovalMode(mode?.mode ?? "strict");
-      setShadow(sh ?? null);
       if (mc) setMcts(mc);
     } catch (e) {
       setErr((e as Error).message);
@@ -203,20 +191,8 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        {/* Shadow */}
-        {shadow && (
-          <Card title="Scaffold shadow rollout" icon={GitBranchIcon}>
-            {shadow.hasPending ? (
-              <ScaffoldPendingDetail
-                shadow={shadow}
-                rpc={state.rpc}
-                onChange={() => { void load(); }}
-              />
-            ) : (
-              <p className="text-xs p-text-3">No pending scaffold.</p>
-            )}
-          </Card>
-        )}
+        {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
+            live on the agent's Brain surface (single source of truth). */}
 
         {/* Always-active skills */}
         <AlwaysActiveSkillsCard rpc={state.rpc} />
@@ -268,7 +244,7 @@ function GepaOptimizationCard({
       };
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}) — it will shadow-eval, then you can promote it above.`);
+        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}) — it will shadow-eval, then you can promote it from the agent's Brain surface.`);
         onProposed();
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}).`);
@@ -312,63 +288,6 @@ function GepaOptimizationCard({
 }
 
 // ── Scaffold pending detail + promote/rollback controls ──────────
-
-function ScaffoldPendingDetail({
-  shadow, rpc, onChange,
-}: {
-  shadow: ShadowStatus;
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
-  onChange: () => void;
-}) {
-  const [busy, setBusy] = useState<null | 'promote' | 'rollback'>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const apply = useCallback(async (decision: 'promote' | 'rollback') => {
-    setBusy(decision);
-    setMsg(null);
-    try {
-      const r = await rpc('applyScaffoldDecision', [decision]) as
-        { ok?: boolean; action?: string; newCurrentVersion?: number; error?: string };
-      if (r.error) setMsg(`Error: ${r.error}`);
-      else setMsg(`Applied ${r.action} → now at v${r.newCurrentVersion}`);
-      onChange();
-    } catch (e) {
-      setMsg(`Error: ${(e as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
-  }, [rpc, onChange]);
-
-  const auto = shadow.decision?.decision;
-  const winRate = shadow.decision?.winRate;
-  return (
-    <div className="text-xs space-y-3">
-      <div>Pending v{shadow.pending?.version} — {shadow.pending?.trialsSoFar} trials so far
-        {typeof winRate === 'number' && <span className="ml-2 p-text-3">(win rate {(winRate * 100).toFixed(0)}%)</span>}
-      </div>
-      <div className="text-[11px] p-text-3">{shadow.pending?.rationale}</div>
-      {auto && auto !== 'continue' && (
-        <div className="text-[11px] p-text-2 px-2 py-1 rounded bg-[var(--c-elevated,#18181b)]">
-          Auto-judge recommends: <strong>{auto}</strong>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => apply('promote')}
-          disabled={!!busy}
-          className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
-        >{busy === 'promote' ? 'Promoting…' : 'Promote pending'}</button>
-        <button
-          type="button"
-          onClick={() => apply('rollback')}
-          disabled={!!busy}
-          className="px-3 py-1.5 rounded-md text-xs font-medium p-card hover:p-card-hover disabled:opacity-50"
-        >{busy === 'rollback' ? 'Rolling back…' : 'Rollback pending'}</button>
-      </div>
-      {msg && <div className="text-[11px] p-text-2 mt-1">{msg}</div>}
-    </div>
-  );
-}
 
 // ── Always-active skills pinning ─────────────────────────────────
 

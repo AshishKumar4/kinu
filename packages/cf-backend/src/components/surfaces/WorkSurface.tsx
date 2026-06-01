@@ -75,7 +75,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <BrainSurface
               agentStatus={props.agentStatus} tools={props.tools}
               memory={props.memory} memoryContent={props.memoryContent}
-              onSearchMemory={props.onSearchMemory}
+              onSearchMemory={props.onSearchMemory} rpc={props.rpc}
             />
           )}
           {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} />}
