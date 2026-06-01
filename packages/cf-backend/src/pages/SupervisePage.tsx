@@ -17,8 +17,14 @@ import { EmptyState } from "@/components/surfaces/shared";
 import type { Rpc } from "@/lib/protocol";
 
 interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
-interface RunRow { runId: string; lastTs: string; eventCount: number }
+interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; eventCount: number }
 interface TriggerRow { id: string; kind: string; state: string; created_at: number; rate_limit_per_min?: number }
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
 
 export interface SupervisePageProps {
   rpc: Rpc;
@@ -107,14 +113,16 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
 /* ── Run history ───────────────────────────────────────────────── */
 
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
-  const [runs, setRuns] = useState<RunRow[] | null>(null);
-  useEffect(() => { rpc<RunRow[]>("listRuns", [50]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
+  const [runs, setRuns] = useState<RunSummary[] | null>(null);
+  useEffect(() => { rpc<RunSummary[]>("getRunSummaries", [30]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
+  const totalTokens = (runs ?? []).reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Run history</h2>
+        <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
         {runs && <Badge variant="secondary">{runs.length}</Badge>}
+        {totalTokens > 0 && <span className="ml-auto text-[11px] p-text-3">{fmtTokens(totalTokens)} tokens</span>}
       </div>
       {runs === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
         : runs.length === 0 ? <p className="text-xs p-text-3">No recorded runs yet.</p>
@@ -122,9 +130,11 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {runs.map((r) => (
               <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className="font-mono p-text-2 truncate flex-1">{r.runId}</span>
-                <span className="p-text-3 shrink-0">{r.eventCount} events</span>
-                <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.lastTs).toLocaleString()}</span>
+                <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "bg-emerald-500" : r.status === "aborted" ? "bg-red-500" : "bg-zinc-500"}`} />
+                <span className="text-[10px] px-1 rounded p-elevated p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
+                <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
+                {(r.tokensIn + r.tokensOut) > 0 && <span className="p-text-3 shrink-0 tabular-nums" title="tokens in+out">{fmtTokens(r.tokensIn + r.tokensOut)} tok</span>}
+                <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
               </div>
             ))}
           </div>

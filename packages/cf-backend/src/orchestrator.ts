@@ -246,6 +246,9 @@ export class OrchestratorAgent extends Think<Env> {
   private _turnToolCalls: ToolCallRecord[] = [];
   private _turnStepCount = 0;
   private _turnStartedAt = 0;
+  // Per-turn token accumulator (summed across steps in onStepFinish), emitted
+  // on turn_end so the Supervise budget view can show real spend per run.
+  private _turnUsage = { input: 0, output: 0 };
   private _turnHadError = false;
   private _sessionTurnCount = 0;
   private _sessionTurns: CompletedTurn[] = [];
@@ -979,6 +982,7 @@ export class OrchestratorAgent extends Think<Env> {
     this._turnToolCalls = [];
     this._turnStepCount = 0;
     this._turnStartedAt = Date.now();
+    this._turnUsage = { input: 0, output: 0 };
     this._turnHadError = false;
     this._firstChunkReceived = false;
     this._inFlight = true;
@@ -1171,6 +1175,8 @@ export class OrchestratorAgent extends Think<Env> {
     const outTok = u?.outputTokens ?? 0;
     const cached = u?.cachedInputTokens ?? 0;
     const reasoning = u?.reasoningTokens ?? 0;
+    this._turnUsage.input += inTok;
+    this._turnUsage.output += outTok;
     const modelId = (ctx as unknown as { response?: { modelId?: string } }).response?.modelId;
     const extras: string[] = [];
     if (cached > 0) extras.push(`cached=${cached}`);
@@ -1210,6 +1216,7 @@ export class OrchestratorAgent extends Think<Env> {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'turn_end',
           turnIndex: this._sessionTurnCount,
+          tokenUsage: { input: this._turnUsage.input, output: this._turnUsage.output },
         });
         this.eventRecorder.emit(this._currentRunId, {
           type: 'run_end',
@@ -2493,6 +2500,39 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
     return this.eventRecorder.listRuns(limit);
+  }
+
+  /**
+   * Recent runs enriched with PROVENANCE (what kicked each off) + COST (tokens
+   * spent) — the cross-run history + budget view for the Supervise altitude.
+   * Folds the per-run run_start (caused_by/userMessage) and summed turn_end
+   * tokenUsage out of the durable event log.
+   */
+  @callable()
+  async getRunSummaries(limit: number = 30): Promise<Array<{
+    runId: string; startedAt: number; causedBy: string | null; userMessage: string | null;
+    status: string | null; tokensIn: number; tokensOut: number; eventCount: number;
+  }>> {
+    return this.eventRecorder.listRuns(limit).map((run) => {
+      let tokensIn = 0, tokensOut = 0;
+      let causedBy: string | null = null, userMessage: string | null = null, status: string | null = null;
+      let startedAt = Date.parse(run.lastTs) || Date.now();
+      try {
+        for (const e of this.eventRecorder.read(run.runId, { limit: 1000 })) {
+          if (e.type === 'run_start') {
+            causedBy = e.caused_by ?? 'chat';
+            userMessage = e.userMessage ?? null;
+            startedAt = Date.parse(e.timestamp) || startedAt;
+          } else if (e.type === 'turn_end' && e.tokenUsage) {
+            tokensIn += e.tokenUsage.input;
+            tokensOut += e.tokenUsage.output;
+          } else if (e.type === 'run_end') {
+            status = e.reason ?? null;
+          }
+        }
+      } catch { /* run events unreadable — return the bare summary */ }
+      return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, eventCount: run.eventCount };
+    });
   }
 
   /** Count events for a single run — for UI badges. */
