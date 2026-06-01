@@ -10,7 +10,7 @@ import {
 import ExecutorsPanel from "@/components/ExecutorsPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
-import type { ToolInfo, MemoryEntry, MCTSNode } from "@/lib/protocol";
+import type { ToolInfo, MemoryEntry, MCTSNode, Rpc } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { BrainSurface } from "./BrainSurface";
 import { ReasoningSurface } from "./ReasoningSurface";
@@ -43,7 +43,7 @@ export interface WorkSurfaceProps {
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
   agentName?: string;
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {

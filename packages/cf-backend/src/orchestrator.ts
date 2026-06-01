@@ -983,12 +983,16 @@ export class OrchestratorAgent extends Think<Env> {
     this._firstChunkReceived = false;
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
-    // Start a new run for the event log.
+    // Start a new run for the event log, with provenance so cross-run history
+    // (Supervise altitude) can show what kicked each run off. This is the chat
+    // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
     this._currentRunId = `run-${nanoid()}`;
     try {
       this.eventRecorder.emit(this._currentRunId, {
         type: 'run_start',
         agentId: this.name,
+        caused_by: 'chat',
+        userMessage: extractLastUserText(ctx.messages)?.slice(0, 500),
       });
       this.eventRecorder.emit(this._currentRunId, {
         type: 'turn_start',

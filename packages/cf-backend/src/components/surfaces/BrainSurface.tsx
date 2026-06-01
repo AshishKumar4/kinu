@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-proteus";
-import type { ToolInfo, MemoryEntry } from "@/lib/protocol";
+import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 
@@ -22,13 +22,13 @@ export interface BrainSurfaceProps {
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
 }
 
 export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc }: BrainSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
-  useEffect(() => { rpc("getFacts", [100]).then((f) => setFacts(f as Fact[])).catch(() => {}); }, [rpc]);
+  useEffect(() => { rpc<Fact[]>("getFacts", [100]).then(setFacts).catch(() => {}); }, [rpc]);
 
   return (
     <div className="space-y-6 animate-fade-in">

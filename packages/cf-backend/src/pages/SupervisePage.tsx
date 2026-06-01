@@ -14,13 +14,14 @@ import {
   GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon, WarningIcon,
 } from "@phosphor-icons/react";
 import { EmptyState } from "@/components/surfaces/shared";
+import type { Rpc } from "@/lib/protocol";
 
 interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
 interface RunRow { runId: string; lastTs: string; eventCount: number }
 interface TriggerRow { id: string; kind: string; state: string; created_at: number; rate_limit_per_min?: number }
 
 export interface SupervisePageProps {
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
   onRunTask: (task: string) => void;
 }
 
@@ -38,12 +39,12 @@ export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
 
 /* ── Curriculum (Voyager self-proposed tasks) ──────────────────── */
 
-function CurriculumBlock({ rpc, onRunTask }: { rpc: (m: string, a?: unknown[]) => Promise<unknown>; onRunTask: (t: string) => void }) {
+function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) => void }) {
   const [tasks, setTasks] = useState<ProposedTask[] | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    rpc("listCurriculumTasks", []).then((r) => setTasks((r as { tasks: ProposedTask[] }).tasks)).catch(() => setTasks([]));
+    rpc<{ tasks: ProposedTask[] }>("listCurriculumTasks", []).then((r) => setTasks(r.tasks)).catch(() => setTasks([]));
   }, [rpc]);
   useEffect(() => { load(); }, [load]);
 
@@ -105,9 +106,9 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: (m: string, a?: unknown[]) =
 
 /* ── Run history ───────────────────────────────────────────────── */
 
-function RunHistoryBlock({ rpc }: { rpc: (m: string, a?: unknown[]) => Promise<unknown> }) {
+function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const [runs, setRuns] = useState<RunRow[] | null>(null);
-  useEffect(() => { rpc("listRuns", [50]).then((r) => setRuns(r as RunRow[])).catch(() => setRuns([])); }, [rpc]);
+  useEffect(() => { rpc<RunRow[]>("listRuns", [50]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
@@ -134,9 +135,9 @@ function RunHistoryBlock({ rpc }: { rpc: (m: string, a?: unknown[]) => Promise<u
 
 /* ── Automations (triggers) — honest wired-vs-stub ─────────────── */
 
-function AutomationsBlock({ rpc }: { rpc: (m: string, a?: unknown[]) => Promise<unknown> }) {
+function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const [triggers, setTriggers] = useState<TriggerRow[] | null>(null);
-  useEffect(() => { rpc("listTriggers", []).then((r) => setTriggers((r as { triggers: TriggerRow[] }).triggers ?? [])).catch(() => setTriggers([])); }, [rpc]);
+  useEffect(() => { rpc<{ triggers: TriggerRow[] }>("listTriggers", []).then((r) => setTriggers(r.triggers ?? [])).catch(() => setTriggers([])); }, [rpc]);
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">

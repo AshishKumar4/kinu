@@ -40,7 +40,7 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
   const base = { ts, source: "run" as const, rawType: e.type };
   switch (e.type) {
     case "run_start":
-      return { ...base, kind: "trigger", label: "Run started", detail: e.userMessage };
+      return { ...base, kind: "trigger", label: e.caused_by ? `Run started · ${e.caused_by}` : "Run started", detail: e.userMessage };
     case "turn_start":
       return { ...base, kind: "llm-turn", label: `Turn ${e.turnIndex}` };
     case "tool_call_start":

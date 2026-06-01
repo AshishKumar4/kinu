@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
+import type { Rpc } from "@/lib/protocol";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
@@ -70,7 +71,7 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
 }
 
 export interface ScaffoldLineageProps {
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
   currentVersion: number;
 }
 
@@ -84,17 +85,15 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [previewOut, setPreviewOut] = useState<string | null>(null);
 
   const loadVersions = useCallback(() => {
-    rpc("listScaffoldVersions", [20])
-      .then((v) => setVersions(v as ScaffoldVersion[]))
-      .catch(() => {});
+    rpc<ScaffoldVersion[]>("listScaffoldVersions", [20]).then(setVersions).catch(() => {});
   }, [rpc]);
 
   useEffect(() => { loadVersions(); }, [loadVersions]);
 
   const select = useCallback((version: number) => {
     setSelected(version); setDiff(null); setVerdict(null); setPreviewOut(null);
-    rpc("getScaffoldDiff", [version]).then((d) => setDiff(d as ScaffoldDiff)).catch(() => {});
-    rpc("getShadowVerdict", [version]).then((v) => setVerdict(v as ShadowVerdict)).catch(() => {});
+    rpc<ScaffoldDiff>("getScaffoldDiff", [version]).then(setDiff).catch(() => {});
+    rpc<ShadowVerdict>("getShadowVerdict", [version]).then(setVerdict).catch(() => {});
   }, [rpc]);
 
   const decide = useCallback(async (mode: "promote" | "rollback") => {
@@ -107,7 +106,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     if (selected == null || !previewTask.trim()) return;
     setBusy("preview"); setPreviewOut(null);
     try {
-      const r = await rpc("previewScaffoldLive", [selected, previewTask.trim()]) as { ok?: boolean; error?: string; events?: Array<{ type: string; text?: string }> };
+      const r = await rpc<{ ok?: boolean; error?: string; events?: Array<{ type: string; text?: string }> }>("previewScaffoldLive", [selected, previewTask.trim()]);
       const text = (r.events ?? []).filter((e) => e.type === "text_delta").map((e) => e.text ?? "").join("");
       setPreviewOut(r.error ? `Error: ${r.error}` : (text || "(no text output)"));
     } catch (e) {

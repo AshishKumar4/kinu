@@ -2,15 +2,19 @@
  * Proteus agent hooks — useAgent() + useAgentChat() from Agents SDK.
  */
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
-import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan } from "../lib/protocol";
+import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, Rpc } from "../lib/protocol";
 import { touchAgent, registerAgent } from "../lib/user-api";
 
 export interface ExecutorOutput {
   id: string; command: string; stdout: string; stderr: string;
   exit_code: number; created_at: number;
+}
+
+export interface ExecutorInfo {
+  name: string; kind: string; capabilities: string[]; available: boolean;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -55,7 +59,7 @@ export function useProteus(agentId?: string) {
   const [runTimeline, setRunTimeline] = useState<TimelineSpan[]>([]);
   const [memoryContent, setMemoryContent] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [executors, setExecutors] = useState<Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>>([]);
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   // Pinned (exposed) ports for the sandbox executor — polled hook-level so the
   // Output/Devices port badge updates regardless of the active surface.
@@ -138,6 +142,13 @@ export function useProteus(agentId?: string) {
 
   const isConnected = connectionStatus === "connected";
 
+  // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
+  // read rpc<T>("getFoo", []) cast-free. Memoized on `agent` so it's a stable
+  // identity (surface effects keyed on [rpc] don't refetch each render).
+  const rpc = useMemo<Rpc>(() =>
+    <T = unknown>(method: string, args: unknown[] = []) => agent.call(method, args) as Promise<T>,
+  [agent]);
+
   // Fetch all tab data on connect
   const fetched = useRef(false);
   useEffect(() => {
@@ -180,9 +191,7 @@ export function useProteus(agentId?: string) {
             setMctsTree(buildTree(msg.nodes));
           }
           // Pull the freshest timeline so the new MCTS spans land promptly.
-          agent.call("getRunTimeline", [{ limit: 250 }])
-            .then(spans => setRunTimeline(spans as TimelineSpan[]))
-            .catch(() => {});
+          rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
         }
       } catch { /* not JSON or not our message */ }
     };
@@ -191,47 +200,16 @@ export function useProteus(agentId?: string) {
   }, [agent]);
 
   function refreshLiveData() {
-    agent.call("getRunTimeline", [{ limit: 250 }])
-      .then(spans => setRunTimeline(spans as TimelineSpan[]))
-      .catch(() => {});
-    agent.call("getMctsTree", [])
-      .then((nodes) => {
-        const list = nodes as Array<{
-          id: string; parent_id: string | null; depth: number;
-          visits: number; value: number; status: string; action: string;
-          task?: string; observation?: string; created_at?: number;
-        }>;
-        if (list.length > 0) setMctsTree(buildTree(list));
-      })
-      .catch(() => {});
-    agent.call("getMemoryContent", [])
-      .then(c => { setMemoryContent(c as string ?? ""); })
-      .catch(() => {});
-    // Refresh tools so newly-crafted tools (via workspace.createTool) appear
-    // in the Tools pane without reconnecting. Uses the same mapping as loadAllData.
-    agent.call("getToolDescriptions", [])
-      .then((result) => {
-        const r = result as {
-          builtIn: Array<{ name: string; description: string }>;
-          crafted: Array<{ name: string; description: string; qualityScore?: number; usageCount?: number }>;
-        };
-        const builtInTools: ToolInfo[] = r.builtIn.map(t => ({
-          name: t.name, description: t.description, scope: "local" as const,
-          qualityScore: 1, usageCount: 0, lastUsed: "",
-        }));
-        const craftedTools: ToolInfo[] = r.crafted.map(t => ({
-          name: t.name, description: t.description, scope: "global" as const,
-          qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0, lastUsed: "",
-        }));
-        setTools([...builtInTools, ...craftedTools]);
-      })
-      .catch(() => {});
+    rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
+    rpc<MctsRow[]>("getMctsTree", []).then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); }).catch(() => {});
+    rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
+    // Refresh tools so newly-crafted tools appear without reconnecting.
+    rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
   }
 
   function loadAllData() {
-    agent.call("getAgentStatus", [])
-      .then((s) => {
-        const status = s as AgentStatus;
+    rpc<AgentStatus>("getAgentStatus", [])
+      .then((status) => {
         setAgentStatus(status);
         if (agentId) {
           // Fire-and-forget: record in UserDO (new agent → register; existing → touch).
@@ -242,30 +220,14 @@ export function useProteus(agentId?: string) {
       })
       .catch(() => {});
 
-    // Tools — use real descriptions
-    agent.call("getToolDescriptions", [])
-      .then((result) => {
-        const r = result as { builtIn: Array<{ name: string; description: string }>; crafted: Array<{ name: string; description: string; isLearned?: boolean; qualityScore?: number; usageCount?: number }> };
-        const builtInTools: ToolInfo[] = r.builtIn.map(t => ({
-          name: t.name, description: t.description, scope: "local" as const,
-          qualityScore: 1, usageCount: 0, lastUsed: "",
-        }));
-        const craftedTools: ToolInfo[] = r.crafted.map(t => ({
-          name: t.name, description: t.description, scope: "global" as const,
-          qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0, lastUsed: "",
-        }));
-        setTools([...builtInTools, ...craftedTools]);
-      })
+    // Tools — use real descriptions.
+    rpc<ToolDescResult>("getToolDescriptions", [])
+      .then((r) => setTools(mapToolDescriptions(r)))
       .catch(() => {
-        // Fallback to getToolList — note that crafted tools from getToolList come
-        // with scope: 'local' from CraftStore, but the Tools pane uses scope
-        // === 'global' to render the "Learned" badge, so we re-tag them here.
-        agent.call("getToolList", [])
-          .then((result) => {
-            const r = result as {
-              builtIn: string[];
-              crafted: Array<{ name: string; description: string; scope: string; qualityScore: number; usageCount: number }>;
-            };
+        // Fallback to getToolList (builtIn is string[]; crafted re-tagged global
+        // so the Tools pane shows the "Learned" badge).
+        rpc<{ builtIn: string[]; crafted: Array<{ name: string; description: string; qualityScore: number; usageCount: number }> }>("getToolList", [])
+          .then((r) => {
             const builtInTools: ToolInfo[] = r.builtIn.map(name => ({
               name, description: "Built-in tool", scope: "local" as const,
               qualityScore: 1, usageCount: 0, lastUsed: "",
@@ -279,49 +241,23 @@ export function useProteus(agentId?: string) {
           .catch(() => {});
       });
 
-    // Memory — load the actual MEMORY.md content
-    agent.call("getMemoryContent", [])
-      .then((content) => {
-        const text = content as string;
-        setMemoryContent(text);
-        if (text) {
-          // Parse into MemoryEntry[] for the UI
-          const entries = parseMemoryContent(text);
-          setMemory(entries);
-        }
-      })
+    // Memory — load the actual MEMORY.md content.
+    rpc<string>("getMemoryContent", [])
+      .then((text) => { setMemoryContent(text); if (text) setMemory(parseMemoryContent(text)); })
       .catch(() => {});
 
-    // MCTS tree
-    agent.call("getMctsTree", [])
-      .then((nodes) => {
-        const list = nodes as Array<{
-          id: string; parent_id: string | null; depth: number;
-          visits: number; value: number; status: string; action: string;
-        }>;
-        if (list.length > 0) setMctsTree(buildTree(list));
-      })
+    rpc<MctsRow[]>("getMctsTree", [])
+      .then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); })
       .catch(() => {});
 
-    // Unified run timeline spine.
-    agent.call("getRunTimeline", [{ limit: 250 }])
-      .then(spans => setRunTimeline(spans as TimelineSpan[]))
-      .catch(() => {});
+    rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
 
-    // Executors
-    agent.call("getExecutors", [])
+    rpc<ExecutorInfo[]>("getExecutors", [])
       .then((list) => {
-        setExecutors(list as Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>);
-        // Load output history for each executor
-        for (const exec of list as Array<{ name: string }>) {
-          agent.call("getExecutorOutput", [exec.name, 50])
-            .then((rows) => {
-              setExecutorOutputs(prev => {
-                const next = new Map(prev);
-                next.set(exec.name, (rows as Array<{ id: string; command: string; stdout: string; stderr: string; exit_code: number; created_at: number }>).reverse());
-                return next;
-              });
-            })
+        setExecutors(list);
+        for (const exec of list) {
+          rpc<ExecutorOutput[]>("getExecutorOutput", [exec.name, 50])
+            .then((rows) => setExecutorOutputs((prev) => new Map(prev).set(exec.name, rows.reverse())))
             .catch(() => {});
         }
       })
@@ -356,50 +292,41 @@ export function useProteus(agentId?: string) {
       if (memoryContent) setMemory(parseMemoryContent(memoryContent));
       return;
     }
-    agent.call("doSearchMemory", [q])
-      .then((results) => {
-        // Map MemorySearchResult (snippet, score) → MemoryEntry (content, updatedAt)
-        const mapped = ((results ?? []) as Array<{
-          path: string; startLine?: number; endLine?: number; snippet: string; score: number;
-        }>).map(r => ({
-          path: r.path,
-          content: r.snippet,
-          matchScore: r.score,
-          updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
-        }));
-        setMemory(mapped);
-      })
+    rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; score: number }>>("doSearchMemory", [q])
+      .then((results) => setMemory((results ?? []).map(r => ({
+        path: r.path,
+        content: r.snippet,
+        matchScore: r.score,
+        updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
+      }))))
       .catch(() => {});
-  }, [agent, memoryContent]);
+  }, [rpc, memoryContent]);
 
   const setModel = useCallback((modelId: string) => {
     // Optimistically reflect in the UI so the dropdown doesn't snap back
     // while the RPC is in flight.
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
-    agent.call("setModel", [modelId]).then((result) => {
+    rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]).then((r) => {
       // Server may have normalized the spec — sync the UI to authoritative value.
-      const r = result as { ok?: boolean; spec?: string };
       if (r?.spec) setAgentStatus(prev => prev ? { ...prev, model: r.spec! } : prev);
     }).catch((err) => {
       // Surface to the user, never swallow. Roll the UI back so the select
       // reflects the actually-stored value.
       console.error('[setModel] failed:', err);
       // Re-fetch the authoritative stored spec.
-      agent.call("getStoredModelSpec", []).then((r) => {
-        const stored = (r as { spec?: string | null }).spec ?? '';
-        setAgentStatus(prev => prev ? { ...prev, model: stored } : prev);
+      rpc<{ spec?: string | null }>("getStoredModelSpec", []).then((r) => {
+        setAgentStatus(prev => prev ? { ...prev, model: r.spec ?? '' } : prev);
       }).catch(() => {});
     });
-  }, [agent]);
+  }, [rpc]);
 
   // Single source of truth: the server-side broadcast. executeInExecutor ONLY
   // fires the RPC; the broadcast handler below renders the row. This prevents
   // the double-output bug where the optimistic append AND the broadcast both
   // fired for one invocation (race-ordering made dedup windows unreliable).
   const executeInExecutor = useCallback((executorId: string, command: string) => {
-    return agent.call("executeInExecutor", [executorId, command]).then(r =>
-      r as { stdout?: string; stderr?: string; exitCode?: number; error?: string });
-  }, [agent]);
+    return rpc<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>("executeInExecutor", [executorId, command]);
+  }, [rpc]);
 
   // Listen for executor-output broadcasts — emitted by the orchestrator on
   // every exec completion (user- or agent-triggered). Attach to the outer
@@ -439,9 +366,7 @@ export function useProteus(agentId?: string) {
     let cancelled = false;
     const poll = async () => {
       try {
-        const r = await agent.call("getExposedPorts", ["sandbox"]) as {
-          ports?: Array<{ port: number; url?: string; name?: string }>;
-        };
+        const r = await rpc<{ ports?: Array<{ port: number; url?: string; name?: string }> }>("getExposedPorts", ["sandbox"]);
         if (cancelled) return;
         setPinnedPorts((r.ports ?? [])
           .filter(p => typeof p.port === "number" && p.url)
@@ -481,10 +406,8 @@ export function useProteus(agentId?: string) {
      * 'agent name already exists', etc.).
      */
     forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
-      agent.call("forkAgent", [untilMessageId, opts ?? {}]) as Promise<{
-        id: string; name: string; url: string; forkPointMs: number;
-      }>,
-    rpc: agent.call.bind(agent),
+      rpc<{ id: string; name: string; url: string; forkPointMs: number }>("forkAgent", [untilMessageId, opts ?? {}]),
+    rpc,
     rawAgent: agent,
   };
 }
@@ -508,11 +431,27 @@ export function useHomeConnection() {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function buildTree(nodes: Array<{
+export interface MctsRow {
   id: string; parent_id: string | null; depth: number;
   visits: number; value: number; status: string; action: string;
   task?: string; observation?: string; created_at?: number;
-}>): MCTSNode {
+}
+
+interface ToolDescResult {
+  builtIn: Array<{ name: string; description: string }>;
+  crafted: Array<{ name: string; description: string; qualityScore?: number; usageCount?: number }>;
+}
+
+/** Map a getToolDescriptions result into the UI's ToolInfo[] — single source
+ *  for the mapping used by both the initial load and live refresh. */
+function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
+  return [
+    ...r.builtIn.map((t) => ({ name: t.name, description: t.description, scope: "local" as const, qualityScore: 1, usageCount: 0, lastUsed: "" })),
+    ...r.crafted.map((t) => ({ name: t.name, description: t.description, scope: "global" as const, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0, lastUsed: "" })),
+  ];
+}
+
+function buildTree(nodes: MctsRow[]): MCTSNode {
   const map = new Map<string, MCTSNode>();
   for (const n of nodes) {
     map.set(n.id, {

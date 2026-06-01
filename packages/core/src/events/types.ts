@@ -37,7 +37,13 @@ export interface RunEventBase {
 }
 
 export type RunEvent =
-  | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string })
+  | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string;
+      /** What kicked off this run: 'chat' | 'webhook' | 'timer' | 'peer' | … */
+      caused_by?: string;
+      /** Ingress descriptor kind for event-triggered runs (webhook_hmac, …). */
+      ingress_kind?: string;
+      /** The trigger that fired this run, when event-driven. */
+      trigger_id?: string })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
   | (RunEventBase & { type: 'text_delta'; text: string })
   | (RunEventBase & { type: 'tool_call_start'; name: string; args: Record<string, unknown>; toolCallId: string })

@@ -8,14 +8,14 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon } from "@phosphor-icons/react";
 import { MCTSTree } from "@/components/mcts-tree";
-import type { MCTSNode } from "@/lib/protocol";
+import type { MCTSNode, Rpc } from "@/lib/protocol";
 import { EmptyState, EMPTY_HINTS } from "./shared";
 
 type SubView = "mcts" | "branches" | "gepa";
 
 export interface ReasoningSurfaceProps {
   mctsTree: MCTSNode | null;
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
 }
 
 export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
@@ -111,9 +111,9 @@ interface HeadRun {
   merge: { narrative: string; headCount: number; totalTokens: number } | null;
 }
 
-function BranchesView({ rpc }: { rpc: (m: string, a?: unknown[]) => Promise<unknown> }) {
+function BranchesView({ rpc }: { rpc: Rpc }) {
   const [runs, setRuns] = useState<HeadRun[] | null>(null);
-  useEffect(() => { rpc("getHeadRuns", [20]).then((r) => setRuns(r as HeadRun[])).catch(() => setRuns([])); }, [rpc]);
+  useEffect(() => { rpc<HeadRun[]>("getHeadRuns", [20]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
   if (runs === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   if (runs.length === 0) return <EmptyState icon={<GitForkIcon size={28} />} title="No branching-head runs yet" hint="When the agent runs think(strategy:'heads'), the parallel reasoning branches and their merge appear here." />;
   return (
@@ -155,14 +155,14 @@ interface GepaRunRow { runId: string; target: string; startedAt: number; status:
 interface GepaCandidate { id: string; parentId: string | null; aggregateScore: number; scores: Record<string, number>; createdAt: number }
 interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
 
-function GepaView({ rpc }: { rpc: (m: string, a?: unknown[]) => Promise<unknown> }) {
+function GepaView({ rpc }: { rpc: Rpc }) {
   const [runs, setRuns] = useState<GepaRunRow[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [detail, setDetail] = useState<GepaRunDetail | null>(null);
-  useEffect(() => { rpc("getGepaRuns", [20]).then((r) => setRuns(r as GepaRunRow[])).catch(() => setRuns([])); }, [rpc]);
+  useEffect(() => { rpc<GepaRunRow[]>("getGepaRuns", [20]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
   const open = useCallback((runId: string) => {
     setSel(runId); setDetail(null);
-    rpc("getGepaRun", [runId]).then((d) => setDetail(d as GepaRunDetail)).catch(() => {});
+    rpc<GepaRunDetail>("getGepaRun", [runId]).then(setDetail).catch(() => {});
   }, [rpc]);
 
   if (runs === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
