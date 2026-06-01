@@ -78,7 +78,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onSearchMemory={props.onSearchMemory} rpc={props.rpc}
             />
           )}
-          {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} />}
+          {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} rpc={props.rpc} />}
           {surface === "Devices" && (
             <div className="h-full -m-5">
               <ExecutorsPanel
