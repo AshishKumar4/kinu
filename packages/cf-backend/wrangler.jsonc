@@ -119,7 +119,63 @@
   // `backups/` prefix to GC expired archives.
   "r2_buckets": [
     { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
-  ]
+  ],
+  // ── Staging environment (headless testing) ──────────────────────
+  // A second deployment on *.workers.dev for testing think/tools directly
+  // without Cloudflare Access in the way. Differences from prod: a distinct
+  // worker name (`proteus-staging`) — which gives it ISOLATED Durable Object
+  // namespaces, so staging never touches prod data — no custom-domain route,
+  // and `DEV_USER_EMAIL` set with NO `CF_ACCESS_*` vars, so authenticateRequest()
+  // (auth/access.ts) synthesizes a fixed dev identity and the worker is
+  // reachable headlessly. Fully specified because wrangler does not inherit
+  // bindings/vars into named environments. Deploy: `wrangler deploy --env staging`.
+  "env": {
+    "staging": {
+      "name": "proteus-staging",
+      "workers_dev": true,
+      "routes": [],
+      "main": "src/server.ts",
+      "compatibility_date": "2025-12-01",
+      "compatibility_flags": ["nodejs_compat"],
+      "worker_loaders": [{ "binding": "LOADER" }],
+      "assets": {
+        "directory": "dist/client",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/*", "!/assets/*"]
+      },
+      "durable_objects": {
+        "bindings": [
+          { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
+          { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
+          { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "ProteusSandbox", "name": "Sandbox" }
+        ]
+      },
+      "containers": [
+        {
+          "class_name": "ProteusSandbox",
+          "image": "docker.io/cloudflare/sandbox:0.11.0",
+          "max_instances": 5,
+          "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+        }
+      ],
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
+        { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
+        { "tag": "v3", "new_sqlite_classes": ["UserDO"] }
+      ],
+      "ai": { "binding": "AI" },
+      "r2_buckets": [
+        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+      ],
+      "vars": {
+        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+        "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
+        "DEV_USER_EMAIL": "staging-tester@proteus.dev"
+      }
+    }
+  }
   // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
   //
   // First create the index:
