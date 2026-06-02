@@ -284,6 +284,12 @@ export {
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
 } from './heads/index.js';
 
+// Background-job system — auto-background >30s tool calls + wake-on-completion.
+export {
+  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle,
+  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
+} from './jobs/index.js';
+
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
 // instructions + a tool-surface restriction (allowed_tools). Distinct from

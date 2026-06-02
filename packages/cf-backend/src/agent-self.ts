@@ -25,6 +25,8 @@ export interface AgentSelfHost {
     cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown>;
   }): { id: string; kind: string; nextFireAt: number | null };
   cancelTrigger(id: string): Promise<unknown> | unknown;
+  jobResult(jobId: string): Promise<unknown>;
+  listBackgroundJobs(limit?: number): Promise<unknown>;
 }
 
 const TYPES = `export declare const agent: {
@@ -41,6 +43,12 @@ const TYPES = `export declare const agent: {
     Promise<{ id: string; kind: string; nextFireAt: number | null }>;
   /** Cancel a previously-scheduled trigger by id. */
   cancelSchedule(id: string): Promise<{ ok: boolean }>;
+  /** Read a background job's status + result. When a long tool call is
+   *  auto-backgrounded you get a { jobId }; you are woken on completion — call
+   *  this to fetch the result, then synthesize/continue. */
+  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed'; result: string | null; error: string | null } | null>;
+  /** List your recent background jobs (newest first). */
+  backgroundJobs(limit?: number): Promise<unknown>;
 };
 `;
 
@@ -99,6 +107,23 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           if (typeof id !== 'string' || !id) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
           try { return await host.cancelTrigger(id); }
           catch (err) { return { error: `agent.cancelSchedule: ${(err as Error).message}` }; }
+        },
+      },
+      jobResult: {
+        description: 'Read a background job (status + result). Long tool calls auto-background past 30s and return a { jobId }; you are woken on completion — call this to fetch the result.',
+        execute: async (...args: unknown[]) => {
+          const id = args[0];
+          if (typeof id !== 'string' || !id) return { error: 'agent.jobResult: jobId must be a non-empty string' };
+          try { return await host.jobResult(id); }
+          catch (err) { return { error: `agent.jobResult: ${(err as Error).message}` }; }
+        },
+      },
+      backgroundJobs: {
+        description: 'List your recent background jobs (newest first) with their status.',
+        execute: async (...args: unknown[]) => {
+          const limit = typeof args[0] === 'number' ? args[0] : undefined;
+          try { return await host.listBackgroundJobs(limit); }
+          catch (err) { return { error: `agent.backgroundJobs: ${(err as Error).message}` }; }
         },
       },
     },

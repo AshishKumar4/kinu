@@ -94,6 +94,8 @@ import {
   // Unified strategy dispatch
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
+  // Background-job system (#173 — auto-background >30s tool calls)
+  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, type BackgroundJob,
   // EventsHub primitives (spec §1)
   EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore, buildDrainBatch,
   initEventsHubTables,
@@ -405,6 +407,13 @@ export class OrchestratorAgent extends Think<Env> {
   private get facts(): FactsStore {
     if (!this._factsStore) this._factsStore = createFactsStore(this.boundSql);
     return this._factsStore;
+  }
+
+  // Background-job registry — work auto-detached past the 30s threshold (#173).
+  private _jobs: BackgroundJobStore | null = null;
+  private get jobs(): BackgroundJobStore {
+    if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
+    return this._jobs;
   }
 
   // Typed accessors over the `agent_config` key/value table — replaces
@@ -836,6 +845,11 @@ export class OrchestratorAgent extends Think<Env> {
       // whole stable tool surface (tools precede system+messages in Anthropic's
       // cache hierarchy). Namespaced → inert for non-Anthropic providers.
       markLastToolForAnthropicCache(tools);
+
+      // Auto-background (#173): think / execute_tools / run that exceed 30s
+      // detach to a durable fiber and return a "continuing in background" handle,
+      // then wake the agent on completion. Transparent for fast (<30s) calls.
+      this.applyBackgroundThreshold(tools);
 
       this._cachedTools = tools;
       this._cachedToolsKey = cacheKey;
@@ -1604,6 +1618,87 @@ export class OrchestratorAgent extends Think<Env> {
     try { this.broadcast(JSON.stringify({ type: 'agent_renamed', displayName })); } catch { /* nop */ }
   }
 
+  // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
+
+  /** Threshold deps for `withBackgroundThreshold`: mint a job row, then detach
+   *  the still-running promise into a durable fiber that settles + wakes. */
+  private backgroundDeps(kind: string): import('@proteus/core').ThresholdDeps {
+    return {
+      createJob: (k) => {
+        const id = `bgjob-${nanoid()}`;
+        this.jobs.create({ id, kind: k, now: Date.now() });
+        this.logActivity('bg_job_started', `${k} → ${id}`);
+        return id;
+      },
+      detach: (jobId, promise) => this.detachBackgroundJob(jobId, kind, promise),
+    };
+  }
+
+  /** Keep a backgrounded tool's promise alive in a durable fiber (keepAlive held
+   *  for its lifetime; recovered via onFiberRecovered on eviction). On settle,
+   *  record the result and wake a synthesis turn so the agent acts on it. */
+  private detachBackgroundJob(jobId: string, kind: string, promise: Promise<unknown>): void {
+    void this.runFiber(`bg:${kind}`, async (ctx) => {
+      ctx.stash({ phase: 'running', jobId, kind });
+      try {
+        const result = await promise;
+        this.jobs.settle(jobId, JSON.stringify(result ?? null).slice(0, 16_000), Date.now());
+      } catch (err) {
+        this.jobs.fail(jobId, err instanceof Error ? err.message : String(err), Date.now());
+      }
+      ctx.stash({ phase: 'settled', jobId, kind });
+      await this.wakeForBackgroundJob(jobId);
+    });
+  }
+
+  /** Wake the agent with a synthesis turn carrying the settled job. Same
+   *  saveMessages mechanism the reactor uses; TurnQueue-serialized so it lands
+   *  after any live turn. Runs once per job (no self-wake loop). */
+  private async wakeForBackgroundJob(jobId: string): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    const text = job.status === 'completed'
+      ? `Background ${job.kind} job ${jobId} completed. Read the full result with ` +
+        `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded.`
+      : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
+        `Decide whether to retry or report the failure.`;
+    try {
+      await this.saveMessages([{ id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }] }]);
+    } catch (err) {
+      console.warn('[proteus] wakeForBackgroundJob failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Read a background job's result (the synthesis turn calls this). */
+  @callable()
+  async jobResult(jobId: string): Promise<BackgroundJob | null> {
+    try { return this.jobs.get(jobId); } catch { return null; }
+  }
+
+  /** List recent background jobs (newest first). */
+  @callable()
+  async listBackgroundJobs(limit: number = 20): Promise<BackgroundJob[]> {
+    try { return this.jobs.list(limit); } catch { return []; }
+  }
+
+  /** Tools whose work can be long enough to auto-detach to the background. */
+  private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
+
+  /** Wrap the long-running tools' execute in the 30s background threshold. */
+  private applyBackgroundThreshold(tools: ToolSet): void {
+    for (const key of Object.keys(tools)) {
+      if (!OrchestratorAgent.BACKGROUNDABLE_TOOLS.has(key)) continue;
+      const orig = tools[key];
+      const exec = orig.execute;
+      if (typeof exec !== 'function') continue;
+      const deps = this.backgroundDeps(key);
+      tools[key] = {
+        ...orig,
+        execute: (input, options) => withBackgroundThreshold(key, () => exec(input, options), deps),
+      };
+    }
+  }
+
   /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
    *  the user's chosen model so quality assessments stay consistent. */
   private getModelForReview(): import('ai').LanguageModel {
@@ -1709,6 +1804,9 @@ export class OrchestratorAgent extends Think<Env> {
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
     // cumulative change-set. Captured lazily / re-markable via resetWorkspaceBaseline.
     execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (path TEXT PRIMARY KEY, content TEXT)`);
+
+    // Background-job registry — work auto-detached past the 30s threshold.
+    initBackgroundJobsTable(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -2010,6 +2108,16 @@ export class OrchestratorAgent extends Think<Env> {
         ? JSON.stringify(ctx.snapshot).slice(0, 400)
         : String(ctx.snapshot ?? 'null');
       console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
+      // Background-job fiber (bg:*) interrupted by eviction: its in-flight work
+      // is lost. Fail the orphaned job (idempotent — no-op if it had settled
+      // before the crash) and wake the agent so it isn't left waiting forever.
+      if (ctx.name.startsWith('bg:') && ctx.snapshot && typeof ctx.snapshot === 'object') {
+        const jobId = (ctx.snapshot as { jobId?: unknown }).jobId;
+        if (typeof jobId === 'string' && jobId) {
+          this.jobs.fail(jobId, 'interrupted by Durable Object eviction before completion', Date.now());
+          await this.wakeForBackgroundJob(jobId);
+        }
+      }
       // Persist for the UI's evolution-events stream.
       this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
         VALUES (${nanoid()}, 'fiber_recovered',
