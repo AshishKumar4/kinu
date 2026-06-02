@@ -6,6 +6,7 @@ import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
+  WarningCircleIcon, ProhibitIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
@@ -157,6 +158,23 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   );
 }
 
+/** A background task returning into the conversation — rendered as a centered
+ *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
+function BackgroundEventCard({ kind, status }: { kind: string; status: string }) {
+  const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "text-emerald-400", verb: "completed" }
+    : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
+    : { Icon: WarningCircleIcon, tone: "text-red-400", verb: "failed" };
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+        <meta.Icon size={13} className={meta.tone} weight="fill" />
+        <span>Background <span className="font-medium p-text">{kind}</span> task {meta.verb}</span>
+        <ClockIcon size={11} className="p-text-3" />
+      </div>
+    </div>
+  );
+}
+
 function MessageView({
   message, isLast, isStreaming, onFork, onFeedback,
 }: {
@@ -174,6 +192,14 @@ function MessageView({
   // Fork button disabled on the mid-stream last assistant — that message
   // isn't durably persisted yet.
   const canFork = !isLive && !!onFork && !!message.id;
+
+  // System-injected background-job wake — render as a distinct event card, not
+  // a user bubble (the agent reads its text as a synthesis prompt; the operator
+  // sees a marker that work returned from the background).
+  const bgEvent = (message as { metadata?: { proteusEvent?: string; kind?: string; status?: string } }).metadata;
+  if (bgEvent?.proteusEvent === "background_job") {
+    return <BackgroundEventCard kind={bgEvent.kind ?? "task"} status={bgEvent.status ?? "completed"} />;
+  }
 
   if (isUser) {
     return (
@@ -659,6 +685,9 @@ export default function WorkspacePage() {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             agentName={agentId}
+            backgroundJobs={state.backgroundJobs}
+            runningTaskCount={state.runningTaskCount}
+            onRefreshTasks={state.refreshBackgroundJobs}
             rpc={state.rpc}
           />
         </Panel>

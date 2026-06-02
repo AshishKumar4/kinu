@@ -5,7 +5,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
-import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, Rpc } from "../lib/protocol";
+import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, Rpc } from "../lib/protocol";
 import { touchAgent, registerAgent } from "../lib/user-api";
 
 export interface ExecutorOutput {
@@ -77,6 +77,9 @@ export function useProteus(agentId?: string) {
   // Pinned (exposed) ports for the sandbox executor — polled hook-level so the
   // Output/Devices port badge updates regardless of the active surface.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
+  // Background tasks (auto-detached >30s tool calls) — single source for the
+  // Tasks surface + the Tasks-tab running badge (visible on any surface).
+  const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
 
   const agent = useAgent({
     agent: "orchestrator-agent",
@@ -222,12 +225,17 @@ export function useProteus(agentId?: string) {
     return () => agent.removeEventListener("message", handler as EventListener);
   }, [agent]);
 
+  const refreshBackgroundJobs = useCallback(() => {
+    rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
+  }, [rpc]);
+
   function refreshLiveData() {
     rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
     rpc<MctsRow[]>("getMctsTree", []).then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); }).catch(() => {});
     rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
     // Refresh tools so newly-crafted tools appear without reconnecting.
     rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
+    refreshBackgroundJobs();
   }
 
   // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
@@ -398,6 +406,10 @@ export function useProteus(agentId?: string) {
     executeInExecutor,
     /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
     pinnedPorts,
+    /** Background tasks + a live running count for the Tasks-tab badge. */
+    backgroundJobs,
+    runningTaskCount: backgroundJobs.filter((j) => j.status === "running").length,
+    refreshBackgroundJobs,
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',

@@ -85,7 +85,7 @@ export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
 export type TimelineKind =
 	| "llm-turn" | "tool-call" | "runtime-exec" | "mcts" | "scaffold" | "shadow-eval"
 	| "craft" | "reflection" | "head-split" | "head-merge" | "gepa" | "skills"
-	| "curriculum" | "trigger" | "event-ingress" | "error" | "abort" | "recovery" | "other";
+	| "curriculum" | "trigger" | "event-ingress" | "background" | "error" | "abort" | "recovery" | "other";
 
 export interface TimelineSpan {
 	ts: number;
@@ -96,11 +96,24 @@ export interface TimelineSpan {
 	elapsedMs?: number;
 	/** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
 	data?: unknown;
-	source: "run" | "evolution" | "mcts";
+	source: "run" | "evolution" | "mcts" | "background";
 	/** Id for driving the work surface (node id, run-event id, root id…). */
 	refId?: string;
 	/** Original backend event type, for finer UI affordances. */
 	rawType?: string;
+}
+
+/** A background task (auto-detached >30s tool call). Mirrors core BackgroundJob;
+ *  surfaced by listBackgroundJobs for the Tasks surface + chat event cards. */
+export interface BackgroundJob {
+	id: string;
+	kind: string;
+	label: string | null;
+	status: "running" | "completed" | "failed" | "cancelled";
+	result: string | null;
+	error: string | null;
+	createdAt: number;
+	settledAt: number | null;
 }
 
 export interface EvolutionEvent {

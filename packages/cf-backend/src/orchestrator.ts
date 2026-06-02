@@ -424,6 +424,10 @@ export class OrchestratorAgent extends Think<Env> {
     if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
     return this._jobs;
   }
+  // Live AbortControllers for in-flight background jobs — lets the operator
+  // hard-cancel a running job (aborts the underlying generateText/tool work).
+  // In-memory only; a DO eviction loses it, but onFiberRecovered fails the job.
+  private readonly _jobControllers = new Map<string, AbortController>();
 
   // Typed accessors over the `agent_config` key/value table — replaces
   // scattered raw SQL with a single deep module.
@@ -1639,13 +1643,15 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
 
-  /** Threshold deps for `withBackgroundThreshold`: mint a job row, then detach
-   *  the still-running promise into a durable fiber that settles + wakes. */
-  private backgroundDeps(kind: string): import('@proteus/core').ThresholdDeps {
+  /** Threshold deps for `withBackgroundThreshold`: mint a job row (carrying the
+   *  tool input for retry + registering the AbortController for hard-cancel),
+   *  then detach the still-running promise into a durable fiber. */
+  private backgroundDeps(kind: string, input: unknown, controller: AbortController): import('@proteus/core').ThresholdDeps {
     return {
       createJob: (k) => {
         const id = `bgjob-${nanoid()}`;
-        this.jobs.create({ id, kind: k, now: Date.now() });
+        this.jobs.create({ id, kind: k, input: serializeJobResult(input, 8_000), now: Date.now() });
+        this._jobControllers.set(id, controller);
         this.logActivity('bg_job_started', `${k} → ${id}`);
         return id;
       },
@@ -1665,6 +1671,10 @@ export class OrchestratorAgent extends Think<Env> {
       let outcome: { ok: true; result: unknown } | { ok: false; error: string };
       try { outcome = { ok: true, result: await promise }; }
       catch (err) { outcome = { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+      this._jobControllers.delete(jobId); // work is done — drop the cancel handle
+      // A cancelled job was already marked by cancelBackgroundJob; its promise
+      // rejects with the abort, which we must NOT relabel as a generic failure.
+      if (this.jobs.get(jobId)?.status === 'cancelled') { ctx.stash({ phase: 'settled', jobId, kind }); return; }
       if (outcome.ok) this.jobs.settle(jobId, serializeJobResult(outcome.result), Date.now());
       else this.jobs.fail(jobId, outcome.error, Date.now());
       ctx.stash({ phase: 'settled', jobId, kind });
@@ -1684,7 +1694,12 @@ export class OrchestratorAgent extends Think<Env> {
       : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
         `Decide whether to retry or report the failure.`;
     try {
-      const result = await this.saveMessages([{ id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }] }]);
+      // Mark the wake so the chat renders it as a background-event card, not a
+      // user bubble (the agent still reads the text as its synthesis prompt).
+      const result = await this.saveMessages([{
+        id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }],
+        metadata: { proteusEvent: 'background_job', jobId, kind: job.kind, status: job.status },
+      }]);
       // A skipped wake means a newer turn generation preempted the synthesis
       // turn before it ran — the agent never saw this job. Leave a breadcrumb so
       // the settled result isn't silently lost (it stays readable via jobResult).
@@ -1708,6 +1723,58 @@ export class OrchestratorAgent extends Think<Env> {
     try { return this.jobs.list(limit); } catch { return []; }
   }
 
+  /** Hard-cancel a running background job: abort the underlying work (its merged
+   *  AbortSignal) and mark it cancelled. The detach fiber sees 'cancelled' and
+   *  won't relabel the abort rejection or wake the agent. */
+  @callable()
+  async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== 'running') return { ok: false };
+    this.jobs.cancel(jobId, Date.now());
+    const controller = this._jobControllers.get(jobId);
+    if (controller) { try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ } }
+    this._jobControllers.delete(jobId);
+    this.logActivity('bg_job_cancelled', jobId);
+    return { ok: true };
+  }
+
+  /** Re-run a settled job's tool with its original input as a fresh background
+   *  job. Detaches immediately (the work already proved slow). */
+  @callable()
+  async retryBackgroundJob(jobId: string): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: 'job not found' };
+    if (job.status === 'running') return { ok: false, error: 'job still running' };
+    const inputJson = this.jobs.getInput(jobId);
+    if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
+    const tool = this.getRawTools()[job.kind];
+    if (!tool || typeof tool.execute !== 'function') return { ok: false, error: `tool "${job.kind}" unavailable` };
+    let input: unknown;
+    try { input = JSON.parse(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
+    const controller = new AbortController();
+    const newId = `bgjob-${nanoid()}`;
+    this.jobs.create({ id: newId, kind: job.kind, input: inputJson, now: Date.now() });
+    this._jobControllers.set(newId, controller);
+    this.logActivity('bg_job_retry', `${jobId} → ${newId}`);
+    const promise = Promise.resolve(
+      (tool.execute as (i: unknown, o: unknown) => unknown)(input, { abortSignal: controller.signal, toolCallId: newId, messages: [] }),
+    );
+    this.detachBackgroundJob(newId, job.kind, promise);
+    return { ok: true, jobId: newId };
+  }
+
+  /** Remove a settled job from the registry (UI dismiss). */
+  @callable()
+  async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
+    try { this.jobs.dismiss(jobId); return { ok: true }; } catch { return { ok: false }; }
+  }
+
+  /** Clear all settled jobs (keep running ones). */
+  @callable()
+  async clearBackgroundJobs(): Promise<{ ok: boolean }> {
+    try { this.jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
+  }
+
   /** Tools whose work can be long enough to auto-detach to the background. */
   private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
 
@@ -1720,10 +1787,17 @@ export class OrchestratorAgent extends Think<Env> {
       const orig = wrapped[key];
       const exec = orig?.execute;
       if (!orig || typeof exec !== 'function') continue;
-      const deps = this.backgroundDeps(key);
       wrapped[key] = {
         ...orig,
-        execute: (input, options) => withBackgroundThreshold(key, () => exec(input, options), deps),
+        execute: (input, options) => {
+          // Per-call AbortController so a hard-cancel aborts the underlying work.
+          // Merge it with the turn's own signal so a turn abort still propagates.
+          const controller = new AbortController();
+          const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+          const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
+          const deps = this.backgroundDeps(key, input, controller);
+          return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps);
+        },
       };
     }
     return wrapped;
@@ -2108,6 +2182,19 @@ export class OrchestratorAgent extends Think<Env> {
           ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
           detail: `value ${Number(n.value).toFixed(2)} · ${n.status}`,
           source: 'mcts', refId: n.id,
+        });
+      }
+    } catch { /* table may not exist */ }
+    // 4) Background jobs — auto-detached >30s tool calls, as first-class spans
+    // (the run that "ended" because work moved to the background must say so).
+    try {
+      for (const j of this.jobs.list(limit)) {
+        const detail = j.status === 'running' ? 'running in background'
+          : j.error ? `${j.status}: ${j.error}` : j.status;
+        spans.push({
+          ts: j.createdAt, kind: 'background',
+          label: `Background ${j.kind}`, detail,
+          source: 'background', refId: j.id, rawType: j.status,
         });
       }
     } catch { /* table may not exist */ }

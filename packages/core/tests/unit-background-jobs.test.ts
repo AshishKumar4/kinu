@@ -38,6 +38,41 @@ describe('BackgroundJobStore', () => {
     expect(s.list().length).toBe(2);
     expect(s.list().filter((j) => j.status === 'running').map((j) => j.id)).toEqual(['b']);
   });
+
+  test('cancel marks a running job cancelled; no-op once settled', () => {
+    const s = newStore();
+    s.create({ id: 'c', kind: 'think', now: 1 });
+    s.cancel('c', 2);
+    expect(s.get('c')?.status).toBe('cancelled');
+    expect(s.get('c')?.error).toMatch(/cancelled/i);
+    // A settle after cancel must NOT revive it.
+    s.settle('c', 'late', 3);
+    expect(s.get('c')?.status).toBe('cancelled');
+  });
+
+  test('create stores input_json; getInput round-trips it for retry', () => {
+    const s = newStore();
+    s.create({ id: 'd', kind: 'execute_tools', input: '{"code":"1+1"}', now: 1 });
+    expect(s.getInput('d')).toBe('{"code":"1+1"}');
+    expect(s.getInput('missing')).toBeNull();
+  });
+
+  test('dismiss removes only settled jobs; clearSettled keeps running ones', () => {
+    const s = newStore();
+    s.create({ id: 'run1', kind: 'run', now: 1 });
+    s.create({ id: 'done1', kind: 'think', now: 2 });
+    s.settle('done1', 'ok', 3);
+    // Can't dismiss a running job.
+    s.dismiss('run1');
+    expect(s.get('run1')).not.toBeNull();
+    s.dismiss('done1');
+    expect(s.get('done1')).toBeNull();
+    // clearSettled drops settled, keeps running.
+    s.create({ id: 'done2', kind: 'think', now: 4 }); s.fail('done2', 'x', 5);
+    s.clearSettled();
+    expect(s.get('done2')).toBeNull();
+    expect(s.get('run1')?.status).toBe('running');
+  });
 });
 
 describe('serializeJobResult', () => {

@@ -5,23 +5,25 @@
  * surface is active; this owns the switcher chrome + dispatch.
  */
 import {
-  MonitorIcon, BrainIcon, TreeStructureIcon, DesktopTowerIcon,
+  MonitorIcon, BrainIcon, TreeStructureIcon, DesktopTowerIcon, ClockIcon,
 } from "@phosphor-icons/react";
 import ExecutorsPanel from "@/components/ExecutorsPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
-import type { ToolInfo, MemoryEntry, MCTSNode, Rpc } from "@/lib/protocol";
+import type { ToolInfo, MemoryEntry, MCTSNode, BackgroundJob, Rpc } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { BrainSurface } from "./BrainSurface";
 import { ReasoningSurface } from "./ReasoningSurface";
+import { TasksSurface } from "./TasksSurface";
 
-export const SURFACES = ["Output", "Brain", "Reasoning", "Devices"] as const;
+export const SURFACES = ["Output", "Brain", "Reasoning", "Tasks", "Devices"] as const;
 export type SurfaceKind = (typeof SURFACES)[number];
 
 const SURFACE_ICON: Record<SurfaceKind, React.ComponentType<{ size?: number }>> = {
   Output: MonitorIcon,
   Brain: BrainIcon,
   Reasoning: TreeStructureIcon,
+  Tasks: ClockIcon,
   Devices: DesktopTowerIcon,
 };
 
@@ -44,6 +46,10 @@ export interface WorkSurfaceProps {
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
   agentName?: string;
+  // Background tasks (Tasks surface) + live running count for its tab badge.
+  backgroundJobs: BackgroundJob[];
+  runningTaskCount?: number;
+  onRefreshTasks: () => void;
   rpc: Rpc;
 }
 
@@ -54,7 +60,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className="flex items-center border-b p-border px-2 gap-0.5 shrink-0">
         {SURFACES.map((s) => {
           const Icon = SURFACE_ICON[s];
-          const badge = (s === "Output" || s === "Devices") ? props.pinnedPorts.length : 0;
+          const badge = (s === "Output" || s === "Devices") ? props.pinnedPorts.length
+            : s === "Tasks" ? (props.runningTaskCount ?? 0) : 0;
+          const badgeTone = s === "Tasks" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300";
           return (
             <button key={s} onClick={() => onSurface(s)}
               className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px flex items-center gap-1.5 ${
@@ -62,7 +70,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               }`}>
               <Icon size={13} /><span>{s}</span>
               {badge > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">{badge}</span>
+                <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold ${badgeTone}`}>{badge}</span>
               )}
             </button>
           );
@@ -80,6 +88,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           )}
           {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} rpc={props.rpc} />}
+          {surface === "Tasks" && <TasksSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshTasks} rpc={props.rpc} />}
           {surface === "Devices" && (
             <div className="h-full -m-5">
               <ExecutorsPanel

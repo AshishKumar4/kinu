@@ -7,7 +7,9 @@
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 
-export type BackgroundJobStatus = 'running' | 'completed' | 'failed';
+export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+const SETTLED: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
 
 export interface BackgroundJob {
   id: string;
@@ -26,7 +28,7 @@ interface Row {
 }
 
 function toJob(r: Row): BackgroundJob {
-  const status: BackgroundJobStatus = r.status === 'completed' || r.status === 'failed' ? r.status : 'running';
+  const status: BackgroundJobStatus = SETTLED.has(r.status) ? r.status as BackgroundJobStatus : 'running';
   return {
     id: r.id, kind: r.kind, label: r.label, status,
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
@@ -52,18 +54,21 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
     status      TEXT NOT NULL DEFAULT 'running',
     result      TEXT,
     error       TEXT,
+    input_json  TEXT,
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
+  // Older DOs predate input_json (retry needs the original tool input).
+  try { execRaw(`ALTER TABLE background_jobs ADD COLUMN input_json TEXT`); } catch { /* exists */ }
 }
 
 export class BackgroundJobStore {
   constructor(private readonly sql: SqlExecutor) {}
 
-  create(opts: { id: string; kind: string; label?: string; now: number }): void {
-    this.sql`INSERT OR IGNORE INTO background_jobs (id, kind, label, status, created_at)
-      VALUES (${opts.id}, ${opts.kind}, ${opts.label ?? null}, 'running', ${opts.now})`;
+  create(opts: { id: string; kind: string; label?: string; input?: string; now: number }): void {
+    this.sql`INSERT OR IGNORE INTO background_jobs (id, kind, label, status, input_json, created_at)
+      VALUES (${opts.id}, ${opts.kind}, ${opts.label ?? null}, 'running', ${opts.input ?? null}, ${opts.now})`;
   }
 
   /** Mark a running job completed. No-op if already settled (idempotent wake). */
@@ -76,6 +81,29 @@ export class BackgroundJobStore {
   fail(id: string, error: string, now: number): void {
     this.sql`UPDATE background_jobs SET status='failed', error=${error}, settled_at=${now}
       WHERE id=${id} AND status='running'`;
+  }
+
+  /** Mark a running job cancelled (operator hard-cancel). No-op if settled. */
+  cancel(id: string, now: number): void {
+    this.sql`UPDATE background_jobs SET status='cancelled', error='cancelled by operator', settled_at=${now}
+      WHERE id=${id} AND status='running'`;
+  }
+
+  /** Remove a settled job from the registry. No-op if still running. */
+  dismiss(id: string): void {
+    this.sql`DELETE FROM background_jobs WHERE id=${id} AND status != 'running'`;
+  }
+
+  /** Remove all settled jobs. Running jobs are kept. Returns nothing. */
+  clearSettled(): void {
+    this.sql`DELETE FROM background_jobs WHERE status != 'running'`;
+  }
+
+  /** The serialized tool input a job was created with — re-run source for retry. */
+  getInput(id: string): string | null {
+    const rows = this.sql<{ input_json: string | null }>`
+      SELECT input_json FROM background_jobs WHERE id=${id} LIMIT 1`;
+    return rows[0]?.input_json ?? null;
   }
 
   get(id: string): BackgroundJob | null {

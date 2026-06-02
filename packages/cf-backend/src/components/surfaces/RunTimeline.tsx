@@ -35,6 +35,7 @@ const KIND_META: Record<TimelineKind, KindMeta> = {
   "curriculum": { icon: GraduationCapIcon, tone: "text-lime-400" },
   "trigger": { icon: LightningIcon, tone: "text-yellow-400" },
   "event-ingress": { icon: DatabaseIcon, tone: "p-text-3" },
+  "background": { icon: ClockIcon, tone: "text-orange-400" },
   "error": { icon: WarningCircleIcon, tone: "text-red-400" },
   "abort": { icon: ProhibitIcon, tone: "text-red-400" },
   "recovery": { icon: ArrowsClockwiseIcon, tone: "text-amber-400" },
