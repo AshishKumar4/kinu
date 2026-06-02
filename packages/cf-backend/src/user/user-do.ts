@@ -18,7 +18,7 @@ import {
   DurableObjectOAuthClientProvider,
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
-import { nanoid, type Credential } from '@proteus/core';
+import { nanoid, DeviceTunnel, type Credential } from '@proteus/core';
 import { initUserTables } from './schema.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
@@ -223,6 +223,113 @@ export class UserDO extends Agent<Env> {
     validateAgentName(name);
     const row = this.sqlx(`SELECT 1 AS x FROM user_agents WHERE name = ? AND archived_at IS NULL`, name)[0];
     return !!row;
+  }
+
+  // ── Connected devices (user-level laptop/PC tunnel hub) ──────────────
+  //
+  // The reverse-WS tunnel from a user's machine terminates HERE, not on a
+  // specific agent — so one `proteus connect` lets every one of the user's
+  // agents reach the device. Live sockets are held in-memory (an open WS keeps
+  // this DO warm); each is wrapped in a DeviceTunnel that does the JSON-RPC.
+  // Agents reach a device by forwarding to `deviceRpc()` over a DO-to-DO call.
+  private readonly _deviceTunnels = new Map<string, DeviceTunnel>();
+
+  /** Mint a device + connect token. The CLI/UI hands the token to the daemon. */
+  @callable()
+  async registerDevice(label?: string): Promise<{ deviceId: string; token: string }> {
+    const deviceId = `dev-${nanoid(10)}`;
+    const token = `pdt_${nanoid(32)}`;
+    this.sqlx(
+      `INSERT INTO user_devices (id, token, label, created_at) VALUES (?, ?, ?, ?)`,
+      deviceId, token, (label && label.trim()) || 'My device', Date.now(),
+    );
+    return { deviceId, token };
+  }
+
+  /** Verify a presented device token (called by pc-handler before WS upgrade). */
+  async verifyDeviceToken(token: string): Promise<{ ok: boolean; deviceId?: string }> {
+    const row = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE token = ? AND revoked_at IS NULL LIMIT 1`, token,
+    )[0];
+    return row ? { ok: true, deviceId: row.id } : { ok: false };
+  }
+
+  /** Accept the daemon's WebSocket and wire it to a DeviceTunnel. Called by
+   *  pc-handler via native DO RPC (WebSockets cross the DO boundary). NOT
+   *  @callable — a WebSocket isn't agents-RPC-serializable. */
+  async attachDeviceSocket(deviceId: string, ws: WebSocket): Promise<void> {
+    this.ensureInit();
+    (ws as unknown as { accept(): void }).accept();
+    this._deviceTunnels.get(deviceId)?.dispose();
+    const tunnel = new DeviceTunnel(ws as unknown as import('@proteus/core').TunnelSocket);
+    this._deviceTunnels.set(deviceId, tunnel);
+    const now = Date.now();
+    this.sqlx(`UPDATE user_devices SET connected_at = ?, last_seen_at = ? WHERE id = ?`, now, now, deviceId);
+    ws.addEventListener('message', (ev: MessageEvent) => {
+      const data = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer);
+      // The daemon's HELLO carries metadata; everything else is an RPC response.
+      try {
+        const m = JSON.parse(data) as { type?: string; os?: string; hostname?: string };
+        if (m.type === 'HELLO') {
+          this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
+            m.os ?? null, m.hostname ?? null, Date.now(), deviceId);
+          return;
+        }
+      } catch { /* not JSON / not HELLO — fall through to RPC */ }
+      tunnel.handleMessage(data);
+    });
+    ws.addEventListener('close', () => {
+      tunnel.dispose();
+      this._deviceTunnels.delete(deviceId);
+      try { this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId); } catch { /* nop */ }
+    });
+  }
+
+  private pickDevice(deviceId?: string): DeviceTunnel | null {
+    if (deviceId) { const t = this._deviceTunnels.get(deviceId); return t?.isConnected() ? t : null; }
+    for (const t of this._deviceTunnels.values()) if (t.isConnected()) return t;
+    return null;
+  }
+
+  /** Forward a JSON-RPC call to a connected device. The agent's laptop executor
+   *  calls this over a DO-to-DO RPC. Throws if no device is connected. */
+  async deviceRpc(method: string, params: unknown[], deviceId?: string): Promise<unknown> {
+    const tunnel = this.pickDevice(deviceId);
+    if (!tunnel) throw new Error('no device connected');
+    return tunnel.rpc(method, params);
+  }
+
+  /** Whether any (or a specific) device is live — drives the laptop executor's
+   *  availability cache + the UI badge. */
+  async isDeviceConnected(deviceId?: string): Promise<boolean> {
+    return this.pickDevice(deviceId) != null;
+  }
+
+  /** The user's devices for the Devices tab (live-connected flag from memory). */
+  @callable()
+  async listDevices(): Promise<Array<{
+    id: string; label: string; os: string | null; hostname: string | null;
+    connected: boolean; createdAt: number; lastSeenAt: number | null;
+  }>> {
+    return this.sqlx<{
+      id: string; label: string; os: string | null; hostname: string | null;
+      created_at: number; last_seen_at: number | null;
+    }>(`SELECT id, label, os, hostname, created_at, last_seen_at FROM user_devices
+        WHERE revoked_at IS NULL ORDER BY created_at DESC`)
+      .map((r) => ({
+        id: r.id, label: r.label, os: r.os, hostname: r.hostname,
+        connected: this._deviceTunnels.get(r.id)?.isConnected() ?? false,
+        createdAt: r.created_at, lastSeenAt: r.last_seen_at,
+      }));
+  }
+
+  /** Revoke a device: drop its live socket + mark the row revoked. */
+  @callable()
+  async revokeDevice(deviceId: string): Promise<{ ok: boolean }> {
+    this._deviceTunnels.get(deviceId)?.dispose();
+    this._deviceTunnels.delete(deviceId);
+    this.sqlx(`UPDATE user_devices SET revoked_at = ?, connected_at = NULL WHERE id = ?`, Date.now(), deviceId);
+    return { ok: true };
   }
 
   // ── Credentials ────────────────────────────────────────────────────

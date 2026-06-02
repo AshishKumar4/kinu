@@ -88,4 +88,25 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_name ON user_mcp_servers (name)`);
+
+  // User-level connected devices (laptops/PCs). One row per device the user has
+  // linked via `proteus connect` / the Devices tab. The reverse-WS tunnel + the
+  // live socket live on THIS UserDO (the user-level hub) so every one of the
+  // user's agents can request the device — not per-agent like the old scheme.
+  // `token` is the device's connect secret; the daemon presents it on
+  // /pc/connect. os/hostname arrive in the daemon HELLO.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_devices (
+      id            TEXT PRIMARY KEY,
+      token         TEXT NOT NULL,
+      label         TEXT NOT NULL,
+      os            TEXT,
+      hostname      TEXT,
+      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      connected_at  INTEGER,
+      last_seen_at  INTEGER,
+      revoked_at    INTEGER
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token ON user_devices (token)`);
 }

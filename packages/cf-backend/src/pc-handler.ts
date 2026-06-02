@@ -1,21 +1,16 @@
 /**
- * PC executor — reverse-WebSocket tunnel from the user's laptop.
+ * Device tunnel — reverse-WebSocket from the user's laptop, at the USER level.
  *
  * Routes:
  *   GET  /pc/install                — one-line curl install script
  *   GET  /pc/daemon.js              — the Node daemon binary (JS)
- *   WS   /pc/connect?agent=X&token=Y — daemon WS upgrade
+ *   WS   /pc/connect?user=U&token=T — daemon WS upgrade
  *
- * Tokens are issued via `@callable() getPcInstallUrl()` on the orchestrator
- * (forthcoming). For now, the install endpoint returns a script that uses a
- * per-agent token embedded at runtime via the agent's @callable RPC.
- *
- * Per-agent WS registry: when a daemon connects with ?agent=<name>&token=<t>,
- * we look up the orchestrator DO for that agent and call its `attachPcSocket`
- * @callable RPC. The orchestrator's SSH executor handles the socket lifecycle.
+ * A device links ONCE to the user (token minted by UserDO.registerDevice), and
+ * every one of that user's agents can then reach it. On connect we resolve the
+ * user's UserDO, verify the token, and hand it the socket (attachDeviceSocket) —
+ * the UserDO owns the tunnel + does the JSON-RPC the agents forward to.
  */
-
-import { readFileSync } from "node:fs";
 
 const DAEMON_JS_URL = "/pc/daemon.js";
 
@@ -36,23 +31,23 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
 }
 
 function installScriptResponse(origin: string): Response {
-  // Users run:  curl -fsSL <origin>/pc/install?agent=<name>&token=<t> | bash
-  // The script downloads daemon.js, writes ~/.proteus/pc-agent.js and a
-  // helper launcher. It reads agent+token from env vars so they don't leak
-  // into shell history via the URL.
+  // Users run:  PROTEUS_USER=<id> PROTEUS_TOKEN=<t> curl -fsSL <origin>/pc/install | bash
+  // The token is user-level (one link, all agents). The script downloads
+  // daemon.js, writes ~/.proteus/{config.json,pc-agent.js}, and starts it.
+  // user+token come from env vars so they don't leak into shell history.
   const script = `#!/usr/bin/env bash
 set -eu
-: "\${PROTEUS_AGENT:?set PROTEUS_AGENT=<agent-name> before running}"
-: "\${PROTEUS_TOKEN:?set PROTEUS_TOKEN=<one-shot-token> before running}"
+: "\${PROTEUS_USER:?set PROTEUS_USER=<user-id> before running}"
+: "\${PROTEUS_TOKEN:?set PROTEUS_TOKEN=<device-token> before running}"
 PROTEUS_ORIGIN="\${PROTEUS_ORIGIN:-${origin}}"
 
 DIR="\$HOME/.proteus"
 mkdir -p "\$DIR"
 chmod 700 "\$DIR"
-echo "Downloading Proteus PC daemon…"
+echo "Downloading Proteus device daemon…"
 curl -fsSL "\$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "\$DIR/pc-agent.js"
 cat > "\$DIR/config.json" <<EOF
-{"agent":"\$PROTEUS_AGENT","token":"\$PROTEUS_TOKEN","origin":"\$PROTEUS_ORIGIN"}
+{"user":"\$PROTEUS_USER","token":"\$PROTEUS_TOKEN","origin":"\$PROTEUS_ORIGIN"}
 EOF
 chmod 600 "\$DIR/config.json"
 
@@ -64,7 +59,7 @@ else
   echo "Node.js required. Install https://nodejs.org/ then re-run."
   exit 1
 fi
-echo "Proteus PC daemon installed. Check the Executors tab — Your PC should flip to connected within a few seconds."
+echo "Proteus device connected. Check the Devices tab — it should flip to connected within a few seconds."
 `;
   return new Response(script, {
     status: 200,
@@ -88,27 +83,28 @@ async function handlePcConnect(request: Request, env: Env): Promise<Response> {
   if (upgrade !== "websocket") return new Response("Expected WebSocket", { status: 426 });
 
   const url = new URL(request.url);
-  const agentName = url.searchParams.get("agent");
+  const userId = url.searchParams.get("user");
   const token = url.searchParams.get("token");
-  if (!agentName || !token) {
-    return new Response("Missing ?agent or ?token", { status: 400 });
+  if (!userId || !token) {
+    return new Response("Missing ?user or ?token", { status: 400 });
   }
 
-  const ns = env.OrchestratorAgent;
-  if (!ns) return new Response("No OrchestratorAgent binding", { status: 500 });
-  const id = ns.idFromName(agentName);
-  const stub = ns.get(id);
+  const ns = env.UserDO;
+  if (!ns) return new Response("No UserDO binding", { status: 500 });
+  const stub = ns.get(ns.idFromName(userId)) as unknown as {
+    verifyDeviceToken(token: string): Promise<{ ok: boolean; deviceId?: string }>;
+    attachDeviceSocket(deviceId: string, ws: WebSocket): Promise<void>;
+  };
 
-  // Verify token by RPC before upgrading.
-  const verified = await (stub as unknown as { verifyPcToken(token: string): Promise<{ ok: boolean }> })
-    .verifyPcToken(token);
-  if (!verified?.ok) return new Response("unauthorized", { status: 401 });
+  // Verify the device token against the user's hub before upgrading.
+  const verified = await stub.verifyDeviceToken(token);
+  if (!verified?.ok || !verified.deviceId) return new Response("unauthorized", { status: 401 });
 
-  // Accept the WebSocket, then hand the server side to the DO.
+  // Accept the WebSocket and hand the server side to the UserDO (it accepts +
+  // wires the JSON-RPC tunnel; the agents forward calls to it).
   const pair = new WebSocketPair();
   const [client, server] = [pair[0], pair[1]];
-  (server as unknown as { accept(): void }).accept();
-  await (stub as unknown as { attachPcSocket(ws: WebSocket): Promise<void> }).attachPcSocket(server);
+  await stub.attachDeviceSocket(verified.deviceId, server);
 
   return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
 }
@@ -126,9 +122,9 @@ const { spawn } = require('node:child_process');
 
 const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'config.json');
 const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-const AGENT = cfg.agent, TOKEN = cfg.token;
+const USER = cfg.user, TOKEN = cfg.token;
 const ORIGIN = (cfg.origin || 'https://proteus.ashishkumarsingh.com').replace(/^http/, 'ws');
-const WS_URL = \`\${ORIGIN}/pc/connect?agent=\${encodeURIComponent(AGENT)}&token=\${encodeURIComponent(TOKEN)}\`;
+const WS_URL = \`\${ORIGIN}/pc/connect?user=\${encodeURIComponent(USER)}&token=\${encodeURIComponent(TOKEN)}\`;
 
 let WS;
 try { WS = require('ws'); } catch { /* Node 22+ has global WebSocket */ }
@@ -178,7 +174,7 @@ function connect() {
   ws.addEventListener('open', () => {
     log('Connected');
     backoff = 1000;
-    ws.send(JSON.stringify({ type: 'HELLO', agent: AGENT, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
+    ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
   });
   ws.addEventListener('message', (ev) => {
     try { handle(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), ws); }

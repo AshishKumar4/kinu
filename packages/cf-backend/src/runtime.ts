@@ -22,7 +22,7 @@ import type {
 } from "@proteus/core";
 import {
   DefaultExecutionRouter, createInlineExecutor,
-  createSandboxExecutor, createSSHTunnelExecutor,
+  createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
   createNimbusExecutor,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
@@ -197,9 +197,32 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     }
   }
 
-  // Register SSH tunnel executor — always available as a target, but only
-  // "connected" when a user's tunnel WebSocket attaches via setSocket().
-  const sshExecutor = createSSHTunnelExecutor();
+  // Register the laptop executor. The device socket lives on the user's UserDO
+  // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
+  // one connected device serves all of the user's agents. `isAvailable()` is
+  // sync + hot, so we keep a cheap cached flag, seeded once from the hub and
+  // refreshed on each call's outcome.
+  let deviceConnected = false;
+  const deviceTransport: DeviceTransport = {
+    isConnected: () => deviceConnected,
+    rpc: async (method, params) => {
+      const stub = userDOStubFor(agent);
+      if (!stub) { deviceConnected = false; throw new Error('no device connected'); }
+      try {
+        const result = await stub.deviceRpc(method, params);
+        deviceConnected = true;
+        return result;
+      } catch (err) {
+        if (/no device connected/.test(err instanceof Error ? err.message : String(err))) deviceConnected = false;
+        throw err;
+      }
+    },
+  };
+  void (async () => {
+    const stub = userDOStubFor(agent);
+    if (stub) { try { deviceConnected = await stub.isDeviceConnected(); } catch { /* nop */ } }
+  })();
+  const sshExecutor = createSSHTunnelExecutor(deviceTransport);
   executionRouter.register(sshExecutor);
 
   // Vectorize-backed semantic memory. Only constructs when both

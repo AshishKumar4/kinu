@@ -25,12 +25,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   TerminalIcon, FolderOpenIcon, FolderIcon, FileIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon,
-  ArrowLeftIcon, CopyIcon, EyeIcon, WarningIcon, PlugIcon,
+  ArrowLeftIcon, CopyIcon, EyeIcon, WarningIcon, PlugIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import { Badge } from "@cloudflare/kumo";
 import { ExecutorTerminal } from "./ExecutorTerminal";
 import type { ExecutorOutput } from "../hooks/use-proteus";
 import type { DirEntry } from "@/lib/protocol";
+import { listDevices, registerDevice, revokeDevice, type UserDevice } from "@/lib/user-api";
 
 const EXECUTOR_LABELS: Record<string, string> = {
   sandbox:   "Sandbox",
@@ -455,7 +456,7 @@ function ConnectionHelp({ exec, rpc, agentName }: {
   agentName?: string;
 }) {
   if (exec.name === "laptop") {
-    return <YourPcConnect rpc={rpc} agentName={agentName} />;
+    return <YourPcConnect />;
   }
   if (exec.name === "nimbus") {
     return (
@@ -508,41 +509,66 @@ function ConnectionHelp({ exec, rpc, agentName }: {
   );
 }
 
-function YourPcConnect({ rpc, agentName }: {
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
-  agentName?: string;
-}) {
+function YourPcConnect() {
+  const [devices, setDevices] = useState<UserDevice[] | null>(null);
   const [install, setInstall] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const refresh = useCallback(() => { listDevices().then(setDevices).catch(() => setDevices([])); }, []);
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 5000); // running daemon flips connected within seconds
+    return () => clearInterval(t);
+  }, [refresh]);
+
   const issue = useCallback(async () => {
     setIssuing(true);
-    try {
-      const r = await rpc("issuePcToken", []) as { installCommand?: string };
-      if (r.installCommand) setInstall(r.installCommand);
-    } finally { setIssuing(false); }
-  }, [rpc]);
+    try { const r = await registerDevice(); setInstall(r.installCommand); refresh(); }
+    finally { setIssuing(false); }
+  }, [refresh]);
+
+  const revoke = useCallback(async (id: string) => {
+    await revokeDevice(id).catch(() => {});
+    refresh();
+  }, [refresh]);
 
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="max-w-2xl mx-auto space-y-4">
         <div className="flex items-center gap-2">
           <TerminalIcon size={20} className="p-accent" />
-          <h2 className="text-base font-semibold">Connect Your PC</h2>
+          <h2 className="text-base font-semibold">Connect a device</h2>
         </div>
         <p className="text-sm p-text-2">
-          Install the Proteus PC daemon to let this agent run commands on your local machine.
-          The daemon opens one outbound WebSocket — no inbound ports required.
+          Link a laptop or PC to <span className="font-medium">your account</span> — once connected,
+          every one of your agents can use it (with your consent). The daemon opens one outbound
+          WebSocket; no inbound ports, runs as your user, never root.
         </p>
+
+        {devices && devices.length > 0 && (
+          <div className="rounded-md border p-border overflow-hidden text-xs">
+            {devices.map((d) => (
+              <div key={d.id} className="flex items-center gap-2 px-3 py-2 border-b p-border last:border-0">
+                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "bg-emerald-500" : "bg-zinc-500"}`} />
+                <span className="font-medium p-text">{d.label}</span>
+                {d.hostname && <span className="p-text-3 font-mono">{d.hostname}{d.os ? ` · ${d.os}` : ""}</span>}
+                <span className="p-text-3 ml-auto">{d.connected ? "connected" : "offline"}</span>
+                <button onClick={() => revoke(d.id)} title="Revoke device" className="p-text-3 hover:text-red-400"><TrashIcon size={13} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {!install ? (
           <button
             onClick={issue}
             disabled={issuing}
             className="px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 disabled:opacity-50"
-          >{issuing ? "Generating…" : "Generate install command"}</button>
+          >{issuing ? "Generating…" : "Connect a device"}</button>
         ) : (
           <div className="space-y-2">
+            <p className="text-xs p-text-2">Paste this on the machine you want to connect:</p>
             <div className="rounded-md p-elevated border p-border p-3 font-mono text-[11px] p-text break-all select-all leading-relaxed">
               {install}
             </div>
@@ -551,11 +577,10 @@ function YourPcConnect({ rpc, agentName }: {
                 onClick={() => { navigator.clipboard.writeText(install).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
                 className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 p-text-2"
               ><CopyIcon size={11} />{copied ? "copied" : "Copy"}</button>
-              <button onClick={issue} className="p-text-3 hover:p-text">Regenerate (revokes previous)</button>
-              {agentName && <span className="ml-auto p-text-3">Agent: <span className="font-mono">{agentName}</span></span>}
+              <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
             </div>
             <p className="text-[11px] p-text-3 mt-1 flex items-center gap-1.5">
-              <WarningIcon size={11} /> Paste in your terminal. Daemon runs as your user, never root. Token is one-shot.
+              <WarningIcon size={11} /> This token links the device to your account. Prefer the CLI: <code className="font-mono">proteus connect</code>.
             </p>
           </div>
         )}

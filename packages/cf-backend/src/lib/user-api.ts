@@ -82,6 +82,29 @@ export const touchAgent     = (name: string) =>
 export const removeAgent    = (name: string) =>
   api<{ ok: boolean }>('DELETE', `/agents/${encodeURIComponent(name)}`);
 
+// ── Devices (user-level laptop/PC tunnel) ──────────────────────────
+export interface UserDevice {
+  id: string;
+  label: string;
+  os: string | null;
+  hostname: string | null;
+  connected: boolean;
+  createdAt: number;
+  lastSeenAt: number | null;
+}
+export interface RegisteredDevice {
+  deviceId: string;
+  token: string;
+  userId: string;
+  origin: string;
+  installCommand: string;
+}
+export const listDevices    = () => api<UserDevice[]>('GET', '/devices');
+export const registerDevice = (label?: string) =>
+  api<RegisteredDevice>('POST', '/devices', { label });
+export const revokeDevice   = (id: string) =>
+  api<{ ok: boolean }>('DELETE', `/devices/${encodeURIComponent(id)}`);
+
 // ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api<CredentialSummary[]>('GET', '/credentials');
 export const setCredential    = (key: string, value: unknown) =>

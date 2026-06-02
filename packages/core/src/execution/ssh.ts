@@ -19,85 +19,28 @@
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
 
 const NOT_CONNECTED =
-  'SSH tunnel not connected. Connect your machine via the Executors tab, ' +
-  'or run: npx proteus-tunnel --agent <agent-url>';
-
-const RPC_TIMEOUT_MS = 30_000;
+  'No device connected. Connect your machine once at the user level ' +
+  '(Devices / Executors tab → "Connect a device", or run the Proteus CLI: `proteus connect`).';
 
 /**
- * Minimal WebSocket interface — works with both platform WebSocket
- * and the standard browser/node WebSocket.
+ * Transport the laptop executor speaks through. The actual device socket lives
+ * on the user-level hub (UserDO); the agent forwards each JSON-RPC call there,
+ * so one connected device serves all of a user's agents. `isConnected()` is a
+ * cheap CACHED flag (the executor's isAvailable() is sync + hot) — the transport
+ * refreshes it from the hub out of band and on each call's outcome.
  */
-interface TunnelSocket {
-  send(data: string): void;
-  addEventListener(type: 'message', handler: (event: { data: unknown }) => void): void;
-  removeEventListener(type: 'message', handler: (event: { data: unknown }) => void): void;
-  readyState: number;
-}
-
-// WebSocket.OPEN = 1 across all implementations
-const WS_OPEN = 1;
-
-interface RpcRequest {
-  id: string;
-  method: string;
-  params: unknown[];
-}
-
-interface RpcResponse {
-  id: string;
-  result?: unknown;
-  error?: string;
+export interface DeviceTransport {
+  rpc(method: string, params: unknown[]): Promise<unknown>;
+  isConnected(): boolean;
 }
 
 /**
- * Create an SSHTunnelExecutor.
- *
- * Call setSocket() when a tunnel WebSocket connects from the user's machine.
- * Call clearSocket() when it disconnects.
+ * Create the laptop (`laptop.*`) executor over a device transport. The transport
+ * forwards to the user's device hub; this executor just shapes the tool surface.
  */
-export function createSSHTunnelExecutor(): ExecutorProvider & {
-  setSocket(ws: TunnelSocket): void;
-  clearSocket(): void;
-} {
-  let socket: TunnelSocket | null = null;
-  let rpcIdCounter = 0;
-
-  function isConnected(): boolean {
-    return socket != null && socket.readyState === WS_OPEN;
-  }
-
-  function rpc(method: string, params: unknown[]): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      if (!isConnected()) { reject(new Error(NOT_CONNECTED)); return; }
-
-      const id = `rpc-${++rpcIdCounter}`;
-      const request: RpcRequest = { id, method, params };
-
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error(`RPC timeout after ${RPC_TIMEOUT_MS}ms: ${method}`));
-      }, RPC_TIMEOUT_MS);
-
-      function handler(event: { data: unknown }) {
-        try {
-          const msg = JSON.parse(String(event.data)) as RpcResponse;
-          if (msg.id !== id) return;
-          cleanup();
-          if (msg.error) reject(new Error(msg.error));
-          else resolve(msg.result);
-        } catch { /* not our message */ }
-      }
-
-      function cleanup() {
-        clearTimeout(timeout);
-        socket?.removeEventListener('message', handler);
-      }
-
-      socket!.addEventListener('message', handler);
-      socket!.send(JSON.stringify(request));
-    });
-  }
+export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorProvider {
+  const isConnected = (): boolean => transport.isConnected();
+  const rpc = (method: string, params: unknown[]): Promise<unknown> => transport.rpc(method, params);
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
@@ -177,10 +120,7 @@ export function createSSHTunnelExecutor(): ExecutorProvider & {
     },
   };
 
-  const provider: ExecutorProvider & {
-    setSocket(ws: TunnelSocket): void;
-    clearSocket(): void;
-  } = {
+  const provider: ExecutorProvider = {
     name: 'laptop',
     kind: 'laptop',
     capabilities: new Set<ExecutorCapability>([
@@ -195,7 +135,7 @@ export function createSSHTunnelExecutor(): ExecutorProvider & {
       // Verify connectivity with a simple echo
       await rpc('exec', ['echo connected']);
     },
-    disconnect: async () => { socket = null; },
+    disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
     types: `declare namespace laptop {
   /** Execute a command on the user's local machine */
@@ -224,9 +164,6 @@ export function createSSHTunnelExecutor(): ExecutorProvider & {
     },
     async unexposePort() { /* nothing to do */ },
     async listExposedPorts() { return []; },
-
-    setSocket(ws: TunnelSocket) { socket = ws; },
-    clearSocket() { socket = null; },
   };
 
   return provider;

@@ -91,6 +91,25 @@ export async function handleUserRequest(
     catch (e) { return err(400, (e as Error).message); }
   }
 
+  // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
+  if (path === '/devices' && method === 'GET') {
+    return json(await stub.listDevices());
+  }
+  if (path === '/devices' && method === 'POST') {
+    const body = await safeJson<{ label?: string }>(request);
+    const { deviceId, token } = await stub.registerDevice(body?.label);
+    // One-liner the user pastes on their machine (token is user-level — links
+    // the device to every one of the user's agents at once).
+    const installCommand =
+      `PROTEUS_USER=${identity.userId} PROTEUS_TOKEN=${token} curl -fsSL ${url.origin}/pc/install | bash`;
+    return json({ deviceId, token, userId: identity.userId, origin: url.origin, installCommand }, { status: 201 });
+  }
+  const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
+  if (deviceMatch && method === 'DELETE') {
+    try { await stub.revokeDevice(decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
+    catch (e) { return err(400, (e as Error).message); }
+  }
+
   // ── Credentials ────────────────────────────────────────────────────
   if (path === '/credentials' && method === 'GET') {
     return json(await stub.listCredentials());

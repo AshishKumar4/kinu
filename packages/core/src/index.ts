@@ -157,7 +157,8 @@ export {
   createSandboxExecutor, type SandboxHandle,
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
-  createSSHTunnelExecutor,
+  createSSHTunnelExecutor, type DeviceTransport,
+  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED,
   // Legacy (shelved) — kept for type imports only.
   createNimbusExecutor, type NimbusExecutorOpts,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
