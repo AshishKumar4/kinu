@@ -30,6 +30,7 @@ import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
+import { nextCronFire } from "./lib/cron.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
 import { aiSchema } from "./ai-schema.js";
@@ -1742,23 +1743,32 @@ export class OrchestratorAgent extends Think<Env> {
         };
         const scheduled_fire_at = (trigger as typeof trigger & { next_fire_at?: number }).next_fire_at ?? now;
 
-        this.eventLog.publish({
-          descriptor: {
-            ingress: 'timer_alarm',
-            variant: 'timer',
-            payload: {
-              trigger_id: trigger.id,
-              scheduled_fire_at,
-              label: spec.label,
-              user_payload: spec.payload,
+        if (spec.label === 'auto_gepa') {
+          // Continuous self-optimization: run GEPA in the background instead of
+          // waking the agent. It proposes a single pending scaffold (no-op when
+          // one is already mid-shadow), which the per-turn auto-judge then
+          // accrues trials on and the regression-aware gate promotes/rolls back.
+          void this.runScaffoldGepaOptimization()
+            .catch((err) => console.warn('[proteus] auto-GEPA failed:', (err as Error).message));
+        } else {
+          this.eventLog.publish({
+            descriptor: {
+              ingress: 'timer_alarm',
+              variant: 'timer',
+              payload: {
+                trigger_id: trigger.id,
+                scheduled_fire_at,
+                label: spec.label,
+                user_payload: spec.payload,
+              },
+              trigger_creator_trust: trigger.creator_trust,
             },
-            trigger_creator_trust: trigger.creator_trust,
-          },
-          now,
-        });
+            now,
+          });
+        }
 
         if (trigger.kind === 'timer_cron') {
-          const next = spec.cron ? this.nextCronFire(spec.cron, now) : null;
+          const next = spec.cron ? nextCronFire(spec.cron, now) : null;
           this.triggerRegistry.markFired(trigger.id, now, next);
         } else {
           this.triggerRegistry.markFired(trigger.id, now, null);
@@ -1790,34 +1800,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  Simple implementation: supports `*\/n * * * *` (every n minutes) and
    *  `m h * * *` (daily at hh:mm UTC); enough for v1 schedules. Full cron
    *  parsing arrives with the Triggers UI. */
-  private nextCronFire(cron: string, from: number): number | null {
-    const parts = cron.trim().split(/\s+/);
-    if (parts.length !== 5) return null;
-    const [min, hour] = parts;
-    const d = new Date(from);
-    // every-n-minutes: `*\/n * * * *`
-    if (min.startsWith('*/')) {
-      const n = parseInt(min.slice(2), 10);
-      if (Number.isFinite(n) && n > 0) {
-        const cur = d.getUTCMinutes();
-        const next = (Math.floor(cur / n) + 1) * n;
-        const nd = new Date(d);
-        nd.setUTCMinutes(next, 0, 0);
-        if (next >= 60) { nd.setUTCMinutes(next - 60, 0, 0); nd.setUTCHours(nd.getUTCHours() + 1); }
-        return nd.getTime();
-      }
-    }
-    // daily at hh:mm
-    const m = parseInt(min, 10);
-    const h = parseInt(hour, 10);
-    if (Number.isFinite(m) && Number.isFinite(h)) {
-      const nd = new Date(d);
-      nd.setUTCHours(h, m, 0, 0);
-      if (nd.getTime() <= from) nd.setUTCDate(nd.getUTCDate() + 1);
-      return nd.getTime();
-    }
-    return null;
-  }
 
   // ── Callable RPC methods ───────────────────────────────────────
 
@@ -3609,7 +3591,7 @@ export class OrchestratorAgent extends Think<Env> {
   }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
     const now = Date.now();
     const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
-    const nextFireAt = opts.cron ? this.nextCronFire(opts.cron, now) : (opts.atMs ?? null);
+    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
     const id = this.triggerRegistry.register({
       kind,
       spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
@@ -3617,6 +3599,31 @@ export class OrchestratorAgent extends Think<Env> {
       next_fire_at: nextFireAt ?? undefined,
     }, now);
     return { id, kind, nextFireAt };
+  }
+
+  /**
+   * Enable/disable continuous self-optimization: a `timer_cron` trigger labelled
+   * `auto_gepa` that, when it fires, runs GEPA in the background (alarm()). Pass
+   * a cron to enable (replaces any existing one), null/'' to disable. Operator-
+   * gated — pairs with `auto_promote_scaffold` so an operator can run continuous
+   * GEPA while still hand-promoting, or both for a fully-autonomous cycle.
+   */
+  @callable()
+  async setAutoGepa(cron: string | null): Promise<{ ok: true; cron: string | null; triggerId?: string }> {
+    const prev = this.config.get('auto_gepa_trigger_id');
+    if (prev) { this.triggerRegistry.revoke(prev, Date.now()); this.config.delete('auto_gepa_trigger_id'); }
+    const c = cron?.trim();
+    if (!c) { this.config.delete('auto_gepa_cron'); return { ok: true, cron: null }; }
+    const { id } = this.createTimerTrigger({ cron: c, label: 'auto_gepa', trust: 'owner' });
+    this.config.set('auto_gepa_trigger_id', id);
+    this.config.set('auto_gepa_cron', c);
+    return { ok: true, cron: c, triggerId: id };
+  }
+
+  /** Current auto-GEPA schedule (cron) or null when disabled. */
+  @callable()
+  async getAutoGepa(): Promise<{ cron: string | null }> {
+    return { cron: this.config.get('auto_gepa_cron') };
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This
