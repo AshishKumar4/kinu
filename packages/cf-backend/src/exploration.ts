@@ -31,6 +31,7 @@ import { Agent, callable } from "agents";
 import { generateText, generateObject, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { agentAffinityKey } from "./providers/workers-ai.js";
 import { aiSchema } from "./ai-schema.js";
 import type { UserDO } from "./user/user-do.js";
 import {
@@ -100,6 +101,7 @@ export class ExplorationAgent extends Agent<Env> {
       env: this.env,
       userDOStub,
       appTitle: 'Proteus (exploration)',
+      workersAI: { sessionAffinity: agentAffinityKey(this.name) },
     });
     return this._providerRegistry;
   }

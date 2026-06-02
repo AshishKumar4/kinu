@@ -117,14 +117,12 @@ export function collectStepText(result: { text: string; steps: StepResult<ToolSe
  * DO env binding and we defer to @cloudflare/workers-ai-provider at call time
  * via a factory indirection, so this file has no hard dep on that package.
  */
+// NOTE: the live Workers AI path is `createWorkersAIProvider` (cf-backend),
+// which correctly types sessionAffinity as a string. The CLI is the only
+// `createChatModel` caller and uses `openai-compat`, so no `workers-ai` variant
+// is needed here (a removed `sessionAffinity?: boolean` was a latent footgun —
+// a boolean would serialize to the literal header value "true").
 export type ChatModelConfig =
-  | {
-      kind: 'workers-ai';
-      /** Workers AI binding from env.AI. */
-      factory: (modelId: string, opts?: { sessionAffinity?: boolean }) => LanguageModel;
-      modelId: string;
-      sessionAffinity?: boolean;
-    }
   | {
       kind: 'ai-gateway';
       baseURL: string;
@@ -141,9 +139,6 @@ export type ChatModelConfig =
     };
 
 export function createChatModel(config: ChatModelConfig): LanguageModel {
-  if (config.kind === 'workers-ai') {
-    return config.factory(config.modelId, { sessionAffinity: config.sessionAffinity });
-  }
   if (config.kind === 'ai-gateway') {
     return createOpenAICompatible({
       name: 'workers-ai',

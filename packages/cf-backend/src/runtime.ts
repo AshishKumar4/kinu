@@ -41,6 +41,7 @@ import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { agentAffinityKey } from "./providers/workers-ai.js";
 import type { UserDO } from "./user/user-do.js";
 
 /**
@@ -353,6 +354,7 @@ function createDualPathLLM(agent: AgentHost): LLM {
           env: agent.env,
           userDOStub: userDOStubFor(agent),
           appTitle: 'Proteus',
+          workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
         const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
         const result = await generateText({
@@ -438,6 +440,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
     env: agent.env,
     userDOStub: null,
     appTitle: 'Proteus (inline branch)',
+    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });
   const spec = reg.normalizeSpecSync(null);
   const getModel = () => reg.resolveModel(spec);

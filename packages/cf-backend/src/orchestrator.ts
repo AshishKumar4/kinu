@@ -111,6 +111,7 @@ import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { agentAffinityKey } from "./providers/workers-ai.js";
 import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
@@ -630,6 +631,7 @@ export class OrchestratorAgent extends Think<Env> {
       env: this.env,
       userDOStub,
       appTitle: 'Proteus',
+      workersAI: { sessionAffinity: agentAffinityKey(this.name) },
     });
     return this._providerRegistry;
   }

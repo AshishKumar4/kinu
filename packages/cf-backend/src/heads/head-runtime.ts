@@ -15,6 +15,7 @@ import { type MergeOutput, effortFor, createAgentConfigStore } from "@proteus/co
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
+import { agentAffinityKey } from "../providers/workers-ai.js";
 import { aiSchema } from "../ai-schema.js";
 import type { UserDO } from "../user/user-do.js";
 
@@ -32,6 +33,7 @@ export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string)
     env: orchestrator.env,
     userDOStub,
     appTitle: 'Proteus (heads)',
+    workersAI: { sessionAffinity: agentAffinityKey(orchestrator.name) },
   });
 
   const config = createAgentConfigStore(

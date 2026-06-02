@@ -22,6 +22,14 @@ export interface WorkersAIOptions {
   sessionAffinity?: string;
 }
 
+/** Stable per-agent Workers AI session-affinity key — pins an agent's turns to
+ *  the same replica so the (default-on) prefix cache actually hits across turns.
+ *  Same `proteus-<name>` scheme as the sandbox id; one source so the 5 registry
+ *  call sites don't drift. */
+export function agentAffinityKey(name: string): string {
+  return `proteus-${name}`;
+}
+
 export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvider {
   return {
     id: 'workers-ai',
