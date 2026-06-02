@@ -19,6 +19,12 @@ export interface ModelMenuEntry {
   capabilities?: string[];
 }
 
+// Gateway /compat models — always-on when the gateway is configured. MiniMax M3
+// is the default; it's a paid partner model needing gateway balance / BYOK.
+const GATEWAY_MODELS: ModelMenuEntry[] = [
+  { spec: 'ai-gateway/minimax/m3', label: 'MiniMax M3 (1M ctx)', provider: 'ai-gateway', capabilities: ['tools', 'streaming', 'reasoning'] },
+];
+
 const WORKERS_AI_MODELS: ModelMenuEntry[] = [
   { spec: 'workers-ai/@cf/moonshotai/kimi-k2.6',           label: 'Kimi K2.6',         provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
   { spec: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',     label: 'Llama 4 Scout',     provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
@@ -60,7 +66,9 @@ export async function listAvailableModels(env: Env, userId: string): Promise<Mod
   const keys = new Set(creds.map((c) => c.key));
 
   const out: ModelMenuEntry[] = [];
-  // Workers AI is always on (binding present at the worker level).
+  // Gateway models first (MiniMax M3 is the default), then the free Workers AI
+  // binding. The gateway is configured at the worker level (URL var + secret).
+  if (env.AI_GATEWAY_URL) out.push(...GATEWAY_MODELS);
   if (env.AI) out.push(...WORKERS_AI_MODELS);
   if (keys.has('codex.oauth'))      out.push(...CODEX_MODELS);
   if (keys.has('openai.bearer'))    out.push(...OPENAI_MODELS);

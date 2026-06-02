@@ -20,14 +20,14 @@ function fakeUserDOStub(creds: Record<string, Record<string, string>> = {}) {
 }
 
 describe('AgentProviderRegistry composition', () => {
-  test('registers all 7 providers in preference order', () => {
+  test('registers all 7 providers in preference order (ai-gateway first)', () => {
     const reg = createAgentProviderRegistry({
       env: { AI: fakeAiBinding() },
       userDOStub: fakeUserDOStub(),
     });
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
-      'workers-ai', 'ai-gateway', 'codex', 'openai',
+      'ai-gateway', 'workers-ai', 'codex', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
   });
@@ -44,18 +44,26 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.normalizeSpecSync('anthropic/claude-opus-4-7')).toBe('anthropic/claude-opus-4-7');
   });
 
-  test('normalizeSpecSync — null returns workers-ai default when env.AI present', () => {
-    const reg = createAgentProviderRegistry({ env: { AI: fakeAiBinding() }, userDOStub: fakeUserDOStub() });
-    expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
-    expect(reg.normalizeSpecSync('')).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+  test('normalizeSpecSync — null defaults to ai-gateway/minimax/m3 in prod (gateway + binding)', () => {
+    const reg = createAgentProviderRegistry({
+      env: { AI: fakeAiBinding(), AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
+      userDOStub: fakeUserDOStub(),
+    });
+    expect(reg.normalizeSpecSync(null)).toBe('ai-gateway/minimax/m3');
+    expect(reg.normalizeSpecSync('')).toBe('ai-gateway/minimax/m3');
   });
 
-  test('normalizeSpecSync — null falls back to ai-gateway when no env.AI but vars set', () => {
+  test('normalizeSpecSync — null falls back to workers-ai/kimi when gateway not configured', () => {
+    const reg = createAgentProviderRegistry({ env: { AI: fakeAiBinding() }, userDOStub: fakeUserDOStub() });
+    expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+  });
+
+  test('normalizeSpecSync — gateway-only env defaults to minimax/m3', () => {
     const reg = createAgentProviderRegistry({
       env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
       userDOStub: fakeUserDOStub(),
     });
-    expect(reg.normalizeSpecSync(null)).toBe('ai-gateway/workers-ai/@cf/moonshotai/kimi-k2.6');
+    expect(reg.normalizeSpecSync(null)).toBe('ai-gateway/minimax/m3');
   });
 
   test('normalizeSpecSync — throws when no sync-resolvable provider', () => {
