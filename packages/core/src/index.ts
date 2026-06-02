@@ -290,7 +290,9 @@ export {
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
+  BackgroundJobRunner,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
+  type BackgroundJobRunnerDeps,
 } from './jobs/index.js';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.

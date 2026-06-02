@@ -1,0 +1,151 @@
+// BackgroundJobRunner — the backend-agnostic >30s-detach lifecycle (re-arch P4).
+// Verifies the durable-fiber detach → settle/fail → programmatic-turn wake, the
+// operator hard-cancel, and the evict-mid-flight recovery — over a fake fiber +
+// fake BackendHost, with no DO.
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { BackgroundJobRunner } from '../src/jobs/runner.js';
+import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index.js';
+import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
+import type { Schedule } from '../src/types/primitives.js';
+import { makeSql, makeExecRaw } from './helpers.js';
+
+function newStore(): BackgroundJobStore {
+  const db = new Database(':memory:');
+  initBackgroundJobsTable(makeExecRaw(db));
+  return new BackgroundJobStore(makeSql(db));
+}
+
+/** A fiber that runs the body inline + captures each ctx.stash + exposes the
+ *  in-flight body promises so a test can await detach completion. */
+function fakeFiber() {
+  const stashes: unknown[] = [];
+  const runs: Promise<unknown>[] = [];
+  const fiber: Schedule['fiber'] = async (_name, fn) => {
+    const body = fn({ stash: (d: unknown) => { stashes.push(d); }, snapshot: null });
+    runs.push(body);
+    return body;
+  };
+  return { fiber, stashes, runs, settled: () => Promise.all(runs) };
+}
+
+function fakeHost() {
+  const enqueued: ProgrammaticTurn[] = [];
+  let status: 'queued' | 'skipped' = 'queued';
+  const host: BackendHost = {
+    broadcast: () => {},
+    enqueueTurn: async (i) => { enqueued.push(i); return { status }; },
+  };
+  return { host, enqueued, setStatus: (s: 'queued' | 'skipped') => { status = s; } };
+}
+
+function setup() {
+  const store = newStore();
+  const { fiber, stashes, runs, settled } = fakeFiber();
+  const { host, enqueued, setStatus } = fakeHost();
+  const logs: Array<{ e: string; d?: string }> = [];
+  const runner = new BackgroundJobRunner({ store, fiber, host, logActivity: (e, d) => logs.push({ e, d }) });
+  return { runner, store, stashes, runs, settled, host, enqueued, setStatus, logs };
+}
+
+describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
+  test('resolving work settles the job + wakes a synthesis turn (once)', async () => {
+    const { runner, store, enqueued, stashes, settled } = setup();
+    const id = runner.create('think', { q: 1 }, new AbortController());
+    expect(store.get(id)?.status).toBe('running');
+
+    runner.detach(id, 'think', Promise.resolve('the answer'));
+    await settled();
+
+    const job = store.get(id);
+    expect(job?.status).toBe('completed');
+    expect(job?.result).toBe('"the answer"');               // serializeJobResult
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0].text).toContain(id);
+    expect(enqueued[0].text).toContain('completed');
+    expect(enqueued[0].metadata?.proteusEvent).toBe('background_job');
+    expect(enqueued[0].metadata?.status).toBe('completed');
+    expect(stashes).toEqual([
+      { phase: 'running', jobId: id, kind: 'think' },
+      { phase: 'settled', jobId: id, kind: 'think' },
+    ]);
+  });
+
+  test('rejecting work fails the job + the wake says failed', async () => {
+    const { runner, store, enqueued, settled } = setup();
+    const id = runner.create('run', {}, new AbortController());
+    runner.detach(id, 'run', Promise.reject(new Error('boom')));
+    await settled();
+
+    expect(store.get(id)?.status).toBe('failed');
+    expect(store.get(id)?.error).toBe('boom');
+    expect(enqueued[0].text).toContain('failed');
+    expect(enqueued[0].text).toContain('boom');
+    expect(enqueued[0].metadata?.status).toBe('failed');
+  });
+
+  test('a skipped wake (turn preempted) leaves a breadcrumb but keeps the result', async () => {
+    const { runner, store, setStatus, logs, settled } = setup();
+    setStatus('skipped');
+    const id = runner.create('think', {}, new AbortController());
+    runner.detach(id, 'think', Promise.resolve('ok'));
+    await settled();
+
+    expect(store.get(id)?.status).toBe('completed');        // result retained
+    expect(logs.find((l) => l.e === 'bg_job_wake_skipped')).toBeTruthy();
+  });
+});
+
+describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
+  test('cancel aborts the work + marks cancelled; the fiber does not relabel or wake', async () => {
+    const { runner, store, enqueued, settled } = setup();
+    const controller = new AbortController();
+    const id = runner.create('run', {}, controller);
+    let reject!: (e: unknown) => void;
+    runner.detach(id, 'run', new Promise((_, r) => { reject = r; }));
+
+    expect(runner.cancel(id)).toBe(true);
+    expect(store.get(id)?.status).toBe('cancelled');
+    expect(controller.signal.aborted).toBe(true);
+    expect(runner.cancel(id)).toBe(false);                  // already settled → no-op
+
+    reject(new Error('aborted'));                            // the work unwinds on its abort
+    await settled();
+    expect(store.get(id)?.status).toBe('cancelled');        // NOT relabelled failed
+    expect(enqueued).toHaveLength(0);                        // no synthesis wake
+  });
+});
+
+describe('BackgroundJobRunner.recover — evict mid-flight', () => {
+  test('a job stashed running is failed + woken', async () => {
+    const { runner, store, enqueued } = setup();
+    const id = runner.create('think', {}, new AbortController());
+    await runner.recover({ jobId: id, phase: 'running' });
+
+    expect(store.get(id)?.status).toBe('failed');
+    expect(store.get(id)?.error).toContain('eviction');
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0].metadata?.status).toBe('failed');
+  });
+
+  test('a job already stashed settled is NOT re-failed or re-woken', async () => {
+    const { runner, store, enqueued } = setup();
+    const id = runner.create('think', {}, new AbortController());
+    store.settle(id, '"x"', 123);
+    await runner.recover({ jobId: id, phase: 'settled' });
+
+    expect(store.get(id)?.status).toBe('completed');
+    expect(enqueued).toHaveLength(0);
+  });
+});
+
+describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {
+  test('createJob mints a running job (carrying input) + logs bg_job_started', () => {
+    const { runner, store, logs } = setup();
+    const deps = runner.thresholdDeps('heads', { code: '1+1' }, new AbortController());
+    const id = deps.createJob('heads');
+    expect(store.get(id)?.status).toBe('running');
+    expect(store.getInput(id)).toBe('{"code":"1+1"}');
+    expect(logs).toContainEqual({ e: 'bg_job_started', d: `heads → ${id}` });
+  });
+});

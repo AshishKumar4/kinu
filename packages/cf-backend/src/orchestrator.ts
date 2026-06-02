@@ -66,7 +66,7 @@ import {
   nanoid,
   // Branching heads
   HeadController, HeadJournal, initHeadsTables,
-  type SerializedMessage, type SplitPhaseEvent, type HeadRunView,
+  type SerializedMessage, type SplitPhaseEvent, type HeadRunView, type HeadRuntime,
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
@@ -98,7 +98,7 @@ import {
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
   // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult, type BackgroundJob,
+  BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold, type BackgroundJob,
   // EventsHub primitives (spec §1)
   EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore,
   initEventsHubTables,
@@ -298,6 +298,7 @@ export class OrchestratorAgent extends Think<Env> {
   private _host: BackendHost | null = null;
   private get host(): BackendHost {
     if (!this._host) {
+      const agent = this;
       this._host = {
         broadcast: (event) => { try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ } },
         enqueueTurn: async ({ text, metadata }) => {
@@ -307,6 +308,10 @@ export class OrchestratorAgent extends Think<Env> {
           }]);
           return { status: result.status === 'skipped' ? 'skipped' : 'queued' };
         },
+        // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
+        // heads need the owner for UserDO auth, set by first-turn time. undefined
+        // before then ⇒ heads degrade (getHeadController throws the no-owner error).
+        get headRuntime() { return agent.getCFHeadRuntime(); },
       };
     }
     return this._host;
@@ -471,10 +476,21 @@ export class OrchestratorAgent extends Think<Env> {
     if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
     return this._jobs;
   }
-  // Live AbortControllers for in-flight background jobs — lets the operator
-  // hard-cancel a running job (aborts the underlying generateText/tool work).
-  // In-memory only; a DO eviction loses it, but onFiberRecovered fails the job.
-  private readonly _jobControllers = new Map<string, AbortController>();
+  // The backend-agnostic background-job lifecycle (detach → settle → wake +
+  // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
+  // and the BackendHost programmatic-turn wake. Owns the cancel-controller map.
+  private _jobRunner: BackgroundJobRunner | null = null;
+  private get jobRunner(): BackgroundJobRunner {
+    if (!this._jobRunner) {
+      this._jobRunner = new BackgroundJobRunner({
+        store: this.jobs,
+        fiber: this.rt.schedule.fiber,
+        host: this.host,
+        logActivity: (event, detail) => this.logActivity(event, detail),
+      });
+    }
+    return this._jobRunner;
+  }
 
   // Typed accessors over the `agent_config` key/value table — replaces
   // scattered raw SQL with a single deep module.
@@ -931,11 +947,24 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private getHeadController(): HeadController {
     if (this._headController) return this._headController;
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
-    const runtime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId);
+    // The HeadRuntime flows through the BackendHost seam (CLI supplies a
+    // subprocess-backed one or undefined → single-shot degrade).
+    const runtime = this.host.headRuntime;
+    if (!runtime) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
     this._headController = new HeadController(runtime, this.headJournal);
     return this._headController;
+  }
+
+  /** Build the CF HeadRuntime (Facet spawner + merge LLM) once per DO lifetime,
+   *  lazily — heads need the agent's owner for UserDO auth. undefined when the
+   *  agent has no owner; surfaced via host.headRuntime. */
+  private _cfHeadRuntime: HeadRuntime | null = null;
+  private getCFHeadRuntime(): HeadRuntime | undefined {
+    if (this._cfHeadRuntime) return this._cfHeadRuntime;
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) return undefined;
+    this._cfHeadRuntime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId);
+    return this._cfHeadRuntime;
   }
 
   /**
@@ -1538,74 +1567,9 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
-
-  /** Threshold deps for `withBackgroundThreshold`: mint a job row (carrying the
-   *  tool input for retry + registering the AbortController for hard-cancel),
-   *  then detach the still-running promise into a durable fiber. */
-  private backgroundDeps(kind: string, input: unknown, controller: AbortController): import('@proteus/core').ThresholdDeps {
-    return {
-      createJob: (k) => {
-        const id = `bgjob-${nanoid()}`;
-        this.jobs.create({ id, kind: k, input: serializeJobResult(input, 8_000), now: Date.now() });
-        this._jobControllers.set(id, controller);
-        this.logActivity('bg_job_started', `${k} → ${id}`);
-        return id;
-      },
-      detach: (jobId, promise) => this.detachBackgroundJob(jobId, kind, promise),
-    };
-  }
-
-  /** Keep a backgrounded tool's promise alive in a durable fiber (keepAlive held
-   *  for its lifetime; recovered via onFiberRecovered on eviction). On settle,
-   *  record the result and wake a synthesis turn so the agent acts on it. */
-  private detachBackgroundJob(jobId: string, kind: string, promise: Promise<unknown>): void {
-    void this.runFiber(`bg:${kind}`, async (ctx) => {
-      ctx.stash({ phase: 'running', jobId, kind });
-      // Settle-vs-fail is driven ONLY by whether the work resolved; serializing
-      // its result happens separately so a non-serializable success (e.g. a
-      // BigInt from execute_tools) is never mislabelled as a failure.
-      let outcome: { ok: true; result: unknown } | { ok: false; error: string };
-      try { outcome = { ok: true, result: await promise }; }
-      catch (err) { outcome = { ok: false, error: err instanceof Error ? err.message : String(err) }; }
-      this._jobControllers.delete(jobId); // work is done — drop the cancel handle
-      // A cancelled job was already marked by cancelBackgroundJob; its promise
-      // rejects with the abort, which we must NOT relabel as a generic failure.
-      if (this.jobs.get(jobId)?.status === 'cancelled') { ctx.stash({ phase: 'settled', jobId, kind }); return; }
-      if (outcome.ok) this.jobs.settle(jobId, serializeJobResult(outcome.result), Date.now());
-      else this.jobs.fail(jobId, outcome.error, Date.now());
-      ctx.stash({ phase: 'settled', jobId, kind });
-      await this.wakeForBackgroundJob(jobId);
-    });
-  }
-
-  /** Wake the agent with a synthesis turn carrying the settled job. Same
-   *  saveMessages mechanism the reactor uses; TurnQueue-serialized so it lands
-   *  after any live turn. Runs once per job (no self-wake loop). */
-  private async wakeForBackgroundJob(jobId: string): Promise<void> {
-    const job = this.jobs.get(jobId);
-    if (!job) return;
-    const text = job.status === 'completed'
-      ? `Background ${job.kind} job ${jobId} completed. Read the full result with ` +
-        `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded.`
-      : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
-        `Decide whether to retry or report the failure.`;
-    try {
-      // Mark the wake so the chat renders it as a background-event card, not a
-      // user bubble (the agent still reads the text as its synthesis prompt).
-      const result = await this.saveMessages([{
-        id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }],
-        metadata: { proteusEvent: 'background_job', jobId, kind: job.kind, status: job.status },
-      }]);
-      // A skipped wake means a newer turn generation preempted the synthesis
-      // turn before it ran — the agent never saw this job. Leave a breadcrumb so
-      // the settled result isn't silently lost (it stays readable via jobResult).
-      if (result.status === 'skipped') {
-        this.logActivity('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
-      }
-    } catch (err) {
-      console.warn('[proteus] wakeForBackgroundJob failed:', err instanceof Error ? err.message : err);
-    }
-  }
+  // Lifecycle (detach → settle → wake + cancel + recover) lives in the core
+  // BackgroundJobRunner (this.jobRunner); the @callable control plane below is
+  // the cf adapter over it + the BackgroundJobStore.
 
   /** Read a background job's result (the synthesis turn calls this). */
   @callable()
@@ -1624,14 +1588,7 @@ export class OrchestratorAgent extends Think<Env> {
    *  won't relabel the abort rejection or wake the agent. */
   @callable()
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    const job = this.jobs.get(jobId);
-    if (!job || job.status !== 'running') return { ok: false };
-    this.jobs.cancel(jobId, Date.now());
-    const controller = this._jobControllers.get(jobId);
-    if (controller) { try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ } }
-    this._jobControllers.delete(jobId);
-    this.logActivity('bg_job_cancelled', jobId);
-    return { ok: true };
+    return { ok: this.jobRunner.cancel(jobId) };
   }
 
   /** Re-run a settled job's tool with its original input as a fresh background
@@ -1648,14 +1605,12 @@ export class OrchestratorAgent extends Think<Env> {
     let input: unknown;
     try { input = JSON.parse(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
     const controller = new AbortController();
-    const newId = `bgjob-${nanoid()}`;
-    this.jobs.create({ id: newId, kind: job.kind, input: inputJson, now: Date.now() });
-    this._jobControllers.set(newId, controller);
+    const newId = this.jobRunner.create(job.kind, input, controller);
     this.logActivity('bg_job_retry', `${jobId} → ${newId}`);
     const promise = Promise.resolve(
       (tool.execute as (i: unknown, o: unknown) => unknown)(input, { abortSignal: controller.signal, toolCallId: newId, messages: [] }),
     );
-    this.detachBackgroundJob(newId, job.kind, promise);
+    this.jobRunner.detach(newId, job.kind, promise);
     return { ok: true, jobId: newId };
   }
 
@@ -1745,7 +1700,7 @@ export class OrchestratorAgent extends Think<Env> {
           const controller = new AbortController();
           const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
           const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
-          const deps = this.backgroundDeps(key, input, controller);
+          const deps = this.jobRunner.thresholdDeps(key, input, controller);
           return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps);
         },
       };
@@ -2142,19 +2097,11 @@ export class OrchestratorAgent extends Think<Env> {
         : String(ctx.snapshot ?? 'null');
       console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
       // Background-job fiber (bg:*) is operational plumbing, not an evolution
-      // event: handle it on its own and return, skipping the MEMORY.md note +
+      // event: the runner re-fails + wakes an orphaned 'running' job (a 'settled'
+      // one already recorded its outcome + woke), skipping the MEMORY.md note +
       // evolution_events INSERT that the user-facing recovery path emits.
       if (ctx.name.startsWith('bg:')) {
-        const snap = (ctx.snapshot ?? {}) as { jobId?: unknown; phase?: unknown };
-        const jobId = typeof snap.jobId === 'string' ? snap.jobId : '';
-        // Only a job interrupted while still RUNNING is orphaned. One stashed in
-        // the 'settled' phase already recorded its outcome + woke the agent
-        // before eviction — re-failing it would clobber a real result and
-        // re-waking would inject a duplicate synthesis turn.
-        if (jobId && snap.phase === 'running') {
-          this.jobs.fail(jobId, 'interrupted by Durable Object eviction before completion', Date.now());
-          await this.wakeForBackgroundJob(jobId);
-        }
+        await this.jobRunner.recover(ctx.snapshot);
         return;
       }
       // Persist for the UI's evolution-events stream.
