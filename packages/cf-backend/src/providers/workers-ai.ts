@@ -7,6 +7,8 @@ import type { ModelProvider, ModelInfo } from '@proteus/core';
 
 const MODELS: ModelInfo[] = [
   { id: '@cf/moonshotai/kimi-k2.6',                       label: 'Kimi K2.6',            capabilities: ['tools', 'streaming'] },
+  // Partner model via the binding's gateway route — needs BYOK/balance (not free).
+  { id: 'minimax/m3',                                     label: 'MiniMax M3 (1M ctx)',  capabilities: ['tools', 'streaming', 'reasoning'] },
   { id: '@cf/meta/llama-4-scout-17b-16e-instruct',        label: 'Llama 4 Scout',        capabilities: ['tools', 'streaming', 'vision'] },
   { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',       label: 'Llama 3.3 70B (fast)', capabilities: ['tools', 'streaming'] },
   { id: '@cf/openai/gpt-oss-120b',                        label: 'GPT-OSS 120B',         capabilities: ['tools', 'streaming'] },

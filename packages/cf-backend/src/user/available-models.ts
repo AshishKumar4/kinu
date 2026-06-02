@@ -21,6 +21,10 @@ export interface ModelMenuEntry {
 
 const WORKERS_AI_MODELS: ModelMenuEntry[] = [
   { spec: 'workers-ai/@cf/moonshotai/kimi-k2.6',           label: 'Kimi K2.6',         provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
+  // MiniMax M3 — 1M-context partner model, routed via the env.AI binding. NOT
+  // free: needs a BYOK MiniMax key in the AI Gateway or gateway balance (else
+  // AiGatewayError 2021). Selectable; not the default until credentials exist.
+  { spec: 'workers-ai/minimax/m3',                         label: 'MiniMax M3 (1M ctx · BYOK/balance)', provider: 'workers-ai', capabilities: ['tools', 'streaming', 'reasoning'] },
   { spec: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',     label: 'Llama 4 Scout',     provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
   { spec: 'workers-ai/@cf/meta/llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick',  provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
   { spec: 'workers-ai/@cf/qwen/qwen2.5-coder-32b-instruct',         label: 'Qwen 2.5 Coder',    provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
