@@ -28,11 +28,11 @@
  */
 
 import { Agent, callable } from "agents";
-import { generateText, generateObject, tool, jsonSchema } from "ai";
+import { generateText, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { agentAffinityKey } from "./providers/workers-ai.js";
-import { aiSchema } from "./ai-schema.js";
+import { generateJson } from "./lib/generate-json.js";
 import type { UserDO } from "./user/user-do.js";
 import {
   type CraftedTool,
@@ -546,14 +546,13 @@ export class ExplorationAgent extends Agent<Env> {
           },
         };
       },
-      async mergeLLM(prompt: string, _schema: typeof MergeOutputSchema): Promise<MergeOutput> {
-        const { object } = await generateObject({
+      async mergeLLM(prompt: string): Promise<MergeOutput> {
+        return generateJson({
           model: facet.getModel(parentInput.model),
-          schema: aiSchema<MergeOutput>(MergeOutputSchema),
+          schema: MergeOutputSchema,
           prompt,
           maxOutputTokens: 2048,
         });
-        return object;
       },
     };
 

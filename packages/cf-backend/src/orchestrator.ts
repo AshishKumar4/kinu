@@ -25,7 +25,7 @@ import { Think, Session } from "@cloudflare/think";
 // preamble into the LLM's sandbox arrow, so mid-turn additions are visible
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
-import { streamText, generateObject, generateText, tool, jsonSchema, stepCountIs } from "ai";
+import { streamText, generateText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
@@ -33,9 +33,9 @@ import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextCronFire } from "./lib/cron.js";
 import { compactionThreshold } from "./lib/context-window.js";
+import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
-import { aiSchema } from "./ai-schema.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
   ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
@@ -1501,16 +1501,14 @@ export class OrchestratorAgent extends Think<Env> {
       const autoApply = this.config.getAutoPromoteScaffold();
       if (sampleRate <= 0) return;
 
-      const judge: StructuredJudgeFn = async (prompt) => {
-        const { object } = await generateObject({
+      const judge: StructuredJudgeFn = async (prompt) =>
+        generateJson({
           model: this.getModelForReview(),
-          schema: aiSchema<JudgeOutput>(JudgeOutputSchema),
+          schema: JudgeOutputSchema,
           prompt,
           maxOutputTokens: 512,
-          ...effortFor('judge'),
+          providerOptions: effortFor('judge').providerOptions,
         });
-        return object;
-      };
 
       const judgeTask = task.slice(0, 2000);
       const result = await runAutoShadowEval({
@@ -2332,21 +2330,20 @@ export class OrchestratorAgent extends Think<Env> {
         return { score: 0, feedback: `scaffold execution failed: ${(err as Error).message}` };
       }
       try {
-        const judged = await generateObject({
+        const obj = await generateJson({
           model,
-          schema: aiSchema<{ score: number; feedback: string }>(v.object({
+          schema: v.object({
             score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
             feedback: v.pipe(v.string(), v.minLength(1)),
-          })),
+          }),
           prompt:
             `Rate this agent response to the task on a 0..1 scale (correctness, ` +
             `helpfulness, clarity) and give one sentence of specific, actionable ` +
             `feedback on how the agent's behaviour could improve.\n\n` +
             `Task:\n${instance.input}\n\nResponse:\n${output.slice(0, 4000)}\n\n` +
-            `Respond as {score, feedback}.`,
-          ...effortFor('judge'),
+            `Respond with ONLY {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
+          providerOptions: effortFor('judge').providerOptions,
         });
-        const obj = judged.object;
         return { score: obj.score, feedback: obj.feedback };
       } catch (err) {
         return { score: 0.5, feedback: `judge unavailable: ${(err as Error).message}` };

@@ -24,18 +24,21 @@ export const MergeOutputSchema = v.object({
     v.minLength(1, 'narrative must be non-empty'),
     v.description("Coherent narrative that integrates the heads' findings."),
   ),
-  selected_decisions: v.pipe(
+  // The list fields default to [] when the model omits them — only the
+  // narrative is essential, so a merge that produced a good narrative but no
+  // explicit decisions/questions still validates instead of falling back.
+  selected_decisions: v.optional(v.pipe(
     v.array(DecisionSchema),
     v.description("Final answers the merge has chosen from the heads' decision lists."),
-  ),
-  unresolved_questions: v.pipe(
+  ), []),
+  unresolved_questions: v.optional(v.pipe(
     v.array(v.string()),
     v.description('Questions raised by one or more heads that remain open.'),
-  ),
-  recommendations: v.pipe(
+  ), []),
+  recommendations: v.optional(v.pipe(
     v.array(v.string()),
     v.description('Actionable next steps. Each item should be one short imperative sentence.'),
-  ),
+  ), []),
 });
 
 export type MergeOutput = v.InferOutput<typeof MergeOutputSchema>;

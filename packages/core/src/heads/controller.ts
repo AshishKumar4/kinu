@@ -341,12 +341,13 @@ ${recentContext || '(none)'}
 Heads' reports:
 ${headSections}
 
-Produce a structured JSON merge result with:
-- narrative: a coherent unified narrative (the response the parent head writes back to the user)
-- selected_decisions: the final answers chosen across the heads
-- unresolved_questions: any open questions that remain
-- recommendations: short imperative next-step suggestions
-
-The narrative should be specific and grounded in the heads' evidence. Do not include
-references to the merge process itself.`;
+Return ONLY a JSON object with EXACTLY these keys and types (use [] for empty lists):
+{
+  "narrative": "<coherent unified narrative — the response the parent head writes back to the user>",
+  "selected_decisions": [{ "question": "<question>", "choice": "<final answer>", "rationale": "<why>" }],
+  "unresolved_questions": ["<open question>"],
+  "recommendations": ["<short imperative next step>"]
+}
+selected_decisions, unresolved_questions, and recommendations MUST be JSON arrays (never objects).
+The narrative should be specific and grounded in the heads' evidence; do not reference the merge process itself.`;
 }

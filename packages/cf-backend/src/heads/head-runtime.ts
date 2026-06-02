@@ -7,16 +7,15 @@
  * parallel-spawn infrastructure.
  */
 
-import { generateObject } from "ai";
 import type {
   HeadRuntime, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
 } from "@proteus/core";
-import { type MergeOutput, effortFor, createAgentConfigStore } from "@proteus/core";
+import { type MergeOutput, MergeOutputSchema, effortFor, createAgentConfigStore } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
 import { agentAffinityKey } from "../providers/workers-ai.js";
-import { aiSchema } from "../ai-schema.js";
+import { generateJson } from "../lib/generate-json.js";
 import type { UserDO } from "../user/user-do.js";
 
 /** Agent surface this head runtime needs — `env` is protected on the DO base
@@ -39,17 +38,16 @@ export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string)
   const config = createAgentConfigStore(
     orchestrator.sql.bind(orchestrator) as unknown as import('@proteus/core').SqlExecutor,
   );
-  const mergeLLM: MergeLLMFn = async (prompt, schema): Promise<MergeOutput> => {
+  const mergeLLM: MergeLLMFn = async (prompt): Promise<MergeOutput> => {
     const stored = config.getModel();
     const model = reg.resolveModel(reg.normalizeSpecSync(stored));
-    const { object } = await generateObject({
+    return generateJson({
       model,
-      schema: aiSchema<MergeOutput>(schema),
+      schema: MergeOutputSchema,
       prompt,
       maxOutputTokens: 4096,
-      ...effortFor('head_merge'),
+      providerOptions: effortFor('head_merge').providerOptions,
     });
-    return object;
   };
 
   return {
