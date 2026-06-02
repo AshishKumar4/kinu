@@ -13,7 +13,7 @@
 
 import type { SqlExecutor } from '../types/primitives.js';
 import type {
-  HeadId, HeadInput, HeadReport, HeadStep, Evidence, MergeResult, MergeStrategy,
+  HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, MergeResult, MergeStrategy,
   HeadRunView, HeadRunHeadView,
 } from './types.js';
 
@@ -103,7 +103,7 @@ export class HeadJournal {
       WHERE head_id = ${headId} ORDER BY seq`.map((r) => ({
         text: r.text ?? '',
         reasoning: r.reasoning ?? undefined,
-        toolCalls: parseArray(r.tool_calls_json),
+        toolCalls: parseArray<HeadStepToolCall>(r.tool_calls_json),
       }));
   }
 

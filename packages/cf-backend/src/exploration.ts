@@ -610,7 +610,7 @@ export class ExplorationAgent extends Agent<Env> {
     // source of truth — same schema the orchestrator initializes.
     initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); });
 
-    const journal = new HeadJournal(this.sql.bind(this) as never);
+    const journal = new HeadJournal(this.sql.bind(this) as unknown as SqlExecutor);
     const facet = this;
     const runtime = {
       async spawnHead(childInput: HeadInput) {
