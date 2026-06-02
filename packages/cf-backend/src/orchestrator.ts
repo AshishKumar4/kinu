@@ -112,6 +112,7 @@ import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { agentAffinityKey } from "./providers/workers-ai.js";
+import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
 import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
@@ -827,6 +828,11 @@ export class OrchestratorAgent extends Think<Env> {
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
       });
+
+      // Anthropic prompt-caching: one breakpoint on the last tool caches the
+      // whole stable tool surface (tools precede system+messages in Anthropic's
+      // cache hierarchy). Namespaced → inert for non-Anthropic providers.
+      markLastToolForAnthropicCache(tools);
 
       this._cachedTools = tools;
       this._cachedToolsKey = cacheKey;
