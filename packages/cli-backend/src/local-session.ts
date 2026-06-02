@@ -141,9 +141,16 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** Tool names for the banner + /tools view. */
+  /** Tool names for the banner. */
   toolNames(): string[] {
     return Object.keys(this.tools);
+  }
+
+  /** Built-in tools with descriptions for the /tools view. */
+  describeTools(): Array<{ name: string; description: string }> {
+    return Object.entries(this.tools).map(([name, t]) => ({
+      name, description: (t as { description?: string }).description ?? '',
+    }));
   }
 
   // ── BackendHost ────────────────────────────────────────────────────

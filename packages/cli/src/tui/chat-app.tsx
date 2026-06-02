@@ -1,31 +1,18 @@
 /**
- * TUI Chat Application — OpenTUI React-based terminal UI for Proteus.
+ * TUI Chat Application — OpenTUI React terminal UI over LocalAgentSession.
  *
- * Replaces the raw readline chat-loop with a proper terminal UI featuring:
- * - Scrollable message history
- * - Streaming text with cursor indicator
- * - Tool call/result display
- * - Status bar with agent info
- * - Slash command support (/help, /status, /tools, /memory, /tree, /exit)
+ * The session (in @proteus/cli-backend) owns the whole agent loop; this renders
+ * its SessionEvent stream into scrollable message history with streaming text,
+ * tool cards, evolution/background-event markers, and a status bar. Slash
+ * commands (/help, /status, /tools, /memory, /tree, /exit) operate on the
+ * runtime directly.
  */
 
 import { createCliRenderer } from '@opentui/core';
-import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
+import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { CoreMessage, ToolSet } from 'ai';
 import type { AgentRuntime, AgentInfo, LLMProviderConfig, SearchNode } from '@proteus/core';
-import {
-  EvolutionEngine,
-  buildBuiltinTools,
-  buildSystemPromptSync,
-  createChatModel,
-  runChat,
-  resolveMaxSteps,
-  type CompletedTurn,
-  type ToolCallRecord,
-  type ChatEvent,
-} from '@proteus/core';
-import { createNodeCraftedExecute, createNodeExecuteToolFactory } from '@proteus/cli-backend';
+import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent } from '@proteus/cli-backend';
 
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
@@ -33,6 +20,7 @@ import { HelpView, StatusView } from './help-view.js';
 
 export interface ChatAppOpts {
   rt: AgentRuntime;
+  db: LocalSessionDb;
   info: AgentInfo;
   dbSize: number;
   llmConfig: LLMProviderConfig;
@@ -43,8 +31,7 @@ export interface ChatAppOpts {
 let globalExit: (() => void) | null = null;
 let globalSessionCleanup: (() => Promise<void>) | null = null;
 
-function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAutoEvolve }: ChatAppOpts) {
-  const renderer = useRenderer();
+function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, noAutoEvolve }: ChatAppOpts) {
   const { height } = useTerminalDimensions();
   const [messages, setMessages] = useState<DisplayMessage[]>([
     { id: 'welcome', role: 'system', content: `Connected to ${initialInfo.name}. Type a message or /help for commands.` },
@@ -53,46 +40,59 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
   const [isProcessing, setIsProcessing] = useState(false);
   const [info, setInfo] = useState(initialInfo);
 
-  const historyRef = useRef<CoreMessage[]>([]);
   const msgIdRef = useRef(0);
-  const sessionTurnsRef = useRef<CompletedTurn[]>([]);
-
-  const model = createChatModel({
-    kind: 'openai-compat',
-    name: llmConfig.name,
-    baseURL: llmConfig.baseURL,
-    headers: llmConfig.headers,
-    modelId: llmConfig.model,
-  });
-
-  const engineRef = useRef<EvolutionEngine | null>(null);
-  if (!engineRef.current) {
-    engineRef.current = new EvolutionEngine(rt, { enabled: !noAutoEvolve });
-    engineRef.current.onEvent((event) => {
-      addMessage({ role: 'evolution', content: `[${event.type}] ${event.message}` });
-    });
-  }
-
-  // CLI tool surface: execute_tools + run + memory (the always-on builtins).
-  // think / fact / skills are CF-only (they need a HeadController / FactsStore /
-  // SkillsVfs the CLI doesn't provision). The CLI wires the Node execute-tools
-  // factory and the Node crafted-tool executor; codemodeLoader is a sentinel so
-  // the factory branch is selected. `engine` drives auto-evolution, not a tool.
-  const tools: ToolSet = buildBuiltinTools({
-    rt,
-    craftedToolExecute: createNodeCraftedExecute(),
-    createExecuteTool: createNodeExecuteToolFactory({
-      vfs: rt.storage.vfs,
-      memory: rt.memory,
-      shell: rt.shell,
-    }) as never,
-    codemodeLoader: { __cli: true } as unknown,
-  });
+  const streamRef = useRef('');
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
-    setMessages(prev => [...prev, { ...msg, id }]);
+    setMessages((prev) => [...prev, { ...msg, id }]);
   }, []);
+
+  // The agent loop — built once. Its SessionEvent stream drives React state.
+  const sessionRef = useRef<LocalAgentSession | null>(null);
+  if (!sessionRef.current) {
+    sessionRef.current = new LocalAgentSession({
+      rt, db, model: resolveChatModel(llmConfig), noAutoEvolve,
+      onEvent: (event: SessionEvent) => {
+        switch (event.type) {
+          case 'turn-start':
+            streamRef.current = '';
+            setStreamingText('');
+            setIsProcessing(true);
+            if (event.kind === 'programmatic') {
+              addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
+            }
+            break;
+          case 'text-delta':
+            streamRef.current += event.delta;
+            setStreamingText(streamRef.current);
+            break;
+          case 'tool-call':
+            addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+            break;
+          case 'tool-result':
+            addMessage({ role: 'tool_result', content: event.result });
+            break;
+          case 'evolution':
+            addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
+            break;
+          case 'error':
+            addMessage({ role: 'system', content: `Error: ${event.message}` });
+            break;
+          case 'turn-end':
+            setStreamingText(null);
+            setIsProcessing(false);
+            if (event.turn.assistantResponse.trim()) {
+              addMessage({ role: 'assistant', content: event.turn.assistantResponse.trim() });
+            }
+            break;
+          case 'broadcast':
+            break;
+        }
+      },
+    });
+  }
+  const session = sessionRef.current;
 
   const handleSlash = useCallback(async (input: string) => {
     const cmd = input.split(/\s+/)[0]!.toLowerCase();
@@ -105,19 +105,15 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
         addMessage({ role: 'system', content: 'HELP_VIEW' });
         return;
       case '/status': {
-        const fresh = refreshInfo();
-        setInfo(fresh);
+        setInfo(refreshInfo());
         addMessage({ role: 'system', content: 'STATUS_VIEW' });
         return;
       }
       case '/tools': {
-        const builtIn = Object.entries(tools).map(([name, t]) =>
-          `  ${name} — ${(t as { description?: string }).description ?? ''}`,
-        );
-        const crafted = rt.craftStore.list();
-        const craftedLines = crafted.map(t => `  ${t.name} — ${t.description.slice(0, 50)}`);
+        const builtIn = session.describeTools().map(({ name, description }) => `  ${name} — ${description}`);
+        const crafted = rt.craftStore.list().map((t) => `  ${t.name} — ${t.description.slice(0, 50)}`);
         const lines = ['Built-in:', ...builtIn];
-        if (craftedLines.length > 0) lines.push('', 'Crafted:', ...craftedLines);
+        if (crafted.length > 0) lines.push('', 'Crafted:', ...crafted);
         addMessage({ role: 'system', content: lines.join('\n') });
         return;
       }
@@ -131,7 +127,7 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
         if (nodes.length === 0) {
           addMessage({ role: 'system', content: 'No MCTS nodes yet. Use /evolve or ask complex questions.' });
         } else {
-          const lines = nodes.map(n => {
+          const lines = nodes.map((n) => {
             const prefix = '  '.repeat(n.depth) + (n.status === 'pruned' ? '◌' : n.status === 'terminal' ? '★' : '○');
             return `${prefix} ${n.value.toFixed(3)} n=${n.visits} ${n.action?.slice(0, 40) ?? ''}`;
           });
@@ -142,114 +138,31 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
       default:
         addMessage({ role: 'system', content: `Unknown command: ${cmd}. Type /help` });
     }
-  }, [addMessage, refreshInfo, rt, tools]);
+  }, [addMessage, refreshInfo, rt, session]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
     if (!text) return;
-
-    if (text.startsWith('/')) {
-      await handleSlash(text);
-      return;
-    }
-
+    if (text.startsWith('/')) { await handleSlash(text); return; }
     addMessage({ role: 'user', content: text });
-    setIsProcessing(true);
-    setStreamingText('');
+    try { await session.send(text); } catch { /* errors surface as SessionEvents */ }
+  }, [addMessage, handleSlash, session]);
 
-    const turnStart = Date.now();
-    const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
-    const executorNames = (rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const systemPrompt = buildSystemPromptSync(rt, {
-      extraKnowledge: knowledge || undefined,
-      registeredExecutors: executorNames,
-    });
+  // opentui's `input` intrinsic merges with React DOM's, so onSubmit's type is
+  // the intersection of (value: string) and (event: SubmitEvent). opentui passes
+  // the value string at runtime; accept the union and forward the string.
+  const onInputSubmit = useCallback((value: string | object) => {
+    if (typeof value === 'string') void handleSubmit(value);
+  }, [handleSubmit]);
 
-    historyRef.current.push({ role: 'user', content: text });
-
-    const turnToolCalls: ToolCallRecord[] = [];
-    let fullText = '';
-    let stepCount = 0;
-    let hadError = false;
-
-    try {
-      for await (const event of runChat({
-        model,
-        system: systemPrompt,
-        history: historyRef.current,
-        tools,
-        maxSteps: resolveMaxSteps(),
-      })) {
-        switch (event.type) {
-          case 'text-delta':
-            fullText += event.delta;
-            setStreamingText(fullText);
-            break;
-          case 'tool-call':
-            addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
-            turnToolCalls.push({ name: event.toolName, args: event.args, result: null });
-            break;
-          case 'tool-result': {
-            addMessage({ role: 'tool_result', content: event.result });
-            const lastCall = turnToolCalls.findLast(tc => tc.name === event.toolName && tc.result === null);
-            if (lastCall) lastCall.result = event.result;
-            break;
-          }
-          case 'done':
-            for (const msg of (event as any).responseMessages ?? []) {
-              historyRef.current.push(msg);
-            }
-            if (!fullText.trim() && event.text.trim()) fullText = event.text;
-            break;
-        }
-      }
-    } catch (err) {
-      hadError = true;
-      addMessage({ role: 'system', content: `Error: ${(err as Error).message}` });
-    }
-
-    setStreamingText(null);
-    setIsProcessing(false);
-
-    if (fullText.trim()) {
-      addMessage({ role: 'assistant', content: fullText.trim() });
-    }
-
-    // Store in DB
-    const msgId = crypto.randomUUID();
-    const sessionId = 'tui-' + Date.now();
-    rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${msgId}, ${sessionId}, ${'user'}, ${text})`;
-    rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${sessionId}, ${msgId}, ${'assistant'}, ${fullText})`;
-
-    const turn: CompletedTurn = {
-      userMessage: text, assistantResponse: fullText, toolCalls: turnToolCalls,
-      steps: stepCount, durationMs: Date.now() - turnStart, feedback: null, hadError,
-    };
-    sessionTurnsRef.current.push(turn);
-    await engineRef.current?.onTurnComplete(turn);
-  }, [addMessage, handleSlash, model, rt, tools]);
-
-  // Register session cleanup so the exit handler can fire session evolution
-  const sessionStartRef = useRef(Date.now());
+  // Fire a partial-session evolution flush on exit.
   useEffect(() => {
-    globalSessionCleanup = async () => {
-      if (sessionTurnsRef.current.length > 0 && engineRef.current) {
-        await engineRef.current.onSessionComplete({
-          sessionId: `tui-${sessionStartRef.current}`,
-          turns: sessionTurnsRef.current,
-          startedAt: sessionStartRef.current,
-          endedAt: Date.now(),
-        });
-      }
-    };
+    globalSessionCleanup = async () => { await session.end(); };
     return () => { globalSessionCleanup = null; };
-  }, []);
+  }, [session]);
 
-  // Escape to exit
   useKeyboard((key) => {
-    if (key.name === 'escape') {
-      globalExit?.();
-    }
+    if (key.name === 'escape') globalExit?.();
   });
 
   const scrollHeight = Math.max(1, height - 7);
@@ -259,7 +172,7 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
       <StatusBar
         info={info}
         model={llmConfig.model}
-        toolCount={Object.keys(tools).length}
+        toolCount={session.toolNames().length}
         autoEvolve={!noAutoEvolve}
         connected={true}
       />
@@ -283,7 +196,7 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
           return null;
         })}
         <MessageList
-          messages={messages.filter(m => !(m.role === 'system' && (m.content === 'HELP_VIEW' || m.content === 'STATUS_VIEW')))}
+          messages={messages.filter((m) => !(m.role === 'system' && (m.content === 'HELP_VIEW' || m.content === 'STATUS_VIEW')))}
           streamingText={streamingText}
         />
         {isProcessing && streamingText === '' && (
@@ -307,7 +220,7 @@ function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAuto
         <input
           focused={!isProcessing}
           placeholder={isProcessing ? 'Waiting for response…' : 'Type a message or /help'}
-          onSubmit={handleSubmit}
+          onSubmit={onInputSubmit}
         />
       </box>
     </box>
@@ -319,10 +232,9 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   const root = createRoot(renderer);
 
   const cleanup = async () => {
-    // Fire session-level evolution before exit
     try { await globalSessionCleanup?.(); } catch { /* best effort */ }
     root.render(<box />);
-    renderer.cleanup();
+    renderer.destroy();
     console.log('\n  Goodbye.\n');
     process.exit(0);
   };

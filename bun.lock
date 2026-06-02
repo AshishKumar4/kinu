@@ -98,6 +98,9 @@
         "@proteus/core": "workspace:*",
         "react": "^19.2.5",
       },
+      "devDependencies": {
+        "@types/react": "^19.2.14",
+      },
     },
     "packages/cli-backend": {
       "name": "@proteus/cli-backend",

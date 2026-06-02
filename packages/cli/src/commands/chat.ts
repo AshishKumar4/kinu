@@ -50,9 +50,9 @@ export async function chatCommand(name: string | undefined, opts: {
   // Use TUI by default, fall back to classic readline with --classic flag
   // or when stdin is not a TTY (piped input)
   if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop({ rt, info, dbSize, llmConfig, refreshInfo });
+    await runChatLoop({ rt, db, info, dbSize, llmConfig, refreshInfo });
   } else {
-    await runTuiChat({ rt, info, dbSize, llmConfig, refreshInfo, noAutoEvolve: false });
+    await runTuiChat({ rt, db, info, dbSize, llmConfig, refreshInfo, noAutoEvolve: false });
   }
   db.close();
 }

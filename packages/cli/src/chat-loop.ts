@@ -1,25 +1,14 @@
 /**
- * Interactive chat REPL — uses the shared runChat() engine from @proteus/core.
+ * Interactive chat REPL — a thin presentation layer over LocalAgentSession.
  *
- * Streams text, displays tool calls inline, fires evolution hooks,
- * handles slash commands. Stores full CoreMessage history including
- * tool call/result messages for proper multi-turn context.
+ * The session (in @proteus/cli-backend) owns the whole agent loop: streaming,
+ * tool calls, per-turn accounting, evolution, background jobs, and the reactor.
+ * This renders its SessionEvent stream to the terminal and feeds it user input.
  */
 
 import * as readline from 'node:readline';
-import { type CoreMessage, type ToolSet } from 'ai';
 import type { AgentRuntime, AgentInfo, SearchNode, LLMProviderConfig } from '@proteus/core';
-import {
-  EvolutionEngine,
-  buildBuiltinTools,
-  buildSystemPromptSync,
-  createChatModel,
-  runChat,
-  resolveMaxSteps,
-  type CompletedTurn,
-  type ToolCallRecord,
-} from '@proteus/core';
-import { createNodeCraftedExecute, createNodeExecuteToolFactory } from '@proteus/cli-backend';
+import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent } from '@proteus/cli-backend';
 import {
   printChatBanner, printSlashHelp, printAgentStatus,
   printSearchTree, printToolCall, printToolResult,
@@ -29,6 +18,7 @@ import {
 
 export interface ChatLoopOpts {
   rt: AgentRuntime;
+  db: LocalSessionDb;
   info: AgentInfo;
   dbSize: number;
   llmConfig: LLMProviderConfig;
@@ -37,71 +27,35 @@ export interface ChatLoopOpts {
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
-  const { rt, dbSize, llmConfig, refreshInfo, noAutoEvolve } = opts;
+  const { rt, db, dbSize, llmConfig, refreshInfo, noAutoEvolve } = opts;
   let info = opts.info;
 
-  const model = createChatModel({
-    kind: 'openai-compat',
-    name: llmConfig.name,
-    baseURL: llmConfig.baseURL,
-    headers: llmConfig.headers,
-    modelId: llmConfig.model,
+  // Per-turn render state — reset on every turn-start so the agent-name header
+  // prints once per turn and the typing indicator stops on first output.
+  const typing = createTypingIndicator(info.name);
+  let headerPrinted = false;
+
+  const session = new LocalAgentSession({
+    rt, db, model: resolveChatModel(llmConfig), noAutoEvolve,
+    onEvent: (event) => renderEvent(event, info.name, typing, () => headerPrinted, (v) => { headerPrinted = v; }),
   });
 
-  const engine = new EvolutionEngine(rt, { enabled: !noAutoEvolve });
-  engine.onEvent(event => printEvolutionEvent(event.type, event.message));
-
-  // CLI tool surface: execute_tools + run + memory (the always-on builtins).
-  // think / fact / skills are CF-only (they need a HeadController / FactsStore /
-  // SkillsVfs the CLI doesn't provision). `engine` drives auto-evolution on
-  // session end, not a tool.
-  // v2.1(B): craftedToolExecute supplies a Node-side compiler for crafted tools.
-  // v2.1(E): createExecuteTool is the Node execute-tools factory — core no
-  // longer ships an in-process fallback. A sentinel loader keeps the factory
-  // branch active in buildBuiltinTools.
-  const tools: ToolSet = buildBuiltinTools({
-    rt,
-    craftedToolExecute: createNodeCraftedExecute(),
-    createExecuteTool: createNodeExecuteToolFactory({
-      vfs: rt.storage.vfs,
-      memory: rt.memory,
-      shell: rt.shell,
-    }) as never,
-    codemodeLoader: { __cli: true } as unknown,
-  });
-
-  printChatBanner(info, Object.keys(tools), !noAutoEvolve);
+  printChatBanner(info, session.toolNames(), !noAutoEvolve);
 
   const prompt = () => `${ACCENT(info.name)} ${DIM('›')} `;
-  const rl = readline.createInterface({
-    input: process.stdin, output: process.stdout, prompt: prompt(),
-  });
-
-  const sessionId = 'chat-' + Date.now();
-  const sessionTurns: CompletedTurn[] = [];
-  const sessionStart = Date.now();
-  const history: CoreMessage[] = [];
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: prompt() });
 
   let exiting = false;
   const onExit = async () => {
     if (exiting) return;
     exiting = true;
-    if (sessionTurns.length > 0) {
-      try {
-        // Await session evolution with a 5-second timeout so Ctrl+C doesn't hang
-        await Promise.race([
-          engine.onSessionComplete({
-            sessionId, turns: sessionTurns, startedAt: sessionStart, endedAt: Date.now(),
-          }),
-          new Promise(resolve => setTimeout(resolve, 5000)),
-        ]);
-      } catch { /* best effort */ }
-    }
+    // Flush a partial evolution window (5s cap so Ctrl+C never hangs).
+    try { await Promise.race([session.end(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* best effort */ }
     console.log(DIM('\n  Goodbye.\n'));
     rl.close();
     process.exit(0);
   };
-  process.on('SIGINT', () => void onExit());
+  process.on('SIGINT', () => { session.interrupt(); void onExit(); });
 
   rl.prompt();
 
@@ -110,114 +64,67 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (!input) { rl.prompt(); continue; }
 
     if (input.startsWith('/')) {
-      const result = await handleSlash(input, rt, info, dbSize, refreshInfo, tools);
+      const result = await handleSlash(input, rt, info, dbSize, refreshInfo, session);
       if (result === 'exit') { await onExit(); return; }
       if (result === 'refresh') info = refreshInfo();
       rl.prompt();
       continue;
     }
 
-    const turnStart = Date.now();
-    const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
-    const executorNames = (rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const systemPrompt = buildSystemPromptSync(rt, {
-      extraKnowledge: knowledge || undefined,
-      registeredExecutors: executorNames,
-    });
-
-    history.push({ role: 'user', content: input });
-
-    const turnToolCalls: ToolCallRecord[] = [];
-    let hadError = false;
-    let fullText = '';
-    let stepCount = 0;
-
-    const typing = createTypingIndicator(info.name);
+    headerPrinted = false;
     typing.start();
-    let headerPrinted = false;
-
     try {
-      for await (const event of runChat({
-        model,
-        system: systemPrompt,
-        history,
-        tools,
-        maxSteps: resolveMaxSteps(),
-      })) {
-        switch (event.type) {
-          case 'text-delta':
-            if (!headerPrinted) {
-              typing.stop();
-              process.stdout.write(`\n${ACCENT(info.name)} ${DIM('›')} `);
-              headerPrinted = true;
-            }
-            process.stdout.write(event.delta);
-            fullText += event.delta;
-            break;
-
-          case 'tool-call':
-            typing.stop();
-            printToolCall(event.toolName, event.args);
-            turnToolCalls.push({ name: event.toolName, args: event.args, result: null });
-            break;
-
-          case 'tool-result': {
-            printToolResult(event.result);
-            const lastCall = turnToolCalls.findLast(tc => tc.name === event.toolName && tc.result === null);
-            if (lastCall) lastCall.result = event.result;
-            break;
-          }
-
-          case 'step-finish':
-            stepCount++;
-            break;
-
-          case 'done':
-            // Append the SDK's response messages to history (includes tool_call/result)
-            for (const msg of event.responseMessages) {
-              history.push(msg);
-            }
-            if (!fullText.trim() && event.text.trim()) {
-              if (!headerPrinted) {
-                typing.stop();
-                process.stdout.write(`\n${ACCENT(info.name)} ${DIM('›')} `);
-              }
-              process.stdout.write(event.text.trim());
-              fullText = event.text;
-            }
-            break;
-        }
-      }
-
-      if (!headerPrinted) typing.stop();
-      console.log('\n');
-
-      // Store in DB
-      const msgId = crypto.randomUUID();
-      rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
-        VALUES (${msgId}, ${sessionId}, ${'user'}, ${input})`;
-      rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-        VALUES (${crypto.randomUUID()}, ${sessionId}, ${msgId}, ${'assistant'}, ${fullText})`;
-
-      const turn: CompletedTurn = {
-        userMessage: input,
-        assistantResponse: fullText,
-        toolCalls: turnToolCalls,
-        steps: stepCount,
-        durationMs: Date.now() - turnStart,
-        feedback: null,
-        hadError,
-      };
-      sessionTurns.push(turn);
-      await engine.onTurnComplete(turn);
-
+      await session.send(input);
     } catch (err) {
       typing.stop();
-      hadError = true;
       console.log(`\n${ERR('error')} ${(err as Error).message}\n`);
     }
-
+    if (!headerPrinted) typing.stop();
+    console.log('\n');
     rl.prompt();
+  }
+}
+
+/** Render one SessionEvent to the terminal. */
+function renderEvent(
+  event: SessionEvent, agentName: string, typing: { stop: () => void },
+  getHeader: () => boolean, setHeader: (v: boolean) => void,
+): void {
+  const header = () => {
+    if (getHeader()) return;
+    typing.stop();
+    process.stdout.write(`\n${ACCENT(agentName)} ${DIM('›')} `);
+    setHeader(true);
+  };
+  switch (event.type) {
+    case 'turn-start':
+      if (event.kind === 'programmatic') {
+        typing.stop();
+        setHeader(false);
+        console.log(`\n${DIM(`⚡ ${event.event ?? 'event'}`)} ${MUTED(event.text.slice(0, 80))}`);
+      }
+      break;
+    case 'text-delta':
+      header();
+      process.stdout.write(event.delta);
+      break;
+    case 'tool-call':
+      typing.stop();
+      printToolCall(event.toolName, event.args);
+      break;
+    case 'tool-result':
+      printToolResult(event.result);
+      break;
+    case 'evolution':
+      printEvolutionEvent(event.event, event.message);
+      break;
+    case 'error':
+      typing.stop();
+      console.log(`\n${ERR('error')} ${event.message}\n`);
+      break;
+    case 'turn-end':
+    case 'broadcast':
+      break;
   }
 }
 
@@ -225,7 +132,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
 async function handleSlash(
   input: string, rt: AgentRuntime, info: AgentInfo, dbSize: number,
-  refreshInfo: () => AgentInfo, tools: ToolSet,
+  refreshInfo: () => AgentInfo, session: LocalAgentSession,
 ): Promise<'exit' | 'refresh' | 'ok'> {
   const cmd = input.split(/\s+/)[0]!.toLowerCase();
   switch (cmd) {
@@ -234,8 +141,8 @@ async function handleSlash(
     case '/help': printSlashHelp(); return 'ok';
     case '/tools': {
       console.log(`\n${DIM('Built-in tools:')}`);
-      for (const [name, t] of Object.entries(tools)) {
-        console.log(`  ${ACCENT(name)} ${DIM('—')} ${(t as { description?: string }).description ?? ''}`);
+      for (const { name, description } of session.describeTools()) {
+        console.log(`  ${ACCENT(name)} ${DIM('—')} ${description}`);
       }
       const crafted = rt.craftStore.list();
       if (crafted.length > 0) {
