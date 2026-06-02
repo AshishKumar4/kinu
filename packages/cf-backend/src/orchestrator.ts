@@ -28,9 +28,10 @@ import { streamText, generateObject, generateText, tool, jsonSchema, stepCountIs
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
-import type { TimelineSpan } from "./lib/protocol.js";
+import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { diffLines, computeWorkspaceDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
+import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
 import { aiSchema } from "./ai-schema.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -2800,14 +2801,63 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  @callable() async getExecutorFiles(executorId: string, path: string) {
+  /** Typed directory listing for the file manager. Workspace is read straight
+   *  off the VFS (accurate types + sizes); other executors' heterogeneous
+   *  `readdir` output is normalized via parseReaddirEntries. */
+  @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
+    const dir = path || '/';
+    if (executorId === 'workspace') {
+      try {
+        const names = await this.rt.storage.vfs.readdir(dir);
+        const entries: DirEntry[] = [];
+        for (const name of names) {
+          const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
+          let type: DirEntry['type'] = 'file';
+          let size: number | undefined;
+          try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — leave as file */ }
+          entries.push({ name, type, size });
+        }
+        return { entries: sortDirEntries(entries) };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    }
     const provider = this.rt.executionRouter?.getProvider(executorId);
     if (!provider) return { error: `Executor "${executorId}" not found` };
     const readdirTool = provider.tools.readdir;
     if (!readdirTool) return { error: `Executor "${executorId}" has no readdir tool` };
     try {
-      const result = await readdirTool.execute(path || '/');
-      return { entries: result };
+      const result = await readdirTool.execute(dir);
+      return { entries: parseReaddirEntries(result) };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Read a single file's text content for the file-manager viewer. Workspace
+   *  reads off the VFS; other executors via their readFile tool. Caps size and
+   *  refuses binary (NUL byte). */
+  @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
+    if (!path) return { error: 'path required' };
+    const MAX = 512 * 1024;
+    try {
+      let text: string;
+      if (executorId === 'workspace') {
+        const stat = await this.rt.storage.vfs.stat(path);
+        if (stat?.isDir) return { error: 'path is a directory' };
+        const raw = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+        text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      } else {
+        const provider = this.rt.executionRouter?.getProvider(executorId);
+        if (!provider) return { error: `Executor "${executorId}" not found` };
+        const readFileTool = provider.tools.readFile;
+        if (!readFileTool) return { error: `Executor "${executorId}" has no readFile tool` };
+        const raw = await readFileTool.execute(path);
+        text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+      }
+      if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
+      if (text.length > MAX) return { content: text.slice(0, MAX), truncated: true };
+      return { content: text };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }

@@ -24,12 +24,13 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  TerminalIcon, FolderOpenIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon,
-  CopyIcon, EyeIcon, WarningIcon, PlugIcon,
+  TerminalIcon, FolderOpenIcon, FolderIcon, FileIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon,
+  ArrowLeftIcon, CopyIcon, EyeIcon, WarningIcon, PlugIcon,
 } from "@phosphor-icons/react";
 import { Badge } from "@cloudflare/kumo";
 import { ExecutorTerminal } from "./ExecutorTerminal";
 import type { ExecutorOutput } from "../hooks/use-proteus";
+import type { DirEntry } from "@/lib/protocol";
 
 const EXECUTOR_LABELS: Record<string, string> = {
   sandbox:   "Sandbox",
@@ -44,7 +45,6 @@ export interface ExecutorsPanelProps {
   executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
   outputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<unknown>;
-  onBrowse: (id: string, path: string) => Promise<unknown>;
   agentName?: string;
   rpc: (method: string, args?: unknown[]) => Promise<unknown>;
   pinnedPorts: Array<{ port: number; url: string; name?: string }>;
@@ -100,7 +100,6 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
             exec={activeInfo}
             outputs={props.outputs.get(activeInfo.name) ?? []}
             onExecute={(cmd) => props.onExecute(activeInfo.name, cmd)}
-            onBrowse={(path) => props.onBrowse(activeInfo.name, path)}
             rpc={props.rpc}
             agentName={props.agentName}
             pinnedPorts={activeInfo.name === "sandbox" ? props.pinnedPorts : []}
@@ -117,7 +116,6 @@ interface PerExecutorViewProps {
   exec: { name: string; kind: string; capabilities: string[]; available: boolean };
   outputs: ExecutorOutput[];
   onExecute: (cmd: string) => Promise<unknown>;
-  onBrowse: (path: string) => Promise<unknown>;
   rpc: (method: string, args?: unknown[]) => Promise<unknown>;
   agentName?: string;
   pinnedPorts: Array<{ port: number; url: string; name?: string }>;
@@ -129,7 +127,7 @@ type TabSelection =
   | { kind: 'terminal' };
 
 function PerExecutorView(props: PerExecutorViewProps) {
-  const { exec, outputs, onExecute, onBrowse, rpc, agentName, pinnedPorts } = props;
+  const { exec, outputs, onExecute, rpc, agentName, pinnedPorts } = props;
 
   // Initial tab: first preview if any, else terminal.
   const [active, setActive] = useState<TabSelection>(() =>
@@ -213,7 +211,7 @@ function PerExecutorView(props: PerExecutorViewProps) {
           return <PreviewPane port={p.port} url={p.url} name={p.name} />;
         })()}
         {active.kind === 'files' && (
-          <FilesPane execName={exec.name} onBrowse={onBrowse} />
+          <FilesPane execName={exec.name} rpc={rpc} />
         )}
         {active.kind === 'terminal' && (
           <TerminalPane execName={exec.name} outputs={outputs} onExecute={onExecute} />
@@ -318,38 +316,54 @@ function TerminalPane({ execName, outputs, onExecute }: {
   );
 }
 
-function FilesPane({ execName, onBrowse }: {
-  execName: string; onBrowse: (path: string) => Promise<unknown>;
-}) {
+type Rpc = (method: string, args?: unknown[]) => Promise<unknown>;
+interface FileState { content?: string; truncated?: boolean; error?: string }
+
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n}b`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}k`;
+  return `${(n / (1024 * 1024)).toFixed(1)}M`;
+}
+
+function joinPath(dir: string, name: string): string {
+  return dir === "/" ? `/${name}` : `${dir}/${name}`;
+}
+
+/** General per-executor file manager: typed directory listing (getExecutorFiles)
+ *  + a text viewer (readExecutorFile). Drives its own fetches off the stable
+ *  `rpc`, so it only re-reads when the path or executor changes. */
+function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
   const [path, setPath] = useState("/");
-  const [entries, setEntries] = useState<string[]>([]);
+  const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  // The parent recreates `onBrowse` on every render; depending on its identity
-  // would refetch the listing on every parent render (streaming tokens, port
-  // changes, …). Hold it in a ref so `refresh` is stable and the fetch fires
-  // only when the path or executor actually changes.
-  const onBrowseRef = useRef(onBrowse);
-  useEffect(() => { onBrowseRef.current = onBrowse; }, [onBrowse]);
+  const [viewing, setViewing] = useState<string | null>(null);   // full path of file in the viewer
+  const [file, setFile] = useState<FileState | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
 
   const refresh = useCallback(async (p: string) => {
     setLoading(true);
     setErr(null);
     try {
-      const r = await onBrowseRef.current(p) as { entries?: unknown; error?: string };
+      const r = await rpc("getExecutorFiles", [execName, p]) as { entries?: DirEntry[]; error?: string };
       if (r.error) { setErr(r.error); setEntries([]); }
-      else {
-        const arr = Array.isArray(r.entries)
-          ? (r.entries as unknown[]).map(String)
-          : String(r.entries ?? '').split('\n').filter(Boolean);
-        setEntries(arr);
-      }
+      else setEntries(r.entries ?? []);
     } catch (e) { setErr((e as Error).message); setEntries([]); }
     finally { setLoading(false); }
-  }, []);
+  }, [rpc, execName]);
 
-  useEffect(() => { refresh(path); }, [path, execName, refresh]);
+  const openFile = useCallback(async (full: string) => {
+    setViewing(full);
+    setFile(null);
+    setFileLoading(true);
+    try {
+      setFile(await rpc("readExecutorFile", [execName, full]) as FileState);
+    } catch (e) { setFile({ error: (e as Error).message }); }
+    finally { setFileLoading(false); }
+  }, [rpc, execName]);
+
+  // Re-list on path/executor change; leaving any open file viewer.
+  useEffect(() => { setViewing(null); refresh(path); }, [path, execName, refresh]);
 
   const segments = path === "/" ? [] : path.split("/").filter(Boolean);
 
@@ -367,38 +381,67 @@ function FilesPane({ execName, onBrowse }: {
           </span>
         ))}
         <button
-          onClick={() => refresh(path)}
+          onClick={() => viewing ? openFile(viewing) : refresh(path)}
           className="ml-auto p-text-3 hover:p-text p-1"
           title="Refresh"
         ><ArrowsClockwiseIcon size={11} /></button>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2 text-xs space-y-0.5">
-        {err && <div className="text-red-400">{err}</div>}
-        {loading && <div className="p-text-3">Loading…</div>}
-        {!loading && segments.length > 0 && (
-          <button
-            onClick={() => setPath('/' + segments.slice(0, -1).join('/'))}
-            className="p-text-3 hover:p-text font-mono"
-          >📁 ..</button>
-        )}
-        {entries.map((entry, i) => {
-          const isDir = entry.startsWith("d ") || entry.endsWith("/");
-          const name = entry.replace(/^[d-] /, "").replace(/\/$/, "");
-          return (
+
+      {viewing ? (
+        <FileViewer
+          name={viewing.split("/").pop() ?? viewing}
+          state={file}
+          loading={fileLoading}
+          onBack={() => setViewing(null)}
+        />
+      ) : (
+        <div className="flex-1 overflow-y-auto px-3 py-2 text-xs space-y-0.5">
+          {err && <div className="text-red-400">{err}</div>}
+          {loading && <div className="p-text-3">Loading…</div>}
+          {!loading && segments.length > 0 && (
             <button
-              key={i}
-              onClick={() => isDir ? setPath((path === "/" ? "" : path) + "/" + name) : undefined}
-              className={`block w-full text-left truncate font-mono ${
-                isDir ? "p-text hover:underline cursor-pointer" : "p-text-2 cursor-default"
-              }`}
+              onClick={() => setPath('/' + segments.slice(0, -1).join('/'))}
+              className="flex items-center gap-1.5 p-text-3 hover:p-text font-mono"
+            ><FolderIcon size={12} /> ..</button>
+          )}
+          {entries.map((e) => (
+            <button
+              key={e.name}
+              onClick={() => e.type === "dir" ? setPath(joinPath(path, e.name)) : openFile(joinPath(path, e.name))}
+              className="flex items-center gap-1.5 w-full text-left font-mono p-text-2 hover:p-text"
             >
-              {isDir ? "📁 " : "📄 "}{name}
+              {e.type === "dir"
+                ? <FolderIcon size={12} className="text-sky-400 shrink-0" weight="fill" />
+                : <FileIcon size={12} className="p-text-3 shrink-0" />}
+              <span className="truncate flex-1">{e.name}</span>
+              {e.type === "file" && e.size != null && <span className="p-text-3 shrink-0 tabular-nums">{fmtSize(e.size)}</span>}
             </button>
-          );
-        })}
-        {!loading && entries.length === 0 && !err && (
-          <div className="p-text-3 italic">(empty)</div>
-        )}
+          ))}
+          {!loading && entries.length === 0 && !err && (
+            <div className="p-text-3 italic">(empty)</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FileViewer({ name, state, loading, onBack }: {
+  name: string; state: FileState | null; loading: boolean; onBack: () => void;
+}) {
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border">
+        <button onClick={onBack} className="p-text-3 hover:p-text" title="Back to files" aria-label="Back to files">
+          <ArrowLeftIcon size={12} />
+        </button>
+        <span className="text-xs font-mono p-text-2 truncate">{name}</span>
+        {state?.truncated && <span className="text-[10px] px-1 rounded p-elevated p-text-3 ml-auto shrink-0">truncated</span>}
+      </div>
+      <div className="flex-1 overflow-auto">
+        {loading ? <div className="p-text-3 text-xs px-3 py-3">Loading…</div>
+          : state?.error ? <div className="text-red-400 text-xs px-3 py-3">{state.error}</div>
+          : <pre className="text-[11px] font-mono p-text-2 whitespace-pre px-3 py-2 leading-relaxed">{state?.content ?? ""}</pre>}
       </div>
     </div>
   );

@@ -85,7 +85,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 executors={props.executors}
                 outputs={props.executorOutputs}
                 onExecute={props.onExecute}
-                onBrowse={(id: string, path: string) => props.rpc("getExecutorFiles", [id, path])}
                 agentName={props.agentName}
                 rpc={props.rpc}
                 pinnedPorts={props.pinnedPorts}

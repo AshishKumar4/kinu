@@ -67,6 +67,14 @@ export interface MemoryEntry {
 	updatedAt: string;
 }
 
+/** One directory entry in the per-executor file manager (getExecutorFiles).
+ *  Normalized across executors (each provider's readdir has its own format). */
+export interface DirEntry {
+	name: string;
+	type: "file" | "dir";
+	size?: number;
+}
+
 /** Typed agent RPC. The single boundary cast (unknown → T) lives in the hook's
  *  wrapper, so call sites read `rpc<Foo>("getFoo", [])` cast-free. */
 export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
