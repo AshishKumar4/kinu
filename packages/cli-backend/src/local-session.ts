@@ -16,12 +16,15 @@ import { type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult,
+  SessionWriter, SessionMessage,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold,
   EventLog, initEventsHubTables,
   EvolutionEngine,
+  initFactsTable, createFactsStore,
+  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createThinkTool,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
 } from '@proteus/core';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -113,8 +116,12 @@ export class LocalAgentSession implements BackendHost {
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
 
-    // Same built-in surface the TUI/REPL assembled inline, now wrapped so >30s
-    // calls auto-background. think / fact / skills remain CF-only for now.
+    // agent_facts world model — exposes the `fact` tool (parity with the DO).
+    initFactsTable(this.rt.storage.execRaw);
+
+    // The full built-in surface, now wrapped so >30s calls auto-background.
+    // think (single-shot + MCTS; heads needs a subprocess HeadRuntime — P6b) +
+    // fact + the Node execute/craft factories.
     const rawTools = buildBuiltinTools({
       rt: this.rt,
       craftedToolExecute: createNodeCraftedExecute(),
@@ -124,6 +131,8 @@ export class LocalAgentSession implements BackendHost {
         shell: this.rt.shell,
       }) as never,
       codemodeLoader: { __cli: true } as unknown,
+      thinkTool: this.buildThinkTool(),
+      facts: createFactsStore(this.rt.storage.sql),
     });
     this.tools = this.wrapToolsForBackground(rawTools);
 
@@ -290,6 +299,46 @@ export class LocalAgentSession implements BackendHost {
     // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
     await this.orch.completeTurn(turn);
     this.emit({ type: 'turn-end', turn });
+  }
+
+  /** The unified `think` tool — single-shot + MCTS strategies. Heads is omitted
+   *  locally (it needs a subprocess HeadRuntime via host.headRuntime, P6b); MCTS
+   *  explores over rt.spawnBranch (createBranchSpawner) just like the DO. */
+  private buildThinkTool(): ToolSet[string] {
+    const registry = createStrategyRegistry();
+    registry.register(createSingleShotStrategy());
+    registry.register(createMCTSStrategy());
+    return createThinkTool({
+      registry,
+      rt: this.rt,
+      model: this.model,
+      defaultOptions: () => ({ mcts: { session: this.createMCTSSession() } }),
+    });
+  }
+
+  /** A fresh SessionWriter for an MCTS run — an in-memory message tree that also
+   *  persists nodes to the messages table (session_id='mcts'), mirroring the DO. */
+  private createMCTSSession(): SessionWriter {
+    const messages: Array<{ id: string; parentId: string | null; role: 'user' | 'assistant'; content: string }> = [];
+    const sql = this.rt.storage.sql;
+    return {
+      async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
+        const content = msg.parts.map((p) => p.text).join('');
+        messages.push({ id: msg.id, parentId: parentId ?? null, role: msg.role, content });
+        sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+          VALUES (${msg.id}, ${'mcts'}, ${parentId ?? null}, ${msg.role}, ${content})`;
+      },
+      getHistory(leafId?: string): Array<{ role: string; content: string }> {
+        const result: Array<{ role: string; content: string }> = [];
+        let current = leafId ? messages.find((m) => m.id === leafId) : undefined;
+        while (current) {
+          result.unshift({ role: current.role, content: current.content });
+          current = current.parentId ? messages.find((m) => m.id === current!.parentId) : undefined;
+        }
+        return result;
+      },
+      async compact(): Promise<void> {},
+    };
   }
 
   /** Mirror the cf-backend wrapToolsForBackground: shallow-clone the toolset and

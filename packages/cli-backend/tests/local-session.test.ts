@@ -132,11 +132,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(b.event.type).toBe('job_update');
   });
 
-  test('toolNames exposes the built-in surface; end() resolves', async () => {
+  test('toolNames exposes the full surface (think/fact parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    expect(names.length).toBeGreaterThan(0);
-    expect(names).toContain('run');
+    // Full parity with the DO surface: execution + memory + reasoning + facts.
+    for (const t of ['run', 'execute_tools', 'memory', 'think', 'fact']) expect(names).toContain(t);
     await session.send('hi');
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
   });
