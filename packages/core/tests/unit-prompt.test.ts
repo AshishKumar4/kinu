@@ -68,6 +68,9 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('sandbox.*');
     expect(prompt).toMatch(/Showing a running app/);
     expect(prompt).toMatch(/exposePort/);
+    // With ≥2 executors, warn they're disjoint filesystems (the documented
+    // "wrote in the sandbox, read an empty workspace" confusion).
+    expect(prompt).toMatch(/separate filesystems/i);
   });
 
   test('omits executor section when no executors registered', () => {

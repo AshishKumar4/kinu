@@ -48,6 +48,14 @@ function renderExecutorSection(names: string[]): string {
         return `  **${n}.*** — registered executor`;
     }
   });
+  // Each executor is a SEPARATE filesystem — a file written via one namespace
+  // is NOT visible to another (workspace.* is the Worker VFS; sandbox.* is the
+  // container; laptop.* is the user's disk). Stay on one executor for a task,
+  // and read back with the SAME namespace you wrote with. (Prevents the
+  // "wrote in the sandbox, read an empty workspace" confusion.)
+  const disjointNote = names.length > 1
+    ? '\n\n**These namespaces are separate filesystems.** A file you write with one (e.g. `sandbox.writeFile`) is NOT readable through another (e.g. `workspace.readFile`). Pick the executor a task lives on and read/write/inspect it all through that same namespace.'
+    : '';
   // When the sandbox executor is registered, append a "Showing apps" guide
   // so the model knows that user-visible previews require exposePort. The
   // app's UI auto-renders the returned URL as a live iframe in the chat
@@ -99,7 +107,7 @@ Rules:
   - If your server takes a while to boot (e.g. Next.js), inspect
     \`sandbox.readFile("/tmp/srv-<port>.log")\` to see what's happening.\n`
     : '';
-  return `\n### Executor namespaces inside execute_tools\n${lines.join('\n')}\n${showingApps}`;
+  return `\n### Executor namespaces inside execute_tools\n${lines.join('\n')}${disjointNote}\n${showingApps}`;
 }
 
 function renderBuiltinToolsSection(): string {
