@@ -78,7 +78,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Survey finding: 3 prior impls exist, all use the X pattern.',
         evidence: [{ id: 'e1', kind: 'fact', body: 'prior art' }],
         decisions: [{ question: 'use X pattern?', choice: 'yes', rationale: 'standard' }],
-        artifactRefs: [], childHeadIds: [], toolCalls: [],
+        artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
         tokenUsage: { input: 100, output: 80, total: 180 }, wallClockMs: 120,
       },
       'design': {
@@ -86,7 +86,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Design sketch: minimal struct, no abstractions.',
         evidence: [{ id: 'e2', kind: 'fact', body: 'simple > clever' }],
         decisions: [{ question: 'add abstraction?', choice: 'no', rationale: 'YAGNI' }],
-        artifactRefs: [], childHeadIds: [], toolCalls: [],
+        artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
         tokenUsage: { input: 120, output: 90, total: 210 }, wallClockMs: 180,
       },
       'risks': {
@@ -94,7 +94,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Failure modes: connection drops, race on init.',
         evidence: [{ id: 'e3', kind: 'fact', body: 'race condition' }],
         decisions: [{ question: 'add retry?', choice: 'yes', rationale: 'idempotent' }],
-        artifactRefs: [], childHeadIds: [], toolCalls: [],
+        artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
         tokenUsage: { input: 110, output: 75, total: 185 }, wallClockMs: 150,
       },
     };

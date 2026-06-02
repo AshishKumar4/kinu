@@ -47,6 +47,7 @@ import {
   type HeadBudget,
   type MergeResult,
   budgetExhausted,
+  initHeadsTables,
   HeadController,
   HeadJournal,
   MergeOutputSchema,
@@ -55,7 +56,7 @@ import {
 } from "@proteus/core";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
-import { extractFinalText, synthesizeHeadSummary } from "./lib/head-summary.js";
+import { extractFinalText, synthesizeHeadSummary, extractHeadSteps } from "./lib/head-summary.js";
 import type { SqlExecutor } from "@proteus/agent-utils";
 
 const MAX_HEAD_STEPS = 16;
@@ -300,6 +301,7 @@ export class ExplorationAgent extends Agent<Env> {
         artifactRefs: [...this.headArtifacts],
         childHeadIds: [...this.headChildIds],
         toolCalls: [...this.headToolCalls],
+        steps: extractHeadSteps(result.steps),
         tokenUsage: {
           input: this.headTokenUsage.input,
           output: this.headTokenUsage.output,
@@ -318,6 +320,7 @@ export class ExplorationAgent extends Agent<Env> {
         artifactRefs: [...this.headArtifacts],
         childHeadIds: [...this.headChildIds],
         toolCalls: [...this.headToolCalls],
+        steps: [],
         tokenUsage: {
           input: this.headTokenUsage.input,
           output: this.headTokenUsage.output,
@@ -511,25 +514,9 @@ export class ExplorationAgent extends Agent<Env> {
     headCount: number;
   }> {
     // Ensure the journal tables exist on THIS facet's storage so recursive
-    // splits can persist locally without competing with the orchestrator.
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    execRaw(`CREATE TABLE IF NOT EXISTS head_journal (
-      id TEXT PRIMARY KEY, parent_id TEXT, root_id TEXT NOT NULL, depth INTEGER NOT NULL,
-      task TEXT NOT NULL, rationale TEXT, status TEXT NOT NULL, spawned_at INTEGER NOT NULL,
-      completed_at INTEGER, token_input INTEGER DEFAULT 0, token_output INTEGER DEFAULT 0,
-      wall_clock_ms INTEGER DEFAULT 0, summary TEXT, error_message TEXT,
-      decisions_json TEXT, artifacts_json TEXT, tool_calls_json TEXT,
-      child_head_ids_json TEXT, merge_strategy TEXT NOT NULL DEFAULT 'synthesize')`);
-    execRaw(`CREATE TABLE IF NOT EXISTS head_evidence (
-      id TEXT PRIMARY KEY, head_id TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL,
-      ref TEXT, confidence REAL, created_at INTEGER NOT NULL)`);
-    execRaw(`CREATE TABLE IF NOT EXISTS head_merge_results (
-      root_id TEXT PRIMARY KEY, merged_narrative TEXT NOT NULL,
-      selected_decisions_json TEXT, unresolved_questions_json TEXT,
-      recommendations_json TEXT, cost_head_count INTEGER NOT NULL,
-      cost_total_tokens INTEGER NOT NULL, cost_total_wall_ms INTEGER NOT NULL,
-      cost_max_depth INTEGER NOT NULL, merged_at INTEGER NOT NULL,
-      merge_strategy TEXT NOT NULL)`);
+    // splits can persist locally without competing with the orchestrator. Single
+    // source of truth — same schema the orchestrator initializes.
+    initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); });
 
     const journal = new HeadJournal(this.sql.bind(this) as never);
     const facet = this;

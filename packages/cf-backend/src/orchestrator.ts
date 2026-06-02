@@ -64,7 +64,7 @@ import {
   nanoid,
   // Branching heads
   HeadController, HeadJournal, initHeadsTables,
-  type SerializedMessage, type SplitPhaseEvent,
+  type SerializedMessage, type SplitPhaseEvent, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
@@ -300,6 +300,14 @@ export class OrchestratorAgent extends Think<Env> {
   // heads strategy drives it, injecting inheritedContext + an onPhase event
   // sink via defaultOptions().
   private _headController: HeadController | null = null;
+
+  // The orchestrator's view of head activity (journal + runs + steps). Shared by
+  // getHeadController (write path) and getHeadRuns (read path).
+  private _headJournal: HeadJournal | null = null;
+  private get headJournal(): HeadJournal {
+    if (!this._headJournal) this._headJournal = new HeadJournal(this.boundSql);
+    return this._headJournal;
+  }
 
   // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
   // Backed by `agent_log` rows of kind in {step, tool_call, tool_result,
@@ -873,12 +881,10 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private getHeadController(): HeadController {
     if (this._headController) return this._headController;
-    const sqlForJournal = this.sql.bind(this) as unknown as SqlExecutor;
-    const journal = new HeadJournal(sqlForJournal);
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
     const runtime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId);
-    this._headController = new HeadController(runtime, journal);
+    this._headController = new HeadController(runtime, this.headJournal);
     return this._headController;
   }
 
@@ -2714,55 +2720,12 @@ export class OrchestratorAgent extends Think<Env> {
     } catch { /* table may not exist on very first start */ }
   }
 
-  /** Recent branching-head runs (think strategy=heads): each root spawn with
-   *  its child heads + the merged synthesis — drives the Reasoning surface's
-   *  Branches strip. Reads head_journal + head_merge_results directly. */
+  /** Recent branching-head runs (think strategy=heads): each split grouped by
+   *  root_id with its heads (incl. the ordered per-head step trace) + the merged
+   *  synthesis — drives the Reasoning surface's Branches strip. */
   @callable()
-  async getHeadRuns(limit: number = 20): Promise<Array<{
-    rootId: string; task: string; rationale: string; status: string; spawnedAt: number;
-    heads: Array<{
-      id: string; task: string; rationale: string; status: string; summary: string | null;
-      errorMessage: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number;
-      toolCalls: Array<{ name: string; status: string }>;
-      decisions: Array<{ question: string; choice: string; rationale: string }>;
-    }>;
-    merge: { narrative: string; headCount: number; totalTokens: number } | null;
-  }>> {
-    try {
-      const roots = this.sql<{ id: string; task: string; rationale: string; status: string; spawned_at: number }>`
-        SELECT id, task, rationale, status, spawned_at FROM head_journal
-        WHERE parent_id IS NULL OR parent_id = ''
-        ORDER BY spawned_at DESC LIMIT ${limit}`;
-      return roots.map((root) => {
-        const heads = this.sql<{ id: string; task: string; rationale: string; status: string; summary: string | null; error_message: string | null; token_input: number; token_output: number; wall_clock_ms: number; tool_calls_json: string | null; decisions_json: string | null }>`
-          SELECT id, task, rationale, status, summary, error_message, token_input, token_output, wall_clock_ms, tool_calls_json, decisions_json
-          FROM head_journal WHERE root_id = ${root.id} ORDER BY depth, spawned_at`
-          .map((h) => {
-            const tools = h.tool_calls_json ? safeJsonParse(h.tool_calls_json) : null;
-            const decs = h.decisions_json ? safeJsonParse(h.decisions_json) : null;
-            return {
-              id: h.id, task: h.task, rationale: h.rationale, status: h.status,
-              summary: h.summary, errorMessage: h.error_message, tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
-              toolCalls: (Array.isArray(tools) ? tools : []).map((t) => {
-                const o = (t ?? {}) as { name?: unknown; status?: unknown };
-                return { name: String(o.name ?? '?'), status: String(o.status ?? '') };
-              }),
-              decisions: (Array.isArray(decs) ? decs : []).map((d) => {
-                const o = (d ?? {}) as { question?: unknown; choice?: unknown; rationale?: unknown };
-                return { question: String(o.question ?? ''), choice: String(o.choice ?? ''), rationale: String(o.rationale ?? '') };
-              }),
-            };
-          });
-        const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number }>`
-          SELECT merged_narrative, cost_head_count, cost_total_tokens
-          FROM head_merge_results WHERE root_id = ${root.id}`[0];
-        return {
-          rootId: root.id, task: root.task, rationale: root.rationale, status: root.status, spawnedAt: root.spawned_at,
-          heads,
-          merge: mergeRow ? { narrative: mergeRow.merged_narrative, headCount: mergeRow.cost_head_count, totalTokens: mergeRow.cost_total_tokens } : null,
-        };
-      });
-    } catch { return []; }
+  async getHeadRuns(limit: number = 20): Promise<HeadRunView[]> {
+    try { return this.headJournal.listRuns(limit); } catch { return []; }
   }
 
   /** Tear down every per-agent resource, then wipe this Durable Object. Called

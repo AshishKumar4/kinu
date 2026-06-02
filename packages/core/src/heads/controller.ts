@@ -108,6 +108,10 @@ export class HeadController {
     const n = opts.request.heads.length;
     const childBudget = deriveChildBudget(parentBudget, n, opts.request.budgetSplit);
 
+    // Anchor the run identity before spawning so its heads group under one root
+    // (top-level splits have a synthetic root with no head row of its own).
+    this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+
     // Spawn all children concurrently.
     const spawnPromises = opts.request.heads.map(async (h, idx) => {
       const id = `${rootId}-d${childBudget.maxDepth + 1}-${idx}-${nanoid(6)}`;
@@ -164,6 +168,7 @@ export class HeadController {
             artifactRefs: [],
             childHeadIds: [],
             toolCalls: [],
+            steps: [],
             tokenUsage: { input: 0, output: 0, total: 0 },
             wallClockMs: Date.now() - startedAt,
             errorMessage: err instanceof Error ? err.message : String(err),

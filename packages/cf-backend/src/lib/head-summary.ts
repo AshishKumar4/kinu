@@ -5,8 +5,62 @@
 // and a generative head almost always ends on a tool-call / reasoning turn —
 // so reading `result.text` alone yielded an empty per-head merge summary.
 
+import type { HeadStep } from "@proteus/core";
+
 interface StepLike { text?: string }
 interface ResultLike { text?: string; reasoningText?: string; steps?: ReadonlyArray<StepLike> }
+
+/** ai-SDK v6 step shape we read for the trace. toolCalls carry `.input`, their
+ *  results carry `.output`, matched by `toolCallId`. */
+interface ToolCallLike { toolName?: string; name?: string; input?: unknown; toolCallId?: string }
+interface ToolResultLike { toolName?: string; output?: unknown; result?: unknown; toolCallId?: string }
+interface TraceStepLike {
+  text?: string;
+  reasoningText?: string;
+  toolCalls?: ReadonlyArray<ToolCallLike>;
+  toolResults?: ReadonlyArray<ToolResultLike>;
+}
+
+const DIGEST_LIMIT = 800;
+
+/** Truncate a digested value so a single step can't bloat the trace store. */
+function digest(value: unknown): unknown {
+  if (value == null) return value;
+  if (typeof value === "string") return value.length > DIGEST_LIMIT ? value.slice(0, DIGEST_LIMIT) + "…" : value;
+  try {
+    const s = JSON.stringify(value);
+    if (s.length <= DIGEST_LIMIT) return value;
+    return s.slice(0, DIGEST_LIMIT) + "…";
+  } catch { return String(value).slice(0, DIGEST_LIMIT); }
+}
+
+/** Walk ai-SDK v6 `result.steps` into the ordered head trace: each step's prose,
+ *  reasoning, and tool calls (input matched with its output by toolCallId).
+ *  Steps with no text, reasoning, or tool calls are dropped (empty padding). */
+export function extractHeadSteps(steps: ReadonlyArray<TraceStepLike> | undefined): HeadStep[] {
+  if (!steps?.length) return [];
+  const out: HeadStep[] = [];
+  for (const step of steps) {
+    const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
+    const results = Array.isArray(step.toolResults) ? step.toolResults : [];
+    const toolCalls = calls.map((c, i) => {
+      const match = c.toolCallId
+        ? results.find((r) => r.toolCallId === c.toolCallId)
+        : results[i];
+      const output = match?.output ?? match?.result;
+      return {
+        name: String(c.toolName ?? c.name ?? "?"),
+        input: digest(c.input),
+        output: output === undefined ? undefined : digest(output),
+      };
+    });
+    const text = step.text?.trim() ?? "";
+    const reasoning = step.reasoningText?.trim() || undefined;
+    if (!text && !reasoning && toolCalls.length === 0) continue;
+    out.push({ text, reasoning, toolCalls });
+  }
+  return out;
+}
 
 /** The head's real final answer: the last text-bearing step (not just the last
  *  step), falling back to the model's reasoning text. */

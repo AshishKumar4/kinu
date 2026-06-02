@@ -270,6 +270,7 @@ export { isoDate, today, nowMs } from './utils/date.js';
 // and MCTS branches (single short LLM call for evaluation).
 export type {
   HeadId, HeadBudget, HeadInput, HeadReport,
+  HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, MergeStrategy,
   BudgetSplit, SerializedMessage,

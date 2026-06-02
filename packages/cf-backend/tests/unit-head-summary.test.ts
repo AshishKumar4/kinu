@@ -1,6 +1,6 @@
 // Head report-summary capture — the #176 fix for empty per-head merge summaries.
 import { describe, test, expect } from "bun:test";
-import { extractFinalText, synthesizeHeadSummary } from "../src/lib/head-summary";
+import { extractFinalText, synthesizeHeadSummary, extractHeadSteps } from "../src/lib/head-summary";
 
 describe("extractFinalText", () => {
   test("uses result.text when the final step has text", () => {
@@ -47,5 +47,47 @@ describe("synthesizeHeadSummary", () => {
 
   test("returns null when the head recorded nothing at all", () => {
     expect(synthesizeHeadSummary({ decisions: [], evidence: [], toolCalls: [] })).toBeNull();
+  });
+});
+
+describe("extractHeadSteps", () => {
+  test("walks v6 steps into ordered trace; matches tool output to input by toolCallId", () => {
+    const steps = extractHeadSteps([
+      { text: "Let me check the file.", reasoningText: "I should read it first" },
+      {
+        text: "",
+        toolCalls: [{ toolName: "sandbox_read", input: { path: "/a.ts" }, toolCallId: "c1" }],
+        toolResults: [{ toolName: "sandbox_read", output: "file contents", toolCallId: "c1" }],
+      },
+      { text: "The file defines a router." },
+    ]);
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toEqual({ text: "Let me check the file.", reasoning: "I should read it first", toolCalls: [] });
+    expect(steps[1].toolCalls[0]).toEqual({ name: "sandbox_read", input: { path: "/a.ts" }, output: "file contents" });
+    expect(steps[2]).toEqual({ text: "The file defines a router.", reasoning: undefined, toolCalls: [] });
+  });
+
+  test("falls back to positional output match when toolCallId is absent", () => {
+    const steps = extractHeadSteps([
+      { toolCalls: [{ name: "exec", input: "ls" }], toolResults: [{ output: "a.ts b.ts" }] },
+    ]);
+    expect(steps[0].toolCalls[0]).toEqual({ name: "exec", input: "ls", output: "a.ts b.ts" });
+  });
+
+  test("drops empty padding steps (no text, reasoning, or tool calls)", () => {
+    const steps = extractHeadSteps([{ text: "" }, {}, { text: "real" }]);
+    expect(steps).toEqual([{ text: "real", reasoning: undefined, toolCalls: [] }]);
+  });
+
+  test("digests oversized input/output", () => {
+    const big = "x".repeat(2000);
+    const steps = extractHeadSteps([{ toolCalls: [{ name: "t", input: big }], toolResults: [{ output: big }] }]);
+    expect(String(steps[0].toolCalls[0].input).length).toBeLessThan(900);
+    expect(String(steps[0].toolCalls[0].output).length).toBeLessThan(900);
+  });
+
+  test("returns [] for empty / undefined", () => {
+    expect(extractHeadSteps(undefined)).toEqual([]);
+    expect(extractHeadSteps([])).toEqual([]);
   });
 });

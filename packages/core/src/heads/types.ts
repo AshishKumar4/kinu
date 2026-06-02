@@ -121,6 +121,21 @@ export interface ArtifactRef {
   readonly description?: string;
 }
 
+/** One tool call within a head step — name + (digested) input/output. */
+export interface HeadStepToolCall {
+  readonly name: string;
+  readonly input?: unknown;
+  readonly output?: unknown;
+}
+
+/** One reasoning step of a head's run — the ordered trace the UI replays so the
+ *  user can see what each branch actually did, turn by turn. */
+export interface HeadStep {
+  readonly text: string;
+  readonly reasoning?: string;
+  readonly toolCalls: readonly HeadStepToolCall[];
+}
+
 /** What a head reports back to its parent on completion. */
 export interface HeadReport {
   readonly id: HeadId;
@@ -135,10 +150,41 @@ export interface HeadReport {
   readonly childHeadIds: readonly HeadId[];
   /** Tool calls the head made — for telemetry. */
   readonly toolCalls: readonly ToolCallRecord[];
+  /** Ordered per-step trace (text + reasoning + tool calls) — drives the live
+   *  expandable head timeline in the Reasoning surface. */
+  readonly steps: readonly HeadStep[];
   readonly tokenUsage: { input: number; output: number; total: number };
   readonly wallClockMs: number;
   /** Free-form failure message if status != 'completed'. */
   readonly errorMessage?: string;
+}
+
+/** One head as the Reasoning surface renders it — lifecycle + the ordered
+ *  trace. Assembled by HeadJournal.listRuns; returned verbatim by getHeadRuns. */
+export interface HeadRunHeadView {
+  readonly id: HeadId;
+  readonly task: string;
+  readonly rationale: string;
+  readonly status: string;
+  readonly summary: string | null;
+  readonly errorMessage: string | null;
+  readonly tokenInput: number;
+  readonly tokenOutput: number;
+  readonly wallClockMs: number;
+  readonly toolCalls: ReadonlyArray<{ name: string; status: string }>;
+  readonly decisions: ReadonlyArray<{ question: string; choice: string; rationale: string }>;
+  readonly steps: readonly HeadStep[];
+}
+
+/** One split (a run): its identity + grouped heads + the merge synthesis. */
+export interface HeadRunView {
+  readonly rootId: HeadId;
+  readonly task: string;
+  readonly rationale: string;
+  readonly status: string;
+  readonly spawnedAt: number;
+  readonly heads: readonly HeadRunHeadView[];
+  readonly merge: { narrative: string; headCount: number; totalTokens: number } | null;
 }
 
 /** What the parent asks the controller to run. */
