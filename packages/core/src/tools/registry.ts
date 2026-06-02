@@ -51,9 +51,11 @@ export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
     'container — use this for npm/pip/dev servers and ANY process that listens on a port. ' +
     'codemode.* exposes learned patterns. After starting a dev server in the sandbox, call ' +
     'sandbox.exposePort(port) so the user can SEE the running app — the returned URL renders ' +
-    'as a live iframe in the chat and on the Executors tab. Agent-crafted tools are reachable ' +
-    'as tools.<name>(args) and their bodies may call workspace.*, sandbox.*, codemode.*, ' +
-    'tools.* freely. Runs in sandboxed Worker.',
+    'as a live iframe in the chat and on the Executors tab. agent.* steers YOURSELF: ' +
+    'agent.proposeCurriculum/acceptCurriculumTask (self-improvement tasks) and ' +
+    'agent.schedule({cron|atMs}) to wake yourself for a future autonomous turn. Agent-crafted ' +
+    'tools are reachable as tools.<name>(args) and their bodies may call workspace.*, sandbox.*, ' +
+    'codemode.*, tools.* freely. Runs in sandboxed Worker.',
   run:
     'Run a shell command. Pipes, redirects, env vars all work. The `runtime` ' +
     'parameter chooses where it runs: "workspace" (default — the agent\'s own ' +

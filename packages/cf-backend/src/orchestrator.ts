@@ -111,6 +111,7 @@ import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { createRLMProvider } from "./rlm.js";
+import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
@@ -584,6 +585,8 @@ export class OrchestratorAgent extends Think<Env> {
         this.providerRegistry(),
         () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
       );
+      // `agent.*` — the agent steers itself (curriculum + self-scheduling).
+      const agentSelfProvider = createAgentSelfProvider(this);
       // Record which executor the agent actually works in, so the UI (diff /
       // file manager) defaults to where work happened. One upsert per executor
       // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
@@ -592,7 +595,7 @@ export class OrchestratorAgent extends Think<Env> {
         this._executorsUsedThisTurn.add(name);
         try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
       };
-      const allProviders = [craftedProvider, rlmProvider, ...executorProviders.map(p => {
+      const allProviders = [craftedProvider, rlmProvider, agentSelfProvider, ...executorProviders.map(p => {
         const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
         const wrapped: typeof tools = {};
         for (const [k, tool] of Object.entries(tools)) {
@@ -3587,6 +3590,33 @@ export class OrchestratorAgent extends Think<Env> {
   async cancelTrigger(trigger_id: string) {
     const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
     return { ok: true, changed };
+  }
+
+  /**
+   * Register a timer trigger — `timer_cron` (recurring, from a cron expr) or
+   * `timer_oneshot` (a single future fire at `atMs`). Shared by the agent's
+   * `agent.schedule` tool and the auto-GEPA scheduler, so trigger creation has
+   * one home (not inlined SQL). When it fires, alarm() publishes a timer event
+   * and the reactor wakes the agent. `trust` defaults to 'authenticated' so
+   * agent-created schedules are distinguishable from operator ones.
+   */
+  createTimerTrigger(opts: {
+    cron?: string;
+    atMs?: number;
+    label?: string;
+    payload?: Record<string, unknown>;
+    trust?: 'authenticated' | 'owner';
+  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
+    const now = Date.now();
+    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
+    const nextFireAt = opts.cron ? this.nextCronFire(opts.cron, now) : (opts.atMs ?? null);
+    const id = this.triggerRegistry.register({
+      kind,
+      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+      creator_trust: opts.trust ?? 'authenticated',
+      next_fire_at: nextFireAt ?? undefined,
+    }, now);
+    return { id, kind, nextFireAt };
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This
