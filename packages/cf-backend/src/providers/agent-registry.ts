@@ -7,10 +7,7 @@
 //      (codex, openai, openrouter, openai-compat, anthropic)
 //
 // Ordering is also the preference order for `defaultSpec()`:
-//   ai-gateway → workers-ai → codex → openai → anthropic → openrouter → openai-compat
-// ai-gateway is first so the default model is MiniMax M3 (via the gateway's
-// unified /compat endpoint); workers-ai (the free env.AI binding, Kimi) is the
-// fallback when the gateway isn't configured.
+//   workers-ai → ai-gateway → codex → openai → anthropic → openrouter → openai-compat
 //
 // Auth flows through the UserDO stub passed in opts.userDOStub — getAuth /
 // hasCredential are thin wrappers over its RPCs. No credential material ever
@@ -54,10 +51,8 @@ export interface AgentProviderRegistry {
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
-  // ai-gateway first → its defaultModel (MiniMax M3) is the registry default;
-  // workers-ai (env.AI binding, Kimi) is the free fallback.
-  registry.register(createAIGatewayProvider());
   registry.register(createWorkersAIProvider(opts.workersAI));
+  registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
@@ -98,20 +93,18 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   };
 
   // Sync-resolvable provider = needs no credential read to construct.
-  // ai-gateway (env vars → MiniMax M3) is preferred; workers-ai (env.AI binding
-  // → Kimi) is the free fallback when the gateway isn't configured.
+  // workers-ai (env.AI binding) and ai-gateway (env vars) qualify.
   function syncDefaultProvider(): string {
+    if (opts.env.AI && typeof opts.env.AI !== 'string') return 'workers-ai';
     if (typeof opts.env.AI_GATEWAY_URL === 'string' && opts.env.AI_GATEWAY_URL
      && typeof opts.env.AI_GATEWAY_AUTH === 'string' && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
-    if (opts.env.AI && typeof opts.env.AI !== 'string') return 'workers-ai';
-    throw new Error('No sync-resolvable provider (need AI_GATEWAY_AUTH or env.AI).');
+    throw new Error('No sync-resolvable provider (need env.AI or AI_GATEWAY_AUTH).');
   }
   function syncDefaultModelId(provider: string): string {
-    const own = registry.get(provider)?.defaultModel;
-    if (own) return own;
     const fallback = registry.get('workers-ai')?.defaultModel ?? '';
     if (!fallback) throw new Error('workers-ai provider missing defaultModel.');
-    return fallback;
+    if (provider === 'ai-gateway') return `workers-ai/${fallback}`;
+    return registry.get(provider)?.defaultModel ?? fallback;
   }
 
   return {

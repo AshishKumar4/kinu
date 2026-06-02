@@ -87,10 +87,7 @@
   // wildcard DNS record + non-workers.dev hostname, neither of which is
   // available here; we bypass it with our own token-gated proxy.)
   "vars": {
-    // Unified /compat OpenAI endpoint — serves partner models (minimax/m3) AND
-    // Workers AI (workers-ai/@cf/...) under one base. The AI SDK appends
-    // /chat/completions. (Was /workers-ai/v1, which couldn't reach partner models.)
-    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/compat",
+    "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
     "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
     // Cloudflare Access — verified against the team's JWKS on every
     // protected request. Public values (the AUD is an application
