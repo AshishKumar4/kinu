@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useParams } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
@@ -21,6 +21,15 @@ function LazyFallback() {
   );
 }
 
+// Remount the whole workspace — and with it the useAgent/useAgentChat hooks and
+// their message buffer — whenever the agent changes. Without the key, switching
+// /agent/A → /agent/B reuses the same component instance and one session's
+// messages bleed into the next.
+function KeyedWorkspace() {
+  const { agentId } = useParams();
+  return <WorkspacePage key={agentId} />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -29,7 +38,7 @@ export default function App() {
           <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
           <Route path="/user/settings" element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
           <Route path="/user/settings/mcp" element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
-          <Route path="/agent/:agentId" element={<ErrorBoundary label="workspace"><WorkspacePage /></ErrorBoundary>} />
+          <Route path="/agent/:agentId" element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
           <Route path="/mcts/:agentId" element={
             <ErrorBoundary label="mcts-explorer">
               <Suspense fallback={<LazyFallback />}>

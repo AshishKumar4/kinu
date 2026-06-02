@@ -48,12 +48,16 @@ export function CreateAgentModal({ onClose }: CreateAgentModalProps) {
     const displayName = m.split("\n")[0].slice(0, 60);
     try {
       await registerAgent(fullName, displayName, m);
+      // Dismiss the modal BEFORE navigating: it's rendered by the persistent
+      // Sidebar, so without this the "creating…" scrim stays up over the
+      // freshly-opened agent page. Leave `busy` set — the modal unmounts.
+      onClose();
       navigate(`/agent/${fullName}`, { state: { initialPrompt: m, displayName } });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-  }, [mission, busy, effectiveSlug, navigate]);
+  }, [mission, busy, effectiveSlug, navigate, onClose]);
 
   return (
     <Modal
