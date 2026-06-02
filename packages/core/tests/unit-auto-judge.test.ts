@@ -131,6 +131,34 @@ describe('runAutoShadowEval', () => {
     expect(map.get(0)).toBe('historical');
   });
 
+  test('auto-applies ROLLBACK on a regression (regression veto, end-to-end)', async () => {
+    const rt = await setup();
+    // Seed 5 pending wins (past minTrials with a strong record); this turn the
+    // judge picks 'current' — a single regression must roll the pending back
+    // despite the 5-1 record. Proves the hardened gate gates auto-apply.
+    for (let i = 0; i < 5; i++) {
+      rt.storage.sql`INSERT INTO scaffold_evaluations
+        (id, current_version, pending_version, task, current_output, pending_output,
+         current_score, pending_score, winner, judge_rationale, evaluated_at)
+        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+    }
+    const result = await runAutoShadowEval({
+      rt, task: 't', currentOutput: 'c',
+      judge: makeJudge('current'), // the regression
+      llmStream: noOpLlmStream,
+      config: { sampleRate: 1.0, autoApply: true },
+      random: () => 0,
+    });
+    expect(result.decision).toBe('rollback');
+    expect(result.applied).toBe('rollback');
+
+    const statuses = rt.storage.sql<{ version: number; status: string }>`
+      SELECT version, status FROM scaffold_versions ORDER BY version`;
+    const map = new Map(statuses.map((s) => [s.version, s.status]));
+    expect(map.get(0)).toBe('current');      // live scaffold unchanged
+    expect(map.get(1)).toBe('rolled_back');  // bad pending discarded
+  });
+
   test('skips gracefully when pending file unreadable', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
