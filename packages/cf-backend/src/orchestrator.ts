@@ -30,7 +30,7 @@ import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
-import { diffLines, computeWorkspaceDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
+import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
 import { aiSchema } from "./ai-schema.js";
 import type {
@@ -2404,6 +2404,39 @@ export class OrchestratorAgent extends Think<Env> {
     const baseline: Record<string, string> = {};
     for (const r of baselineRows) baseline[r.path] = r.content;
     return { files: computeWorkspaceDiff(baseline, current), baselineJustCaptured: false };
+  }
+
+  /**
+   * General per-executor change-set. The agent VFS ("workspace") has no shell,
+   * so it uses the snapshot baseline (computeWorkspaceDiff). Shell executors
+   * (sandbox/laptop/nimbus) use a real `git diff` of /workspace — the only way
+   * to capture changes the agent made inside a container (feedback: the diff
+   * didn't reflect sandbox repo changes). `git add -A -N` first so newly-created
+   * (untracked) files show as additions; it stages intent-to-add only (no
+   * content), respects .gitignore, and is cleared by the agent's next commit.
+   */
+  @callable()
+  async getExecutorDiff(executorId: string): Promise<{
+    files: FileDiff[]; mode: 'git' | 'vfs-baseline';
+    baselineJustCaptured?: boolean; notGitRepo?: boolean; error?: string;
+  }> {
+    if (executorId === 'workspace') {
+      const r = await this.getWorkspaceDiff();
+      return { files: r.files, mode: 'vfs-baseline', baselineJustCaptured: r.baselineJustCaptured };
+    }
+    const provider = this.rt.executionRouter?.getProvider(executorId);
+    if (!provider) return { files: [], mode: 'git', error: `Executor "${executorId}" not found` };
+    const execTool = provider.tools.exec;
+    if (!execTool) return { files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` };
+    const root = '/workspace';
+    try {
+      const isRepo = String(await execTool.execute(`git -C ${root} rev-parse --is-inside-work-tree 2>/dev/null || echo no`));
+      if (!isRepo.includes('true')) return { files: [], mode: 'git', notGitRepo: true };
+      const raw = String(await execTool.execute(`git -C ${root} add -A -N >/dev/null 2>&1; git -C ${root} --no-pager diff`));
+      return { files: parseGitDiff(raw), mode: 'git' };
+    } catch (err) {
+      return { files: [], mode: 'git', error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Mark the current workspace as the new baseline ("reviewed" — the diff

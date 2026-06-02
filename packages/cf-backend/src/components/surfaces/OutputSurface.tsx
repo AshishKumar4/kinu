@@ -13,13 +13,15 @@ import type { FileDiff } from "@/lib/diff";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { port: number; url: string; name?: string }
+export interface ExecutorInfo { name: string; kind: string; capabilities: string[]; available: boolean }
 
 export interface OutputSurfaceProps {
   pinnedPorts: PinnedPort[];
+  executors: ExecutorInfo[];
   rpc: Rpc;
 }
 
-export function OutputSurface({ pinnedPorts, rpc }: OutputSurfaceProps) {
+export function OutputSurface({ pinnedPorts, executors, rpc }: OutputSurfaceProps) {
   const [view, setView] = useState<"preview" | "diff">(pinnedPorts.length > 0 ? "preview" : "diff");
   return (
     <div className="h-full flex flex-col -m-5">
@@ -33,7 +35,7 @@ export function OutputSurface({ pinnedPorts, rpc }: OutputSurfaceProps) {
         ))}
       </div>
       <div className="flex-1 min-h-0">
-        {view === "preview" ? <PreviewView pinnedPorts={pinnedPorts} /> : <DiffView rpc={rpc} />}
+        {view === "preview" ? <PreviewView pinnedPorts={pinnedPorts} /> : <DiffView executors={executors} rpc={rpc} />}
       </div>
     </div>
   );
@@ -80,15 +82,47 @@ const STATUS_TONE: Record<string, string> = {
   changed: "text-amber-400",
 };
 
-function DiffView({ rpc }: { rpc: Rpc }) {
-  const [files, setFiles] = useState<FileDiff[] | null>(null);
+interface DiffResult {
+  files: FileDiff[];
+  mode: "git" | "vfs-baseline";
+  baselineJustCaptured?: boolean;
+  notGitRepo?: boolean;
+  error?: string;
+}
+
+const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Local", nimbus: "Nimbus" };
+
+/** Prefer a real-shell executor (where the agent does repo work) so its changes
+ *  are visible by default; fall back to the always-present VFS. */
+function pickDefaultExecutor(executors: ExecutorInfo[]): string {
+  for (const p of ["sandbox", "nimbus", "laptop"]) {
+    if (executors.some((e) => e.name === p && e.available)) return p;
+  }
+  return "workspace";
+}
+
+function DiffView({ executors, rpc }: { executors: ExecutorInfo[]; rpc: Rpc }) {
+  const [exec, setExec] = useState(() => pickDefaultExecutor(executors));
+  const [result, setResult] = useState<DiffResult | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
+  // Selector options: every available executor + always the VFS.
+  const options = Array.from(new Set([...executors.filter((e) => e.available).map((e) => e.name), "workspace"]));
+
+  // If the selected executor disappears, fall back to a sensible default.
+  useEffect(() => {
+    if (exec !== "workspace" && !executors.some((e) => e.name === exec && e.available)) {
+      setExec(pickDefaultExecutor(executors));
+    }
+  }, [executors, exec]);
+
   const load = useCallback(() => {
-    rpc<{ files: FileDiff[]; baselineJustCaptured: boolean }>("getWorkspaceDiff", [])
-      .then((r) => setFiles(r.files)).catch(() => setFiles([]));
-  }, [rpc]);
+    setResult(null);
+    rpc<DiffResult>("getExecutorDiff", [exec])
+      .then(setResult)
+      .catch(() => setResult({ files: [], mode: "git", error: "failed to load diff" }));
+  }, [rpc, exec]);
   useEffect(() => { load(); }, [load]);
 
   const markReviewed = useCallback(async () => {
@@ -102,22 +136,43 @@ function DiffView({ rpc }: { rpc: Rpc }) {
     return next;
   });
 
-  if (files === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  const files = result?.files ?? [];
 
   return (
     <div className="h-full overflow-y-auto p-5">
       <div className="flex items-center gap-2 mb-3">
         <GitDiffIcon size={14} className="p-text-2" />
-        <span className="text-sm font-medium p-text">Workspace changes</span>
+        <span className="text-sm font-medium p-text">{result?.mode === "vfs-baseline" ? "Workspace changes" : "Uncommitted changes"}</span>
         {files.length > 0 && <Badge variant="secondary">{files.length}</Badge>}
-        {files.length > 0 && (
+        {result?.mode === "vfs-baseline" && files.length > 0 && (
           <Button size="sm" variant="ghost" className="ml-auto" disabled={busy} onClick={markReviewed}
             icon={busy ? <Loader size="sm" /> : <CheckIcon size={12} />}>Mark reviewed</Button>
         )}
       </div>
-      {files.length === 0 ? (
-        <EmptyState icon={<GitDiffIcon size={28} />} title="No changes since baseline"
-          hint="Files the agent creates or edits appear here as a reviewable change-set. “Mark reviewed” re-baselines." />
+
+      {options.length > 1 && (
+        <div className="flex items-center gap-1 mb-3">
+          {options.map((name) => (
+            <button key={name} onClick={() => setExec(name)}
+              className={`px-2 py-0.5 text-[11px] rounded-md transition-colors ${exec === name ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+              {EXECUTOR_LABELS[name] ?? name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {result === null ? (
+        <div className="flex justify-center py-8"><Loader size="sm" /></div>
+      ) : result.error ? (
+        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2">{result.error}</div>
+      ) : result.notGitRepo ? (
+        <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
+          hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Local (VFS).`} />
+      ) : files.length === 0 ? (
+        <EmptyState icon={<GitDiffIcon size={28} />} title="No changes"
+          hint={result.mode === "vfs-baseline"
+            ? "Files the agent creates or edits appear here as a reviewable change-set. “Mark reviewed” re-baselines."
+            : "Uncommitted changes the agent makes in this device's /workspace appear here (git diff)."} />
       ) : (
         <div className="space-y-1.5">
           {files.map((f) => {

@@ -63,3 +63,60 @@ export function computeWorkspaceDiff(baseline: Record<string, string>, current: 
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
+
+/** Max diff lines kept per file before truncation (keeps the UI bounded for
+ *  large hunks). */
+const MAX_LINES_PER_FILE = 1000;
+
+/**
+ * Parse `git diff` unified output into FileDiff[] — the general per-executor
+ * change-set for executors with a real git repo (sandbox/laptop/nimbus). Pure:
+ * the orchestrator runs `git diff` via the executor's shell and passes the text
+ * here. Handles new/deleted/modified/renamed files and binary markers; hunk
+ * `@@` headers are kept as context rows.
+ */
+export function parseGitDiff(unified: string): FileDiff[] {
+  const out: FileDiff[] = [];
+  const lines = unified.split("\n");
+  let cur: FileDiff | null = null;
+  let newPath: string | null = null;
+  let oldPath: string | null = null;
+  let isNew = false, isDeleted = false;
+
+  const flush = () => {
+    if (!cur) return;
+    cur.path = newPath ?? oldPath ?? cur.path;
+    cur.status = isNew ? "added" : isDeleted ? "removed" : "changed";
+    out.push(cur);
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      flush();
+      cur = { path: "", status: "changed", added: 0, removed: 0, lines: [] };
+      newPath = oldPath = null;
+      isNew = isDeleted = false;
+      // diff --git a/<old> b/<new>
+      const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+      if (m) { oldPath = m[1]; newPath = m[2]; }
+      continue;
+    }
+    if (!cur) continue;
+    if (line.startsWith("new file mode")) { isNew = true; continue; }
+    if (line.startsWith("deleted file mode")) { isDeleted = true; continue; }
+    if (line.startsWith("rename to ")) { newPath = line.slice("rename to ".length).trim(); continue; }
+    if (line.startsWith("rename from ")) { oldPath = line.slice("rename from ".length).trim(); continue; }
+    if (line.startsWith("--- ")) { const p = line.slice(4).trim(); if (p !== "/dev/null") oldPath = p.replace(/^a\//, ""); continue; }
+    if (line.startsWith("+++ ")) { const p = line.slice(4).trim(); if (p !== "/dev/null") newPath = p.replace(/^b\//, ""); continue; }
+    if (line.startsWith("index ") || line.startsWith("old mode") || line.startsWith("new mode")
+      || line.startsWith("similarity index") || line.startsWith("\\ No newline")) continue;
+    if (line.startsWith("Binary files")) { cur.lines.push({ kind: "ctx", text: "(binary file differs)" }); continue; }
+    if (line.startsWith("@@")) { cur.lines.push({ kind: "ctx", text: line }); continue; }
+    if (cur.lines.length >= MAX_LINES_PER_FILE) continue;
+    if (line.startsWith("+")) { cur.lines.push({ kind: "add", text: line.slice(1) }); cur.added++; }
+    else if (line.startsWith("-")) { cur.lines.push({ kind: "del", text: line.slice(1) }); cur.removed++; }
+    else if (line.startsWith(" ")) { cur.lines.push({ kind: "ctx", text: line.slice(1) }); }
+  }
+  flush();
+  return out;
+}
