@@ -308,6 +308,10 @@ export class OrchestratorAgent extends Think<Env> {
   private _triggerRegistry: import('@proteus/core').TriggerRegistry | null = null;
   private _reactorBudget: import('@proteus/core').ReactorBudget | null = null;
   private _replyChannels: import('@proteus/core').ReplyChannelStore | null = null;
+  /** Per-activation guard so the full table-init DDL runs once, not on every
+   *  onStart + claimOwner. Resets on DO eviction, so a cold start always
+   *  re-creates any newly-added tables (no schema-version bookkeeping). */
+  private _schemaReady = false;
 
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
@@ -618,19 +622,16 @@ export class OrchestratorAgent extends Think<Env> {
    *
    *  Defensive: claimOwner can fire BEFORE onStart() completes on a fresh DO
    *  activation (the agents SDK doesn't strictly guarantee onStart→RPC order).
-   *  We initialize all required tables here so the SELECT/UPDATE never hits
-   *  a missing table or missing column. initAllTables is idempotent and the
-   *  agent_soul ALTER inside it is the migration that adds owner_user_id to
-   *  pre-v3 DOs.
+   *  ensureSchema() creates all required tables so the SELECT/UPDATE never hits
+   *  a missing table or column, and is flag-gated so onStart won't repeat it.
    */
   @callable()
   async claimOwner(userId: string): Promise<{ owner: string }> {
     if (!userId) throw new Error('userId required');
     try {
-      const execRaw = (q: string) => { this.ctx.storage.sql.exec(q); };
-      initAllTables(execRaw);
+      this.ensureSchema();
     } catch (err) {
-      console.error('[orchestrator] claimOwner initAllTables failed:', (err as Error).message);
+      console.error('[orchestrator] claimOwner ensureSchema failed:', (err as Error).message);
     }
     const current = this.getOwnerUserId();
     if (current === null) {
@@ -1491,7 +1492,15 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  async onStart() {
+  /**
+   * Create/migrate every agent table. Idempotent and gated by an in-memory
+   * flag so the full DDL set runs once per DO activation (both onStart and a
+   * pre-onStart claimOwner route through here). No persistent schema-version is
+   * tracked: a cold activation always re-runs, so newly-added tables in code
+   * are created without migration bookkeeping.
+   */
+  private ensureSchema(): void {
+    if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
     // Migrate old schemas that conflict with agent-utils implementations.
@@ -1564,6 +1573,13 @@ export class OrchestratorAgent extends Think<Env> {
       created_at INTEGER NOT NULL
     )`);
 
+    this._schemaReady = true;
+  }
+
+  async onStart() {
+    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
+    this.ensureSchema();
+
     // one-time per-agent migration that merges case-collision
     // duplicates in crafted_tools + craft_scores left over from older
     // code that lowercased names. Gated by _v2_codegen_migration_done.
@@ -1595,7 +1611,7 @@ export class OrchestratorAgent extends Think<Env> {
     try {
       const soul = this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
       if (soul.length === 0) {
-        this.sql`INSERT INTO agent_soul (purpose) VALUES (${"A self-evolving coding assistant with MCTS exploration and durable skill evolution."})`;
+        this.sql`INSERT INTO agent_soul (purpose) VALUES (${FALLBACK_PURPOSE})`;
       }
       const identity = this.sql<{ id: string }>`SELECT id FROM agent_identity LIMIT 1`;
       if (identity.length === 0) {
@@ -3222,14 +3238,11 @@ export class OrchestratorAgent extends Think<Env> {
    */
   @callable()
   async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
-    // Ensure the full schema is applied. onStart runs on first access, but if
-    // this RPC is somehow invoked before onStart completes, we want it to be
-    // idempotent w.r.t. DDL.
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    initAllTables(execRaw);
-    // agent_config is a runtime-created table on the orchestrator side; make
-    // sure the fork has it before forkAgentStorage tries to copy rows.
-    execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    // Apply the FULL schema before copying rows. onStart runs on first access,
+    // but this RPC can be invoked before it completes — ensureSchema creates
+    // every table (not just initAllTables') so forkAgentStorage's copy of
+    // events-hub/heads/shadow/etc. rows never hits a missing table.
+    this.ensureSchema();
 
     // Build an ephemeral SqlExecutor over the source's row payload. We don't
     // have cross-DO SQL queries — the payload IS the materialized source view.
