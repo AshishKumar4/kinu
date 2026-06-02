@@ -95,7 +95,7 @@ import {
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
   // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, type BackgroundJob,
+  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult, type BackgroundJob,
   // EventsHub primitives (spec §1)
   EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore, buildDrainBatch,
   initEventsHubTables,
@@ -794,16 +794,24 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   getTools(): ToolSet {
-    // getTools() is the first subclass hook called by _runInferenceLoop.
-    // Start the per-turn timer here to capture the full pre-inference path.
+    // The Think chat loop's tool source (first hook called by _runInferenceLoop).
+    // Returns the CHAT view = the raw surface + the auto-background wrap (#173).
+    // Internal eval side-streams use getRawTools() instead, so a >30s tool run
+    // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
+    // injects an unsolicited "job completed" turn into the user's chat.
     this._turnT0 = performance.now();
     this.logActivity("gettools_start");
+    return this.wrapToolsForBackground(this.getRawTools());
+  }
 
+  /** The UNWRAPPED tool surface — built + cached. Shared by the chat path (via
+   *  getTools, which adds the background wrap) and by internal eval side-streams
+   *  that must run tools to completion inline (never auto-background). */
+  private getRawTools(): ToolSet {
     // Cache key includes CraftStore updated_at AND craft_scores last_used_at
     // because effective-score filtering depends on recency.
     const cacheKey = this._craftCacheKey();
     if (this._cachedTools && cacheKey === this._cachedToolsKey) {
-      this.logActivity("gettools_end", "cache hit");
       return this._cachedTools;
     }
     this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
@@ -846,17 +854,12 @@ export class OrchestratorAgent extends Think<Env> {
       // cache hierarchy). Namespaced → inert for non-Anthropic providers.
       markLastToolForAnthropicCache(tools);
 
-      // Auto-background (#173): think / execute_tools / run that exceed 30s
-      // detach to a durable fiber and return a "continuing in background" handle,
-      // then wake the agent on completion. Transparent for fast (<30s) calls.
-      this.applyBackgroundThreshold(tools);
-
       this._cachedTools = tools;
       this._cachedToolsKey = cacheKey;
       this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      console.error("[proteus] getTools() FAILED:", err);
+      console.error("[proteus] getRawTools() FAILED:", err);
       throw err;
     }
   }
@@ -1546,7 +1549,7 @@ export class OrchestratorAgent extends Think<Env> {
         defaultInference: () => streamText({
           model: this.getModel(),
           messages: [{ role: 'user', content: judgeTask }],
-          tools: this.getTools(),
+          tools: this.getRawTools(),
           stopWhen: stepCountIs(50),
           ...effortFor('scaffold_mutation'),
         }).toUIMessageStream(),
@@ -1640,12 +1643,14 @@ export class OrchestratorAgent extends Think<Env> {
   private detachBackgroundJob(jobId: string, kind: string, promise: Promise<unknown>): void {
     void this.runFiber(`bg:${kind}`, async (ctx) => {
       ctx.stash({ phase: 'running', jobId, kind });
-      try {
-        const result = await promise;
-        this.jobs.settle(jobId, JSON.stringify(result ?? null).slice(0, 16_000), Date.now());
-      } catch (err) {
-        this.jobs.fail(jobId, err instanceof Error ? err.message : String(err), Date.now());
-      }
+      // Settle-vs-fail is driven ONLY by whether the work resolved; serializing
+      // its result happens separately so a non-serializable success (e.g. a
+      // BigInt from execute_tools) is never mislabelled as a failure.
+      let outcome: { ok: true; result: unknown } | { ok: false; error: string };
+      try { outcome = { ok: true, result: await promise }; }
+      catch (err) { outcome = { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+      if (outcome.ok) this.jobs.settle(jobId, serializeJobResult(outcome.result), Date.now());
+      else this.jobs.fail(jobId, outcome.error, Date.now());
       ctx.stash({ phase: 'settled', jobId, kind });
       await this.wakeForBackgroundJob(jobId);
     });
@@ -1663,7 +1668,13 @@ export class OrchestratorAgent extends Think<Env> {
       : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
         `Decide whether to retry or report the failure.`;
     try {
-      await this.saveMessages([{ id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }] }]);
+      const result = await this.saveMessages([{ id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }] }]);
+      // A skipped wake means a newer turn generation preempted the synthesis
+      // turn before it ran — the agent never saw this job. Leave a breadcrumb so
+      // the settled result isn't silently lost (it stays readable via jobResult).
+      if (result.status === 'skipped') {
+        this.logActivity('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
+      }
     } catch (err) {
       console.warn('[proteus] wakeForBackgroundJob failed:', err instanceof Error ? err.message : err);
     }
@@ -1684,19 +1695,22 @@ export class OrchestratorAgent extends Think<Env> {
   /** Tools whose work can be long enough to auto-detach to the background. */
   private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
 
-  /** Wrap the long-running tools' execute in the 30s background threshold. */
-  private applyBackgroundThreshold(tools: ToolSet): void {
-    for (const key of Object.keys(tools)) {
-      if (!OrchestratorAgent.BACKGROUNDABLE_TOOLS.has(key)) continue;
-      const orig = tools[key];
-      const exec = orig.execute;
-      if (typeof exec !== 'function') continue;
+  /** Return a SHALLOW CLONE of the raw toolset with the long-running tools'
+   *  execute wrapped in the 30s background threshold. Never mutates the cached
+   *  raw toolset — so getRawTools() stays unwrapped for the eval side-streams. */
+  private wrapToolsForBackground(raw: ToolSet): ToolSet {
+    const wrapped: ToolSet = { ...raw };
+    for (const key of OrchestratorAgent.BACKGROUNDABLE_TOOLS) {
+      const orig = wrapped[key];
+      const exec = orig?.execute;
+      if (!orig || typeof exec !== 'function') continue;
       const deps = this.backgroundDeps(key);
-      tools[key] = {
+      wrapped[key] = {
         ...orig,
         execute: (input, options) => withBackgroundThreshold(key, () => exec(input, options), deps),
       };
     }
+    return wrapped;
   }
 
   /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
@@ -2108,15 +2122,21 @@ export class OrchestratorAgent extends Think<Env> {
         ? JSON.stringify(ctx.snapshot).slice(0, 400)
         : String(ctx.snapshot ?? 'null');
       console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
-      // Background-job fiber (bg:*) interrupted by eviction: its in-flight work
-      // is lost. Fail the orphaned job (idempotent — no-op if it had settled
-      // before the crash) and wake the agent so it isn't left waiting forever.
-      if (ctx.name.startsWith('bg:') && ctx.snapshot && typeof ctx.snapshot === 'object') {
-        const jobId = (ctx.snapshot as { jobId?: unknown }).jobId;
-        if (typeof jobId === 'string' && jobId) {
+      // Background-job fiber (bg:*) is operational plumbing, not an evolution
+      // event: handle it on its own and return, skipping the MEMORY.md note +
+      // evolution_events INSERT that the user-facing recovery path emits.
+      if (ctx.name.startsWith('bg:')) {
+        const snap = (ctx.snapshot ?? {}) as { jobId?: unknown; phase?: unknown };
+        const jobId = typeof snap.jobId === 'string' ? snap.jobId : '';
+        // Only a job interrupted while still RUNNING is orphaned. One stashed in
+        // the 'settled' phase already recorded its outcome + woke the agent
+        // before eviction — re-failing it would clobber a real result and
+        // re-waking would inject a duplicate synthesis turn.
+        if (jobId && snap.phase === 'running') {
           this.jobs.fail(jobId, 'interrupted by Durable Object eviction before completion', Date.now());
           await this.wakeForBackgroundJob(jobId);
         }
+        return;
       }
       // Persist for the UI's evolution-events stream.
       this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
@@ -2791,7 +2811,7 @@ export class OrchestratorAgent extends Think<Env> {
       defaultInference: () => streamText({
         model: this.getModel(),
         messages: [{ role: 'user', content: task }],
-        tools: this.getTools(),
+        tools: this.getRawTools(),
         stopWhen: stepCountIs(50),
         ...effortFor('scaffold_mutation'),
       }).toUIMessageStream(),
@@ -2931,7 +2951,7 @@ export class OrchestratorAgent extends Think<Env> {
     const orchestrator = this;
     const model = this.getModel();
     return async function* (opts) {
-      const all = orchestrator.getTools();
+      const all = orchestrator.getRawTools();
       const toolSet: ToolSet = (opts.tools && opts.tools.length > 0)
         ? Object.fromEntries(opts.tools.filter(n => all[n]).map(n => [n, all[n]]))
         : all;
@@ -2955,7 +2975,7 @@ export class OrchestratorAgent extends Think<Env> {
   private makeScaffoldCallTool() {
     const orchestrator = this;
     return async (name: string, args: Record<string, unknown>): Promise<unknown> => {
-      const tools = orchestrator.getTools();
+      const tools = orchestrator.getRawTools();
       const t = tools[name];
       if (!t || typeof t.execute !== 'function') {
         return { error: `tool not found: ${name}` };
@@ -2990,7 +3010,7 @@ export class OrchestratorAgent extends Think<Env> {
    * does, then extracts the description. No side effects.
    */
   @callable() async getExecuteToolsDescription() {
-    const tools = this.getTools();
+    const tools = this.getRawTools();
     const et = tools.execute_tools as { description?: string } | undefined;
     return { description: et?.description ?? '' };
   }

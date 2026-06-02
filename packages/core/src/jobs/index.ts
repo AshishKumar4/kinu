@@ -1,6 +1,7 @@
 export {
   BackgroundJobStore,
   initBackgroundJobsTable,
+  serializeJobResult,
   type BackgroundJob,
   type BackgroundJobStatus,
 } from './store.js';

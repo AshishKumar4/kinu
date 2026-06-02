@@ -33,6 +33,17 @@ function toJob(r: Row): BackgroundJob {
   };
 }
 
+/** Serialize a job result for storage — never throws (a non-serializable value,
+ *  e.g. a BigInt from execute_tools, falls back to String()), with a truncation
+ *  marker so the synthesis turn knows when content was clipped. */
+export function serializeJobResult(result: unknown, limit = 16_000): string {
+  let s: string;
+  try { s = JSON.stringify(result ?? null); } catch { s = String(result); }
+  return s.length > limit
+    ? s.slice(0, limit) + `\n…[truncated ${s.length - limit} chars; the full result was longer]`
+    : s;
+}
+
 export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS background_jobs (
     id          TEXT PRIMARY KEY,
@@ -76,11 +87,5 @@ export class BackgroundJobStore {
   list(limit = 20): BackgroundJob[] {
     return this.sql<Row>`SELECT id, kind, label, status, result, error, created_at, settled_at
       FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
-  }
-
-  /** Jobs still marked running — used on fiber recovery to fail orphaned work. */
-  running(): BackgroundJob[] {
-    return this.sql<Row>`SELECT id, kind, label, status, result, error, created_at, settled_at
-      FROM background_jobs WHERE status='running' ORDER BY created_at`.map(toJob);
   }
 }

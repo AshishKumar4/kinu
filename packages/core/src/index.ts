@@ -286,7 +286,7 @@ export {
 
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
 export {
-  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle,
+  BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
 } from './jobs/index.js';
 

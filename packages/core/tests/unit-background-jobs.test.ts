@@ -1,7 +1,7 @@
 // BackgroundJobStore + withBackgroundThreshold — the #173 background/async core.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle } from '../src/jobs/index.js';
+import { BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult } from '../src/jobs/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 function newStore() {
@@ -28,7 +28,7 @@ describe('BackgroundJobStore', () => {
     expect(s.get('j1')?.status).toBe('completed');
   });
 
-  test('fail marks failed; list + running reflect state', () => {
+  test('fail marks failed; list reflects state', () => {
     const s = newStore();
     s.create({ id: 'a', kind: 'run', now: 1 });
     s.create({ id: 'b', kind: 'think', now: 2 });
@@ -36,7 +36,31 @@ describe('BackgroundJobStore', () => {
     expect(s.get('a')?.status).toBe('failed');
     expect(s.get('a')?.error).toBe('boom');
     expect(s.list().length).toBe(2);
-    expect(s.running().map((j) => j.id)).toEqual(['b']); // only the unsettled one
+    expect(s.list().filter((j) => j.status === 'running').map((j) => j.id)).toEqual(['b']);
+  });
+});
+
+describe('serializeJobResult', () => {
+  test('serializes plain values to JSON', () => {
+    expect(serializeJobResult({ ok: true, n: 3 })).toBe('{"ok":true,"n":3}');
+    expect(serializeJobResult('hi')).toBe('"hi"');
+    expect(serializeJobResult(null)).toBe('null');
+    expect(serializeJobResult(undefined)).toBe('null');
+  });
+
+  test('non-serializable success (BigInt) is String()-coerced, never thrown', () => {
+    // A backgrounded execute_tools can resolve a BigInt — JSON.stringify throws
+    // on it; the helper must degrade to a string so settle() still records it.
+    expect(serializeJobResult(10n)).toBe('10');
+    const circular: Record<string, unknown> = {}; circular.self = circular;
+    expect(typeof serializeJobResult(circular)).toBe('string');
+  });
+
+  test('truncates oversized results with a marker', () => {
+    const big = 'x'.repeat(40_000);
+    const out = serializeJobResult(big, 16_000);
+    expect(out.length).toBeLessThan(big.length);
+    expect(out).toContain('[truncated');
   });
 });
 
