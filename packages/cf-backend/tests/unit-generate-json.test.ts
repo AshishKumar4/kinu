@@ -1,6 +1,24 @@
-// extractJsonObject — robust JSON extraction from LLM text (the merge path).
+// extractJsonObject + generateJson — robust structured output (the heads merge
+// path). generateJson replaces ai-v6 generateObject (whose tool-mode `.input`
+// deref crashed on Workers AI); these tests pin that it extracts + validates a
+// model's text response and throws (caller falls back) on a schema mismatch.
 import { describe, test, expect } from "bun:test";
-import { extractJsonObject } from "../src/lib/generate-json";
+import * as v from "valibot";
+import { MockLanguageModelV3 } from "ai/test";
+import { extractJsonObject, generateJson } from "../src/lib/generate-json";
+
+function modelReturning(text: string) {
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: "text", text }],
+      finishReason: "stop",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      warnings: [],
+    }),
+  });
+}
+
+const Schema = v.object({ a: v.number(), b: v.array(v.string()) });
 
 describe("extractJsonObject", () => {
   test("parses a bare JSON object", () => {
@@ -31,5 +49,23 @@ describe("extractJsonObject", () => {
 
   test("throws on an unterminated object", () => {
     expect(() => extractJsonObject('{"a":1')).toThrow(/unterminated/);
+  });
+});
+
+describe("generateJson", () => {
+  test("extracts + validates a model JSON response (fenced + prosey)", async () => {
+    const model = modelReturning('Sure, here you go:\n```json\n{"a":1,"b":["x","y"]}\n```');
+    const out = await generateJson({ model, schema: Schema, prompt: "go" });
+    expect(out).toEqual({ a: 1, b: ["x", "y"] });
+  });
+
+  test("throws on schema mismatch so the caller can fall back", async () => {
+    const model = modelReturning('{"a":"not-a-number","b":[]}');
+    await expect(generateJson({ model, schema: Schema, prompt: "go" })).rejects.toThrow();
+  });
+
+  test("throws when the model returns no JSON object", async () => {
+    const model = modelReturning("I cannot help with that.");
+    await expect(generateJson({ model, schema: Schema, prompt: "go" })).rejects.toThrow(/no JSON object/);
   });
 });
