@@ -13,13 +13,14 @@ import { useProteus } from "@/hooks/use-proteus";
 import { touchAgent, listAvailableModels } from "@/lib/user-api";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
+import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
 import type { TimelineSpan, TimelineKind } from "@/lib/protocol";
-// MODELS are pulled dynamically from /api/user/models (which unions the
-// connected providers' menus). The picker re-fetches on every page mount.
+// The model picker reads /api/user/models (which unions the connected
+// providers' menus); the result is cached for the SPA session (see user-api).
 
 /* ── Message rendering ────────────────────────────────────────── */
 
@@ -358,55 +359,45 @@ function ForkModal({
   }, [name, busy, onSubmit]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={onCancel}
+    <Modal
+      title="Fork from here"
+      icon={<GitBranchIcon size={18} className="p-accent" />}
+      onClose={onCancel}
+      footer={<>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+        <Button size="sm" variant="primary" onClick={submit} disabled={busy}>
+          {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
+        </Button>
+      </>}
     >
-      <div
-        className="w-full max-w-md rounded-xl border p-border p-elevated p-5 space-y-4 animate-fade-in"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2">
-          <GitBranchIcon size={18} className="p-accent" />
-          <h3 className="text-base font-semibold p-text">Fork from here</h3>
-        </div>
-        <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
-          <p>Create a new agent that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
-          <ul className="list-disc list-inside space-y-0.5 p-text-3">
-            <li>Copies: soul, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
-            <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
-            <li>Source agent is unaffected</li>
-          </ul>
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-[11px] p-text-3 block">Fork name (optional)</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={`${sourceName}-fork-<6-char-id>`}
-            disabled={busy}
-            className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
-          />
-          <p className="text-[10px] p-text-3">Allowed: A-Z, a-z, 0-9, _, -</p>
-        </div>
-
-        {err && (
-          <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
-            {err}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button size="sm" variant="primary" onClick={submit} disabled={busy}>
-            {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-          </Button>
-        </div>
+      <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
+        <p>Create a new agent that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+        <ul className="list-disc list-inside space-y-0.5 p-text-3">
+          <li>Copies: soul, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
+          <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
+          <li>Source agent is unaffected</li>
+        </ul>
       </div>
-    </div>
+
+      <div className="space-y-1">
+        <label className="text-[11px] p-text-3 block">Fork name (optional)</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={`${sourceName}-fork-<6-char-id>`}
+          disabled={busy}
+          className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
+        />
+        <p className="text-[10px] p-text-3">Allowed: A-Z, a-z, 0-9, _, -</p>
+      </div>
+
+      {err && (
+        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
+          {err}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -484,14 +475,19 @@ export default function WorkspacePage() {
     if (s) setSurface(s);
   }, []);
 
+  // Send the creation mission as the opening message — once, deterministically,
+  // the moment the socket is connected. The mission rides in via navigation
+  // state from CreateAgentModal; we clear it (replace) right after sending so a
+  // refresh or back-nav never re-fires it.
   useEffect(() => {
     if (initialPromptSent.current) return;
     const ns = location.state as { initialPrompt?: string; displayName?: string } | null;
     if (!ns?.initialPrompt || state.connectionStatus !== "connected") return;
     initialPromptSent.current = true;
     if (ns.displayName) state.rpc("setDisplayName", [ns.displayName]).catch(() => {});
-    setTimeout(() => state.sendChat(ns.initialPrompt!), 300);
-  }, [state.connectionStatus, location.state]); // eslint-disable-line react-hooks/exhaustive-deps
+    state.sendChat(ns.initialPrompt);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [state.connectionStatus, location.state, location.pathname, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const t = chatInput.trim(); if (!t || state.isStreaming) return;

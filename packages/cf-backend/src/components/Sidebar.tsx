@@ -15,16 +15,17 @@
  *   └─────────────────┘
  */
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Link, NavLink, useNavigate, useParams } from "react-router-dom";
+import { Link, NavLink, useParams } from "react-router-dom";
 import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon } from "@phosphor-icons/react";
-import { listAgents, removeAgent, registerAgent, getProfile, type AgentEntry, type UserProfile } from "../lib/user-api";
+import { listAgents, removeAgent, getProfile, type AgentEntry, type UserProfile } from "../lib/user-api";
+import { CreateAgentModal } from "./CreateAgentModal";
 
 export default function Sidebar() {
-  const navigate = useNavigate();
   const { agentId } = useParams();
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshAgents = useCallback(async () => {
@@ -48,21 +49,6 @@ export default function Sidebar() {
     return () => document.removeEventListener('click', onClick);
   }, []);
 
-  const handleNewAgent = useCallback(async () => {
-    const task = prompt("Mission for the new agent:");
-    if (!task || !task.trim()) return;
-    const slug = task.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "agent";
-    const suffix = crypto.randomUUID().slice(0, 6);
-    const name = `${slug}-${suffix}`;
-    try {
-      await registerAgent(name, task.slice(0, 60), task);
-      await refreshAgents();
-      navigate(`/agent/${name}`, { state: { initialPrompt: task, displayName: task.slice(0, 60) } });
-    } catch (err) {
-      alert(`Could not create agent: ${(err as Error).message}`);
-    }
-  }, [navigate, refreshAgents]);
-
   const handleDelete = useCallback(async (name: string) => {
     if (!confirm(`Remove agent "${name}" from your list? (The agent's data is retained server-side.)`)) return;
     try { await removeAgent(name); await refreshAgents(); }
@@ -78,7 +64,7 @@ export default function Sidebar() {
           <span className="font-medium tracking-tight">Proteus</span>
         </Link>
         <button
-          onClick={handleNewAgent}
+          onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-3 py-2 rounded-lg p-card hover:p-card-hover transition-colors text-sm cursor-pointer"
         >
           <PlusIcon size={14} />
@@ -146,6 +132,8 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      {showCreate && <CreateAgentModal onClose={() => setShowCreate(false)} />}
     </aside>
   );
 }

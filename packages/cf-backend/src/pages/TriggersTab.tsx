@@ -13,7 +13,8 @@
  */
 import { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Button, Loader } from "@cloudflare/kumo";
+import { Modal } from "@/components/ui/Modal";
 import {
   PlugIcon, PlusIcon, TrashIcon, CopyIcon, ArrowSquareOutIcon,
   CheckIcon, WarningIcon, ArrowLeftIcon,
@@ -280,51 +281,48 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
   }, [agentName, label, authMode, secret, contentType, onCreated]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="p-card rounded-xl p-6 max-w-md w-full mx-4 space-y-3" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-base font-semibold flex items-center gap-2">
-          <PlugIcon size={16} className="p-accent" /> Create durable webhook
-        </h2>
-        <div className="space-y-2">
+    <Modal
+      title="Create durable webhook"
+      icon={<PlugIcon size={16} className="p-accent" />}
+      onClose={onClose}
+      footer={<>
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button size="sm" variant="primary" onClick={submit} disabled={submitting || !label.trim()}>
+          {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
+        </Button>
+      </>}
+    >
+      <div className="space-y-2">
+        <label className="block">
+          <div className="text-xs p-text-2 mb-1">Label</div>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls}
+            placeholder="github-pr-events" />
+        </label>
+        <label className="block">
+          <div className="text-xs p-text-2 mb-1">Auth mode</div>
+          <select value={authMode} onChange={(e) => setAuthMode(e.target.value as 'hmac' | 'bearer' | 'mtls')} className={inputCls}>
+            <option value="hmac">HMAC (signed body)</option>
+            <option value="bearer">Bearer token (Authorization header)</option>
+            <option value="mtls">mTLS (client certificate)</option>
+          </select>
+        </label>
+        {authMode !== 'mtls' && (
           <label className="block">
-            <div className="text-xs p-text-2 mb-1">Label</div>
-            <input value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls}
-              placeholder="github-pr-events" />
+            <div className="text-xs p-text-2 mb-1">Secret <span className="p-text-3">(blank = auto-generate)</span></div>
+            <input value={secret} onChange={(e) => setSecret(e.target.value)} className={inputCls} placeholder="leave blank to auto-generate" />
           </label>
-          <label className="block">
-            <div className="text-xs p-text-2 mb-1">Auth mode</div>
-            <select value={authMode} onChange={(e) => setAuthMode(e.target.value as 'hmac' | 'bearer' | 'mtls')} className={inputCls}>
-              <option value="hmac">HMAC (signed body)</option>
-              <option value="bearer">Bearer token (Authorization header)</option>
-              <option value="mtls">mTLS (client certificate)</option>
-            </select>
-          </label>
-          {authMode !== 'mtls' && (
-            <label className="block">
-              <div className="text-xs p-text-2 mb-1">Secret <span className="p-text-3">(blank = auto-generate)</span></div>
-              <input value={secret} onChange={(e) => setSecret(e.target.value)} className={inputCls} placeholder="leave blank to auto-generate" />
-            </label>
-          )}
-          <label className="block">
-            <div className="text-xs p-text-2 mb-1">Accepted content type</div>
-            <input value={contentType} onChange={(e) => setContentType(e.target.value)} className={inputCls} placeholder="application/json" />
-          </label>
-        </div>
-        {err && <div className="text-xs text-red-400">{err}</div>}
-        <div className="flex items-center gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-1.5 rounded-md p-card hover:p-card-hover text-xs">Cancel</button>
-          <button
-            onClick={submit}
-            disabled={submitting || !label.trim()}
-            className="ml-auto px-3 py-1.5 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 disabled:opacity-50"
-          >{submitting ? 'Creating…' : 'Create'}</button>
-        </div>
-        <p className="text-[10px] p-text-3 flex items-start gap-1.5">
-          <WarningIcon size={11} className="mt-0.5 shrink-0" />
-          <span>Webhook creation requires a recent login (within 5 minutes). If it fails, you'll be prompted to sign in again.</span>
-        </p>
+        )}
+        <label className="block">
+          <div className="text-xs p-text-2 mb-1">Accepted content type</div>
+          <input value={contentType} onChange={(e) => setContentType(e.target.value)} className={inputCls} placeholder="application/json" />
+        </label>
       </div>
-    </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      <p className="text-[10px] p-text-3 flex items-start gap-1.5">
+        <WarningIcon size={11} className="mt-0.5 shrink-0" />
+        <span>Webhook creation requires a recent login (within 5 minutes). If it fails, you'll be prompted to sign in again.</span>
+      </p>
+    </Modal>
   );
 }
 
