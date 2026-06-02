@@ -92,6 +92,37 @@ export interface RestoreBackupResult {
   readonly id: string;
 }
 
+// ── /workspace backup policy (pure; the orchestrator owns the I/O) ──
+
+export const WORKSPACE_BACKUP_DIR = '/workspace';
+/** Min gap between /workspace backups — debounces per-turn mksquashfs storms. */
+export const BACKUP_MIN_INTERVAL_MS = 60_000;
+/** Backup lifetime (R2). 30 days — pair with an R2 lifecycle GC rule. */
+export const BACKUP_TTL_SECONDS = 30 * 24 * 60 * 60;
+const WORKSPACE_BACKUP_EXCLUDES = ['node_modules', '.git', '*.log', '.cache'] as const;
+
+/** Back up only when the sandbox was used this turn AND the debounce window has
+ *  elapsed since the last successful backup. Pure → unit-testable. */
+export function shouldBackupWorkspace(
+  usedSandbox: boolean,
+  lastBackupAt: number,
+  now: number,
+  minIntervalMs: number = BACKUP_MIN_INTERVAL_MS,
+): boolean {
+  return usedSandbox && now - lastBackupAt >= minIntervalMs;
+}
+
+/** Canonical createBackup options for /workspace (localBucket + excludes). */
+export function workspaceBackupOptions(): BackupOptions {
+  return {
+    dir: WORKSPACE_BACKUP_DIR,
+    localBucket: true,
+    gitignore: true,
+    excludes: WORKSPACE_BACKUP_EXCLUDES,
+    ttl: BACKUP_TTL_SECONDS,
+  };
+}
+
 /**
  * Stable token generator — RFC-3986-safe chars matching the SDK's
  * validateCustomToken (lower-case alphanumerics + underscore, 4-63 chars).

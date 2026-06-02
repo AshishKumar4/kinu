@@ -156,6 +156,8 @@ export {
   DefaultExecutionRouter,
   createInlineExecutor,
   createSandboxExecutor, type SandboxHandle,
+  type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
+  shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   createSSHTunnelExecutor,
   // Legacy (shelved) — kept for type imports only.
   createNimbusExecutor, type NimbusExecutorOpts,

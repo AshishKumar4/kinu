@@ -111,7 +111,15 @@
   // bills against the account directly. Powers chat LLM calls (Kimi K2.6,
   // Llama 4 Scout) AND semantic-memory embeddings (bge-small-en-v1.5)
   // when the Vectorize index below is also enabled.
-  "ai": { "binding": "AI" }
+  "ai": { "binding": "AI" },
+  // R2 bucket for sandbox /workspace backups (squashfs archives). The SDK's
+  // localBucket backup mode moves bytes straight through this binding — no
+  // presigned R2 credentials needed. Bucket: `wrangler r2 bucket create
+  // proteus-backups` (already created). Set an R2 lifecycle rule on the
+  // `backups/` prefix to GC expired archives.
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+  ]
   // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
   //
   // First create the index:

@@ -31,6 +31,8 @@ declare global {
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */
     Sandbox: DurableObjectNamespace<ProteusSandbox>;
+    /** R2 bucket for sandbox /workspace backups (SDK localBucket mode). */
+    BACKUP_BUCKET?: R2Bucket;
     AI_GATEWAY_URL: string;
     AI_GATEWAY_AUTH: string;
     /** Hostname used by @cloudflare/sandbox to build preview URLs.

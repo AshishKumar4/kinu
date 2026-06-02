@@ -78,6 +78,9 @@ export type CFRuntime = AgentRuntime & {
   sshExecutor: ReturnType<typeof createSSHTunnelExecutor>;
   /** Vectorize-backed semantic memory. Noop fallback when no binding. */
   vectorStore: import("@proteus/core").VectorStore;
+  /** The live sandbox container handle (for /workspace backup/restore), or null
+   *  when no Sandbox binding / preview host. Single source for the orchestrator. */
+  sandboxHandle: SandboxHandle | null;
 };
 
 /** Optional hooks the orchestrator can inject into the CF runtime. */
@@ -149,6 +152,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     ? env.PREVIEW_HOSTNAME
     : undefined;
   const sandboxId = `proteus-${agent.name}`;
+  let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
       const handle = getSandbox(
@@ -156,6 +160,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
         sandboxId,
         { normalizeId: true },
       ) as unknown as SandboxHandle;
+      sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
       console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
     } catch (err) {
@@ -233,6 +238,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     sqliteFS,
     sshExecutor,
     vectorStore,
+    sandboxHandle,
   };
 }
 

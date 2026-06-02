@@ -12,7 +12,11 @@ export type {
 
 export { DefaultExecutionRouter } from './router.js';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
-export { createSandboxExecutor, type SandboxHandle } from './sandbox.js';
+export {
+  createSandboxExecutor, type SandboxHandle,
+  type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
+  shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
+} from './sandbox.js';
 export { createSSHTunnelExecutor } from './ssh.js';
 
 // Nimbus — WebSocket client for github.com/AshishKumar4/Nimbus.

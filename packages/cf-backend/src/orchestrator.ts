@@ -46,6 +46,7 @@ import {
   buildBuiltinTools,
   buildSystemPromptSync,
   FALLBACK_PURPOSE,
+  shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
@@ -250,6 +251,10 @@ export class OrchestratorAgent extends Think<Env> {
   /** Executors whose tools ran this turn — debounces the last-active-executor
    *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
   private _executorsUsedThisTurn = new Set<string>();
+  /** /workspace persistence: restored at most once per DO activation; backups
+   *  debounced via the persisted last-backup time + this optimistic gate. */
+  private _workspaceRestored = false;
+  private _lastWorkspaceBackupAt = 0;
   private _turnStartedAt = 0;
   // Per-turn token accumulator (summed across steps in onStepFinish), emitted
   // on turn_end so the Supervise budget view can show real spend per run.
@@ -994,10 +999,41 @@ export class OrchestratorAgent extends Think<Env> {
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
+  /** Restore the agent's /workspace from its last R2 backup — once per DO
+   *  activation, before the turn runs (the container may have slept and lost
+   *  its filesystem). No-op when there's no backup or no sandbox. Never throws. */
+  private async restoreWorkspaceIfNeeded(): Promise<void> {
+    if (this._workspaceRestored) return;
+    this._workspaceRestored = true;            // at-most-once per activation
+    const handle = this.rt.sandboxHandle;
+    if (!handle) return;
+    const backup = this.config.getWorkspaceBackup();
+    if (!backup) return;                        // first-ever run: nothing to restore
+    try { await handle.restoreBackup(backup); }
+    catch (err) { console.warn('[proteus] workspace restore failed:', (err as Error).message); }
+  }
+
+  /** Snapshot /workspace to R2 if the agent used the sandbox this turn and the
+   *  debounce window elapsed. Fire-and-forget (never blocks the turn loop); the
+   *  handle is persisted only on success, so a failed backup keeps the last good
+   *  snapshot. */
+  private backupWorkspaceIfDue(): void {
+    const handle = this.rt.sandboxHandle;
+    if (!handle) return;
+    const now = Date.now();
+    const lastAt = Math.max(this._lastWorkspaceBackupAt, this.config.getWorkspaceBackupAt());
+    if (!shouldBackupWorkspace(this._executorsUsedThisTurn.has('sandbox'), lastAt, now)) return;
+    this._lastWorkspaceBackupAt = now;          // optimistic gate (concurrency within activation)
+    void handle.createBackup(workspaceBackupOptions())
+      .then((b) => this.config.setWorkspaceBackup(b))
+      .catch((err) => console.warn('[proteus] workspace backup failed:', (err as Error).message));
+  }
+
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this._turnToolCalls = [];
     this._turnStepCount = 0;
     this._executorsUsedThisTurn.clear();
+    await this.restoreWorkspaceIfNeeded();
     this._turnStartedAt = Date.now();
     this._turnUsage = { input: 0, output: 0 };
     this._turnHadError = false;
@@ -1361,6 +1397,10 @@ export class OrchestratorAgent extends Think<Env> {
     // block. Letta-style; ~50% test-time token reduction reported. Gated
     // by agent_config.sleep_time_compute='true' (default off).
     void this.runSleepTimeCompute(userText, assistantText, this._turnToolCalls);
+
+    // Persist /workspace to R2 if the agent used the sandbox this turn — so the
+    // work survives the container sleeping. Debounced + fire-and-forget.
+    this.backupWorkspaceIfDue();
   }
 
   /** Background memory compression. Reads recent turn, updates agent_facts +
