@@ -50,8 +50,8 @@ import {
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   buildSystemPromptSync,
-  // backend-agnostic per-turn accounting (shared by cf + cli)
-  TurnAccumulator, type StepLike,
+  // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
+  TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   FALLBACK_PURPOSE,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
@@ -100,7 +100,7 @@ import {
   // Background-job system (#173 — auto-background >30s tool calls)
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult, type BackgroundJob,
   // EventsHub primitives (spec §1)
-  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore, buildDrainBatch,
+  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   type RevisitCondition,
@@ -261,24 +261,55 @@ export class OrchestratorAgent extends Think<Env> {
   /** Backend-agnostic per-turn accounting (tool calls, steps, usage, errors).
    *  Lazily built with cf sinks → activity_log + the durable run-event recorder.
    *  Shared with the CLI backend (core/orchestrator/turn-accumulator). */
-  private _acc: TurnAccumulator | null = null;
-  private get acc(): TurnAccumulator {
-    if (!this._acc) {
-      this._acc = new TurnAccumulator({
-        logActivity: (e, d) => this.logActivity(e, d),
-        onToolCallEvent: (ev) => {
-          try {
-            if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
-          } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
-        },
-        onStepEvent: (ev) => {
-          try {
-            if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
-          } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
+  // The backend-agnostic agent logic (per-turn accounting + session-evolution
+  // cadence + the event→turn reactor). The DO provides the BackendHost
+  // (broadcast + programmatic-turn via saveMessages) + the cf sinks. The CLI
+  // backend builds the same AgentOrchestrator with its own host.
+  private _orch: AgentOrchestrator | null = null;
+  private get orch(): AgentOrchestrator {
+    if (!this._orch) {
+      this._orch = new AgentOrchestrator({
+        host: this.host,
+        engine: this.engine,
+        eventLog: this.eventLog,
+        sessionReflectionInterval: SESSION_REFLECTION_INTERVAL,
+        sinks: {
+          logActivity: (e, d) => this.logActivity(e, d),
+          onToolCallEvent: (ev) => {
+            try {
+              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
+            } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
+          },
+          onStepEvent: (ev) => {
+            try {
+              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
+            } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
+          },
         },
       });
     }
-    return this._acc;
+    return this._orch;
+  }
+  private get acc(): TurnAccumulator { return this.orch.acc; }
+
+  // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
+  // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
+  // the resume path for the reactor + background-job wake + consent.
+  private _host: BackendHost | null = null;
+  private get host(): BackendHost {
+    if (!this._host) {
+      this._host = {
+        broadcast: (event) => { try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ } },
+        enqueueTurn: async ({ text, metadata }) => {
+          const result = await this.saveMessages([{
+            id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }],
+            ...(metadata ? { metadata } : {}),
+          }]);
+          return { status: result.status === 'skipped' ? 'skipped' : 'queued' };
+        },
+      };
+    }
+    return this._host;
   }
   /** Executors whose tools ran this turn — debounces the last-active-executor
    *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
@@ -290,9 +321,8 @@ export class OrchestratorAgent extends Think<Env> {
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
   private _turnsSinceGepa = 0;
-  private _sessionTurnCount = 0;
-  private _sessionTurns: CompletedTurn[] = [];
-  private _sessionStartedAt = Date.now();
+  // Session-reflection cadence (_sessionTurnCount/Turns/StartedAt) now lives on
+  // the core AgentOrchestrator; read the turn index via this.orch.sessionTurnIndex.
 
   // ── Tool cache: avoid rebuilding the built-in ToolSet + codemode types every turn ──
   private _cachedTools: ToolSet | null = null;
@@ -1092,38 +1122,10 @@ export class OrchestratorAgent extends Think<Env> {
       .catch((err) => console.warn('[proteus] workspace backup failed:', (err as Error).message));
   }
 
-  /**
-   * The reactor: wake the agent to act on externally-triggered pending events
-   * (webhooks, timers, peer messages) in one normal Think turn. Called
-   * fire-and-forget from alarm() / webhook ingress / the onChatResponse tail.
-   *
-   * Binds the selected events to a synthetic turn (markConsumed) BEFORE
-   * injecting — since pending()+markConsumed are synchronous, the bind is atomic
-   * w.r.t. the event loop, so a concurrent drain sees them already consumed and
-   * won't double-process (the reentrancy guard). `self_emit`/`internal` events
-   * are excluded (anti-self-wake). saveMessages runs the turn TurnQueue-
-   * serialized behind any live chat; its onChatResponse re-checks and drains the
-   * next batch, so it self-drains until no external events remain — then stops.
-   * No budget/approval gates — only this drain-then-stop correctness.
-   */
-  private async drainPendingEvents(): Promise<void> {
-    let batch: ReturnType<typeof buildDrainBatch>;
-    try {
-      const pending = this.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
-      batch = buildDrainBatch(pending);
-      if (!batch) return;
-      const turnId = `evt-${nanoid()}`;
-      for (const id of batch.ids) this.eventLog.markConsumed(id, turnId, 0);
-    } catch (err) {
-      console.warn('[proteus] drainPendingEvents (select) failed:', (err as Error).message);
-      return;
-    }
-    try {
-      await this.saveMessages([{ id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text: batch.text }] }]);
-    } catch (err) {
-      console.warn('[proteus] drainPendingEvents (turn) failed:', (err as Error).message);
-    }
-  }
+  // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
+  // (it binds selected pending events via markConsumed, then injects one
+  // programmatic turn via host.enqueueTurn → saveMessages). Callers below use
+  // `this.orch.drainPendingEvents()`.
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this.acc.reset(Date.now());
@@ -1144,7 +1146,7 @@ export class OrchestratorAgent extends Think<Env> {
       });
       this.eventRecorder.emit(this._currentRunId, {
         type: 'turn_start',
-        turnIndex: this._sessionTurnCount,
+        turnIndex: this.orch.sessionTurnIndex,
       });
     } catch (err) {
       console.warn('[proteus] event emit failed at beforeTurn:', err);
@@ -1263,7 +1265,7 @@ export class OrchestratorAgent extends Think<Env> {
       if (this._currentRunId) {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'turn_end',
-          turnIndex: this._sessionTurnCount,
+          turnIndex: this.orch.sessionTurnIndex,
           tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
         });
         this.eventRecorder.emit(this._currentRunId, {
@@ -1351,35 +1353,14 @@ export class OrchestratorAgent extends Think<Env> {
     //
     // Fix: fire evolution asynchronously. The DO stays alive via keepAliveWhile
     // in the outer scope. Errors are caught and logged, never propagated.
-    this._sessionTurnCount++;
-    this._sessionTurns.push(turn);
-
-    const sessionTrigger = this._sessionTurnCount >= SESSION_REFLECTION_INTERVAL;
-    if (sessionTrigger) {
-      const sessionData = {
-        sessionId: `${this.ctx.id.toString()}-${Date.now()}`,
-        turns: [...this._sessionTurns],
-        startedAt: this._sessionStartedAt,
-        endedAt: Date.now(),
-      };
-      this._sessionTurnCount = 0;
-      this._sessionTurns = [];
-      this._sessionStartedAt = Date.now();
-
-      // Fire session evolution in background
-      void this.engine.onSessionComplete(sessionData).catch(err =>
-        console.error("[proteus] Session evolution failed:", err)
-      );
-    }
-
-    // Fire turn-level evolution in background (does NOT block the TurnQueue).
-    // EvolutionEngine.onTurnCompleteAsync already does Hermes-style reflection:
-    //   • quality assessment + threshold check
-    //   • generateTurnReflection → append `### Lesson` to MEMORY.md
-    //   • pattern extraction → upsertCraftedTool with Jaccard conflict guard
-    //   • session-level reflection every N turns → maybeEvolveScaffold
-    // No separate ReviewAgent Facet — this single hook handles all of it.
-    this.engine.onTurnCompleteAsync(turn);
+    //
+    // The core AgentOrchestrator owns the shared cadence: advance the
+    // session-reflection counter (firing engine.onSessionComplete every N turns)
+    // + fire turn-level evolution (engine.onTurnCompleteAsync — Hermes-style
+    // reflection: quality/threshold, generateTurnReflection → MEMORY.md lesson,
+    // pattern extraction → crafted tools, periodic scaffold evolution). All
+    // fire-and-forget; never blocks the TurnQueue.
+    this.orch.recordTurn(turn);
 
     // Auto-judge shadow evaluation. When a pending scaffold exists,
     // sample-and-run (default 25%) the pending against this turn's task,
@@ -1408,7 +1389,7 @@ export class OrchestratorAgent extends Think<Env> {
     // Reactor drain-then-stop: handle any external events still pending (arrived
     // during this turn, or queued before a chat turn). No-op when none — so this
     // self-terminates once the external event backlog is empty.
-    void this.drainPendingEvents();
+    void this.orch.drainPendingEvents();
   }
 
   /** Background memory compression. Reads recent turn, updates agent_facts.
@@ -1968,7 +1949,7 @@ export class OrchestratorAgent extends Think<Env> {
 
       // Wake the agent to act on the freshly-published timer events (and any
       // other pending events) — an autonomous turn. Fire-and-forget.
-      if (due.length > 0) void this.drainPendingEvents();
+      if (due.length > 0) void this.orch.drainPendingEvents();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
@@ -3985,7 +3966,7 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Wake the agent to act on the new webhook event — an autonomous turn.
     // Only when newly admitted (a duplicate is already bound or in flight).
-    if (admitted) void this.drainPendingEvents();
+    if (admitted) void this.orch.drainPendingEvents();
 
     return { status: 'admitted', event_id: id, admitted };
   }

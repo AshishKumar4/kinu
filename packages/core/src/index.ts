@@ -298,6 +298,9 @@ export {
   TurnAccumulator,
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator.js';
+export {
+  AgentOrchestrator, type AgentOrchestratorDeps,
+} from './orchestrator/agent-orchestrator.js';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
