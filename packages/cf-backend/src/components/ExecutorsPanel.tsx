@@ -326,11 +326,18 @@ function FilesPane({ execName, onBrowse }: {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // The parent recreates `onBrowse` on every render; depending on its identity
+  // would refetch the listing on every parent render (streaming tokens, port
+  // changes, …). Hold it in a ref so `refresh` is stable and the fetch fires
+  // only when the path or executor actually changes.
+  const onBrowseRef = useRef(onBrowse);
+  useEffect(() => { onBrowseRef.current = onBrowse; }, [onBrowse]);
+
   const refresh = useCallback(async (p: string) => {
     setLoading(true);
     setErr(null);
     try {
-      const r = await onBrowse(p) as { entries?: unknown; error?: string };
+      const r = await onBrowseRef.current(p) as { entries?: unknown; error?: string };
       if (r.error) { setErr(r.error); setEntries([]); }
       else {
         const arr = Array.isArray(r.entries)
@@ -340,9 +347,9 @@ function FilesPane({ execName, onBrowse }: {
       }
     } catch (e) { setErr((e as Error).message); setEntries([]); }
     finally { setLoading(false); }
-  }, [onBrowse]);
+  }, []);
 
-  useEffect(() => { refresh(path); }, [path, refresh, execName]);
+  useEffect(() => { refresh(path); }, [path, execName, refresh]);
 
   const segments = path === "/" ? [] : path.split("/").filter(Boolean);
 
