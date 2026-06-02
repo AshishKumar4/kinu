@@ -481,10 +481,11 @@ export default function WorkspacePage() {
   // refresh or back-nav never re-fires it.
   useEffect(() => {
     if (initialPromptSent.current) return;
-    const ns = location.state as { initialPrompt?: string; displayName?: string } | null;
+    const ns = location.state as { initialPrompt?: string } | null;
     if (!ns?.initialPrompt || state.connectionStatus !== "connected") return;
     initialPromptSent.current = true;
-    if (ns.displayName) state.rpc("setDisplayName", [ns.displayName]).catch(() => {});
+    // No setDisplayName here: a user-origin name would suppress the agent's own
+    // AI auto-titling. The agent titles itself from this opening message.
     state.sendChat(ns.initialPrompt);
     navigate(location.pathname, { replace: true, state: null });
   }, [state.connectionStatus, location.state, location.pathname, navigate]); // eslint-disable-line react-hooks/exhaustive-deps

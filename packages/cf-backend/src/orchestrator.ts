@@ -37,6 +37,7 @@ import { compactionThreshold } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
+import { deriveAgentTitle } from "./lib/agent-naming.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
   ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
@@ -1586,6 +1587,13 @@ export class OrchestratorAgent extends Think<Env> {
   private async maybeGenerateTitle(userText: string): Promise<void> {
     try {
       if (this.config.getNameOrigin() !== null) return; // already user- or auto-named
+      // Show a deterministic provisional title instantly (header parity with the
+      // roster), then replace it with the AI title below. name_origin stays
+      // unset so this retries the AI step on the next turn if generation fails.
+      if (!this.config.getDisplayName()) {
+        const provisional = deriveAgentTitle(userText);
+        if (provisional) await this.propagateDisplayName(provisional);
+      }
       const prompt =
         `Generate a concise 3–6 word title (Title Case, no quotes, no trailing ` +
         `punctuation) for a session that opens with this request:\n\n` +
@@ -1596,7 +1604,8 @@ export class OrchestratorAgent extends Think<Env> {
       });
       const title = text.trim().replace(/^["'#\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ').slice(0, 60);
       if (title.length >= 2) {
-        await this.applyDisplayName(title, 'auto');
+        await this.propagateDisplayName(title);
+        this.config.setNameOrigin('auto');
         console.log(`[proteus] auto-titled agent → "${title}"`);
       }
     } catch (err) {
@@ -1604,18 +1613,19 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Set the display name everywhere it lives: agent_config (source of truth),
-   *  the owner's roster row (the Sidebar), and a live broadcast to open clients. */
-  private async applyDisplayName(displayName: string, origin: 'user' | 'auto'): Promise<void> {
+  /** Push a display name to all three homes: agent_config (source of truth),
+   *  the owner's roster row (the Sidebar), and a live broadcast to open clients.
+   *  Does NOT set name_origin — the caller decides whether this locks
+   *  auto-titling (a provisional title leaves it open; user/auto titles set it). */
+  private async propagateDisplayName(displayName: string): Promise<void> {
     this.config.setDisplayName(displayName);
-    this.config.setNameOrigin(origin);
     const userId = this.getOwnerUserId();
     if (userId) {
       try {
         const stub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
         await stub.setAgentDisplayName(this.name, displayName);
       } catch (err) {
-        console.warn('[proteus] applyDisplayName roster sync failed:', err instanceof Error ? err.message : err);
+        console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
       }
     }
     try { this.broadcast(JSON.stringify({ type: 'agent_renamed', displayName })); } catch { /* nop */ }
@@ -3041,7 +3051,8 @@ export class OrchestratorAgent extends Think<Env> {
   // setModel moved below — validates spec via the provider registry before storing.
 
   @callable() async setDisplayName(displayName: string) {
-    await this.applyDisplayName(displayName, 'user');
+    await this.propagateDisplayName(displayName);
+    this.config.setNameOrigin('user'); // locks auto-titling — the operator named it
     return { displayName };
   }
 

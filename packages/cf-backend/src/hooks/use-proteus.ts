@@ -239,7 +239,11 @@ export function useProteus(agentId?: string) {
         setAgentStatus(snap.status);
         if (agentId) {
           // Fire-and-forget: record in UserDO (new agent → register; existing → touch).
-          registerAgent(agentId, snap.status.displayName || snap.status.name, snap.status.purpose).catch(() => {
+          // Pass the agent's own display title only if it has a real one — the
+          // status falls back to the slug (=name) when untitled, and sending that
+          // would clobber the roster's provisional title.
+          const title = snap.status.displayName !== snap.status.name ? snap.status.displayName : undefined;
+          registerAgent(agentId, snap.status.purpose, title).catch(() => {
             touchAgent(agentId).catch(() => {});
           });
         }

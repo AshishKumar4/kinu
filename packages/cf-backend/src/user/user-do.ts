@@ -22,6 +22,7 @@ import { nanoid, type Credential } from '@proteus/core';
 import { initUserTables } from './schema.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
+import { resolveAgentTitle } from '../lib/agent-naming.js';
 import {
   createCodexOAuthClient, tokensToCredential, CODEX_DEVICE_PORTAL,
   type DeviceCodeStart,
@@ -164,9 +165,15 @@ export class UserDO extends Agent<Env> {
   }
 
   @callable()
-  async registerAgent(name: string, displayName: string, purpose?: string): Promise<AgentEntry> {
+  async registerAgent(name: string, displayName?: string, purpose?: string): Promise<AgentEntry> {
     validateAgentName(name);
     const now = Date.now();
+    const existing = this.sqlx<{ display_name: string }>(
+      `SELECT display_name FROM user_agents WHERE name = ?`, name,
+    )[0];
+    const title = resolveAgentTitle({
+      explicit: displayName, existing: existing?.display_name, purpose, slug: name,
+    });
     this.sqlx(
       `INSERT INTO user_agents (name, display_name, purpose, created_at, last_visited)
        VALUES (?, ?, ?, ?, ?)
@@ -175,9 +182,9 @@ export class UserDO extends Agent<Env> {
          purpose      = COALESCE(excluded.purpose, user_agents.purpose),
          last_visited = excluded.last_visited,
          archived_at  = NULL`,
-      name, displayName, purpose ?? null, now, now,
+      name, title, purpose ?? null, now, now,
     );
-    return { name, displayName, purpose: purpose ?? '', createdAt: now, lastVisited: now, archivedAt: null };
+    return { name, displayName: title, purpose: purpose ?? '', createdAt: now, lastVisited: now, archivedAt: null };
   }
 
   @callable()

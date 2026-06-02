@@ -73,7 +73,8 @@ export async function handleUserRequest(
     const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
     if (!body) return err(400, 'Body must be JSON');
     if (typeof body.name !== 'string' || !body.name) return err(400, 'name required');
-    if (typeof body.displayName !== 'string' || !body.displayName) return err(400, 'displayName required');
+    // displayName is optional — the agent derives a provisional title from its
+    // mission (purpose) and AI-titles itself on the first turn.
     try {
       const entry = await stub.registerAgent(body.name, body.displayName, body.purpose);
       return json(entry, { status: 201 });
