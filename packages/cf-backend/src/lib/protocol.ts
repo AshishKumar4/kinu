@@ -116,6 +116,15 @@ export interface BackgroundJob {
 	settledAt: number | null;
 }
 
+/** A pending device-consent request — an agent wants to run a command on a
+ *  connected device; the user decides (Allow once / Always / Deny). */
+export interface PendingConsent {
+	consentId: string;
+	deviceLabel: string;
+	command: string;
+	createdAt: number;
+}
+
 export interface EvolutionEvent {
 	id: string;
 	timestamp: string;

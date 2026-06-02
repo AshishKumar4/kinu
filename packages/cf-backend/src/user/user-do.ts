@@ -285,24 +285,91 @@ export class UserDO extends Agent<Env> {
     });
   }
 
-  private pickDevice(deviceId?: string): DeviceTunnel | null {
-    if (deviceId) { const t = this._deviceTunnels.get(deviceId); return t?.isConnected() ? t : null; }
-    for (const t of this._deviceTunnels.values()) if (t.isConnected()) return t;
+  /** The id of a connected device — the requested one, or the first live one. */
+  private connectedDeviceId(deviceId?: string): string | null {
+    if (deviceId) return this._deviceTunnels.get(deviceId)?.isConnected() ? deviceId : null;
+    for (const [id, t] of this._deviceTunnels) if (t.isConnected()) return id;
     return null;
   }
 
-  /** Forward a JSON-RPC call to a connected device. The agent's laptop executor
-   *  calls this over a DO-to-DO RPC. Throws if no device is connected. */
-  async deviceRpc(method: string, params: unknown[], deviceId?: string): Promise<unknown> {
-    const tunnel = this.pickDevice(deviceId);
-    if (!tunnel) throw new Error('no device connected');
+  private deviceLabel(deviceId: string): string {
+    return this.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? 'your device';
+  }
+
+  /** Forward a JSON-RPC call to a connected device — the single consent
+   *  chokepoint. Every agent call passes its name, so we can enforce the
+   *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
+   *  the agent to raise a consent card and await the user's decision. */
+  async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string }): Promise<unknown> {
+    const deviceId = this.connectedDeviceId(opts?.deviceId);
+    if (!deviceId) throw new Error('no device connected');
+    if (opts?.agentName) {
+      const allowed = await this.checkDeviceConsent(opts.agentName, deviceId, method, params);
+      if (!allowed) throw new Error('device use was not approved');
+    }
+    const tunnel = this._deviceTunnels.get(deviceId)!;
     return tunnel.rpc(method, params);
   }
 
   /** Whether any (or a specific) device is live — drives the laptop executor's
    *  availability cache + the UI badge. */
   async isDeviceConnected(deviceId?: string): Promise<boolean> {
-    return this.pickDevice(deviceId) != null;
+    return this.connectedDeviceId(deviceId) != null;
+  }
+
+  // ── Device consent (ask-once-then-remember) ──────────────────────────
+
+  private getDeviceConsentPolicy(agentName: string, deviceId: string): 'allow' | 'deny' | null {
+    const row = this.sqlx<{ policy: string }>(
+      `SELECT policy FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
+    )[0];
+    return row?.policy === 'allow' || row?.policy === 'deny' ? row.policy : null;
+  }
+
+  private setDeviceConsentPolicy(agentName: string, deviceId: string, policy: 'allow' | 'deny'): void {
+    this.sqlx(
+      `INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(agent_name, device_id) DO UPDATE SET policy = excluded.policy, updated_at = excluded.updated_at`,
+      agentName, deviceId, policy, Date.now(),
+    );
+  }
+
+  /** Resolve consent for one agent→device call. Remembered policies short-
+   *  circuit; otherwise the agent renders a card and the user decides. */
+  private async checkDeviceConsent(agentName: string, deviceId: string, method: string, params: unknown[]): Promise<boolean> {
+    const policy = this.getDeviceConsentPolicy(agentName, deviceId);
+    if (policy === 'allow') return true;
+    if (policy === 'deny') return false;
+    const command = method === 'exec' ? String(params[0] ?? '') : `${method}(${params.map((p) => String(p)).join(', ').slice(0, 80)})`;
+    let decision: 'once' | 'always' | 'deny';
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName)) as unknown as {
+        awaitDeviceConsent(req: { deviceId: string; deviceLabel: string; command: string }): Promise<'once' | 'always' | 'deny'>;
+      };
+      decision = await stub.awaitDeviceConsent({ deviceId, deviceLabel: this.deviceLabel(deviceId), command });
+    } catch {
+      return false; // agent unreachable / timed out → fail closed (not remembered)
+    }
+    // Only "always" is remembered; "once" and "deny" are per-call decisions.
+    if (decision === 'deny') return false;
+    if (decision === 'always') this.setDeviceConsentPolicy(agentName, deviceId, 'allow');
+    return true;
+  }
+
+  /** The remembered consent policies (Devices tab — see/revoke which agents may
+   *  use a device). */
+  @callable()
+  async listDeviceConsents(): Promise<Array<{ agentName: string; deviceId: string; policy: string }>> {
+    return this.sqlx<{ agent_name: string; device_id: string; policy: string }>(
+      `SELECT agent_name, device_id, policy FROM device_consent ORDER BY updated_at DESC`,
+    ).map((r) => ({ agentName: r.agent_name, deviceId: r.device_id, policy: r.policy }));
+  }
+
+  /** Forget a remembered consent (next use re-asks). */
+  @callable()
+  async clearDeviceConsent(agentName: string, deviceId: string): Promise<{ ok: boolean }> {
+    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+    return { ok: true };
   }
 
   /** The user's devices for the Devices tab (live-connected flag from memory). */

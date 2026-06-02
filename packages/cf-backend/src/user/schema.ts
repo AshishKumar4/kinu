@@ -109,4 +109,18 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token ON user_devices (token)`);
+
+  // Per-(agent, device) consent policy. Ask-once-then-remember: a missing row
+  // means ASK (the agent raises a card in chat the first time it touches the
+  // device); 'allow' / 'deny' are the remembered decisions. One device, many
+  // agents — each agent earns its own consent.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS device_consent (
+      agent_name  TEXT NOT NULL,
+      device_id   TEXT NOT NULL,
+      policy      TEXT NOT NULL,
+      updated_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (agent_name, device_id)
+    )
+  `);
 }

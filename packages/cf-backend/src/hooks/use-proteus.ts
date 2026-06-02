@@ -5,7 +5,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
-import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, Rpc } from "../lib/protocol";
+import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
 import { touchAgent, registerAgent } from "../lib/user-api";
 
 export interface ExecutorOutput {
@@ -80,6 +80,9 @@ export function useProteus(agentId?: string) {
   // Background tasks (auto-detached >30s tool calls) — single source for the
   // Tasks surface + the Tasks-tab running badge (visible on any surface).
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
+  // Pending device-consent requests — an agent wants to use a connected device;
+  // the chat renders a card and the user decides (ask-once-then-remember).
+  const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
 
   const agent = useAgent({
     agent: "orchestrator-agent",
@@ -218,6 +221,11 @@ export function useProteus(agentId?: string) {
           }
           // Pull the freshest timeline so the new MCTS spans land promptly.
           rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
+        } else if (msg.type === "device_consent") {
+          setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
+            : [...prev, { consentId: msg.consentId, deviceLabel: msg.deviceLabel, command: msg.command, createdAt: Date.now() }]);
+        } else if (msg.type === "device_consent_resolved") {
+          setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
         }
       } catch { /* not JSON or not our message */ }
     };
@@ -229,6 +237,11 @@ export function useProteus(agentId?: string) {
     rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
   }, [rpc]);
 
+  const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
+    setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
+    rpc("resolveDeviceConsent", [consentId, decision]).catch(() => {});
+  }, [rpc]);
+
   function refreshLiveData() {
     rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
     rpc<MctsRow[]>("getMctsTree", []).then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); }).catch(() => {});
@@ -236,6 +249,8 @@ export function useProteus(agentId?: string) {
     // Refresh tools so newly-crafted tools appear without reconnecting.
     rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
     refreshBackgroundJobs();
+    // Re-hydrate any consent cards still pending after a reload.
+    rpc<PendingConsent[]>("listPendingConsents", []).then(setPendingConsents).catch(() => {});
   }
 
   // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
@@ -410,6 +425,9 @@ export function useProteus(agentId?: string) {
     backgroundJobs,
     runningTaskCount: backgroundJobs.filter((j) => j.status === "running").length,
     refreshBackgroundJobs,
+    /** Pending device-consent requests + the resolver (chat consent cards). */
+    pendingConsents,
+    resolveConsent,
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',

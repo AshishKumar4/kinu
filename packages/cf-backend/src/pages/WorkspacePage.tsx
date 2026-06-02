@@ -6,7 +6,7 @@ import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
-  WarningCircleIcon, ProhibitIcon,
+  WarningCircleIcon, ProhibitIcon, DesktopTowerIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
@@ -19,7 +19,7 @@ import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surf
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
-import type { TimelineSpan, TimelineKind } from "@/lib/protocol";
+import type { TimelineSpan, TimelineKind, PendingConsent } from "@/lib/protocol";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -154,6 +154,35 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
           {output != null && <pre className="rounded-lg p-elevated border p-border p-2.5 text-xs font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Consent card: an agent wants to run a command on a connected device. The
+ *  user decides — Allow once / Always allow this agent / Deny. */
+function DeviceConsentCard({ consent, onResolve }: {
+  consent: PendingConsent;
+  onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
+}) {
+  return (
+    <div className="rounded-xl border border-amber-500/40 p-3 animate-fade-in" style={{ background: "rgba(245,158,11,0.06)" }}>
+      <div className="flex items-start gap-2">
+        <DesktopTowerIcon size={16} className="text-amber-400 shrink-0 mt-0.5" weight="fill" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs p-text">
+            This agent wants to run a command on <span className="font-medium">{consent.deviceLabel}</span>:
+          </div>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-elevated rounded px-2 py-1">{consent.command || "(command)"}</code>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-2.5 justify-end">
+        <button onClick={() => onResolve(consent.consentId, "deny")}
+          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Deny</button>
+        <button onClick={() => onResolve(consent.consentId, "once")}
+          className="px-2.5 py-1 text-[11px] rounded-md p-card hover:p-card-hover p-text-2">Allow once</button>
+        <button onClick={() => onResolve(consent.consentId, "always")}
+          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Always allow</button>
+      </div>
     </div>
   );
 }
@@ -630,6 +659,15 @@ export default function WorkspacePage() {
               <div ref={messagesEndRef} />
             </div>
             </ErrorBoundary>
+
+            {/* Device-consent cards — an agent wants to use a connected device */}
+            {state.pendingConsents.length > 0 && (
+              <div className="px-5 lg:px-7 space-y-2 pb-1">
+                {state.pendingConsents.map((c) => (
+                  <DeviceConsentCard key={c.consentId} consent={c} onResolve={state.resolveConsent} />
+                ))}
+              </div>
+            )}
 
             {/* Input */}
             <div className="px-5 py-3 border-t p-border lg:px-7">

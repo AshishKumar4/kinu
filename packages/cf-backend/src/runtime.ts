@@ -209,7 +209,8 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
       const stub = userDOStubFor(agent);
       if (!stub) { deviceConnected = false; throw new Error('no device connected'); }
       try {
-        const result = await stub.deviceRpc(method, params);
+        // Pass the agent's name so the hub can enforce per-agent consent.
+        const result = await stub.deviceRpc(method, params, { agentName: agent.name });
         deviceConnected = true;
         return result;
       } catch (err) {

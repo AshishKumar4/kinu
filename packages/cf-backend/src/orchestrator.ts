@@ -1775,6 +1775,60 @@ export class OrchestratorAgent extends Think<Env> {
     try { this.jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
   }
 
+  // ── Device consent (P2) — ask-once-then-remember ─────────────────────
+  // The UserDO (device hub) calls awaitDeviceConsent when this agent touches a
+  // device with no remembered policy. We raise a card in the chat (broadcast +
+  // listPendingConsents for reload) and await the user's decision via the
+  // resolveDeviceConsent RPC. "Always" is persisted on the hub, not here.
+  private readonly _pendingConsents = new Map<string, {
+    resolve: (d: 'once' | 'always' | 'deny') => void;
+    deviceLabel: string; command: string; createdAt: number;
+  }>();
+
+  /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides
+   *  (or denies after 5 min so a device call never hangs forever). */
+  async awaitDeviceConsent(req: { deviceId: string; deviceLabel: string; command: string }): Promise<'once' | 'always' | 'deny'> {
+    const consentId = `cons-${nanoid(10)}`;
+    this.logActivity('device_consent_requested', `${req.deviceLabel}: ${req.command.slice(0, 80)}`);
+    try {
+      this.broadcast(JSON.stringify({
+        type: 'device_consent', consentId, deviceId: req.deviceId,
+        deviceLabel: req.deviceLabel, command: req.command,
+      }));
+    } catch { /* nop */ }
+    return new Promise<'once' | 'always' | 'deny'>((resolve) => {
+      const timer = setTimeout(() => {
+        if (this._pendingConsents.delete(consentId)) {
+          try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
+          resolve('deny');
+        }
+      }, 5 * 60_000);
+      this._pendingConsents.set(consentId, {
+        resolve: (d) => { clearTimeout(timer); resolve(d); },
+        deviceLabel: req.deviceLabel, command: req.command, createdAt: Date.now(),
+      });
+    });
+  }
+
+  /** The chat UI calls this when the user clicks a consent card button. */
+  @callable()
+  async resolveDeviceConsent(consentId: string, decision: 'once' | 'always' | 'deny'): Promise<{ ok: boolean }> {
+    const p = this._pendingConsents.get(consentId);
+    if (!p) return { ok: false };
+    this._pendingConsents.delete(consentId);
+    try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
+    p.resolve(decision === 'always' || decision === 'deny' ? decision : 'once');
+    return { ok: true };
+  }
+
+  /** Pending consent requests — so the chat re-renders cards after a reload. */
+  @callable()
+  async listPendingConsents(): Promise<Array<{ consentId: string; deviceLabel: string; command: string; createdAt: number }>> {
+    return [...this._pendingConsents.entries()].map(([consentId, p]) => ({
+      consentId, deviceLabel: p.deviceLabel, command: p.command, createdAt: p.createdAt,
+    }));
+  }
+
   /** Tools whose work can be long enough to auto-detach to the background. */
   private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
 
