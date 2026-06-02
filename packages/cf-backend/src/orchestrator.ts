@@ -2536,7 +2536,7 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async getHeadRuns(limit: number = 20): Promise<Array<{
     rootId: string; task: string; rationale: string; status: string; spawnedAt: number;
-    heads: Array<{ id: string; task: string; rationale: string; status: string; summary: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number }>;
+    heads: Array<{ id: string; task: string; rationale: string; status: string; summary: string | null; errorMessage: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number }>;
     merge: { narrative: string; headCount: number; totalTokens: number } | null;
   }>> {
     try {
@@ -2545,12 +2545,12 @@ export class OrchestratorAgent extends Think<Env> {
         WHERE parent_id IS NULL OR parent_id = ''
         ORDER BY spawned_at DESC LIMIT ${limit}`;
       return roots.map((root) => {
-        const heads = this.sql<{ id: string; task: string; rationale: string; status: string; summary: string | null; token_input: number; token_output: number; wall_clock_ms: number }>`
-          SELECT id, task, rationale, status, summary, token_input, token_output, wall_clock_ms
+        const heads = this.sql<{ id: string; task: string; rationale: string; status: string; summary: string | null; error_message: string | null; token_input: number; token_output: number; wall_clock_ms: number }>`
+          SELECT id, task, rationale, status, summary, error_message, token_input, token_output, wall_clock_ms
           FROM head_journal WHERE root_id = ${root.id} ORDER BY depth, spawned_at`
           .map((h) => ({
             id: h.id, task: h.task, rationale: h.rationale, status: h.status,
-            summary: h.summary, tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
+            summary: h.summary, errorMessage: h.error_message, tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
           }));
         const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number }>`
           SELECT merged_narrative, cost_head_count, cost_total_tokens

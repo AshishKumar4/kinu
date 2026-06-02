@@ -308,6 +308,7 @@ export class ExplorationAgent extends Agent<Env> {
         errorMessage: this.headAbortReason ?? undefined,
       };
     } catch (err) {
+      console.warn(`[proteus] head ${input.id} errored:`, err instanceof Error ? err.message : err);
       return {
         id: input.id, status: "errored",
         summary: `Head ${input.id} errored: ${err instanceof Error ? err.message : String(err)}`,
