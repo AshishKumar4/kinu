@@ -10,7 +10,7 @@ import {
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
 import { useProteus } from "@/hooks/use-proteus";
-import { touchAgent } from "@/lib/user-api";
+import { touchAgent, listAvailableModels } from "@/lib/user-api";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
@@ -413,10 +413,9 @@ function ForkModal({
 function ModelSelector({ current, onChange }: { current: string; onChange: (id: string) => void }) {
   const [models, setModels] = useState<Array<{ spec: string; label: string }>>([]);
   useEffect(() => {
-    import("../lib/user-api").then(({ listAvailableModels }) => {
-      listAvailableModels().then((m) => setModels(m.map((x) => ({ spec: x.spec, label: x.label }))))
-        .catch(() => setModels([]));
-    });
+    listAvailableModels()
+      .then((m) => setModels(m.map((x) => ({ spec: x.spec, label: x.label }))))
+      .catch(() => setModels([]));
   }, []);
   return (
     <select value={current} onChange={e => onChange(e.target.value)}

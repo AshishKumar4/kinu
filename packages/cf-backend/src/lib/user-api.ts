@@ -83,15 +83,19 @@ export const removeAgent    = (name: string) =>
 // ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api<CredentialSummary[]>('GET', '/credentials');
 export const setCredential    = (key: string, value: unknown) =>
-  api<{ ok: boolean }>('POST', `/credentials/${encodeURIComponent(key)}`, value);
+  api<{ ok: boolean }>('POST', `/credentials/${encodeURIComponent(key)}`, value)
+    .then((r) => { invalidateModelsCache(); return r; });
 export const deleteCredential = (key: string) =>
-  api<{ ok: boolean }>('DELETE', `/credentials/${encodeURIComponent(key)}`);
+  api<{ ok: boolean }>('DELETE', `/credentials/${encodeURIComponent(key)}`)
+    .then((r) => { invalidateModelsCache(); return r; });
 
 // ── Codex device flow ──────────────────────────────────────────────
 export const codexStatus      = () => api<CodexStatus>('GET', '/codex');
 export const startCodexFlow   = () => api<DeviceFlowStart>('POST', '/codex/start');
-export const pollCodexFlow    = () => api<PollResult>('POST', '/codex/poll');
-export const disconnectCodex  = () => api<{ ok: boolean }>('DELETE', '/codex');
+export const pollCodexFlow    = () => api<PollResult>('POST', '/codex/poll')
+  .then((r) => { if (r.connected) invalidateModelsCache(); return r; });
+export const disconnectCodex  = () => api<{ ok: boolean }>('DELETE', '/codex')
+  .then((r) => { invalidateModelsCache(); return r; });
 
 // ── Config / defaults ──────────────────────────────────────────────
 export const listConfig       = () => api<Record<string, string>>('GET', '/config');
@@ -100,7 +104,16 @@ export const setConfig        = (key: string, value: string) =>
   api<{ ok: boolean }>('PUT', `/config/${encodeURIComponent(key)}`, { value });
 
 // ── Models + providers ─────────────────────────────────────────────
-export const listAvailableModels    = () => api<ModelMenuEntry[]>('GET', '/models');
+// The model menu only changes when a provider is connected/disconnected, so it
+// is cached for the SPA session and invalidated by the provider mutators above.
+let _modelsCache: Promise<ModelMenuEntry[]> | null = null;
+export function listAvailableModels(): Promise<ModelMenuEntry[]> {
+  if (!_modelsCache) {
+    _modelsCache = api<ModelMenuEntry[]>('GET', '/models').catch((e) => { _modelsCache = null; throw e; });
+  }
+  return _modelsCache;
+}
+export function invalidateModelsCache(): void { _modelsCache = null; }
 export const listConnectedProviders = () =>
   api<Array<{ id: string; label: string; credentialKeys: string[] }>>('GET', '/providers');
 
