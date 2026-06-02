@@ -49,7 +49,7 @@
   "containers": [
     {
       "class_name": "ProteusSandbox",
-      "image": "docker.io/cloudflare/sandbox:0.8.11",
+      "image": "docker.io/cloudflare/sandbox:0.11.0",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
