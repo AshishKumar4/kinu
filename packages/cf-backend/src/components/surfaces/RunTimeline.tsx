@@ -11,7 +11,7 @@ import {
   SparkleIcon, WrenchIcon, TerminalIcon, TreeStructureIcon, GitBranchIcon,
   PackageIcon, BrainIcon, ArrowsClockwiseIcon, WarningCircleIcon, BookOpenIcon,
   GraduationCapIcon, LightningIcon, DatabaseIcon, ClockIcon, ProhibitIcon,
-  ScalesIcon, GitMergeIcon,
+  ScalesIcon, GitMergeIcon, XIcon,
 } from "@phosphor-icons/react";
 import type { TimelineSpan, TimelineKind } from "@/lib/protocol";
 
@@ -58,9 +58,11 @@ export interface RunTimelineProps {
   onSelect?: (span: TimelineSpan) => void;
   follow: boolean;
   onToggleFollow: () => void;
+  /** Collapse the timeline column (Column B → 0 width). */
+  onClose?: () => void;
 }
 
-export function RunTimeline({ spans, selectedRef, onSelect, follow, onToggleFollow }: RunTimelineProps) {
+export function RunTimeline({ spans, selectedRef, onSelect, follow, onToggleFollow, onClose }: RunTimelineProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   // Pin to the live frontier when Follow is on and a new span arrives.
@@ -74,15 +76,23 @@ export function RunTimeline({ spans, selectedRef, onSelect, follow, onToggleFoll
         <span className="text-xs font-medium p-text-2 flex items-center gap-1.5">
           <ClockIcon size={13} /> Run Timeline
         </span>
-        <button
-          onClick={onToggleFollow}
-          className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-            follow ? "p-accent border-current" : "p-text-3 p-border hover:p-text-2"
-          }`}
-          title="Auto-scroll to the live frontier"
-        >
-          {follow ? "● Following" : "Follow"}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onToggleFollow}
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              follow ? "p-accent border-current" : "p-text-3 p-border hover:p-text-2"
+            }`}
+            title="Auto-scroll to the live frontier"
+          >
+            {follow ? "● Following" : "Follow"}
+          </button>
+          {onClose && (
+            <button onClick={onClose} title="Hide timeline" aria-label="Hide timeline"
+              className="p-0.5 rounded p-text-3 hover:p-text-2 transition-colors cursor-pointer">
+              <XIcon size={12} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-1 py-1.5">

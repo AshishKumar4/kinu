@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
-  GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon,
+  GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
@@ -451,6 +451,15 @@ export default function WorkspacePage() {
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [follow, setFollow] = useState(true);
   const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  // Run Timeline (Column B) is collapsed by default — it's a spine you summon,
+  // not an always-on firehose. (feedback: the live timeline was distracting.)
+  const timelineRef = usePanelRef();
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const toggleTimeline = useCallback(() => {
+    const t = timelineRef.current;
+    if (!t) return;
+    if (t.isCollapsed()) t.resize("24%"); else t.collapse();
+  }, [timelineRef]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialPromptSent = useRef(false);
 
@@ -531,7 +540,7 @@ export default function WorkspacePage() {
       ) : (
       <PanelGroup className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
-        <Panel minSize={24} defaultSize={34}>
+        <Panel minSize={24} defaultSize={42}>
           <div className="flex flex-col h-full border-r p-border">
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
@@ -552,6 +561,14 @@ export default function WorkspacePage() {
               </div>
               <div className="flex items-center gap-2">
                 <ModelSelector current={as?.model ?? ""} onChange={state.setModel} />
+                <button
+                  onClick={toggleTimeline}
+                  title={timelineOpen ? "Hide run timeline" : "Show run timeline"}
+                  aria-label="Toggle run timeline"
+                  className={`p-1 rounded transition-colors cursor-pointer ${timelineOpen ? "p-accent" : "p-text-3 hover:p-text-2"}`}
+                >
+                  <ClockIcon size={14} />
+                </button>
                 {state.messages.length > 0 && (
                   <Button variant="ghost" shape="square" size="sm" onClick={state.clearHistory} icon={<TrashIcon size={12} />} aria-label="Clear" />
                 )}
@@ -610,8 +627,9 @@ export default function WorkspacePage() {
 
         <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
 
-        {/* ── Column B — Run Timeline (the spine) ─────────────── */}
-        <Panel minSize={14} defaultSize={22}>
+        {/* ── Column B — Run Timeline (the spine; collapsed by default) ── */}
+        <Panel panelRef={timelineRef} collapsible collapsedSize={0} defaultSize={0} minSize={15}
+          onResize={(s) => setTimelineOpen(s.asPercentage > 0.5)}>
           <div className="flex flex-col h-full border-r p-border">
             <ErrorBoundary label="Timeline">
               <RunTimeline
@@ -620,6 +638,7 @@ export default function WorkspacePage() {
                 onSelect={onTimelineSelect}
                 follow={follow}
                 onToggleFollow={() => setFollow(f => !f)}
+                onClose={toggleTimeline}
               />
             </ErrorBoundary>
           </div>
@@ -628,7 +647,7 @@ export default function WorkspacePage() {
         <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
 
         {/* ── Column C — Work Surface ─────────────────────────── */}
-        <Panel minSize={28} defaultSize={44}>
+        <Panel minSize={28} defaultSize={58}>
           <WorkSurface
             surface={surface}
             onSurface={setSurface}
