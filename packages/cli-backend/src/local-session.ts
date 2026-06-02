@@ -16,15 +16,17 @@ import { type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult,
-  SessionWriter, SessionMessage,
+  SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold,
   EventLog, initEventsHubTables,
   EvolutionEngine,
-  initFactsTable, createFactsStore,
+  initFactsTable, createFactsStore, renderFactsBlock,
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createThinkTool,
+  discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
+  unionAllowedTools, toolAllowedBySkills,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
 } from '@proteus/core';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -87,9 +89,16 @@ export class LocalAgentSession implements BackendHost {
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
   private readonly jobRunner: BackgroundJobRunner;
+  private readonly factsStore: FactsStore;
   private readonly onEvent: (event: SessionEvent) => void;
   private readonly sessionId = `local-${Date.now()}`;
   private readonly history: ModelMessage[] = [];
+
+  /** Skills invoked this turn (explicit/auto-activation + the skills tool's
+   *  `invoke` action). Cleared at turn start; the skills tool's closures mutate
+   *  this stable Set, so the cached toolset never needs rebuilding. */
+  private readonly turnInvokedSkills = new Set<string>();
+  private skillsVfs: SkillsVfs | null = null;
 
   /** FIFO of turns to run — user inputs + programmatic injects (reactor / job
    *  wake), drained by a single serialized pump so turns never interleave. */
@@ -118,10 +127,11 @@ export class LocalAgentSession implements BackendHost {
 
     // agent_facts world model — exposes the `fact` tool (parity with the DO).
     initFactsTable(this.rt.storage.execRaw);
+    this.factsStore = createFactsStore(this.rt.storage.sql);
 
-    // The full built-in surface, now wrapped so >30s calls auto-background.
-    // think (single-shot + MCTS; heads needs a subprocess HeadRuntime — P6b) +
-    // fact + the Node execute/craft factories.
+    // The full built-in surface, now wrapped so >30s calls auto-background:
+    // think (single-shot + MCTS; heads needs a subprocess HeadRuntime — P6b),
+    // fact, skills, + the Node execute/craft factories.
     const rawTools = buildBuiltinTools({
       rt: this.rt,
       craftedToolExecute: createNodeCraftedExecute(),
@@ -132,7 +142,12 @@ export class LocalAgentSession implements BackendHost {
       }) as never,
       codemodeLoader: { __cli: true } as unknown,
       thinkTool: this.buildThinkTool(),
-      facts: createFactsStore(this.rt.storage.sql),
+      facts: this.factsStore,
+      skills: {
+        vfs: this.getSkillsVfs(),
+        recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
+        currentlyInvoked: () => Array.from(this.turnInvokedSkills),
+      },
     });
     this.tools = this.wrapToolsForBackground(rawTools);
 
@@ -226,13 +241,17 @@ export class LocalAgentSession implements BackendHost {
 
     const startedAt = Date.now();
     this.orch.beginTurn(startedAt);
+    this.turnInvokedSkills.clear();
 
     const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
     const executorNames = (this.rt.executionRouter?.listExecutors() ?? []).map((e) => e.name);
+    const activeSkills = await this.resolveTurnSkills(item.text);
     const systemPrompt = buildSystemPromptSync(this.rt, {
       extraKnowledge: knowledge || undefined,
       registeredExecutors: executorNames,
-    });
+      ...(activeSkills ? { activeSkills } : {}),
+    }) + this.factsTail();
+    const turnTools = this.filterToolsBySkills(activeSkills);
 
     this.history.push({ role: 'user', content: item.text });
 
@@ -246,7 +265,7 @@ export class LocalAgentSession implements BackendHost {
         model: this.model,
         system: systemPrompt,
         history: this.history,
-        tools: this.tools,
+        tools: turnTools,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
       })) {
@@ -299,6 +318,64 @@ export class LocalAgentSession implements BackendHost {
     // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
     await this.orch.completeTurn(turn);
     this.emit({ type: 'turn-end', turn });
+  }
+
+  /** Passthrough SkillsVfs shim over rt.storage.vfs (mirrors the DO). */
+  private getSkillsVfs(): SkillsVfs {
+    if (this.skillsVfs) return this.skillsVfs;
+    const vfs = this.rt.storage.vfs;
+    this.skillsVfs = {
+      exists: (p) => vfs.exists(p),
+      readFile: (p, opts) => vfs.readFile(p, opts),
+      writeFile: (p, data) => vfs.writeFile(p, data),
+      readdir: (p) => vfs.readdir(p),
+      unlink: (p) => vfs.unlink(p),
+      mkdir: (p, opts) => vfs.mkdir(p, opts),
+    };
+    return this.skillsVfs;
+  }
+
+  /** Resolve the skills active for this turn — explicit @invocations + builtin
+   *  auto-activation (always-active config is a CLI follow-up). Mirrors the DO's
+   *  beforeTurn: only scans the VFS when activation is plausible, and records the
+   *  activated names onto the per-turn invoke tracker for skills.list. */
+  private async resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
+    try {
+      const explicit = extractExplicitInvocations(userText);
+      const anyAutoActivate = BUILTIN_SKILLS.some((s) => s.auto_activate);
+      if (explicit.length === 0 && !anyAutoActivate) return undefined;
+      const available = await discoverSkills(this.getSkillsVfs());
+      const activeSet = resolveActiveSkills({ available, explicit, userMessage: userText, alwaysActive: [] });
+      if (activeSet.active.length === 0) return undefined;
+      for (const r of activeSet.reasons) this.turnInvokedSkills.add(r.name);
+      return activeSet;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Restrict the turn's toolset to the active skills' allowed_tools union (the
+   *  skills tool stays reachable so the agent can list/invoke more mid-turn).
+   *  Empty union / no skills = full surface. */
+  private filterToolsBySkills(activeSkills?: ActiveSkillSet): ToolSet {
+    if (!activeSkills) return this.tools;
+    const allowed = unionAllowedTools(activeSkills.active);
+    if (allowed.length === 0) return this.tools;
+    const filtered: ToolSet = {};
+    for (const [name, t] of Object.entries(this.tools)) {
+      if (name === 'skills' || toolAllowedBySkills(name, allowed)) filtered[name] = t;
+    }
+    return filtered;
+  }
+
+  /** The recent-facts world-model block appended to every system prompt (single
+   *  source with the DO's getSystemPrompt). */
+  private factsTail(): string {
+    try {
+      const block = renderFactsBlock(this.factsStore.recentTopK(20), { maxChars: 2000 });
+      if (block) return `\n\n## World model (facts you remembered):\n${block}`;
+    } catch { /* facts table not yet populated */ }
+    return '';
   }
 
   /** The unified `think` tool — single-shot + MCTS strategies. Heads is omitted

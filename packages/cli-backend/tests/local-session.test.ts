@@ -43,7 +43,21 @@ function fakeModel(answer: string): LanguageModel {
   } as unknown as LanguageModel;
 }
 
-function setup(answer = 'hello there') {
+/** Like fakeModel, but records the tool names the SDK hands to doStream — lets a
+ *  test assert per-turn toolset filtering (e.g. by an active skill). */
+function capturingModel(answer: string, sink: (toolNames: string[]) => void): LanguageModel {
+  const base = fakeModel(answer) as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+  const inner = base.doStream.bind(base);
+  return {
+    ...base,
+    doStream: async (options: { tools?: Array<{ name: string }> }) => {
+      sink((options.tools ?? []).map((t) => t.name));
+      return inner(options);
+    },
+  } as unknown as LanguageModel;
+}
+
+function setup(answer = 'hello there', model?: LanguageModel) {
   const db = new Database(':memory:');
   // The agent DB carries a messages table in production (created on `proteus
   // create`); the runtime factory doesn't, so provision it for the test.
@@ -54,7 +68,7 @@ function setup(answer = 'hello there') {
   const rt = createCLIRuntime(db as never, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
-    rt, db, model: fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
+    rt, db, model: model ?? fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
   });
   return { db, rt, session, events };
 }
@@ -132,11 +146,25 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(b.event.type).toBe('job_update');
   });
 
+  test('a /skill activation filters the turn toolset to allowed_tools (+ skills)', async () => {
+    let captured: string[] = [];
+    const { rt, session } = setup('ok', capturingModel('ok', (t) => { captured = t; }));
+    await rt.storage.vfs.mkdir('/workspace/skills', { recursive: true });
+    await rt.storage.vfs.writeFile(
+      '/workspace/skills/focused.md',
+      '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n',
+    );
+    await session.send('/focused remember this');
+    // The active skill restricts to memory; the skills tool stays reachable so
+    // the agent can list/invoke more mid-turn.
+    expect(new Set(captured)).toEqual(new Set(['memory', 'skills']));
+  });
+
   test('toolNames exposes the full surface (think/fact parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    // Full parity with the DO surface: execution + memory + reasoning + facts.
-    for (const t of ['run', 'execute_tools', 'memory', 'think', 'fact']) expect(names).toContain(t);
+    // Full parity with the DO surface: execution + memory + reasoning + facts + skills.
+    for (const t of ['run', 'execute_tools', 'memory', 'think', 'fact', 'skills']) expect(names).toContain(t);
     await session.send('hi');
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
   });
