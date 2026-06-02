@@ -23,6 +23,9 @@ export const AGENT_CONFIG_KEYS = {
   reviewModel: 'review_model',
   /** Comma-separated list of skill names the operator wants always-on. */
   alwaysActiveSkills: 'always_active_skills',
+  /** The executor namespace the agent most recently ran a tool in — so the UI
+   *  (diff / file manager) defaults to where work actually happened. */
+  lastActiveExecutor: 'last_active_executor',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -53,6 +56,11 @@ export interface AgentConfigStore {
   /** Skills the operator has pinned as always-active for this agent. */
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
+  /** The executor namespace the agent last ran a tool in, or null. */
+  getLastActiveExecutor(): string | null;
+  /** Record the last-active executor. Ignores values that aren't a plausible
+   *  executor namespace (defense against a poisoned config value). */
+  setLastActiveExecutor(name: string): void;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -122,6 +130,13 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
       if (v.length === 0) sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.alwaysActiveSkills}`;
       else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
+    },
+    getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
+    setLastActiveExecutor(name) {
+      // Provider namespaces are short identifiers; reject anything else so a
+      // bad value can't poison the UI default. Not a fixed allow-list (executors
+      // are registered dynamically) — just a shape check.
+      if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
     },
   };
 }

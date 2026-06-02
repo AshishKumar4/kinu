@@ -41,6 +41,7 @@ export interface WorkSurfaceProps {
   // Devices (ExecutorsPanel)
   executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
   executorOutputs: Map<string, ExecutorOutput[]>;
+  lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
   agentName?: string;
   rpc: Rpc;
@@ -70,7 +71,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
       <div className="flex-1 overflow-y-auto p-5 min-h-0">
         <ErrorBoundary key={surface} label={surface}>
-          {surface === "Output" && <OutputSurface pinnedPorts={props.pinnedPorts} executors={props.executors} rpc={props.rpc} />}
+          {surface === "Output" && <OutputSurface pinnedPorts={props.pinnedPorts} executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} />}
           {surface === "Brain" && (
             <BrainSurface
               agentStatus={props.agentStatus} tools={props.tools}

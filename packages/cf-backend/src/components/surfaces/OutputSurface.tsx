@@ -10,6 +10,7 @@ import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { MonitorIcon, ArrowSquareOutIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import type { FileDiff } from "@/lib/diff";
+import { pickDefaultExecutor } from "@/lib/executor-default";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { port: number; url: string; name?: string }
@@ -18,10 +19,11 @@ export interface ExecutorInfo { name: string; kind: string; capabilities: string
 export interface OutputSurfaceProps {
   pinnedPorts: PinnedPort[];
   executors: ExecutorInfo[];
+  lastActiveExecutor?: string | null;
   rpc: Rpc;
 }
 
-export function OutputSurface({ pinnedPorts, executors, rpc }: OutputSurfaceProps) {
+export function OutputSurface({ pinnedPorts, executors, lastActiveExecutor, rpc }: OutputSurfaceProps) {
   const [view, setView] = useState<"preview" | "diff">(pinnedPorts.length > 0 ? "preview" : "diff");
   return (
     <div className="h-full flex flex-col -m-5">
@@ -35,7 +37,7 @@ export function OutputSurface({ pinnedPorts, executors, rpc }: OutputSurfaceProp
         ))}
       </div>
       <div className="flex-1 min-h-0">
-        {view === "preview" ? <PreviewView pinnedPorts={pinnedPorts} /> : <DiffView executors={executors} rpc={rpc} />}
+        {view === "preview" ? <PreviewView pinnedPorts={pinnedPorts} /> : <DiffView executors={executors} lastActiveExecutor={lastActiveExecutor} rpc={rpc} />}
       </div>
     </div>
   );
@@ -92,17 +94,8 @@ interface DiffResult {
 
 const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Local", nimbus: "Nimbus" };
 
-/** Prefer a real-shell executor (where the agent does repo work) so its changes
- *  are visible by default; fall back to the always-present VFS. */
-function pickDefaultExecutor(executors: ExecutorInfo[]): string {
-  for (const p of ["sandbox", "nimbus", "laptop"]) {
-    if (executors.some((e) => e.name === p && e.available)) return p;
-  }
-  return "workspace";
-}
-
-function DiffView({ executors, rpc }: { executors: ExecutorInfo[]; rpc: Rpc }) {
-  const [exec, setExec] = useState(() => pickDefaultExecutor(executors));
+function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorInfo[]; lastActiveExecutor?: string | null; rpc: Rpc }) {
+  const [exec, setExec] = useState(() => pickDefaultExecutor(executors, lastActiveExecutor));
   const [result, setResult] = useState<DiffResult | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -113,9 +106,9 @@ function DiffView({ executors, rpc }: { executors: ExecutorInfo[]; rpc: Rpc }) {
   // If the selected executor disappears, fall back to a sensible default.
   useEffect(() => {
     if (exec !== "workspace" && !executors.some((e) => e.name === exec && e.available)) {
-      setExec(pickDefaultExecutor(executors));
+      setExec(pickDefaultExecutor(executors, lastActiveExecutor));
     }
-  }, [executors, exec]);
+  }, [executors, exec, lastActiveExecutor]);
 
   const load = useCallback(() => {
     setResult(null);

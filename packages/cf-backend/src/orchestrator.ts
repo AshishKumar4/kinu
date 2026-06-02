@@ -247,6 +247,9 @@ export class OrchestratorAgent extends Think<Env> {
   private _engine: EvolutionEngine | null = null;
   private _turnToolCalls: ToolCallRecord[] = [];
   private _turnStepCount = 0;
+  /** Executors whose tools ran this turn — debounces the last-active-executor
+   *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
+  private _executorsUsedThisTurn = new Set<string>();
   private _turnStartedAt = 0;
   // Per-turn token accumulator (summed across steps in onStepFinish), emitted
   // on turn_end so the Supervise budget view can show real spend per run.
@@ -576,12 +579,22 @@ export class OrchestratorAgent extends Think<Env> {
         this.providerRegistry(),
         () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
       );
-      const allProviders = [craftedProvider, rlmProvider, ...executorProviders.map(p => ({
-        name: p.name,
-        tools: p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>,
-        types: p.types,
-        positionalArgs: p.positionalArgs,
-      }))];
+      // Record which executor the agent actually works in, so the UI (diff /
+      // file manager) defaults to where work happened. One upsert per executor
+      // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
+      const recordExecutor = (name: string) => {
+        if (this._executorsUsedThisTurn.has(name)) return;
+        this._executorsUsedThisTurn.add(name);
+        try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
+      };
+      const allProviders = [craftedProvider, rlmProvider, ...executorProviders.map(p => {
+        const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+        const wrapped: typeof tools = {};
+        for (const [k, tool] of Object.entries(tools)) {
+          wrapped[k] = { ...tool, execute: async (...args) => { const r = await tool.execute(...args); recordExecutor(p.name); return r; } };
+        }
+        return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
+      })];
 
       this._craftExecTool = createCodeTool({
         tools: allProviders as Parameters<typeof createCodeTool>[0]["tools"],
@@ -984,6 +997,7 @@ export class OrchestratorAgent extends Think<Env> {
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this._turnToolCalls = [];
     this._turnStepCount = 0;
+    this._executorsUsedThisTurn.clear();
     this._turnStartedAt = Date.now();
     this._turnUsage = { input: 0, output: 0 };
     this._turnHadError = false;
@@ -2794,7 +2808,8 @@ export class OrchestratorAgent extends Think<Env> {
         outputs: await safe(this.getExecutorOutput(e.name, 50), [] as unknown[]),
       })),
     );
-    return { status, tools, memoryContent, mcts, timeline, executors, executorOutputs };
+    const lastActiveExecutor = this.config.getLastActiveExecutor();
+    return { status, tools, memoryContent, mcts, timeline, executors, executorOutputs, lastActiveExecutor };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {

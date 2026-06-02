@@ -29,6 +29,26 @@ describe('AgentConfigStore — generic get/set/delete', () => {
   });
 });
 
+describe('AgentConfigStore — lastActiveExecutor', () => {
+  test('round-trips a valid executor name', () => {
+    const c = setup();
+    expect(c.getLastActiveExecutor()).toBeNull();
+    c.setLastActiveExecutor('sandbox');
+    expect(c.getLastActiveExecutor()).toBe('sandbox');
+    c.setLastActiveExecutor('workspace');
+    expect(c.getLastActiveExecutor()).toBe('workspace');
+  });
+
+  test('rejects values that are not plausible executor namespaces', () => {
+    const c = setup();
+    c.setLastActiveExecutor('sandbox');
+    c.setLastActiveExecutor('; DROP TABLE agent_config; --');
+    c.setLastActiveExecutor('');
+    c.setLastActiveExecutor('a'.repeat(40));
+    expect(c.getLastActiveExecutor()).toBe('sandbox'); // unchanged by the bad writes
+  });
+});
+
 describe('AgentConfigStore — typed accessors', () => {
   test('model: get/set round-trip + canonical key', () => {
     const c = setup();

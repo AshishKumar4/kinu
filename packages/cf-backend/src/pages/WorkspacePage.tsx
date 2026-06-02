@@ -655,6 +655,7 @@ export default function WorkspacePage() {
             mctsTree={state.mctsTree}
             executors={state.executors}
             executorOutputs={state.executorOutputs}
+            lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             agentName={agentId}
             rpc={state.rpc}

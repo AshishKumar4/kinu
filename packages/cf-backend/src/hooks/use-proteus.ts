@@ -50,6 +50,7 @@ export interface WorkspaceSnapshot {
   timeline: TimelineSpan[];
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
+  lastActiveExecutor: string | null;
 }
 
 /**
@@ -72,6 +73,7 @@ export function useProteus(agentId?: string) {
   const [error, setError] = useState<string | null>(null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
+  const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
   // Pinned (exposed) ports for the sandbox executor — polled hook-level so the
   // Output/Devices port badge updates regardless of the active surface.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
@@ -237,6 +239,7 @@ export function useProteus(agentId?: string) {
         if (snap.mcts.length > 0) setMctsTree(buildTree(snap.mcts));
         setRunTimeline(snap.timeline);
         setExecutors(snap.executors);
+        setLastActiveExecutor(snap.lastActiveExecutor);
         const outputs = new Map<string, ExecutorOutput[]>();
         for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
         setExecutorOutputs(outputs);
@@ -377,6 +380,7 @@ export function useProteus(agentId?: string) {
     setModel,
     executors,
     executorOutputs,
+    lastActiveExecutor,
     executeInExecutor,
     /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
     pinnedPorts,
