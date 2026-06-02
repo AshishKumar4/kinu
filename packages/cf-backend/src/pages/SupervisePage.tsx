@@ -14,7 +14,7 @@ import {
   GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon, WarningIcon,
 } from "@phosphor-icons/react";
 import { EmptyState } from "@/components/surfaces/shared";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc, BackgroundJob } from "@/lib/protocol";
 
 interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
 interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number }
@@ -29,9 +29,11 @@ function fmtTokens(n: number): string {
 export interface SupervisePageProps {
   rpc: Rpc;
   onRunTask: (task: string) => void;
+  /** Cross-link into the RUN altitude's Tasks surface to manage a job. */
+  onOpenTasks: () => void;
 }
 
-export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
+export function SupervisePage({ rpc, onRunTask, onOpenTasks }: SupervisePageProps) {
   return (
     <div className="h-full overflow-y-auto px-6 py-5 lg:px-10 max-w-5xl mx-auto space-y-8">
       <CurriculumBlock rpc={rpc} onRunTask={onRunTask} />
@@ -39,7 +41,41 @@ export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
         <RunHistoryBlock rpc={rpc} />
         <AutomationsBlock rpc={rpc} />
       </div>
+      <BackgroundTasksBlock rpc={rpc} onOpenTasks={onOpenTasks} />
     </div>
+  );
+}
+
+/* ── Background tasks — supervise-level digest, cross-linking to RUN ─ */
+
+function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () => void }) {
+  const [jobs, setJobs] = useState<BackgroundJob[] | null>(null);
+  useEffect(() => { rpc<BackgroundJob[]>("listBackgroundJobs", [20]).then(setJobs).catch(() => setJobs([])); }, [rpc]);
+  const running = (jobs ?? []).filter((j) => j.status === "running").length;
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-3">
+        <ClockIcon size={16} className="p-accent" />
+        <h2 className="text-sm font-semibold p-text">Background tasks</h2>
+        {running > 0 && <Badge variant="secondary">{running} running</Badge>}
+        <div className="flex-1" />
+        <Button size="sm" variant="ghost" onClick={onOpenTasks}>Manage in Tasks →</Button>
+      </div>
+      {jobs === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
+        : jobs.length === 0 ? <p className="text-xs p-text-3">No background tasks — long tool calls (&gt;30s) detach here.</p>
+        : (
+          <div className="rounded-md border p-border overflow-hidden text-xs">
+            {jobs.slice(0, 6).map((j) => (
+              <div key={j.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+                <span className={`size-1.5 rounded-full shrink-0 ${j.status === "running" ? "bg-amber-500" : j.status === "completed" ? "bg-emerald-500" : j.status === "cancelled" ? "bg-zinc-500" : "bg-red-500"}`} />
+                <span className="font-mono p-text-2">{j.kind}</span>
+                <span className="p-text-3 truncate flex-1">{j.id.replace(/^bgjob-/, "").slice(0, 8)}</span>
+                <span className="p-text-3 shrink-0">{j.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+    </section>
   );
 }
 
