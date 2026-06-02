@@ -13,7 +13,7 @@ import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
-import type { CompletedTurn } from '../evolution/types.js';
+import type { CompletedTurn, CompletedSession } from '../evolution/types.js';
 import { nanoid } from '../utils/nanoid.js';
 
 export interface AgentOrchestratorDeps {
@@ -59,19 +59,44 @@ export class AgentOrchestrator {
     this.sessionTurnCount++;
     this.sessionTurns.push(turn);
     if (this.sessionTurnCount >= this.reflectionInterval) {
-      const sessionData = {
-        sessionId: `sess-${nanoid()}`,
-        turns: [...this.sessionTurns],
-        startedAt: this.sessionStartedAt,
-        endedAt: Date.now(),
-      };
-      this.sessionTurnCount = 0;
-      this.sessionTurns = [];
-      this.sessionStartedAt = Date.now();
-      void this.deps.engine.onSessionComplete(sessionData).catch((err) =>
-        console.error('[proteus] Session evolution failed:', err));
+      const sessionData = this.snapshotSession();
+      if (sessionData) {
+        void this.deps.engine.onSessionComplete(sessionData).catch((err) =>
+          console.error('[proteus] Session evolution failed:', err));
+      }
     }
     this.deps.engine.onTurnCompleteAsync(turn);
+  }
+
+  /**
+   * Flush a partial session (fewer than N turns) — fire session evolution on the
+   * buffered turns and reset, AWAITING the reflection. For backends with an
+   * explicit session end (the CLI on exit); the always-on DO rolls over via the
+   * N-turn cadence in recordTurn instead. No-op when no turns are buffered.
+   */
+  async flushSession(): Promise<void> {
+    const sessionData = this.snapshotSession();
+    if (!sessionData) return;
+    try {
+      await this.deps.engine.onSessionComplete(sessionData);
+    } catch (err) {
+      console.error('[proteus] Session evolution failed:', err);
+    }
+  }
+
+  /** Snapshot + reset the current session window. Returns null when empty. */
+  private snapshotSession(): CompletedSession | null {
+    if (this.sessionTurns.length === 0) return null;
+    const data: CompletedSession = {
+      sessionId: `sess-${nanoid()}`,
+      turns: [...this.sessionTurns],
+      startedAt: this.sessionStartedAt,
+      endedAt: Date.now(),
+    };
+    this.sessionTurnCount = 0;
+    this.sessionTurns = [];
+    this.sessionStartedAt = Date.now();
+    return data;
   }
 
   /**

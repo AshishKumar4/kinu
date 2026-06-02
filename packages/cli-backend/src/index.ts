@@ -9,3 +9,7 @@ export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';
 export { createBranchSpawner } from './branch-process.js';
 export { createNodeCraftedExecute } from './craft-executor.js';
 export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory.js';
+export {
+  LocalAgentSession, resolveChatModel,
+  type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
+} from './local-session.js';

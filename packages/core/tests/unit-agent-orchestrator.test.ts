@@ -65,6 +65,19 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (count resets)
     expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
   });
+
+  test('flushSession reflects a partial window (CLI exit); no-op when empty', async () => {
+    const { engine, sessions } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 5 });
+    for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i));   // below the interval — no auto reflection
+    expect(sessions).toEqual([]);
+    await orch.flushSession();
+    expect(sessions).toEqual([2]);                            // the 2 buffered turns reflected
+    expect(orch.sessionTurnIndex).toBe(0);                    // window reset
+    await orch.flushSession();                                // nothing buffered now
+    expect(sessions).toEqual([2]);                            // still just the one
+  });
 });
 
 describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)', () => {
