@@ -50,6 +50,8 @@ import {
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   buildSystemPromptSync,
+  // backend-agnostic per-turn accounting (shared by cf + cli)
+  TurnAccumulator, type StepLike,
   FALLBACK_PURPOSE,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
@@ -256,8 +258,28 @@ export class OrchestratorAgent extends Think<Env> {
 
   private _rt: CFRuntime | null = null;
   private _engine: EvolutionEngine | null = null;
-  private _turnToolCalls: ToolCallRecord[] = [];
-  private _turnStepCount = 0;
+  /** Backend-agnostic per-turn accounting (tool calls, steps, usage, errors).
+   *  Lazily built with cf sinks → activity_log + the durable run-event recorder.
+   *  Shared with the CLI backend (core/orchestrator/turn-accumulator). */
+  private _acc: TurnAccumulator | null = null;
+  private get acc(): TurnAccumulator {
+    if (!this._acc) {
+      this._acc = new TurnAccumulator({
+        logActivity: (e, d) => this.logActivity(e, d),
+        onToolCallEvent: (ev) => {
+          try {
+            if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
+          } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
+        },
+        onStepEvent: (ev) => {
+          try {
+            if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
+          } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
+        },
+      });
+    }
+    return this._acc;
+  }
   /** Executors whose tools ran this turn — debounces the last-active-executor
    *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
   private _executorsUsedThisTurn = new Set<string>();
@@ -265,11 +287,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  debounced via the persisted last-backup time + this optimistic gate. */
   private _workspaceRestored = false;
   private _lastWorkspaceBackupAt = 0;
-  private _turnStartedAt = 0;
-  // Per-turn token accumulator (summed across steps in onStepFinish), emitted
-  // on turn_end so the Supervise budget view can show real spend per run.
-  private _turnUsage = { input: 0, output: 0, cached: 0 };
-  private _turnHadError = false;
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
   private _turnsSinceGepa = 0;
@@ -501,7 +518,6 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── Activity logging: persisted + broadcast to Logs pane ──
   private _turnT0 = 0;
-  private _firstChunkReceived = false;
 
   // Per-turn in-flight flag — forkAgent rejects with "agent busy" while set.
   // Set in beforeTurn, cleared in onChatResponse (after durable persist;
@@ -1110,14 +1126,9 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    this._turnToolCalls = [];
-    this._turnStepCount = 0;
+    this.acc.reset(Date.now());
     this._executorsUsedThisTurn.clear();
     await this.restoreWorkspaceIfNeeded();
-    this._turnStartedAt = Date.now();
-    this._turnUsage = { input: 0, output: 0, cached: 0 };
-    this._turnHadError = false;
-    this._firstChunkReceived = false;
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // Start a new run for the event log, with provenance so cross-run history
@@ -1228,113 +1239,17 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   onChunk(_ctx: ChunkContext): void {
-    if (!this._firstChunkReceived) {
-      this._firstChunkReceived = true;
-      this.logActivity("first_chunk");
-    }
+    this.acc.onFirstChunk();
   }
 
   afterToolCall(ctx: ToolCallResultContext): void {
-    // Think 0.4 renamed: args → input, result → output, and added a success
-    // discriminator + durationMs. See docs/THINK-UPGRADE-AND-FORKING.md §4 U2.
-    // The core ToolCallRecord shape (name/args/result) is stable — we adapt here.
-    const c = ctx as unknown as {
-      toolName: string;
-      input?: Record<string, unknown>;
-      durationMs?: number;
-      success: boolean;
-      output?: unknown;
-      error?: unknown;
-    };
-    const recorded =
-      c.success === false
-        ? { error: c.error instanceof Error ? c.error.message : String(c.error) }
-        : c.output;
-    if (c.success === false) this._turnHadError = true;
-    const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : "";
-    this.logActivity("tool_call_end", `${c.toolName}${dur}`);
-    this._turnToolCalls.push({
-      name: c.toolName,
-      args: (c.input ?? {}) as Record<string, unknown>,
-      result: recorded,
-    });
-    // Persist tool_call_end into the durable run-event log.
-    try {
-      if (this._currentRunId) {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'tool_call_end',
-          name: c.toolName,
-          toolCallId: `tc-${this._turnToolCalls.length}`,
-          result: recorded,
-          error: c.success === false ? String(c.error ?? '') : undefined,
-          durationMs: c.durationMs,
-        });
-      }
-    } catch (err) {
-      console.warn('[proteus] event emit failed at afterToolCall:', err);
-    }
+    // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
+    // accumulator records it + fires the activity log + run-event sinks.
+    this.acc.recordToolCall(ctx as unknown as Parameters<TurnAccumulator['recordToolCall']>[0]);
   }
 
   onStepFinish(ctx: StepContext): void {
-    // Think 0.4: ctx is AI SDK's full StepResult — stepType is gone from the
-    // top level, but toolCalls.length > 0 is a reliable proxy for the old
-    // "tool-result" vs "initial" distinction we logged before.
-    //
-    // StepResult extras surfaced in activity_log (U3):
-    //   usage.cachedInputTokens — AI Gateway / prompt-caching savings
-    //   usage.reasoningTokens   — Kimi K2.6 reasoning budget consumed
-    //   response.modelId        — authoritative model id per step (useful
-    //                             when cascading Workers AI → AI Gateway)
-    this._turnStepCount++;
-    const toolCalls = Array.isArray(ctx.toolCalls) ? ctx.toolCalls : [];
-    const toolResults = Array.isArray(ctx.toolResults) ? ctx.toolResults : [];
-    const toolCallNames = (toolCalls as Array<{ toolName?: string; name?: string }>)
-      .map(tc => tc?.toolName ?? tc?.name ?? "?")
-      .join(",");
-    const derivedStepType = toolCalls.length > 0 ? "tool-call" : "text";
-    const textLen = (ctx.text ?? "").length;
-    const u = ctx.usage as {
-      inputTokens?: number;
-      outputTokens?: number;
-      cachedInputTokens?: number;
-      reasoningTokens?: number;
-    } | undefined;
-    const inTok = u?.inputTokens ?? 0;
-    const outTok = u?.outputTokens ?? 0;
-    // Cached prefix tokens: Workers AI / OpenAI surface them on usage; Anthropic
-    // (and Anthropic-via-OpenRouter) report them in providerMetadata.anthropic.
-    const anthropicMeta = (ctx as unknown as { providerMetadata?: { anthropic?: { cacheReadInputTokens?: number } } })
-      .providerMetadata?.anthropic;
-    const cached = (u?.cachedInputTokens ?? 0) + (anthropicMeta?.cacheReadInputTokens ?? 0);
-    const reasoning = u?.reasoningTokens ?? 0;
-    this._turnUsage.input += inTok;
-    this._turnUsage.output += outTok;
-    this._turnUsage.cached += cached;
-    const modelId = (ctx as unknown as { response?: { modelId?: string } }).response?.modelId;
-    const extras: string[] = [];
-    if (cached > 0) extras.push(`cached=${cached}`);
-    if (reasoning > 0) extras.push(`reasoning=${reasoning}`);
-    if (modelId) extras.push(`model=${modelId}`);
-    const extrasStr = extras.length > 0 ? ` ${extras.join(" ")}` : "";
-    this.logActivity(
-      "step_finish",
-      `step ${this._turnStepCount} kind=${derivedStepType} reason=${ctx.finishReason} ` +
-      `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
-      `in=${inTok} out=${outTok}${extrasStr}`,
-    );
-    // Mirror into the durable run-event log so external SSE subscribers
-    // see per-step progress (UI Last-Event-ID resume + MCP/HTTP consumers).
-    try {
-      if (this._currentRunId) {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'step_finish',
-          stepIndex: this._turnStepCount,
-          reason: typeof ctx.finishReason === 'string' ? ctx.finishReason : undefined,
-        });
-      }
-    } catch (err) {
-      console.warn('[proteus] event emit failed at onStepFinish:', err);
-    }
+    this.acc.recordStep(ctx as unknown as StepLike);
   }
 
   async onChatResponse(result: ChatResponseResult) {
@@ -1349,7 +1264,7 @@ export class OrchestratorAgent extends Think<Env> {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'turn_end',
           turnIndex: this._sessionTurnCount,
-          tokenUsage: { input: this._turnUsage.input, output: this._turnUsage.output, cached: this._turnUsage.cached },
+          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
         });
         this.eventRecorder.emit(this._currentRunId, {
           type: 'run_end',
@@ -1385,7 +1300,7 @@ export class OrchestratorAgent extends Think<Env> {
           if (typeof ts === "number") return ts;
           if (typeof ts === "string") { const p = Date.parse(ts); if (!Number.isNaN(p)) return p; }
           if (ts instanceof Date) return ts.getTime();
-          return this._turnStartedAt || Date.now();
+          return this.acc.startedAt || Date.now();
         })();
         this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
                  VALUES (${lastUserMsg.id}, ${'default'}, ${null}, ${'user'}, ${userText}, ${userCreatedAt})`;
@@ -1405,7 +1320,7 @@ export class OrchestratorAgent extends Think<Env> {
     // heuristic in assessTurnQuality scores the turn at completion time.
     const msgId = (result.message as { id?: string } | null | undefined)?.id;
     if (msgId) {
-      const craftNames = this._turnToolCalls
+      const craftNames = this.acc.toolCalls
         .map(tc => tc.name)
         .filter(name => !BUILTIN_TOOL_NAMES.has(name));
       if (craftNames.length > 0) {
@@ -1419,13 +1334,13 @@ export class OrchestratorAgent extends Think<Env> {
     const turn: CompletedTurn = {
       userMessage: userText,
       assistantResponse: assistantText,
-      toolCalls: this._turnToolCalls,
-      steps: this._turnStepCount,
-      durationMs: this._turnStartedAt > 0 ? Date.now() - this._turnStartedAt : 0,
+      toolCalls: this.acc.toolCalls,
+      steps: this.acc.stepCount,
+      durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
       feedback: null,
       // status is "completed" here (the !== "completed" early-return above),
-      // so turn errors are tracked via the per-step _turnHadError flag.
-      hadError: this._turnHadError,
+      // so turn errors are tracked via the accumulator's per-step hadError flag.
+      hadError: this.acc.hadError,
     };
 
     // CRITICAL: Evolution hooks make LLM calls (reflection, extraction, session
@@ -1476,7 +1391,7 @@ export class OrchestratorAgent extends Think<Env> {
     // Reads recent turn, asks a judge to upsert/decay the agent_facts world
     // model. Letta-style; ~50% test-time token reduction reported. Gated by
     // agent_config.sleep_time_compute='true' (default off).
-    void this.runSleepTimeCompute(userText, assistantText, this._turnToolCalls);
+    void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
     // On the first turn, replace the creation-time slug with a concise
     // AI-generated session title. Fire-and-forget; once-only (name_origin gate).

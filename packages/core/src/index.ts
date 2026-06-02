@@ -293,6 +293,12 @@ export {
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
 } from './jobs/index.js';
 
+// Backend-agnostic orchestration — per-turn accounting shared by both backends.
+export {
+  TurnAccumulator,
+  type StepLike, type ToolResultLike, type TurnSinks,
+} from './orchestrator/turn-accumulator.js';
+
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
 // instructions + a tool-surface restriction (allowed_tools). Distinct from
