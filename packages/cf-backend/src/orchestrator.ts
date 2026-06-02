@@ -2582,7 +2582,12 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async getHeadRuns(limit: number = 20): Promise<Array<{
     rootId: string; task: string; rationale: string; status: string; spawnedAt: number;
-    heads: Array<{ id: string; task: string; rationale: string; status: string; summary: string | null; errorMessage: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number }>;
+    heads: Array<{
+      id: string; task: string; rationale: string; status: string; summary: string | null;
+      errorMessage: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number;
+      toolCalls: Array<{ name: string; status: string }>;
+      decisions: Array<{ question: string; choice: string; rationale: string }>;
+    }>;
     merge: { narrative: string; headCount: number; totalTokens: number } | null;
   }>> {
     try {
@@ -2591,13 +2596,25 @@ export class OrchestratorAgent extends Think<Env> {
         WHERE parent_id IS NULL OR parent_id = ''
         ORDER BY spawned_at DESC LIMIT ${limit}`;
       return roots.map((root) => {
-        const heads = this.sql<{ id: string; task: string; rationale: string; status: string; summary: string | null; error_message: string | null; token_input: number; token_output: number; wall_clock_ms: number }>`
-          SELECT id, task, rationale, status, summary, error_message, token_input, token_output, wall_clock_ms
+        const heads = this.sql<{ id: string; task: string; rationale: string; status: string; summary: string | null; error_message: string | null; token_input: number; token_output: number; wall_clock_ms: number; tool_calls_json: string | null; decisions_json: string | null }>`
+          SELECT id, task, rationale, status, summary, error_message, token_input, token_output, wall_clock_ms, tool_calls_json, decisions_json
           FROM head_journal WHERE root_id = ${root.id} ORDER BY depth, spawned_at`
-          .map((h) => ({
-            id: h.id, task: h.task, rationale: h.rationale, status: h.status,
-            summary: h.summary, errorMessage: h.error_message, tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
-          }));
+          .map((h) => {
+            const tools = h.tool_calls_json ? safeJsonParse(h.tool_calls_json) : null;
+            const decs = h.decisions_json ? safeJsonParse(h.decisions_json) : null;
+            return {
+              id: h.id, task: h.task, rationale: h.rationale, status: h.status,
+              summary: h.summary, errorMessage: h.error_message, tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
+              toolCalls: (Array.isArray(tools) ? tools : []).map((t) => {
+                const o = (t ?? {}) as { name?: unknown; status?: unknown };
+                return { name: String(o.name ?? '?'), status: String(o.status ?? '') };
+              }),
+              decisions: (Array.isArray(decs) ? decs : []).map((d) => {
+                const o = (d ?? {}) as { question?: unknown; choice?: unknown; rationale?: unknown };
+                return { question: String(o.question ?? ''), choice: String(o.choice ?? ''), rationale: String(o.rationale ?? '') };
+              }),
+            };
+          });
         const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number }>`
           SELECT merged_narrative, cost_head_count, cost_total_tokens
           FROM head_merge_results WHERE root_id = ${root.id}`[0];

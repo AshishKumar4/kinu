@@ -6,7 +6,7 @@
  */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon } from "@phosphor-icons/react";
+import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, CaretRightIcon, CaretDownIcon, WrenchIcon } from "@phosphor-icons/react";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, Rpc } from "@/lib/protocol";
 import { EmptyState, EMPTY_HINTS } from "./shared";
@@ -105,10 +105,73 @@ function MctsView({ mctsTree }: { mctsTree: MCTSNode | null }) {
 
 /* ── Branching heads ───────────────────────────────────────────── */
 
+interface HeadEntry {
+  id: string; task: string; rationale: string; status: string; summary: string | null;
+  errorMessage: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number;
+  toolCalls: Array<{ name: string; status: string }>;
+  decisions: Array<{ question: string; choice: string; rationale: string }>;
+}
 interface HeadRun {
   rootId: string; task: string; rationale: string; status: string; spawnedAt: number;
-  heads: Array<{ id: string; task: string; rationale: string; status: string; summary: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number }>;
+  heads: HeadEntry[];
   merge: { narrative: string; headCount: number; totalTokens: number } | null;
+}
+
+function statusDot(status: string): string {
+  if (status === "completed") return "bg-emerald-500";
+  if (status === "errored" || status === "failed") return "bg-red-500";
+  if (status === "budget_exceeded") return "bg-orange-500";
+  return "bg-amber-500";
+}
+
+// One head = an expandable card. Collapsed shows task + summary + a tool count;
+// expanded reveals the nested trace (tool calls + decisions + any error) — the
+// "what is this branch actually doing" view.
+function HeadCard({ h }: { h: HeadEntry }) {
+  const [open, setOpen] = useState(false);
+  const hasDetail = h.toolCalls.length > 0 || h.decisions.length > 0 || !!h.errorMessage;
+  return (
+    <div className="rounded-md border p-border p-elevated">
+      <button
+        type="button"
+        onClick={() => hasDetail && setOpen((o) => !o)}
+        disabled={!hasDetail}
+        className={`w-full flex items-start gap-2 text-left px-2 py-1.5 ${hasDetail ? "cursor-pointer" : "cursor-default"}`}
+      >
+        <span className={`mt-1 size-1.5 rounded-full shrink-0 ${statusDot(h.status)}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] p-text-2 truncate" title={h.task}>{h.task}</div>
+          {h.summary && <div className="text-[11px] p-text-3 line-clamp-2">{h.summary}</div>}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0 text-[10px] p-text-3 tabular-nums pt-0.5">
+          {h.toolCalls.length > 0 && <span className="flex items-center gap-0.5"><WrenchIcon size={10} />{h.toolCalls.length}</span>}
+          <span>{h.tokenInput + h.tokenOutput} tok</span>
+          {hasDetail && (open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />)}
+        </div>
+      </button>
+      {open && (
+        <div className="px-2 pb-2 pl-5 space-y-1.5 animate-fade-in">
+          {h.errorMessage && <div className="text-[10px] text-red-400 break-words">{h.errorMessage}</div>}
+          {h.toolCalls.length > 0 && (
+            <div className="space-y-0.5">
+              {h.toolCalls.map((t, i) => (
+                <div key={i} className="flex items-center gap-1.5 text-[10px]">
+                  <WrenchIcon size={10} className="p-text-3 shrink-0" />
+                  <code className="p-text-2">{t.name}</code>
+                  {t.status && <span className={/error|exit=[1-9]/.test(t.status) ? "text-red-400" : "p-text-3"}>{t.status}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {h.decisions.map((d, i) => (
+            <div key={i} className="text-[10px] p-text-3">
+              <span className="p-text-2">{d.question}</span> <span className="p-accent">→ {d.choice}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function BranchesView({ rpc }: { rpc: Rpc }) {
@@ -126,16 +189,7 @@ function BranchesView({ rpc }: { rpc: Rpc }) {
             <Badge variant="secondary">{run.heads.length} heads</Badge>
           </div>
           <div className="space-y-1 mb-2">
-            {run.heads.map((h) => (
-              <div key={h.id} className="flex items-start gap-2 text-[11px] pl-2 border-l-2 p-border">
-                <span className={`mt-1 size-1.5 rounded-full shrink-0 ${h.status === "completed" ? "bg-emerald-500" : h.status === "failed" ? "bg-red-500" : "bg-amber-500"}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="p-text-2 truncate" title={h.task}>{h.task}</div>
-                  {h.summary && <div className="p-text-3 line-clamp-2">{h.summary}</div>}
-                </div>
-                <span className="p-text-3 shrink-0 tabular-nums">{h.tokenInput + h.tokenOutput} tok</span>
-              </div>
-            ))}
+            {run.heads.map((h) => <HeadCard key={h.id} h={h} />)}
           </div>
           {run.merge && (
             <div className="text-[11px] p-text-2 rounded-md p-elevated border p-border p-2">
