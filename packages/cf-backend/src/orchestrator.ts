@@ -91,7 +91,7 @@ import {
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
   // EventsHub primitives (spec §1)
-  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore,
+  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore, buildDrainBatch,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   type RevisitCondition,
@@ -1029,6 +1029,39 @@ export class OrchestratorAgent extends Think<Env> {
       .catch((err) => console.warn('[proteus] workspace backup failed:', (err as Error).message));
   }
 
+  /**
+   * The reactor: wake the agent to act on externally-triggered pending events
+   * (webhooks, timers, peer messages) in one normal Think turn. Called
+   * fire-and-forget from alarm() / webhook ingress / the onChatResponse tail.
+   *
+   * Binds the selected events to a synthetic turn (markConsumed) BEFORE
+   * injecting — since pending()+markConsumed are synchronous, the bind is atomic
+   * w.r.t. the event loop, so a concurrent drain sees them already consumed and
+   * won't double-process (the reentrancy guard). `self_emit`/`internal` events
+   * are excluded (anti-self-wake). saveMessages runs the turn TurnQueue-
+   * serialized behind any live chat; its onChatResponse re-checks and drains the
+   * next batch, so it self-drains until no external events remain — then stops.
+   * No budget/approval gates — only this drain-then-stop correctness.
+   */
+  private async drainPendingEvents(): Promise<void> {
+    let batch: ReturnType<typeof buildDrainBatch>;
+    try {
+      const pending = this.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
+      batch = buildDrainBatch(pending);
+      if (!batch) return;
+      const turnId = `evt-${nanoid()}`;
+      for (const id of batch.ids) this.eventLog.markConsumed(id, turnId, 0);
+    } catch (err) {
+      console.warn('[proteus] drainPendingEvents (select) failed:', (err as Error).message);
+      return;
+    }
+    try {
+      await this.saveMessages([{ id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text: batch.text }] }]);
+    } catch (err) {
+      console.warn('[proteus] drainPendingEvents (turn) failed:', (err as Error).message);
+    }
+  }
+
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this._turnToolCalls = [];
     this._turnStepCount = 0;
@@ -1401,6 +1434,11 @@ export class OrchestratorAgent extends Think<Env> {
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
     // work survives the container sleeping. Debounced + fire-and-forget.
     this.backupWorkspaceIfDue();
+
+    // Reactor drain-then-stop: handle any external events still pending (arrived
+    // during this turn, or queued before a chat turn). No-op when none — so this
+    // self-terminates once the external event backlog is empty.
+    void this.drainPendingEvents();
   }
 
   /** Background memory compression. Reads recent turn, updates agent_facts +
@@ -1725,19 +1763,9 @@ export class OrchestratorAgent extends Think<Env> {
         }
       }
 
-      // Wake any operator-visible WS clients so they re-fetch the events
-      // sidebar (non-blocking; tolerates absent broadcast surface).
-      if (due.length > 0) {
-        const broadcast = (this as unknown as {
-          broadcastChatMessage?: (msg: unknown) => Promise<void> | void;
-        }).broadcastChatMessage;
-        try {
-          await broadcast?.({
-            role: 'system',
-            parts: [{ type: 'text', text: `[hub] ${due.length} timer event(s) fired` }],
-          });
-        } catch { /* best-effort */ }
-      }
+      // Wake the agent to act on the freshly-published timer events (and any
+      // other pending events) — an autonomous turn. Fire-and-forget.
+      if (due.length > 0) void this.drainPendingEvents();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
@@ -3682,20 +3710,9 @@ export class OrchestratorAgent extends Think<Env> {
       reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
     });
 
-    // Wake the agent so the next chat turn drains the new event. The
-    // operator's WS client (if any) sees a system note.
-    try {
-      const broadcast = (this as unknown as {
-        broadcastChatMessage?: (msg: unknown) => Promise<void> | void;
-      }).broadcastChatMessage;
-      await broadcast?.({
-        role: 'system',
-        parts: [{
-          type: 'text',
-          text: `[hub] webhook event admitted: ${opts.trigger_id} → ${id} (${admitted ? 'new' : 'duplicate'})`,
-        }],
-      });
-    } catch { /* best-effort */ }
+    // Wake the agent to act on the new webhook event — an autonomous turn.
+    // Only when newly admitted (a duplicate is already bound or in flight).
+    if (admitted) void this.drainPendingEvents();
 
     return { status: 'admitted', event_id: id, admitted };
   }
