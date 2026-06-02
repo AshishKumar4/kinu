@@ -412,23 +412,6 @@ export function useProteus(agentId?: string) {
   };
 }
 
-/**
- * Lightweight connection-only hook for HomePage (no chat needed).
- */
-export function useHomeConnection() {
-  const [status, setStatus] = useState<ConnectionStatus>("connecting");
-
-  const agent = useAgent({
-    agent: "orchestrator-agent",
-    name: "home",
-    onOpen: useCallback(() => setStatus("connected"), []),
-    onClose: useCallback(() => setStatus("disconnected"), []),
-    onError: useCallback(() => setStatus("error"), []),
-  });
-
-  return { status, agent };
-}
-
 // ── Helpers ──────────────────────────────────────────────────────
 
 export interface MctsRow {
