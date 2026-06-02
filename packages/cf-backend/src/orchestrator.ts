@@ -44,6 +44,7 @@ import {
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   buildSystemPromptSync,
+  FALLBACK_PURPOSE,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
@@ -636,7 +637,7 @@ export class OrchestratorAgent extends Think<Env> {
       // Unclaimed — first touch. Ensure agent_soul has at least one row.
       const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_soul LIMIT 1`;
       if (exists.length === 0) {
-        this.sql`INSERT INTO agent_soul (purpose, owner_user_id) VALUES (${'A self-evolving coding assistant with MCTS exploration and durable skill evolution.'}, ${userId})`;
+        this.sql`INSERT INTO agent_soul (purpose, owner_user_id) VALUES (${FALLBACK_PURPOSE}, ${userId})`;
       } else {
         this.sql`UPDATE agent_soul SET owner_user_id = ${userId}`;
       }

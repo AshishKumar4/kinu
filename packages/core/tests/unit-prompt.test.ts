@@ -9,8 +9,20 @@ describe('buildSystemPromptSync', () => {
   test('uses FALLBACK_PURPOSE when agent_soul is missing', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Proteus/);          // identity self-id
-    expect(prompt).toMatch(/coding agent/i);
+    expect(prompt).toMatch(/Proteus/);                 // identity self-id
+    expect(prompt).toMatch(/self-evolving/i);          // general-purpose, not code-centric
+  });
+
+  test('teaches the agent it spawns parallel sub-agents and persists across turns', () => {
+    // The "agent is restricted / stateless" feedback was a prompt gap: the
+    // surface never affirmed that think(heads) = real concurrent sub-agents or
+    // that storage persists between turns. These sections close that gap.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Parallel sub-agents/);
+    expect(prompt).toMatch(/2–6 INDEPENDENT/);
+    expect(prompt).toMatch(/recurse.*depth 3/);
+    expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
   test('honors purposeOverride', () => {

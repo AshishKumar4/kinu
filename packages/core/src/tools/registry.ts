@@ -73,11 +73,14 @@ export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
     'user asks for a workflow you\'ve previously codified or one of the ' +
     'built-in skills (e.g. /audit-implementation) applies.',
   think:
-    'Unified exploration dispatcher — the single entry point for deeper reasoning. ' +
-    'Pick a strategy by id: "single-shot" (one LLM call, baseline), "mcts" (tree ' +
-    'search with parallel rollouts — for multi-step planning where the right ' +
-    'approach is not obvious), "heads" (parallel reasoning streams + LLM merge — ' +
-    'when sub-questions are known upfront). Pick the cheapest strategy that fits.',
+    'Spawn deeper reasoning / parallel sub-agents. Pick a strategy by id: ' +
+    '"single-shot" (one LLM call, baseline); "mcts" (parallel tree-search rollouts ' +
+    'over candidate approaches — multi-step planning where the right path is not ' +
+    'obvious); "heads" (spawn 2–6 INDEPENDENT sub-agents that run concurrently — each ' +
+    'runs its own multi-step agentic loop with shell + sandbox + tool access, ' +
+    'optionally a different model per head, recursing to depth 3 — findings merged ' +
+    'via structured synthesis). Use heads to delegate 3+ independent subtasks at once; use mcts to ' +
+    'search a hard decision. Pick the cheapest strategy that fits.',
   memory:
     'Long-term prose memory (memory/MEMORY.md, FTS-indexed). One tool, two actions: ' +
     '"save" (append a note for future turns to retrieve) and "search" (full-text ' +

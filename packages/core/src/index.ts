@@ -61,7 +61,7 @@ export {
   type CraftedToolExecuteFn,
   type CraftedToolSource,
 } from './tools/crafted-executor.js';
-export { buildSystemPrompt, buildSystemPromptSync, type SystemPromptOptions } from './prompt.js';
+export { buildSystemPrompt, buildSystemPromptSync, FALLBACK_PURPOSE, type SystemPromptOptions } from './prompt.js';
 
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder.js';
