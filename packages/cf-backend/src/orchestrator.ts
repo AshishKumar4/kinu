@@ -1450,6 +1450,10 @@ export class OrchestratorAgent extends Think<Env> {
     // agent_config.sleep_time_compute='true' (default off).
     void this.runSleepTimeCompute(userText, assistantText, this._turnToolCalls);
 
+    // On the first turn, replace the creation-time slug with a concise
+    // AI-generated session title. Fire-and-forget; once-only (name_origin gate).
+    void this.maybeGenerateTitle(userText);
+
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
     // work survives the container sleeping. Debounced + fire-and-forget.
     this.backupWorkspaceIfDue();
@@ -1557,6 +1561,47 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       console.warn('[proteus] runShadowEvalSampled failed:', err instanceof Error ? err.message : err);
     }
+  }
+
+  /** Once, on the first turn, replace the creation-time slug with a concise
+   *  AI-generated title derived from the opening request. Skipped if the user
+   *  named the agent (name_origin='user') or it's already auto-titled. */
+  private async maybeGenerateTitle(userText: string): Promise<void> {
+    try {
+      if (this.config.getNameOrigin() !== null) return; // already user- or auto-named
+      const prompt =
+        `Generate a concise 3–6 word title (Title Case, no quotes, no trailing ` +
+        `punctuation) for a session that opens with this request:\n\n` +
+        `"${userText.slice(0, 600)}"\n\nReply with ONLY the title.`;
+      const { text } = await generateText({
+        model: this.getModelForReview(), prompt, maxOutputTokens: 24,
+        ...effortFor('judge'),
+      });
+      const title = text.trim().replace(/^["'#\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ').slice(0, 60);
+      if (title.length >= 2) {
+        await this.applyDisplayName(title, 'auto');
+        console.log(`[proteus] auto-titled agent → "${title}"`);
+      }
+    } catch (err) {
+      console.warn('[proteus] title generation failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Set the display name everywhere it lives: agent_config (source of truth),
+   *  the owner's roster row (the Sidebar), and a live broadcast to open clients. */
+  private async applyDisplayName(displayName: string, origin: 'user' | 'auto'): Promise<void> {
+    this.config.setDisplayName(displayName);
+    this.config.setNameOrigin(origin);
+    const userId = this.getOwnerUserId();
+    if (userId) {
+      try {
+        const stub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+        await stub.setAgentDisplayName(this.name, displayName);
+      } catch (err) {
+        console.warn('[proteus] applyDisplayName roster sync failed:', err instanceof Error ? err.message : err);
+      }
+    }
+    try { this.broadcast(JSON.stringify({ type: 'agent_renamed', displayName })); } catch { /* nop */ }
   }
 
   /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
@@ -2851,7 +2896,7 @@ export class OrchestratorAgent extends Think<Env> {
   // setModel moved below — validates spec via the provider registry before storing.
 
   @callable() async setDisplayName(displayName: string) {
-    this.config.setDisplayName(displayName);
+    await this.applyDisplayName(displayName, 'user');
     return { displayName };
   }
 

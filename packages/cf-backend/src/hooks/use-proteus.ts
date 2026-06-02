@@ -90,6 +90,16 @@ export function useProteus(agentId?: string) {
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
     onError: useCallback(() => {}, []),
+    // Live AI auto-title: the agent broadcasts `agent_renamed` after the first
+    // turn — nudge the Sidebar roster to refetch so the new name shows at once.
+    onMessage: useCallback((ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(typeof ev.data === "string" ? ev.data : "");
+        if (data?.type === "agent_renamed") {
+          window.dispatchEvent(new CustomEvent("proteus:agent-renamed"));
+        }
+      } catch { /* not our JSON */ }
+    }, []),
   });
 
   const {

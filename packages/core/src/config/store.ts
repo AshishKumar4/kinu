@@ -16,6 +16,8 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
   displayName: 'display_name',
+  /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
+  nameOrigin: 'name_origin',
   shellApprovalMode: 'shell_approval_mode',
   sleepTimeCompute: 'sleep_time_compute',
   autoPromoteScaffold: 'auto_promote_scaffold',
@@ -53,6 +55,8 @@ export interface AgentConfigStore {
   setModel(spec: string): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
+  getNameOrigin(): 'user' | 'auto' | null;
+  setNameOrigin(origin: 'user' | 'auto'): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
   getSleepTimeComputeEnabled(): boolean;
@@ -115,6 +119,8 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
+    getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
+    setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';

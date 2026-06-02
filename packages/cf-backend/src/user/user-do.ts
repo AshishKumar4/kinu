@@ -203,6 +203,14 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`DELETE FROM user_agents WHERE name = ?`, name);
   }
 
+  /** Update only the roster display name — keeps the Sidebar in sync with the
+   *  agent's own `agent_config.display_name` (e.g. after AI auto-titling). */
+  @callable()
+  async setAgentDisplayName(name: string, displayName: string): Promise<void> {
+    validateAgentName(name);
+    this.sqlx(`UPDATE user_agents SET display_name = ? WHERE name = ?`, displayName, name);
+  }
+
   @callable()
   async hasAgent(name: string): Promise<boolean> {
     validateAgentName(name);

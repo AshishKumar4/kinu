@@ -41,6 +41,13 @@ export default function Sidebar() {
   // Re-sync when route changes (so a freshly-created agent appears).
   useEffect(() => { refreshAgents(); }, [agentId, refreshAgents]);
 
+  // Re-sync when the active agent AI-renames itself after its first turn.
+  useEffect(() => {
+    const h = () => refreshAgents();
+    window.addEventListener("proteus:agent-renamed", h);
+    return () => window.removeEventListener("proteus:agent-renamed", h);
+  }, [refreshAgents]);
+
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) setShowUserMenu(false);
