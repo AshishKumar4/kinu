@@ -53,7 +53,9 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  */
 function adaptVFS(sqliteFs: SqliteFS): VFS {
   return {
-    readFile: (path, opts) => sqliteFs.readFile(path, opts),
+    // core VFS encoding is the looser `string`; SqliteFS wants the `'utf8'`
+    // literal. Only utf8 is meaningful — narrow it; anything else = binary.
+    readFile: (path, opts) => sqliteFs.readFile(path, opts?.encoding ? { encoding: 'utf8' } : undefined),
     writeFile: (path, data) => sqliteFs.writeFile(path, data),
     readdir: (path) => sqliteFs.readdir(path),
     async stat(path) {
