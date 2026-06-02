@@ -5,17 +5,16 @@
 // ~50% test-time token reduction at matched performance on a coding task.
 //
 // Mechanism: while the agent is idle between user turns, a background fork
-// re-reads recent activity and rewrites the agent_facts world model + the
-// scratch memory block so the next turn starts from a denser, cleaner state.
-// The user never waits for this — it runs as fire-and-forget in onTurnCompleteAsync.
+// re-reads recent activity and rewrites the agent_facts world model so the
+// next turn starts from a denser, cleaner state. The user never waits for this
+// — it runs fire-and-forget in onTurnCompleteAsync.
 //
 // Proteus implements this as a thin layer on top of the existing background
 // review (`EvolutionEngine.onTurnCompleteAsync`) — same fork, additional work.
+// The keyed world model is its lever; long-conversation summarization is owned
+// by Session compaction (configureSession), so there is no parallel prose summary.
 //
-// Outputs:
-//   - Updated agent_facts (upsert new observations, decay stale facts)
-//   - Compressed `scratch` context block (last turn's findings summarized)
-//   - Optional working_set update (rotating LRU of active items)
+// Output: updated agent_facts (upsert new observations, decay stale facts).
 
 import type { LLM } from '../types/primitives.js';
 import type { FactsStore } from './facts.js';
@@ -36,10 +35,6 @@ export interface SleepTimeUpdate {
   upserts: Array<{ key: string; value: unknown; confidence: number; rationale: string }>;
   /** Fact keys to decay confidence on (stale / not re-observed). */
   decay: string[];
-  /** Compressed scratch block (will replace, not append). */
-  scratchUpdate?: string;
-  /** Items to add to working_set (rotating LRU). */
-  workingSetAdds?: string[];
 }
 
 const PROMPT = (i: SleepTimeInput) => `You are a background memory-compression agent. Between user turns, you
@@ -59,15 +54,11 @@ Decide:
    confidence (0.8–1.0). DON'T duplicate existing facts.
 2. Which existing facts should DECAY (lower confidence) because they weren't
    re-observed in this turn and may be stale? List their keys.
-3. Compress the turn's findings into a 100–300 word scratchpad summary the
-   next turn can read.
 
 Respond ONLY with this JSON:
 {
   "upserts": [{"key": "...", "value": ..., "confidence": 0.8, "rationale": "..."}],
-  "decay": ["fact-key-1", "fact-key-2"],
-  "scratchUpdate": "<100-300 words>",
-  "workingSetAdds": ["short item 1", "short item 2"]
+  "decay": ["fact-key-1", "fact-key-2"]
 }`;
 
 export async function runSleepTimeCompute(
@@ -86,24 +77,17 @@ export async function runSleepTimeCompute(
       decay: Array.isArray(parsed.decay)
         ? parsed.decay.filter((k): k is string => typeof k === 'string' && k.length > 0)
         : [],
-      scratchUpdate: typeof parsed.scratchUpdate === 'string' ? parsed.scratchUpdate : undefined,
-      workingSetAdds: Array.isArray(parsed.workingSetAdds)
-        ? parsed.workingSetAdds.filter((s): s is string => typeof s === 'string')
-        : undefined,
     };
   } catch {
     return null;
   }
 }
 
-/** Apply a SleepTimeUpdate to the facts store + (optionally) the Think
- *  Session blocks via a host-provided setBlock callback. The block-write is
- *  optional because tests / non-CF runtimes may not have Think Session. */
+/** Apply a SleepTimeUpdate to the facts store. */
 export function applySleepTimeUpdate(
   facts: FactsStore,
   update: SleepTimeUpdate,
-  setBlock?: (name: string, content: string) => void | Promise<void>,
-): { upserted: number; decayed: number; blocksWritten: number; skipped: number } {
+): { upserted: number; decayed: number; skipped: number } {
   // Pre-flight: drop any upserts whose value can't be serialized. Without
   // this, the first bad value crashes the loop and leaves the store in a
   // partial state (some upserted, the rest unprocessed).
@@ -129,18 +113,5 @@ export function applySleepTimeUpdate(
     });
     decayed++;
   }
-  let blocksWritten = 0;
-  if (setBlock) {
-    if (update.scratchUpdate) {
-      const r = setBlock('scratch', update.scratchUpdate);
-      if (r instanceof Promise) void r;
-      blocksWritten++;
-    }
-    if (update.workingSetAdds && update.workingSetAdds.length > 0) {
-      const r = setBlock('working_set', update.workingSetAdds.map((s, i) => `${i + 1}. ${s}`).join('\n'));
-      if (r instanceof Promise) void r;
-      blocksWritten++;
-    }
-  }
-  return { upserted, decayed, blocksWritten, skipped };
+  return { upserted, decayed, skipped };
 }

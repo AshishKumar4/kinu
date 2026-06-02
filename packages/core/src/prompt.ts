@@ -163,15 +163,6 @@ const answer = await llm.query(\`Synthesize: \${partials.join('\\n\\n')}\`)
 string OR an \`{ error: string }\` envelope on failure — handle both. The
 sub-call has no \`llm.query\` in scope, so recursion depth is bounded at 1.
 
-### Session context blocks
-The agent also has three writable context blocks managed by Think Session:
-- \`memory\` (read-only, 32k tokens) — long-term knowledge mirrored from
-  MEMORY.md. Search via \`search_context('memory', query)\`.
-- \`scratch\` (writable, 8k, ephemeral) — write intermediate reasoning with
-  \`set_context('scratch', text)\`. Cleared between turns.
-- \`working_set\` (writable, 4k, persistent LRU) — last-N items actively in
-  play (files, URLs, ids). \`set_context('working_set', text)\` to update.
-
 ### Parallel sub-agents
 \`think({ strategy: 'heads', task, heads: [...] })\` spawns 2–6 INDEPENDENT
 sub-agents that run concurrently — each runs its own multi-step agentic loop
@@ -203,8 +194,8 @@ improves automatically — good patterns become reusable \`codemode.*\` function
 
 ## Output format
 Your final user-facing message is plain markdown. Keep reasoning concise —
-internal thinking belongs inside tool calls, scratch context, or hidden
-reasoning tokens, not in the user reply. Don't dump raw JSON unless asked.
+internal thinking belongs inside tool calls or hidden reasoning tokens, not in
+the user reply. Don't dump raw JSON unless asked.
 ${knowledgeSection}`;
 }
 

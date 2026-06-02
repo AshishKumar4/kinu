@@ -50,13 +50,15 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('splitLargeText');
   });
 
-  test('documents session-context blocks (memory/scratch/working_set)', () => {
+  test('does not advertise the removed Session context tools/blocks', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Session context blocks/);
-    expect(prompt).toContain('scratch');
-    expect(prompt).toContain('working_set');
-    expect(prompt).toMatch(/set_context/);
+    // These tools are never generated (no writable/searchable Session blocks);
+    // advertising them sent the model to call no-op tools. Memory now lives in
+    // the agent_facts world model + the `memory` prose tool, both real.
+    expect(prompt).not.toMatch(/set_context|search_context|load_context/);
+    expect(prompt).not.toMatch(/Session context blocks/);
+    expect(prompt).toContain('World model (agent_facts)');
   });
 
   test('renders executor section when registeredExecutors supplied', () => {

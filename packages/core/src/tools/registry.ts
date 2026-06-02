@@ -20,14 +20,8 @@ export const BUILTIN_TOOLS = [
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
 
-/**
- * Session-scoped tools contributed by Think via `configureSession()` — not
- * part of the agent's learned capability surface, but active during a turn.
- */
-export const SESSION_TOOLS = ['set_context', 'load_context', 'search_context'] as const;
-
 /** Whitelist applied in beforeTurn() on the CF backend. */
-export const ACTIVE_TOOLS = [...BUILTIN_TOOLS, ...SESSION_TOOLS] as const;
+export const ACTIVE_TOOLS = [...BUILTIN_TOOLS] as const;
 
 /** Set form for O(1) membership checks in hot paths (e.g. craft score filter). */
 export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);

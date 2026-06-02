@@ -17,6 +17,7 @@
  */
 
 import { callable } from "agents";
+import { createCompactFunction } from "agents/experimental/memory/utils";
 import { Think, Session } from "@cloudflare/think";
 // preamble-injection pattern: we construct the codemode tool
 // directly via createCodeTool + PreambleCraftedExecutor. The executor reads
@@ -31,6 +32,7 @@ import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextCronFire } from "./lib/cron.js";
+import { compactionThreshold } from "./lib/context-window.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
 import { aiSchema } from "./ai-schema.js";
@@ -986,33 +988,26 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   configureSession(session: Session): Session {
-    // Context blocks the LLM can read AND write via the Think Session tools
-    // (`set_context`, `load_context`, `search_context` — see tools/registry.ts
-    // ACTIVE_TOOLS whitelist). Block sizes total ~60k tokens; the chat window
-    // compacts at 96k to leave headroom for the streaming response.
+    // The agent's durable context is `getSystemPrompt()` (soul + tools + the
+    // agent_facts world model) plus the persisted conversation — a single
+    // source of truth, not Think's freezable context blocks. The only Session
+    // policy we attach is compaction: the chat window compacts at ~85% of the
+    // active model's context window (≈15% headroom for the streaming response),
+    // and a registered summarizer turns the middle of the transcript into a
+    // summary overlay instead of dropping messages (hermes head/tail protection).
+    const threshold = compactionThreshold(this.getStoredModelId() ?? "");
     return session
-      .withContext("memory", {
-        description:
-          "Long-term knowledge: learned facts, project context, discovered " +
-          "patterns, crafted tool descriptions. Loaded from MEMORY.md.",
-        maxTokens: 32000,
-      })
-      .withContext("scratch", {
-        description:
-          "Ephemeral scratchpad for the current turn — write intermediate " +
-          "reasoning, partial results, hypothesis lists. Cleared between turns. " +
-          "Use `set_context('scratch', text)` to write.",
-        maxTokens: 8000,
-      })
-      .withContext("working_set", {
-        description:
-          "Last-N items the agent is actively working on (files, tasks, URLs). " +
-          "Persists across turns until manually replaced. " +
-          "Use `set_context('working_set', text)` to update.",
-        maxTokens: 4000,
-      })
-      .withCachedPrompt()
-      .compactAfter(96_000);
+      .compactAfter(threshold)
+      .onCompaction(this.summarizeForCompaction());
+  }
+
+  /** Hermes-style compaction fn: summarizes the middle of an over-long
+   *  transcript via the agent's own model, protecting head + recent tail. */
+  private summarizeForCompaction() {
+    return createCompactFunction({
+      summarize: (prompt) =>
+        generateText({ model: this.getModel(), prompt }).then((r) => r.text),
+    });
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -1449,9 +1444,9 @@ export class OrchestratorAgent extends Think<Env> {
     void this.runShadowEvalSampled(userText, assistantText);
 
     // Sleep-time compute — between-turn background memory compression.
-    // Reads recent turn, asks judge to upsert/decay facts + compress scratch
-    // block. Letta-style; ~50% test-time token reduction reported. Gated
-    // by agent_config.sleep_time_compute='true' (default off).
+    // Reads recent turn, asks a judge to upsert/decay the agent_facts world
+    // model. Letta-style; ~50% test-time token reduction reported. Gated by
+    // agent_config.sleep_time_compute='true' (default off).
     void this.runSleepTimeCompute(userText, assistantText, this._turnToolCalls);
 
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
@@ -1468,8 +1463,8 @@ export class OrchestratorAgent extends Think<Env> {
     void this.drainPendingEvents();
   }
 
-  /** Background memory compression. Reads recent turn, updates agent_facts +
-   *  scratch block. Fire-and-forget; does not block TurnQueue. */
+  /** Background memory compression. Reads recent turn, updates agent_facts.
+   *  Fire-and-forget; does not block TurnQueue. */
   private async runSleepTimeCompute(
     task: string, output: string, toolCalls: ToolCallRecord[],
   ): Promise<void> {
@@ -1488,7 +1483,7 @@ export class OrchestratorAgent extends Think<Env> {
       if (!update) return;
       const summary = applySleepTimeUpdate(this.facts, update);
       console.log(
-        `[proteus] sleep-time-compute: upserted=${summary.upserted} decayed=${summary.decayed} blocks=${summary.blocksWritten}`,
+        `[proteus] sleep-time-compute: upserted=${summary.upserted} decayed=${summary.decayed} skipped=${summary.skipped}`,
       );
     } catch (err) {
       console.warn('[proteus] sleep-time-compute failed:', err instanceof Error ? err.message : err);

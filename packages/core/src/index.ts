@@ -47,7 +47,6 @@ export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
 // Canonical tool registry + factories (shared across CF and CLI)
 export {
   BUILTIN_TOOLS,
-  SESSION_TOOLS,
   ACTIVE_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
