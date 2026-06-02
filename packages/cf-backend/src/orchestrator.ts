@@ -2815,6 +2815,67 @@ export class OrchestratorAgent extends Think<Env> {
     try { return this.headJournal.listRuns(limit); } catch { return []; }
   }
 
+  // ── Head shared scratch — the common findings space for a split ──────
+  // Heads keep a PRIVATE per-facet sandbox VFS, but write shared findings here:
+  // the orchestrator's own workspace VFS under shared/findings/, namespaced by
+  // head so siblings can't clobber each other. The main agent reads them through
+  // plain `workspace.readFile('shared/findings/...')`. Reached via RPC because
+  // each head is a separate Durable Object.
+  private static readonly SHARED_FINDINGS_ROOT = 'shared/findings';
+
+  /** Strip leading slashes + path-traversal segments from a head-supplied path. */
+  private sanitizeSharedPath(rel: string): string {
+    return rel.replace(/^\/+/, '').split('/').filter((s) => s && s !== '..' && s !== '.').join('/');
+  }
+
+  /** A head writes a finding; namespaced under its headId so writes never collide. */
+  @callable()
+  async sharedScratchWrite(headId: string, relPath: string, content: string): Promise<{ ok: boolean; path: string }> {
+    const ns = (headId || 'head').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const rel = this.sanitizeSharedPath(relPath) || 'note.md';
+    const path = `${OrchestratorAgent.SHARED_FINDINGS_ROOT}/${ns}/${rel}`;
+    const vfs = this.rt.storage.vfs;
+    const dir = path.split('/').slice(0, -1).join('/');
+    try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
+    await vfs.writeFile(path, content);
+    return { ok: true, path };
+  }
+
+  /** Read any head's finding by path relative to shared/findings/. */
+  @callable()
+  async sharedScratchRead(relPath: string): Promise<string | null> {
+    const rel = this.sanitizeSharedPath(relPath);
+    if (!rel) return null;
+    const root = OrchestratorAgent.SHARED_FINDINGS_ROOT;
+    const path = rel.startsWith(`${root}/`) ? rel : `${root}/${rel}`;
+    try {
+      const c = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+      return typeof c === 'string' ? c : new TextDecoder().decode(c);
+    } catch { return null; }
+  }
+
+  /** List every finding in the shared scratch (paths relative to its root). */
+  @callable()
+  async sharedScratchList(): Promise<string[]> {
+    const vfs = this.rt.storage.vfs;
+    const root = OrchestratorAgent.SHARED_FINDINGS_ROOT;
+    const out: string[] = [];
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > 6) return;
+      let names: string[];
+      try { names = await vfs.readdir(dir); } catch { return; }
+      for (const name of names) {
+        const full = `${dir}/${name}`;
+        let isDir = false;
+        try { isDir = !!(await vfs.stat(full))?.isDir; } catch { /* treat as file */ }
+        if (isDir) await walk(full, depth + 1);
+        else out.push(full.slice(root.length + 1));
+      }
+    };
+    await walk(root, 0);
+    return out;
+  }
+
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
    *  by UserDO.removeAgent on delete so a same-name recreate starts clean and no
    *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;

@@ -39,9 +39,9 @@ function renderExecutorSection(names: string[]): string {
       case 'workspace':
         return '  **workspace.*** — local VFS + shell (readFile, writeFile, readdir, exists, exec, listTools, createTool). For memory use the top-level `memory` tool (save / search), not workspace.*.';
       case 'nimbus':
-        return '  **nimbus.*** — full dev env over DO RPC';
+        return '  **nimbus.*** — lightweight Linux env (fast cold start, native bash/node/python, own 10GB VFS). PREFER it for quick commands, scripts, and file work where a full container is overkill. No port exposure — switch to sandbox.* only for apps the user must see.';
       case 'sandbox':
-        return '  **sandbox.*** — Linux VM over Container (use this for any process that listens on a port; workspace.exec runs in the Worker and cannot expose ports)';
+        return '  **sandbox.*** — full Linux VM over Container. Use for port-listening apps the user must see (exposePort) or heavy installs; nimbus.* is lighter for everything else.';
       case 'laptop':
         return '  **laptop.*** — user\'s local machine over SSH tunnel';
       default:
@@ -171,6 +171,11 @@ each can recurse (spawn its own sub-heads) down to depth 3. Their findings are
 merged via structured synthesis (synthesize / best_of / consensus). Reach for
 this when a task splits into 3+ genuinely independent sub-questions — e.g. survey
 prior art + draft a design + stress-test it, or analyse N files at once.
+Each head has a PRIVATE scratch VFS plus a COMMON one (\`shared/findings/\`,
+head-namespaced) that siblings and you can both read. Because heads run against
+the same resources, when several will TOUCH the same mutable thing, say so in
+their task: give each its own git worktree for a shared repo, or namespaced
+paths — never have two heads write the same file concurrently.
 \`think({ strategy: 'mcts' })\` runs parallel tree-search rollouts over candidate
 approaches. These are real concurrent agents, not a single sequential stream.
 

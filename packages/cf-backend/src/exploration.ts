@@ -34,6 +34,7 @@ import { createAgentProviderRegistry, type AgentProviderRegistry } from "./provi
 import { agentAffinityKey } from "./providers/workers-ai.js";
 import { generateJson } from "./lib/generate-json.js";
 import type { UserDO } from "./user/user-do.js";
+import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
   type HeadId,
@@ -132,6 +133,39 @@ export class ExplorationAgent extends Agent<Env> {
       ).toArray() as Array<{ user_id: string }>;
       return rows[0]?.user_id ?? null;
     } catch { return null; }
+  }
+
+  /** The ROOT orchestrator agent name — the shared point every head in a split
+   *  writes findings to (shared/findings/ in its workspace VFS). Set by the
+   *  spawner right after subAgent(); propagated unchanged to recursive sub-heads
+   *  so the whole tree shares ONE common scratch. Persisted for hibernation. */
+  @callable()
+  async setSharedParent(agentName: string): Promise<{ ok: true }> {
+    if (!agentName) throw new Error('agentName required');
+    this.ctx.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS facet_parent (id INTEGER PRIMARY KEY CHECK (id = 1), agent_name TEXT NOT NULL)`,
+    );
+    this.ctx.storage.sql.exec(
+      `INSERT INTO facet_parent (id, agent_name) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET agent_name = excluded.agent_name`,
+      agentName,
+    );
+    return { ok: true };
+  }
+
+  private getSharedParent(): string | null {
+    try {
+      const rows = this.ctx.storage.sql.exec(
+        `SELECT agent_name FROM facet_parent WHERE id = 1`,
+      ).toArray() as Array<{ agent_name: string }>;
+      return rows[0]?.agent_name ?? null;
+    } catch { return null; }
+  }
+
+  /** Stub to the root orchestrator for shared-scratch RPCs, or null if unset. */
+  private getSharedParentStub(): DurableObjectStub<OrchestratorAgent> | null {
+    const name = this.getSharedParent();
+    if (!name) return null;
+    return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)) as DurableObjectStub<OrchestratorAgent>;
   }
 
   /** Resolve the LanguageModel for this facet. `modelId` is whatever the
@@ -447,6 +481,64 @@ export class ExplorationAgent extends Agent<Env> {
         },
       }),
 
+      shared_write: tool({
+        description:
+          "Write a finding to the SHARED agent-level scratch (visible to sibling heads AND the main agent at `shared/findings/`). Use for results worth sharing across heads — your sandbox_* files stay private to you. Your writes are namespaced by head, so siblings can't clobber them.",
+        inputSchema: jsonSchema<{ path: string; content: string }>({
+          type: "object", required: ["path", "content"],
+          properties: { path: { type: "string" }, content: { type: "string" } },
+        }),
+        execute: async ({ path, content }) => {
+          const stub = facet.getSharedParentStub();
+          if (!stub) { facet.recordHeadToolCall("shared_write", { path }, "no-parent"); return "shared scratch unavailable (no parent agent set)"; }
+          try {
+            const r = await stub.sharedScratchWrite(input.id, path, content);
+            facet.headArtifacts.push({ kind: "file", ref: r.path, description: `shared finding (${content.length}b)` });
+            facet.recordHeadToolCall("shared_write", { path, contentLen: content.length }, "ok");
+            return `wrote shared finding → ${r.path}`;
+          } catch (err) {
+            facet.recordHeadToolCall("shared_write", { path }, "error");
+            return `shared write error: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        },
+      }),
+
+      shared_read: tool({
+        description: "Read a finding from the shared agent-level scratch (path relative to `shared/findings/`, e.g. another head's `<headId>/notes.md`). Use shared_list to discover paths.",
+        inputSchema: jsonSchema<{ path: string }>({
+          type: "object", required: ["path"], properties: { path: { type: "string" } },
+        }),
+        execute: async ({ path }) => {
+          const stub = facet.getSharedParentStub();
+          if (!stub) return "shared scratch unavailable (no parent agent set)";
+          try {
+            const c = await stub.sharedScratchRead(path);
+            facet.recordHeadToolCall("shared_read", { path }, c == null ? "missing" : "ok");
+            return c ?? `(no shared finding at ${path})`;
+          } catch (err) {
+            facet.recordHeadToolCall("shared_read", { path }, "error");
+            return `shared read error: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        },
+      }),
+
+      shared_list: tool({
+        description: "List all findings currently in the shared agent-level scratch (paths relative to `shared/findings/`, across every head).",
+        inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
+        execute: async () => {
+          const stub = facet.getSharedParentStub();
+          if (!stub) return "shared scratch unavailable (no parent agent set)";
+          try {
+            const paths = await stub.sharedScratchList();
+            facet.recordHeadToolCall("shared_list", {}, `${paths.length} files`);
+            return paths.length ? paths.join("\n") : "(shared scratch is empty)";
+          } catch (err) {
+            facet.recordHeadToolCall("shared_list", {}, "error");
+            return `shared list error: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        },
+      }),
+
       split_subheads: tool({
         description:
           "Spawn 2-4 child heads recursively to explore narrower sub-questions. " +
@@ -525,6 +617,10 @@ export class ExplorationAgent extends Agent<Env> {
         const stub = await facet.subAgent(ExplorationAgent, childInput.id);
         const owner = facet.getOwnerUserId();
         if (owner) await stub.setOwner(owner);
+        // Propagate the ROOT orchestrator unchanged so the whole subtree shares
+        // one common findings scratch (not this intermediate head).
+        const sharedParent = facet.getSharedParent();
+        if (sharedParent) await stub.setSharedParent(sharedParent);
         await stub.initHead(childInput);
         return {
           id: childInput.id,
@@ -581,10 +677,13 @@ export class ExplorationAgent extends Agent<Env> {
       `Conventions:`,
       `- record_evidence whenever you learn something worth surfacing in the merge.`,
       `- record_decision when you make a substantive choice the parent might want to reconcile.`,
-      `- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR scratch space (siblings can't see it).`,
+      `- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can't see it).`,
+      `- shared_write / shared_read / shared_list = the COMMON scratch (shared/findings/), visible to sibling heads and the main agent. Put results worth sharing here; your writes are head-namespaced so siblings can't clobber them.`,
       `- split_subheads to recursively explore deeper if needed (depth-budgeted).`,
       `- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.`,
       `- Stay focused on YOUR task. Don't try to do sibling heads' work.`,
+      ``,
+      `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path or use shared_write. Read-only inspection of shared resources is always fine.`,
       ``,
       `Budget: depth ${input.budget.maxDepth}, ${input.budget.maxTokens} tokens, ${input.budget.maxWallClockMs}ms wall-clock.`,
     ].join("\n");

@@ -54,6 +54,8 @@ export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string)
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
       await stub.setOwner(ownerUserId);
+      // The root orchestrator is the shared point for head findings.
+      await stub.setSharedParent(orchestrator.name);
       await stub.initHead(input);
       return {
         id: input.id,

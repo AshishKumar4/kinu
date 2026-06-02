@@ -94,16 +94,15 @@
     // identifier, not a secret) so they can live in vars rather than
     // wrangler secrets.
     "CF_ACCESS_TEAM_DOMAIN": "aksingh.cloudflareaccess.com",
-    "CF_ACCESS_AUD":         "9a0178af6f03c7e212619f79ffca603a758ce3d951e269568e017c870b8e5390"
-    // ── Optional: Nimbus default sandbox ─────────────────────────────
-    // Nimbus is a lightweight DO-backed Linux env (github.com/AshishKumar4/Nimbus).
-    // When NIMBUS_ENDPOINT is set, the `nimbus` runtime is registered by
-    // default for every agent — first-class peer of `workspace` and `sandbox`.
-    // NIMBUS_TOKEN is the HS256 JWT issued via Nimbus's issueNimbusToken();
-    // store as a wrangler secret:
-    //   wrangler secret put NIMBUS_TOKEN
-    //
-    // "NIMBUS_ENDPOINT": "https://nimbus.<account>.workers.dev"
+    "CF_ACCESS_AUD":         "9a0178af6f03c7e212619f79ffca603a758ce3d951e269568e017c870b8e5390",
+    // ── Nimbus — the default lightweight sandbox ─────────────────────
+    // A DO-backed Linux env (github.com/AshishKumar4/Nimbus), deployed at the
+    // custom domain below. Registered for every agent as the `nimbus` runtime —
+    // a first-class peer of `workspace` and `sandbox`, preferred for quick
+    // commands where a full container is overkill. NIMBUS_TOKEN is the HS256 JWT
+    // (issueNimbusToken()); set it as a secret only if the deployment enforces
+    // auth: `wrangler secret put NIMBUS_TOKEN`.
+    "NIMBUS_ENDPOINT": "https://nimbus.ashishkumarsingh.com"
   },
   // Workers AI binding — the orchestrator's LLM resolver tries this FIRST,
   // falling back to AI_GATEWAY_URL + AI_GATEWAY_AUTH only when env.AI is
@@ -172,7 +171,8 @@
       "vars": {
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
         "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
-        "DEV_USER_EMAIL": "staging-tester@proteus.dev"
+        "DEV_USER_EMAIL": "staging-tester@proteus.dev",
+        "NIMBUS_ENDPOINT": "https://nimbus.ashishkumarsingh.com"
       }
     }
   }
