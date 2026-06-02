@@ -2718,6 +2718,35 @@ export class OrchestratorAgent extends Think<Env> {
       ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
+  /**
+   * One-round-trip initial load. Composes the per-surface read RPCs (status,
+   * tools, memory, MCTS, timeline, executors + their recent output) into a
+   * single payload, so the workspace first-paint is one WS call instead of
+   * 6 + N. Each field is independently guarded so one failing read can't blank
+   * the rest. Live updates still arrive via the granular refresh + events.
+   */
+  @callable()
+  async getWorkspaceSnapshot() {
+    const safe = async <T>(p: Promise<T>, fallback: T): Promise<T> => {
+      try { return await p; } catch { return fallback; }
+    };
+    const [status, tools, memoryContent, mcts, timeline, executors] = await Promise.all([
+      this.getAgentStatus(),
+      safe(this.getToolDescriptions(), { builtIn: [], crafted: [], executors: [] }),
+      this.getMemoryContent(),
+      safe(this.getMctsTree(), [] as unknown[]),
+      safe(this.getRunTimeline({ limit: 250 }), [] as TimelineSpan[]),
+      safe(this.getExecutors(), []),
+    ]);
+    const executorOutputs = await Promise.all(
+      executors.map(async (e) => ({
+        name: e.name,
+        outputs: await safe(this.getExecutorOutput(e.name, 50), [] as unknown[]),
+      })),
+    );
+    return { status, tools, memoryContent, mcts, timeline, executors, executorOutputs };
+  }
+
   @callable() async executeInExecutor(executorId: string, command: string) {
     const provider = this.rt.executionRouter?.getProvider(executorId);
     if (!provider) return { error: `Executor "${executorId}" not found` };

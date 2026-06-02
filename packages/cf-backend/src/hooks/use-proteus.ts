@@ -41,6 +41,17 @@ export interface AgentStatus {
   forkLineage: ForkLineage | null;
 }
 
+/** One-round-trip initial-load payload (server: getWorkspaceSnapshot). */
+export interface WorkspaceSnapshot {
+  status: AgentStatus;
+  tools: ToolDescResult;
+  memoryContent: string;
+  mcts: MctsRow[];
+  timeline: TimelineSpan[];
+  executors: ExecutorInfo[];
+  executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
+}
+
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
  * Fetches all surface data via @callable RPCs on connect. The unified Run
@@ -207,59 +218,28 @@ export function useProteus(agentId?: string) {
     rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
   }
 
+  // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
+  // server guards each field independently, so a single failing read degrades
+  // that surface only. Live updates continue via refreshLiveData + events.
   function loadAllData() {
-    rpc<AgentStatus>("getAgentStatus", [])
-      .then((status) => {
-        setAgentStatus(status);
+    rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
+      .then((snap) => {
+        setAgentStatus(snap.status);
         if (agentId) {
           // Fire-and-forget: record in UserDO (new agent → register; existing → touch).
-          registerAgent(agentId, status.displayName || status.name, status.purpose).catch(() => {
+          registerAgent(agentId, snap.status.displayName || snap.status.name, snap.status.purpose).catch(() => {
             touchAgent(agentId).catch(() => {});
           });
         }
-      })
-      .catch(() => {});
-
-    // Tools — use real descriptions.
-    rpc<ToolDescResult>("getToolDescriptions", [])
-      .then((r) => setTools(mapToolDescriptions(r)))
-      .catch(() => {
-        // Fallback to getToolList (builtIn is string[]; crafted re-tagged global
-        // so the Tools pane shows the "Learned" badge).
-        rpc<{ builtIn: string[]; crafted: Array<{ name: string; description: string; qualityScore: number; usageCount: number }> }>("getToolList", [])
-          .then((r) => {
-            const builtInTools: ToolInfo[] = r.builtIn.map(name => ({
-              name, description: "Built-in tool", scope: "local" as const,
-              qualityScore: 1, usageCount: 0, lastUsed: "",
-            }));
-            const craftedTools: ToolInfo[] = r.crafted.map(t => ({
-              name: t.name, description: t.description, scope: "global" as const,
-              qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0, lastUsed: "",
-            }));
-            setTools([...builtInTools, ...craftedTools]);
-          })
-          .catch(() => {});
-      });
-
-    // Memory — load the actual MEMORY.md content.
-    rpc<string>("getMemoryContent", [])
-      .then((text) => { setMemoryContent(text); if (text) setMemory(parseMemoryContent(text)); })
-      .catch(() => {});
-
-    rpc<MctsRow[]>("getMctsTree", [])
-      .then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); })
-      .catch(() => {});
-
-    rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
-
-    rpc<ExecutorInfo[]>("getExecutors", [])
-      .then((list) => {
-        setExecutors(list);
-        for (const exec of list) {
-          rpc<ExecutorOutput[]>("getExecutorOutput", [exec.name, 50])
-            .then((rows) => setExecutorOutputs((prev) => new Map(prev).set(exec.name, rows.reverse())))
-            .catch(() => {});
-        }
+        setTools(mapToolDescriptions(snap.tools));
+        setMemoryContent(snap.memoryContent);
+        if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
+        if (snap.mcts.length > 0) setMctsTree(buildTree(snap.mcts));
+        setRunTimeline(snap.timeline);
+        setExecutors(snap.executors);
+        const outputs = new Map<string, ExecutorOutput[]>();
+        for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
+        setExecutorOutputs(outputs);
       })
       .catch(() => {});
   }
