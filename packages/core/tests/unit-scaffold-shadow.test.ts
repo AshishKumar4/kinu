@@ -153,38 +153,38 @@ describe('decidePromotion', () => {
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('promotes at minTrials when win-rate ≥ promoteThreshold', () => {
-    const p = make({ trialsSoFar: 5, pendingWins: 4, currentWins: 1 });
+  test('promotes only with ZERO regressions and a winning record', () => {
+    const p = make({ trialsSoFar: 5, pendingWins: 5, currentWins: 0 });
     const d = decidePromotion(p, cfg);
     expect(d.decision).toBe('promote');
-    expect(d.winRate).toBeCloseTo(0.8, 2);
+    expect(d.winRate).toBeCloseTo(1, 2);
   });
 
-  test('rollbacks at minTrials when win-rate ≤ rollbackThreshold', () => {
+  test('regression veto: a SINGLE loss rolls back even with a strong win-rate', () => {
+    // 6-1 (winRate 0.86) would promote under win-rate-only logic; the
+    // regression veto (maxRegressions=0) rolls it back. This is the safety core.
+    const p = make({ trialsSoFar: 8, pendingWins: 6, currentWins: 1 });
+    const d = decidePromotion(p, cfg);
+    expect(d.decision).toBe('rollback');
+  });
+
+  test('rollbacks when the pending clearly loses', () => {
     const p = make({ trialsSoFar: 5, pendingWins: 1, currentWins: 4 });
     const d = decidePromotion(p, cfg);
     expect(d.decision).toBe('rollback');
     expect(d.winRate).toBeCloseTo(0.2, 2);
   });
 
-  test('continues for ambiguous mid-range win-rate', () => {
-    const p = make({ trialsSoFar: 5, pendingWins: 3, currentWins: 2, ties: 0 });
-    const d = decidePromotion(p, cfg);
-    // win-rate 0.6 — exactly at promoteThreshold, so still promotes
-    expect(['promote', 'continue']).toContain(d.decision);
+  test('continues below minDecisiveTrials even with a perfect win-rate', () => {
+    // 2-0 with 3 ties: winRate 1.0 but only 2 decisive trials < minDecisiveTrials(3).
+    const p = make({ trialsSoFar: 5, pendingWins: 2, currentWins: 0, ties: 3 });
+    expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('mid-range below promoteThreshold and above rollbackThreshold → continue', () => {
-    const p = make({ trialsSoFar: 5, pendingWins: 5, currentWins: 5, ties: 0 });
-    // pending=5, current=5 → winRate=0.5, neither threshold met
-    const d = decidePromotion(p, cfg);
-    expect(d.decision).toBe('continue');
-  });
-
-  test('forces decision at maxTrials when still mid-range', () => {
+  test('maxTrials force: any regression still rolls back (veto wins over the force)', () => {
     const p = make({ trialsSoFar: 12, pendingWins: 6, currentWins: 5, ties: 1 });
     const d = decidePromotion(p, cfg);
-    expect(['promote', 'rollback']).toContain(d.decision);
+    expect(d.decision).toBe('rollback');
     expect(d.winRate).toBeCloseTo(6 / 11, 2);
   });
 
@@ -193,16 +193,23 @@ describe('decidePromotion', () => {
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('respects custom thresholds', () => {
-    const strictCfg: ShadowConfig = {
-      ...cfg, promoteThreshold: 0.8, rollbackThreshold: 0.2, minTrials: 3,
-    };
+  test('a tolerant config (maxRegressions>0) permits promotion despite some losses', () => {
+    const tolerant: ShadowConfig = { ...cfg, maxRegressions: 2 };
+    // 6-2 (winRate 0.75): 2 regressions allowed → promotes on win-rate.
     expect(decidePromotion(
-      make({ trialsSoFar: 3, pendingWins: 2, currentWins: 1 }), strictCfg,
-    ).decision).toBe('continue'); // 0.67 < 0.8
+      make({ trialsSoFar: 8, pendingWins: 6, currentWins: 2 }), tolerant,
+    ).decision).toBe('promote');
+    // 6-3: exceeds the tolerance → rollback.
+    expect(decidePromotion(
+      make({ trialsSoFar: 9, pendingWins: 6, currentWins: 3 }), tolerant,
+    ).decision).toBe('rollback');
+  });
+
+  test('respects custom promote threshold', () => {
+    const strictCfg: ShadowConfig = { ...cfg, promoteThreshold: 0.8, minTrials: 3 };
     expect(decidePromotion(
       make({ trialsSoFar: 5, pendingWins: 5, currentWins: 0 }), strictCfg,
-    ).decision).toBe('promote'); // 1.0 ≥ 0.8
+    ).decision).toBe('promote'); // 1.0 ≥ 0.8, zero regressions
   });
 });
 

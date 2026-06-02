@@ -213,29 +213,25 @@ describe('v2 e2e: scaffold shadow rollout', () => {
       currentScore: winner === 'current' ? 0.8 : 0.5,
       pendingScore: winner === 'pending' ? 0.8 : 0.5,
     });
-    for (let i = 0; i < 4; i++) {
+    // A clean win with ZERO regressions — the regression veto (maxRegressions=0)
+    // requires the pending lose no decisive trials to be promotable.
+    for (let i = 0; i < 5; i++) {
       recordShadowEvaluation(rt.storage.sql, {
         currentVersion: 0, pendingVersion: 1,
         task: `t${i}`, currentOutput: 'c', pendingOutput: 'p',
         judgeResult: judge('pending'),
       });
     }
-    for (let i = 0; i < 2; i++) {
-      recordShadowEvaluation(rt.storage.sql, {
-        currentVersion: 0, pendingVersion: 1,
-        task: `t-c${i}`, currentOutput: 'c', pendingOutput: 'p',
-        judgeResult: judge('current'),
-      });
-    }
 
     const pending = getPendingScaffold(rt.storage.sql);
     expect(pending).not.toBeNull();
-    expect(pending!.trialsSoFar).toBe(6);
-    expect(pending!.pendingWins).toBe(4);
+    expect(pending!.trialsSoFar).toBe(5);
+    expect(pending!.pendingWins).toBe(5);
+    expect(pending!.currentWins).toBe(0);
 
     const decision = decidePromotion(pending!, DEFAULT_SHADOW_CONFIG);
     expect(decision.decision).toBe('promote');
-    expect(decision.winRate).toBeCloseTo(4 / 6, 2);
+    expect(decision.winRate).toBeCloseTo(1, 2);
 
     const applied = await applyPromotionDecision(rt, pending!, 'promote');
     expect(applied.action).toBe('promote');

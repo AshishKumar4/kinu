@@ -8,8 +8,10 @@
  * output; the pending runs silently). A judge LLM compares per-turn quality.
  *
  * After enough trials (default N=5), we aggregate:
- *   - if pending wins ≥ promoteThreshold (default 0.6 = 3/5 → promote)
- *   - else (default 0.4 = 2/5 → rollback)
+ *   - any decisive trial the pending LOSES beyond maxRegressions (default 0) →
+ *     rollback (the hard regression veto — gates promotion regardless of win-rate)
+ *   - else if ≥ minDecisiveTrials decisive trials and win-rate ≥ promoteThreshold
+ *     (default 0.6) → promote
  *   - else (in between → keep observing, extend trial window)
  *
  * Schema:
@@ -74,6 +76,12 @@ export interface ShadowConfig {
   maxTrials: number;
   /** Auto-promote/rollback without user confirmation. Default false. */
   autoPromote: boolean;
+  /** Max decisive trials the pending may LOSE before it's rolled back. 0 =
+   *  any regression rolls it back (the safe default for auto-promotion). */
+  maxRegressions: number;
+  /** Minimum decisive (non-tie) trials required before a promote — guards
+   *  against promoting on one lucky trial. Default 3. */
+  minDecisiveTrials: number;
 }
 
 export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
@@ -82,6 +90,8 @@ export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
   rollbackThreshold: 0.4,
   maxTrials: 12,
   autoPromote: false,
+  maxRegressions: 0,
+  minDecisiveTrials: 3,
 };
 
 export function initShadowTables(execRaw: RawSqlExec): void {
@@ -276,12 +286,22 @@ export function decidePromotion(
     return { decision: 'continue', winRate: 0.5 };
   }
   const winRate = pending.pendingWins / decisiveTrials;
-  if (pending.trialsSoFar >= config.minTrials) {
+
+  // Regression veto (hard, checked first): if the pending has LOST more decisive
+  // trials than allowed, roll it back immediately. With maxRegressions=0 (the
+  // safe default) a single loss is decisive — the owner's "auto-rollback on
+  // regression". This gates promotion no matter how high the win-rate is.
+  if (pending.currentWins > config.maxRegressions) {
+    return { decision: 'rollback', winRate };
+  }
+
+  if (pending.trialsSoFar >= config.minTrials && decisiveTrials >= config.minDecisiveTrials) {
     if (winRate >= config.promoteThreshold) return { decision: 'promote', winRate };
     if (winRate <= config.rollbackThreshold) return { decision: 'rollback', winRate };
   }
   if (pending.trialsSoFar >= config.maxTrials) {
-    // Force a decision — ties → rollback (safety bias: strict > 0.5 only).
+    // Hard ceiling. The regression veto already passed (currentWins ≤
+    // maxRegressions), so promote iff genuinely ahead, else rollback.
     return { decision: winRate > 0.5 ? 'promote' : 'rollback', winRate };
   }
   return { decision: 'continue', winRate };
