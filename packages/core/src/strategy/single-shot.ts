@@ -11,9 +11,12 @@ export function createSingleShotStrategy(): ExplorationStrategy {
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
       const { text, usage } = await generateText({
+        // maxIterations is the LOOP count, NOT the generation length — reusing
+        // it here capped output at ~10 tokens (the think tool's default budget),
+        // which is why single-shot returned empty text.
         model: ctx.model,
         prompt: ctx.task,
-        maxOutputTokens: ctx.budget?.maxIterations ?? 1024,
+        maxOutputTokens: ctx.budget?.maxOutputTokens ?? 2048,
         abortSignal: ctx.signal,
       });
       return {

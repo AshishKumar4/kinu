@@ -55,6 +55,7 @@ import {
 } from "@proteus/core";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
+import { extractFinalText, synthesizeHeadSummary } from "./lib/head-summary.js";
 import type { SqlExecutor } from "@proteus/agent-utils";
 
 const MAX_HEAD_STEPS = 16;
@@ -289,7 +290,7 @@ export class ExplorationAgent extends Agent<Env> {
         ? "aborted"
         : budgetExhausted(input.budget).exhausted ? "budget_exceeded" : "completed";
 
-      const finalText = result.text?.trim() ?? "";
+      const finalText = extractFinalText(result);
       const summary = finalText || this.headFallbackSummary(input, status);
 
       return {
@@ -612,10 +613,16 @@ export class ExplorationAgent extends Agent<Env> {
     return [{ role: "user", content: lines.join("\n") }];
   }
 
+  /** When a head produced no prose turn, synthesize a summary from what it
+   *  recorded (decisions / evidence / tool calls) so the merge has substance. */
   private headFallbackSummary(input: HeadInput, status: HeadReport["status"]): string {
-    if (status === "completed") {
-      return `Head ${input.id} produced no final text but recorded ${this.headEvidence.length} evidence and ${this.headDecisions.length} decisions.`;
+    if (status !== "completed") {
+      return `Head ${input.id} ended with status=${status}${this.headAbortReason ? ` (${this.headAbortReason})` : ""}.`;
     }
-    return `Head ${input.id} ended with status=${status}${this.headAbortReason ? ` (${this.headAbortReason})` : ""}.`;
+    return synthesizeHeadSummary({
+      decisions: this.headDecisions,
+      evidence: this.headEvidence,
+      toolCalls: this.headToolCalls,
+    }) ?? `Head ${input.id} completed without producing a textual summary.`;
   }
 }
