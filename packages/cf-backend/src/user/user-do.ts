@@ -189,6 +189,17 @@ export class UserDO extends Agent<Env> {
   @callable()
   async removeAgent(name: string): Promise<void> {
     validateAgentName(name);
+    // Tear down the agent's Durable Object (storage, alarm, sandbox) BEFORE
+    // dropping it from the registry — otherwise the DO's SQLite (conversation,
+    // model, scaffold, triggers) survives and a same-name recreate inherits
+    // stale state, and its alarm keeps firing. Best-effort: the registry row is
+    // removed even if teardown fails.
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
+      await stub.destroyAgent();
+    } catch (err) {
+      console.warn('[proteus] removeAgent: agent teardown failed:', err instanceof Error ? err.message : err);
+    }
     this.sqlx(`DELETE FROM user_agents WHERE name = ?`, name);
   }
 

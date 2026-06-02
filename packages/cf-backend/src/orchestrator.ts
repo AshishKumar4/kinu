@@ -18,6 +18,7 @@
 
 import { callable } from "agents";
 import { createCompactFunction } from "agents/experimental/memory/utils";
+import { getSandbox } from "@cloudflare/sandbox";
 import { Think, Session } from "@cloudflare/think";
 // preamble-injection pattern: we construct the codemode tool
 // directly via createCodeTool + PreambleCraftedExecutor. The executor reads
@@ -2562,6 +2563,28 @@ export class OrchestratorAgent extends Think<Env> {
         };
       });
     } catch { return []; }
+  }
+
+  /** Tear down every per-agent resource, then wipe this Durable Object. Called
+   *  by UserDO.removeAgent on delete so a same-name recreate starts clean and no
+   *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
+   *  the DO wipe (storage + alarm) always runs. */
+  @callable()
+  async destroyAgent(): Promise<{ ok: true }> {
+    try {
+      const sb = getSandbox(
+        this.env.Sandbox as Parameters<typeof getSandbox>[0],
+        `proteus-${this.name}`,
+        { normalizeId: true },
+      ) as unknown as { destroy(): Promise<unknown> };
+      await sb.destroy();
+    } catch (err) {
+      console.warn('[proteus] destroyAgent: sandbox teardown failed:', err instanceof Error ? err.message : err);
+    }
+    // The R2 /workspace snapshot self-expires via the BACKUP_TTL lifecycle rule
+    // on the bucket (there is no SDK deleteBackup and the key scheme is internal).
+    await this.destroy(); // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the isolate
+    return { ok: true };
   }
 
   /** The agent's world model — keyed agent_facts, most-recent first — for the
