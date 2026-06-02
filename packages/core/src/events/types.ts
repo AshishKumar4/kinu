@@ -56,7 +56,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
-  | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number } })
+  | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number; cached?: number } })
   | (RunEventBase & { type: 'run_end'; reason?: string });
 
 /** A new event payload sans the base fields the recorder fills in. */

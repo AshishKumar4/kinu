@@ -261,7 +261,7 @@ export class OrchestratorAgent extends Think<Env> {
   private _turnStartedAt = 0;
   // Per-turn token accumulator (summed across steps in onStepFinish), emitted
   // on turn_end so the Supervise budget view can show real spend per run.
-  private _turnUsage = { input: 0, output: 0 };
+  private _turnUsage = { input: 0, output: 0, cached: 0 };
   private _turnHadError = false;
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
@@ -741,13 +741,21 @@ export class OrchestratorAgent extends Think<Env> {
       this._cachedSystemPromptKey = key;
       this.logActivity("getsystemprompt_end", `${base.length} chars`);
     }
-    // Render top-K recent facts on every turn (cheap; bypasses cache because
-    // facts change between turns). Empty → return unmodified base prompt.
+    // Append the recent-facts tail (changes per turn, so it sits AFTER the
+    // cacheable instruction+tools prefix). Single source — see factsTail().
+    return base + this.factsTail();
+  }
+
+  /** The recent-facts block appended to the system prompt — rendered fresh each
+   *  turn (facts change), so it's intentionally outside the cached prefix.
+   *  Returns '' when there are no facts. One source for both the base-prompt
+   *  and the skills-override paths (was copy-pasted). */
+  private factsTail(): string {
     try {
-      const factsBlock = renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 });
-      if (factsBlock) return `${base}\n\n## World model (facts you remembered):\n${factsBlock}`;
+      const block = renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 });
+      if (block) return `\n\n## World model (facts you remembered):\n${block}`;
     } catch { /* facts table not yet initialized */ }
-    return base;
+    return '';
   }
 
   /**
@@ -1077,7 +1085,7 @@ export class OrchestratorAgent extends Think<Env> {
     this._executorsUsedThisTurn.clear();
     await this.restoreWorkspaceIfNeeded();
     this._turnStartedAt = Date.now();
-    this._turnUsage = { input: 0, output: 0 };
+    this._turnUsage = { input: 0, output: 0, cached: 0 };
     this._turnHadError = false;
     this._firstChunkReceived = false;
     this._inFlight = true;
@@ -1141,13 +1149,8 @@ export class OrchestratorAgent extends Think<Env> {
             registeredExecutors: execs,
             activeSkills: activeSet,
           });
-          // Append the same recent-facts block getSystemPrompt does.
-          try {
-            const factsBlock = renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 });
-            if (factsBlock) {
-              systemOverride = `${systemOverride}\n\n## World model (facts you remembered):\n${factsBlock}`;
-            }
-          } catch { /* facts table not yet initialized */ }
+          // Same recent-facts tail getSystemPrompt appends (single source).
+          systemOverride = systemOverride + this.factsTail();
 
           // Intersect activeTools with the union of allowed_tools across the
           // active skills. Empty union (skills don't restrict) = leave the
@@ -1268,10 +1271,15 @@ export class OrchestratorAgent extends Think<Env> {
     } | undefined;
     const inTok = u?.inputTokens ?? 0;
     const outTok = u?.outputTokens ?? 0;
-    const cached = u?.cachedInputTokens ?? 0;
+    // Cached prefix tokens: Workers AI / OpenAI surface them on usage; Anthropic
+    // (and Anthropic-via-OpenRouter) report them in providerMetadata.anthropic.
+    const anthropicMeta = (ctx as unknown as { providerMetadata?: { anthropic?: { cacheReadInputTokens?: number } } })
+      .providerMetadata?.anthropic;
+    const cached = (u?.cachedInputTokens ?? 0) + (anthropicMeta?.cacheReadInputTokens ?? 0);
     const reasoning = u?.reasoningTokens ?? 0;
     this._turnUsage.input += inTok;
     this._turnUsage.output += outTok;
+    this._turnUsage.cached += cached;
     const modelId = (ctx as unknown as { response?: { modelId?: string } }).response?.modelId;
     const extras: string[] = [];
     if (cached > 0) extras.push(`cached=${cached}`);
@@ -1311,7 +1319,7 @@ export class OrchestratorAgent extends Think<Env> {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'turn_end',
           turnIndex: this._sessionTurnCount,
-          tokenUsage: { input: this._turnUsage.input, output: this._turnUsage.output },
+          tokenUsage: { input: this._turnUsage.input, output: this._turnUsage.output, cached: this._turnUsage.cached },
         });
         this.eventRecorder.emit(this._currentRunId, {
           type: 'run_end',
@@ -2629,10 +2637,10 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async getRunSummaries(limit: number = 30): Promise<Array<{
     runId: string; startedAt: number; causedBy: string | null; userMessage: string | null;
-    status: string | null; tokensIn: number; tokensOut: number; eventCount: number;
+    status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number;
   }>> {
     return this.eventRecorder.listRuns(limit).map((run) => {
-      let tokensIn = 0, tokensOut = 0;
+      let tokensIn = 0, tokensOut = 0, tokensCached = 0;
       let causedBy: string | null = null, userMessage: string | null = null, status: string | null = null;
       let startedAt = Date.parse(run.lastTs) || Date.now();
       try {
@@ -2644,12 +2652,13 @@ export class OrchestratorAgent extends Think<Env> {
           } else if (e.type === 'turn_end' && e.tokenUsage) {
             tokensIn += e.tokenUsage.input;
             tokensOut += e.tokenUsage.output;
+            tokensCached += e.tokenUsage.cached ?? 0;
           } else if (e.type === 'run_end') {
             status = e.reason ?? null;
           }
         }
       } catch { /* run events unreadable — return the bare summary */ }
-      return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, eventCount: run.eventCount };
+      return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, tokensCached, eventCount: run.eventCount };
     });
   }
 

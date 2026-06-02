@@ -17,7 +17,7 @@ import { EmptyState } from "@/components/surfaces/shared";
 import type { Rpc } from "@/lib/protocol";
 
 interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
-interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; eventCount: number }
+interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number }
 interface TriggerRow { id: string; kind: string; state: string; created_at: number; rate_limit_per_min?: number }
 
 function fmtTokens(n: number): string {
@@ -116,13 +116,20 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   useEffect(() => { rpc<RunSummary[]>("getRunSummaries", [30]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
   const totalTokens = (runs ?? []).reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
+  const totalCached = (runs ?? []).reduce((s, r) => s + (r.tokensCached ?? 0), 0);
+  // Cache hit-rate = cached input / total input (a proxy; cached is a subset of in).
+  const totalIn = (runs ?? []).reduce((s, r) => s + r.tokensIn, 0);
+  const hitRate = totalIn > 0 ? Math.round((totalCached / totalIn) * 100) : 0;
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
         {runs && <Badge variant="secondary">{runs.length}</Badge>}
-        {totalTokens > 0 && <span className="ml-auto text-[11px] p-text-3">{fmtTokens(totalTokens)} tokens</span>}
+        <span className="ml-auto flex items-center gap-2">
+          {totalCached > 0 && <span className="text-[11px] text-emerald-400" title="prompt-cache hit rate (cached input / total input)">{hitRate}% cached</span>}
+          {totalTokens > 0 && <span className="text-[11px] p-text-3">{fmtTokens(totalTokens)} tokens</span>}
+        </span>
       </div>
       {runs === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
         : runs.length === 0 ? <p className="text-xs p-text-3">No recorded runs yet.</p>
