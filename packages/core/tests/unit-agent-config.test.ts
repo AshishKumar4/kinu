@@ -68,6 +68,20 @@ describe('AgentConfigStore — workspace backup handle', () => {
   });
 });
 
+describe('AgentConfigStore — auto-GEPA cadence', () => {
+  test('round-trips a positive cadence; 0/negative disables', () => {
+    const c = setup();
+    expect(c.getAutoGepaEveryNTurns()).toBe(0); // default off
+    c.setAutoGepaEveryNTurns(25);
+    expect(c.getAutoGepaEveryNTurns()).toBe(25);
+    c.setAutoGepaEveryNTurns(0);
+    expect(c.getAutoGepaEveryNTurns()).toBe(0);
+    c.setAutoGepaEveryNTurns(20);
+    c.setAutoGepaEveryNTurns(-5); // disables
+    expect(c.getAutoGepaEveryNTurns()).toBe(0);
+  });
+});
+
 describe('AgentConfigStore — typed accessors', () => {
   test('model: get/set round-trip + canonical key', () => {
     const c = setup();

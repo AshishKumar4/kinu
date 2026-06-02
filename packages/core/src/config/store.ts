@@ -31,6 +31,9 @@ export const AGENT_CONFIG_KEYS = {
   workspaceBackup: 'workspace_backup',
   /** Epoch ms of the last successful /workspace backup (backup debounce). */
   workspaceBackupAt: 'workspace_backup_at',
+  /** Run GEPA self-optimization after this many turns of new execution traces
+   *  (0 = off). Trace-driven, not clock-driven. */
+  autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -72,6 +75,10 @@ export interface AgentConfigStore {
   setWorkspaceBackup(backup: DirectoryBackup): void;
   /** Epoch ms of the last successful /workspace backup, or 0. */
   getWorkspaceBackupAt(): number;
+  /** Turns-of-new-traces between auto-GEPA passes (0 = disabled). */
+  getAutoGepaEveryNTurns(): number;
+  /** Set the auto-GEPA cadence (turns). 0 / negative disables. */
+  setAutoGepaEveryNTurns(n: number): void;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -167,6 +174,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     getWorkspaceBackupAt() {
       const n = Number(get(AGENT_CONFIG_KEYS.workspaceBackupAt));
       return Number.isFinite(n) ? n : 0;
+    },
+    getAutoGepaEveryNTurns() {
+      const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns)));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    setAutoGepaEveryNTurns(n) {
+      if (Number.isFinite(n) && n > 0) set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(Math.floor(n)));
+      else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.autoGepaEveryNTurns}`;
     },
   };
 }

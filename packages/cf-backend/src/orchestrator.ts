@@ -262,6 +262,9 @@ export class OrchestratorAgent extends Think<Env> {
   // on turn_end so the Supervise budget view can show real spend per run.
   private _turnUsage = { input: 0, output: 0 };
   private _turnHadError = false;
+  /** Turns of new execution traces since the last auto-GEPA pass (in-memory
+   *  cadence; resets on eviction, which just delays the next pass slightly). */
+  private _turnsSinceGepa = 0;
   private _sessionTurnCount = 0;
   private _sessionTurns: CompletedTurn[] = [];
   private _sessionStartedAt = Date.now();
@@ -1439,6 +1442,10 @@ export class OrchestratorAgent extends Think<Env> {
     // work survives the container sleeping. Debounced + fire-and-forget.
     this.backupWorkspaceIfDue();
 
+    // Trace-driven continuous self-optimization (when enabled): run GEPA once
+    // enough new turns have accrued. Fire-and-forget; no-op when disabled.
+    this.maybeRunAutoGepa();
+
     // Reactor drain-then-stop: handle any external events still pending (arrived
     // during this turn, or queued before a chat turn). No-op when none — so this
     // self-terminates once the external event backlog is empty.
@@ -1743,29 +1750,20 @@ export class OrchestratorAgent extends Think<Env> {
         };
         const scheduled_fire_at = (trigger as typeof trigger & { next_fire_at?: number }).next_fire_at ?? now;
 
-        if (spec.label === 'auto_gepa') {
-          // Continuous self-optimization: run GEPA in the background instead of
-          // waking the agent. It proposes a single pending scaffold (no-op when
-          // one is already mid-shadow), which the per-turn auto-judge then
-          // accrues trials on and the regression-aware gate promotes/rolls back.
-          void this.runScaffoldGepaOptimization()
-            .catch((err) => console.warn('[proteus] auto-GEPA failed:', (err as Error).message));
-        } else {
-          this.eventLog.publish({
-            descriptor: {
-              ingress: 'timer_alarm',
-              variant: 'timer',
-              payload: {
-                trigger_id: trigger.id,
-                scheduled_fire_at,
-                label: spec.label,
-                user_payload: spec.payload,
-              },
-              trigger_creator_trust: trigger.creator_trust,
+        this.eventLog.publish({
+          descriptor: {
+            ingress: 'timer_alarm',
+            variant: 'timer',
+            payload: {
+              trigger_id: trigger.id,
+              scheduled_fire_at,
+              label: spec.label,
+              user_payload: spec.payload,
             },
-            now,
-          });
-        }
+            trigger_creator_trust: trigger.creator_trust,
+          },
+          now,
+        });
 
         if (trigger.kind === 'timer_cron') {
           const next = spec.cron ? nextCronFire(spec.cron, now) : null;
@@ -3602,28 +3600,46 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /**
-   * Enable/disable continuous self-optimization: a `timer_cron` trigger labelled
-   * `auto_gepa` that, when it fires, runs GEPA in the background (alarm()). Pass
-   * a cron to enable (replaces any existing one), null/'' to disable. Operator-
-   * gated — pairs with `auto_promote_scaffold` so an operator can run continuous
-   * GEPA while still hand-promoting, or both for a fully-autonomous cycle.
+   * Enable/disable continuous self-optimization. Auto-GEPA is TRACE-driven, not
+   * clock-driven: it runs after `everyNTurns` turns of new execution history
+   * accrue (gated on no pending scaffold), so it fires when there's genuinely
+   * new material to learn from and pauses automatically when the agent is idle —
+   * a wall-clock cron would waste passes on identical eval sets. 0/null disables.
+   * Operator-gated; pairs with `auto_promote_scaffold` for a fully-autonomous
+   * improve→shadow-eval→promote/rollback cycle.
    */
   @callable()
-  async setAutoGepa(cron: string | null): Promise<{ ok: true; cron: string | null; triggerId?: string }> {
+  async setAutoGepa(everyNTurns: number | null): Promise<{ ok: true; everyNTurns: number }> {
+    // Clean up any trigger from the prior cron-based design.
     const prev = this.config.get('auto_gepa_trigger_id');
     if (prev) { this.triggerRegistry.revoke(prev, Date.now()); this.config.delete('auto_gepa_trigger_id'); }
-    const c = cron?.trim();
-    if (!c) { this.config.delete('auto_gepa_cron'); return { ok: true, cron: null }; }
-    const { id } = this.createTimerTrigger({ cron: c, label: 'auto_gepa', trust: 'owner' });
-    this.config.set('auto_gepa_trigger_id', id);
-    this.config.set('auto_gepa_cron', c);
-    return { ok: true, cron: c, triggerId: id };
+    this.config.delete('auto_gepa_cron');
+    this.config.setAutoGepaEveryNTurns(everyNTurns ?? 0);
+    this._turnsSinceGepa = 0;
+    return { ok: true, everyNTurns: this.config.getAutoGepaEveryNTurns() };
   }
 
-  /** Current auto-GEPA schedule (cron) or null when disabled. */
+  /** Current auto-GEPA cadence (turns of new traces between passes; 0 = off). */
   @callable()
-  async getAutoGepa(): Promise<{ cron: string | null }> {
-    return { cron: this.config.get('auto_gepa_cron') };
+  async getAutoGepa(): Promise<{ everyNTurns: number }> {
+    return { everyNTurns: this.config.getAutoGepaEveryNTurns() };
+  }
+
+  /**
+   * Trace-driven auto-GEPA tick — called once per completed turn. When enough
+   * new turns have accrued since the last pass AND no pending scaffold is
+   * mid-shadow, kick GEPA in the background. The counter keeps growing while a
+   * pending is in flight, so a pass fires as soon as the shadow slot frees.
+   */
+  private maybeRunAutoGepa(): void {
+    const everyN = this.config.getAutoGepaEveryNTurns();
+    if (everyN <= 0) return;
+    this._turnsSinceGepa += 1;
+    if (this._turnsSinceGepa < everyN) return;
+    if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
+    this._turnsSinceGepa = 0;
+    void this.runScaffoldGepaOptimization()
+      .catch((err) => console.warn('[proteus] auto-GEPA failed:', (err as Error).message));
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This
