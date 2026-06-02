@@ -34,10 +34,13 @@ export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]):
     ...values: SqlValue[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
+    // SqliteFS encodes BLOBs as ArrayBuffer (Cloudflare DO storage.sql's native
+    // type); bun:sqlite only binds TypedArrays, so coerce ArrayBuffer → Uint8Array.
+    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare(query);
-    if (isRead) return stmt.all(...values) as T[];
-    stmt.run(...values);
+    if (isRead) return stmt.all(...bound) as T[];
+    stmt.run(...bound);
     return [];
   } as SqlExecutor;
   return sql;
@@ -67,7 +70,7 @@ function adaptVFS(sqliteFs: SqliteFS): VFS {
       }
     },
     unlink: (path) => sqliteFs.unlink(path),
-    mkdir: (path) => sqliteFs.mkdir(path),
+    mkdir: (path, opts) => sqliteFs.mkdir(path, opts),
     exists: (path) => sqliteFs.exists(path),
   };
 }
