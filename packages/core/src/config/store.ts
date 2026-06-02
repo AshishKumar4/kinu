@@ -7,6 +7,7 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { DirectoryBackup } from '../execution/sandbox.js';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -26,6 +27,10 @@ export const AGENT_CONFIG_KEYS = {
   /** The executor namespace the agent most recently ran a tool in — so the UI
    *  (diff / file manager) defaults to where work actually happened. */
   lastActiveExecutor: 'last_active_executor',
+  /** Serialized DirectoryBackup handle for the agent's /workspace snapshot. */
+  workspaceBackup: 'workspace_backup',
+  /** Epoch ms of the last successful /workspace backup (backup debounce). */
+  workspaceBackupAt: 'workspace_backup_at',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -61,6 +66,12 @@ export interface AgentConfigStore {
   /** Record the last-active executor. Ignores values that aren't a plausible
    *  executor namespace (defense against a poisoned config value). */
   setLastActiveExecutor(name: string): void;
+  /** The persisted /workspace backup handle, or null if none / malformed. */
+  getWorkspaceBackup(): DirectoryBackup | null;
+  /** Persist the latest /workspace backup handle and stamp the backup time. */
+  setWorkspaceBackup(backup: DirectoryBackup): void;
+  /** Epoch ms of the last successful /workspace backup, or 0. */
+  getWorkspaceBackupAt(): number;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -137,6 +148,25 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       // bad value can't poison the UI default. Not a fixed allow-list (executors
       // are registered dynamically) — just a shape check.
       if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
+    },
+    getWorkspaceBackup() {
+      const v = get(AGENT_CONFIG_KEYS.workspaceBackup);
+      if (!v) return null;
+      try {
+        const o = JSON.parse(v) as Partial<DirectoryBackup>;
+        if (typeof o?.id === 'string' && typeof o?.dir === 'string') {
+          return { id: o.id, dir: o.dir, localBucket: o.localBucket };
+        }
+      } catch { /* malformed → treat as no backup */ }
+      return null;
+    },
+    setWorkspaceBackup(backup) {
+      set(AGENT_CONFIG_KEYS.workspaceBackup, JSON.stringify({ id: backup.id, dir: backup.dir, localBucket: backup.localBucket }));
+      set(AGENT_CONFIG_KEYS.workspaceBackupAt, String(Date.now()));
+    },
+    getWorkspaceBackupAt() {
+      const n = Number(get(AGENT_CONFIG_KEYS.workspaceBackupAt));
+      return Number.isFinite(n) ? n : 0;
     },
   };
 }

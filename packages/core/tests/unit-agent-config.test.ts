@@ -49,6 +49,25 @@ describe('AgentConfigStore — lastActiveExecutor', () => {
   });
 });
 
+describe('AgentConfigStore — workspace backup handle', () => {
+  test('round-trips a DirectoryBackup and stamps the time', () => {
+    const c = setup();
+    expect(c.getWorkspaceBackup()).toBeNull();
+    expect(c.getWorkspaceBackupAt()).toBe(0);
+    c.setWorkspaceBackup({ id: 'abc-123', dir: '/workspace', localBucket: true });
+    expect(c.getWorkspaceBackup()).toEqual({ id: 'abc-123', dir: '/workspace', localBucket: true });
+    expect(c.getWorkspaceBackupAt()).toBeGreaterThan(0);
+  });
+
+  test('returns null on malformed / partial handle', () => {
+    const c = setup();
+    c.set('workspace_backup', 'not json');
+    expect(c.getWorkspaceBackup()).toBeNull();
+    c.set('workspace_backup', JSON.stringify({ id: 'x' })); // missing dir
+    expect(c.getWorkspaceBackup()).toBeNull();
+  });
+});
+
 describe('AgentConfigStore — typed accessors', () => {
   test('model: get/set round-trip + canonical key', () => {
     const c = setup();

@@ -56,6 +56,40 @@ export interface SandboxHandle {
    */
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; status?: string }>>;
+  /** Snapshot a directory to R2 (squashfs). Returns a small serializable handle
+   *  to store and later pass to restoreBackup. (SDK createBackup.) */
+  createBackup(opts: BackupOptions): Promise<DirectoryBackup>;
+  /** Restore a previously-created backup into its directory. (SDK restoreBackup.) */
+  restoreBackup(backup: DirectoryBackup): Promise<RestoreBackupResult>;
+}
+
+/** Options for SandboxHandle.createBackup (subset of the SDK's BackupOptions). */
+export interface BackupOptions {
+  /** Absolute directory to back up (e.g. '/workspace'). */
+  dir: string;
+  /** Move bytes via the BACKUP_BUCKET R2 binding directly (no presigned creds). */
+  localBucket?: boolean;
+  /** Honor .gitignore when archiving. */
+  gitignore?: boolean;
+  /** Wildcard excludes passed to mksquashfs (e.g. ['node_modules','*.log']). */
+  excludes?: readonly string[];
+  /** Backup lifetime in seconds (enforced on restore). */
+  ttl?: number;
+  /** Optional label. */
+  name?: string;
+}
+
+/** Serializable backup handle — store it, pass it back to restoreBackup. */
+export interface DirectoryBackup {
+  readonly id: string;
+  readonly dir: string;
+  readonly localBucket?: boolean;
+}
+
+export interface RestoreBackupResult {
+  readonly success: boolean;
+  readonly dir: string;
+  readonly id: string;
 }
 
 /**
@@ -399,7 +433,10 @@ declare namespace sandbox {
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
     connect: async () => { /* sandbox starts on first RPC */ },
-    disconnect: async () => { /* sandbox DO persists; no explicit close */ },
+    disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
+      filesystem does NOT — the container sleeps after ~10m idle and /workspace
+      is lost. Durability is provided by the orchestrator's backup/restore of
+      /workspace to R2 (createBackup/restoreBackup), not by this no-op close. */ },
     tools,
     types,
     positionalArgs: true,
