@@ -142,10 +142,13 @@ export class HeadController {
       rationale: opts.request.rationale,
     });
 
-    // Race each head against the parent's wall-clock.
+    // Race each head against the parent's wall-clock — measured from when the
+    // heads finished spawning (`startedAt`), NOT from `spawnedAt`: sub-agent
+    // cold-start can take tens of seconds and must not be charged against the
+    // head's own time-to-produce-a-report.
     const reports = await Promise.all(
       handles.map(async (h): Promise<HeadReport> => {
-        const remainingMs = parentBudget.maxWallClockMs - (Date.now() - parentBudget.spawnedAt);
+        const remainingMs = parentBudget.maxWallClockMs - (Date.now() - startedAt);
         try {
           const report = await raceWithTimeout(h, remainingMs);
           this.journal.recordReport(report);

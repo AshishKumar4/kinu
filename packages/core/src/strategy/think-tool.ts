@@ -151,7 +151,11 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
         model: deps.model,
         budget: {
           maxIterations: input.budget ?? 10,
-          wallClockMs: input.wall_clock_ms ?? 60_000,
+          // Only set a wall-clock bound when the caller explicitly asks for one.
+          // A blanket 60s default silently killed heads mid-work (each head's
+          // sub-agent cold-start alone could eat it); leaving it undefined lets
+          // heads fall through to DEFAULT_HEAD_BUDGET (5 min).
+          wallClockMs: input.wall_clock_ms,
         },
         options,
       };
