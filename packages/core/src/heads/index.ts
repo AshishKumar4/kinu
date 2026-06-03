@@ -38,3 +38,9 @@ export {
   type MergeLLMFn,
   type SplitPhaseEvent,
 } from './controller.js';
+export { extractHeadSteps, extractFinalText, synthesizeHeadSummary } from './head-summary.js';
+export {
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
+  type HeadInferenceDeps,
+} from './head-inference.js';

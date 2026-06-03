@@ -1,0 +1,224 @@
+// Backend-agnostic head inference loop — the divergent-reasoning-thread run that
+// produces a HeadReport. Both backends drive this: the cf-backend's Facet head
+// (ExplorationAgent.runAsHead) and the CLI's subprocess head-worker. Previously
+// this loop lived only inside the cf Facet; hoisting it here keeps ONE tested
+// implementation so a CLI head behaves identically to a DO head.
+//
+// The backend provides the model + a HeadCapture + its own scratch tools
+// (sandbox/shared/recursive-split). This module owns the record_evidence /
+// record_decision accumulator tools, the head system prompt + inherited-context
+// messages, the generateText loop (with the abort/step/budget stop condition),
+// and the HeadReport assembly (via the shared head-summary helpers).
+
+import { generateText, tool, jsonSchema, type ToolSet, type LanguageModel } from 'ai';
+import {
+  type HeadInput, type HeadReport, type HeadId,
+  type Evidence, type Decision, type ArtifactRef,
+  budgetExhausted,
+} from './types.js';
+import type { ToolCallRecord } from '../evolution/types.js';
+import { nanoid } from '../utils/nanoid.js';
+import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
+
+/** Hard ceiling on a head's reasoning steps (budget derives a tighter cap). */
+export const MAX_HEAD_STEPS = 16;
+
+/**
+ * The mutable findings a head accumulates as it runs — evidence/decisions
+ * (recorded via the accumulator tools), artifacts + tool calls (recorded by the
+ * backend's scratch tools), child head ids (recursive split), and token usage.
+ * runHeadInference reads it into the final HeadReport; the backend's tools mutate
+ * the SAME instance, so there is one source of truth per head run.
+ */
+export class HeadCapture {
+  readonly evidence: Evidence[] = [];
+  readonly decisions: Decision[] = [];
+  readonly artifacts: ArtifactRef[] = [];
+  readonly toolCalls: ToolCallRecord[] = [];
+  readonly childHeadIds: HeadId[] = [];
+  readonly tokenUsage = { input: 0, output: 0 };
+
+  recordEvidence(e: Evidence): void { this.evidence.push(e); }
+  recordDecision(d: Decision): void { this.decisions.push(d); }
+  recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
+  recordToolCall(name: string, args: Record<string, unknown>, result: string): void {
+    this.toolCalls.push({ name, args, result });
+  }
+  addChildIds(ids: readonly HeadId[]): void { for (const id of ids) this.childHeadIds.push(id); }
+}
+
+/** The two accumulator tools every head has — record_evidence / record_decision,
+ *  pushing into the shared HeadCapture. Backend scratch tools are merged on top. */
+export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
+  return {
+    record_evidence: tool({
+      description:
+        "Record a piece of evidence you've gathered. Use this for facts you want surfaced in the merge synthesis.",
+      inputSchema: jsonSchema<{ kind: Evidence['kind']; body: string; ref?: string; confidence?: number }>({
+        type: 'object', required: ['kind', 'body'],
+        properties: {
+          kind: { type: 'string', enum: ['tool_output', 'fact', 'citation', 'artifact'] },
+          body: { type: 'string' }, ref: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+      }),
+      execute: async ({ kind, body, ref, confidence }) => {
+        const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
+        capture.recordEvidence(ev);
+        capture.recordToolCall('record_evidence', { kind, body, ref, confidence }, 'ok');
+        return `evidence recorded (id=${ev.id})`;
+      },
+    }),
+    record_decision: tool({
+      description: 'Record a decision the head considered.',
+      inputSchema: jsonSchema<{ question: string; choice: string; rationale: string; supportingEvidence?: string[] }>({
+        type: 'object', required: ['question', 'choice', 'rationale'],
+        properties: {
+          question: { type: 'string' }, choice: { type: 'string' }, rationale: { type: 'string' },
+          supportingEvidence: { type: 'array', items: { type: 'string' } },
+        },
+      }),
+      execute: async ({ question, choice, rationale, supportingEvidence }) => {
+        const d: Decision = { question, choice, rationale, supportingEvidence };
+        capture.recordDecision(d);
+        capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok');
+        return 'decision recorded';
+      },
+    }),
+  };
+}
+
+/** The head's system prompt — task framing + the head conventions (record_*,
+ *  private sandbox vs shared scratch, recursive split, isolation discipline). */
+export function buildHeadSystemPrompt(input: HeadInput): string {
+  return [
+    `You are a "head" — one of several parallel reasoning threads in a self-evolving agent runtime.`,
+    ``,
+    `Your task: ${input.task}`,
+    `Why you were spawned: ${input.rationale}`,
+    `Merge strategy: ${input.mergeStrategy} (your work will be combined with sibling heads via this strategy).`,
+    ``,
+    `Conventions:`,
+    `- record_evidence whenever you learn something worth surfacing in the merge.`,
+    `- record_decision when you make a substantive choice the parent might want to reconcile.`,
+    `- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can't see it).`,
+    `- shared_write / shared_read / shared_list = the COMMON scratch (shared/findings/), visible to sibling heads and the main agent. Put results worth sharing here; your writes are head-namespaced so siblings can't clobber them.`,
+    `- split_subheads to recursively explore deeper if needed (depth-budgeted).`,
+    `- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.`,
+    `- Stay focused on YOUR task. Don't try to do sibling heads' work.`,
+    ``,
+    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path or use shared_write. Read-only inspection of shared resources is always fine.`,
+    ``,
+    `Budget: depth ${input.budget.maxDepth}, ${input.budget.maxTokens} tokens, ${input.budget.maxWallClockMs}ms wall-clock.`,
+  ].join('\n');
+}
+
+/** The head's opening message — the inherited conversation + its assigned task. */
+export function buildHeadMessages(input: HeadInput): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const lines: string[] = ['Here is the conversation you inherit:', ''];
+  for (const m of input.inheritedContext) {
+    const trimmed = m.content.length > 400 ? m.content.slice(0, 400) + '…' : m.content;
+    lines.push(`[${m.role}${m.toolName ? `/${m.toolName}` : ''}] ${trimmed}`);
+  }
+  lines.push('', `Now focus on your assigned task: ${input.task}`);
+  return [{ role: 'user', content: lines.join('\n') }];
+}
+
+/** When a head produced no prose turn, synthesize a summary from what it recorded
+ *  (decisions / evidence / tool calls) so the merge has substance. */
+function headFallbackSummary(input: HeadInput, status: HeadReport['status'], capture: HeadCapture, abortReason: string | null): string {
+  if (status !== 'completed') {
+    return `Head ${input.id} ended with status=${status}${abortReason ? ` (${abortReason})` : ''}.`;
+  }
+  return synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
+    ?? `Head ${input.id} completed without producing a textual summary.`;
+}
+
+export interface HeadInferenceDeps {
+  /** The LanguageModel this head reasons with (per-head model override applied upstream). */
+  model: LanguageModel;
+  /** The head's FULL toolset — the accumulator tools (buildHeadAccumulatorTools)
+   *  + the backend's scratch tools (sandbox/shared/split). The caller assembles
+   *  (and may filter) it so each backend keeps control over its allowed surface. */
+  tools: ToolSet;
+  /** Shared findings accumulator — the tools mutate this same instance. */
+  capture: HeadCapture;
+  /** Polled in stopWhen + read for the final status. */
+  isAborted: () => boolean;
+  /** Abort reason, surfaced in errorMessage. */
+  abortReason?: () => string | null;
+}
+
+/**
+ * Run one head's inference loop and assemble its HeadReport. A multi-step
+ * generateText run that stops on abort, the derived step cap, or budget
+ * exhaustion; the final text (last text-bearing step) becomes the summary, with
+ * a recorded-findings fallback. Never throws — failures become an `errored`
+ * report (the controller treats a thrown run() as budget_exceeded anyway).
+ */
+export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
+  const { capture } = deps;
+  const startedAt = Date.now();
+  const maxSteps = Math.min(MAX_HEAD_STEPS, Math.max(1, Math.floor(input.budget.maxTokens / 1200)));
+
+  const usageTotal = () => ({
+    input: capture.tokenUsage.input,
+    output: capture.tokenUsage.output,
+    total: capture.tokenUsage.input + capture.tokenUsage.output,
+  });
+
+  try {
+    const result = await generateText({
+      model: deps.model,
+      system: buildHeadSystemPrompt(input),
+      messages: buildHeadMessages(input),
+      tools: deps.tools,
+      stopWhen: ({ steps }) => {
+        if (deps.isAborted()) return true;
+        if (steps.length >= maxSteps) return true;
+        if (budgetExhausted(input.budget).exhausted) return true;
+        return false;
+      },
+      maxOutputTokens: 2048,
+    });
+
+    const usage = (result as unknown as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+    if (usage) {
+      capture.tokenUsage.input += usage.inputTokens ?? 0;
+      capture.tokenUsage.output += usage.outputTokens ?? 0;
+    }
+
+    const status: HeadReport['status'] = deps.isAborted()
+      ? 'aborted'
+      : budgetExhausted(input.budget).exhausted ? 'budget_exceeded' : 'completed';
+    const abortReason = deps.abortReason?.() ?? null;
+    const summary = extractFinalText(result) || headFallbackSummary(input, status, capture, abortReason);
+
+    return {
+      id: input.id, status, summary,
+      evidence: [...capture.evidence],
+      decisions: [...capture.decisions],
+      artifactRefs: [...capture.artifacts],
+      childHeadIds: [...capture.childHeadIds],
+      toolCalls: [...capture.toolCalls],
+      steps: extractHeadSteps(result.steps),
+      tokenUsage: usageTotal(),
+      wallClockMs: Date.now() - startedAt,
+      errorMessage: abortReason ?? undefined,
+    };
+  } catch (err) {
+    return {
+      id: input.id, status: 'errored',
+      summary: `Head ${input.id} errored: ${err instanceof Error ? err.message : String(err)}`,
+      evidence: [...capture.evidence],
+      decisions: [...capture.decisions],
+      artifactRefs: [...capture.artifacts],
+      childHeadIds: [...capture.childHeadIds],
+      toolCalls: [...capture.toolCalls],
+      steps: [],
+      tokenUsage: usageTotal(),
+      wallClockMs: Date.now() - startedAt,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

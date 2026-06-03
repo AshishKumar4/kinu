@@ -285,6 +285,10 @@ export {
   HeadController, type HeadRuntime, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
+  extractHeadSteps, extractFinalText, synthesizeHeadSummary,
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
+  type HeadInferenceDeps,
 } from './heads/index.js';
 
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
