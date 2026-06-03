@@ -14,6 +14,7 @@ export function HelpView() {
         <span fg="#6b7280">  /tools    </span><span fg="#d1d5db">List available tools</span>{'\n'}
         <span fg="#6b7280">  /memory   </span><span fg="#d1d5db">Show memory contents</span>{'\n'}
         <span fg="#6b7280">  /tree     </span><span fg="#d1d5db">Show MCTS search tree</span>{'\n'}
+        <span fg="#6b7280">  /always   </span><span fg="#d1d5db">Pin always-active skills</span>{'\n'}
         <span fg="#6b7280">  /exit     </span><span fg="#d1d5db">Exit chat</span>
       </text>
     </box>

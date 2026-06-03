@@ -17,13 +17,14 @@ import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
-  HeadRuntime, SerializedMessage, SplitPhaseEvent,
+  HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold,
   EventLog, initEventsHubTables,
   EvolutionEngine,
+  initAgentConfigTable, createAgentConfigStore,
   initFactsTable, createFactsStore, renderFactsBlock,
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
   HeadController, HeadJournal, initHeadsTables,
@@ -34,6 +35,7 @@ import {
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { createCLIHeadRuntime } from './head-runtime.js';
+import { detectOrphanedFibers } from './fiber.js';
 
 /** Build the ai-SDK chat model both frontends drive runChat with — BYO-key
  *  OpenAI-compatible. Shared so model resolution lives in one place (the
@@ -93,6 +95,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly orch: AgentOrchestrator;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly factsStore: FactsStore;
+  private readonly config: AgentConfigStore;
   /** Branching-heads runtime (BackendHost seam) + its controller — local heads
    *  run in-process over isolated ephemeral runtimes. */
   readonly headRuntime: HeadRuntime;
@@ -131,6 +134,10 @@ export class LocalAgentSession implements BackendHost {
       host: this,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
+
+    // agent_config (typed key/value) — backs always-active skills, etc.
+    initAgentConfigTable(this.rt.storage.execRaw);
+    this.config = createAgentConfigStore(this.rt.storage.sql);
 
     // agent_facts world model — exposes the `fact` tool (parity with the DO).
     initFactsTable(this.rt.storage.execRaw);
@@ -190,6 +197,10 @@ export class LocalAgentSession implements BackendHost {
     }));
   }
 
+  /** Skills pinned always-active for this agent (the `/always` command). */
+  getAlwaysActiveSkills(): string[] { return this.config.getAlwaysActiveSkills(); }
+  setAlwaysActiveSkills(names: ReadonlyArray<string>): void { this.config.setAlwaysActiveSkills(names); }
+
   // ── BackendHost ────────────────────────────────────────────────────
 
   broadcast(event: BroadcastEvent): void {
@@ -224,6 +235,23 @@ export class LocalAgentSession implements BackendHost {
   /** End the session: flush a partial evolution window. Call on exit. */
   async end(): Promise<void> {
     await this.orch.flushSession();
+  }
+
+  /**
+   * Recover background jobs orphaned by a previous CLI exit (durable detach). An
+   * interrupted bg:* fiber leaves a row stashed phase 'running'; fail + wake it
+   * (DO onFiberRecovered parity), then clear all stale fiber rows from the prior
+   * run. Call once at startup (no fibers are live yet, so every row is an orphan).
+   */
+  async recoverBackgroundJobs(): Promise<void> {
+    let orphans: ReturnType<typeof detectOrphanedFibers>;
+    try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { return; }
+    for (const o of orphans) {
+      if (o.name.startsWith('bg:')) {
+        try { await this.jobRunner.recover(o.snapshot); } catch { /* best effort */ }
+      }
+      try { this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`; } catch { /* nop */ }
+    }
   }
 
   // ── Internals ──────────────────────────────────────────────────────
@@ -355,10 +383,11 @@ export class LocalAgentSession implements BackendHost {
   private async resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
     try {
       const explicit = extractExplicitInvocations(userText);
+      const alwaysActive = this.config.getAlwaysActiveSkills();
       const anyAutoActivate = BUILTIN_SKILLS.some((s) => s.auto_activate);
-      if (explicit.length === 0 && !anyAutoActivate) return undefined;
+      if (explicit.length === 0 && alwaysActive.length === 0 && !anyAutoActivate) return undefined;
       const available = await discoverSkills(this.getSkillsVfs());
-      const activeSet = resolveActiveSkills({ available, explicit, userMessage: userText, alwaysActive: [] });
+      const activeSet = resolveActiveSkills({ available, explicit, userMessage: userText, alwaysActive });
       if (activeSet.active.length === 0) return undefined;
       for (const r of activeSet.reasons) this.turnInvokedSkills.add(r.name);
       return activeSet;

@@ -41,6 +41,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   });
 
   printChatBanner(info, session.toolNames(), !noAutoEvolve);
+  // Recover any background jobs orphaned by a previous exit (durable detach).
+  void session.recoverBackgroundJobs();
 
   const prompt = () => `${ACCENT(info.name)} ${DIM('›')} `;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: prompt() });
@@ -156,6 +158,20 @@ async function handleSlash(
       const content = await rt.memory.read('memory/MEMORY.md');
       if (content) console.log(`\n${DIM('memory/MEMORY.md:')}\n${MUTED(content.slice(0, 1500))}\n`);
       else console.log(DIM('  Memory is empty.'));
+      return 'ok';
+    }
+    case '/always': {
+      const args = input.split(/\s+/).slice(1);
+      if (args.length === 0) {
+        const cur = session.getAlwaysActiveSkills();
+        console.log(cur.length
+          ? `\n${DIM('Always-active skills:')} ${cur.join(', ')}\n`
+          : DIM('  No always-active skills set. Usage: /always <name>… (or "none" to clear).'));
+      } else {
+        const names = args[0] === 'none' ? [] : args;
+        session.setAlwaysActiveSkills(names);
+        console.log(DIM(names.length ? `  Always-active skills: ${names.join(', ')}` : '  Cleared always-active skills.'));
+      }
       return 'ok';
     }
     case '/tree': {

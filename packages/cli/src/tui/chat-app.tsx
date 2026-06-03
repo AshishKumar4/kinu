@@ -122,6 +122,18 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
         addMessage({ role: 'system', content: content ? `Memory:\n${content.slice(0, 1500)}` : 'Memory is empty.' });
         return;
       }
+      case '/always': {
+        const args = input.split(/\s+/).slice(1);
+        if (args.length === 0) {
+          const cur = session.getAlwaysActiveSkills();
+          addMessage({ role: 'system', content: cur.length ? `Always-active skills: ${cur.join(', ')}` : 'No always-active skills set. Usage: /always <name>… (or "none" to clear).' });
+        } else {
+          const names = args[0] === 'none' ? [] : args;
+          session.setAlwaysActiveSkills(names);
+          addMessage({ role: 'system', content: names.length ? `Always-active skills: ${names.join(', ')}` : 'Cleared always-active skills.' });
+        }
+        return;
+      }
       case '/tree': {
         const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
         if (nodes.length === 0) {
@@ -155,9 +167,10 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
     if (typeof value === 'string') void handleSubmit(value);
   }, [handleSubmit]);
 
-  // Fire a partial-session evolution flush on exit.
+  // Fire a partial-session evolution flush on exit; recover orphaned bg jobs once.
   useEffect(() => {
     globalSessionCleanup = async () => { await session.end(); };
+    void session.recoverBackgroundJobs();
     return () => { globalSessionCleanup = null; };
   }, [session]);
 

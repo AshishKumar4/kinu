@@ -317,6 +317,7 @@ export function printSlashHelp(): void {
   console.log(`  ${ACCENT('/tools')}     List available tools`);
   console.log(`  ${ACCENT('/memory')}    Show agent memory`);
   console.log(`  ${ACCENT('/tree')}      Show MCTS search tree`);
+  console.log(`  ${ACCENT('/always')}    Pin always-active skills (/always <name>… | none)`);
   console.log(`  ${ACCENT('/help')}      Show this help`);
   console.log(`  ${ACCENT('/exit')}      End conversation\n`);
 }

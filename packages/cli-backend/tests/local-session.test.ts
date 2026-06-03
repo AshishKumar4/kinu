@@ -139,6 +139,15 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
 });
 
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
+  test('always-active skills round-trip through agent_config', () => {
+    const { session } = setup();
+    expect(session.getAlwaysActiveSkills()).toEqual([]);
+    session.setAlwaysActiveSkills(['debugging', 'review']);
+    expect(session.getAlwaysActiveSkills()).toEqual(['debugging', 'review']);
+    session.setAlwaysActiveSkills([]);
+    expect(session.getAlwaysActiveSkills()).toEqual([]);
+  });
+
   test('broadcast fans out as a SessionEvent', () => {
     const { session, events } = setup();
     session.broadcast({ type: 'job_update', jobId: 'x' });
@@ -158,6 +167,20 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // The active skill restricts to memory; the skills tool stays reachable so
     // the agent can list/invoke more mid-turn.
     expect(new Set(captured)).toEqual(new Set(['memory', 'skills']));
+  });
+
+  test('recoverBackgroundJobs fails + wakes an orphaned running bg job, clears stale fibers', async () => {
+    const { db, session, events } = setup();
+    // Simulate a previous CLI exit mid-background-job: a running job + its
+    // interrupted bg:* fiber row (stashed phase 'running').
+    db.exec(`INSERT INTO background_jobs (id, kind, status, created_at) VALUES ('bgjob-x', 'run', 'running', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"run"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+
+    expect((db.query(`SELECT status FROM background_jobs WHERE id='bgjob-x'`).get() as { status: string }).status).toBe('failed');
+    expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
+    await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
   });
 
   test('toolNames exposes the full surface (think/fact parity); end() resolves', async () => {
