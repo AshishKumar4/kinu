@@ -5,9 +5,32 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { HeadController, HeadJournal, initHeadsTables } from '@proteus/core';
+import { HeadController, HeadJournal, initHeadsTables, type HeadInput } from '@proteus/core';
 import { createCLIHeadRuntime } from '../src/head-runtime.js';
-import { makeSql, makeExecRaw } from '../src/runtime.js';
+import { makeSql, makeExecRaw, createCLIRuntime } from '../src/runtime.js';
+
+/** Records the tool names the SDK hands a head's generateText call. */
+function capturingHeadModel(answer: string, sink: (names: string[]) => void): LanguageModel {
+  return {
+    specificationVersion: 'v2', provider: 'fake', modelId: 'fake', supportedUrls: {},
+    doGenerate: async (opts: { tools?: Array<{ name: string }> }) => {
+      sink((opts.tools ?? []).map((t) => t.name));
+      return {
+        content: [{ type: 'text', text: answer }],
+        finishReason: 'stop' as const,
+        usage: { inputTokens: 1, outputTokens: 1 },
+        response: { id: 'r', modelId: 'fake', timestamp: new Date(0) },
+        warnings: [],
+      };
+    },
+  } as unknown as LanguageModel;
+}
+
+const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
+  id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
+  inheritedContext: [], budget: { maxDepth: 2, maxTokens: 12_000, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+  mergeStrategy: 'synthesize', ...over,
+});
 
 /** A v2 generateText model that answers differently for a head run vs the merge
  *  synthesis (the merge prompt says "merging the findings of N … heads"). */
@@ -58,6 +81,29 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(result.recommendations).toContain('ship it');
     expect(result.costSummary.headCount).toBe(2);
     expect(result.headIds).toHaveLength(2);
+  });
+
+  test('a head is offered the FULL surface: record + sandbox + shared + split', async () => {
+    let captured: string[] = [];
+    const db = new Database(':memory:');
+    const sharedVfs = createCLIRuntime(db as never, { dbPath: '/tmp/h.db', llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' } }).storage.vfs;
+    const runtime = createCLIHeadRuntime({ model: capturingHeadModel('done', (t) => { captured = t; }), sharedVfs });
+    await (await runtime.spawnHead(aHeadInput())).run();
+    expect(new Set(captured)).toEqual(new Set([
+      'record_evidence', 'record_decision',
+      'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list',
+      'shared_write', 'shared_read', 'shared_list',
+      'split_subheads',
+    ]));
+  });
+
+  test('without a shared VFS, shared_* are omitted (sandbox + split remain)', async () => {
+    let captured: string[] = [];
+    const runtime = createCLIHeadRuntime({ model: capturingHeadModel('done', (t) => { captured = t; }) });
+    await (await runtime.spawnHead(aHeadInput())).run();
+    expect(captured).not.toContain('shared_write');
+    expect(captured).toContain('sandbox_exec');
+    expect(captured).toContain('split_subheads');
   });
 
   test('phase events fire on split and merge', async () => {

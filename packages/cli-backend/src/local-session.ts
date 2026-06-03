@@ -137,7 +137,8 @@ export class LocalAgentSession implements BackendHost {
     this.factsStore = createFactsStore(this.rt.storage.sql);
 
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
-    this.headRuntime = createCLIHeadRuntime({ model: this.model });
+    // The agent's VFS backs the shared findings scratch sibling heads write to.
+    this.headRuntime = createCLIHeadRuntime({ model: this.model, sharedVfs: this.rt.storage.vfs });
     initHeadsTables(this.rt.storage.execRaw);
     this.headController = new HeadController(this.headRuntime, new HeadJournal(this.rt.storage.sql));
 
