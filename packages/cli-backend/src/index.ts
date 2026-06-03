@@ -13,3 +13,4 @@ export {
   LocalAgentSession, resolveChatModel,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
 } from './local-session.js';
+export { createCLIHeadRuntime } from './head-runtime.js';

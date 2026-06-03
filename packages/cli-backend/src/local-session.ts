@@ -17,6 +17,7 @@ import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
+  HeadRuntime, SerializedMessage, SplitPhaseEvent,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
@@ -24,13 +25,15 @@ import {
   EventLog, initEventsHubTables,
   EvolutionEngine,
   initFactsTable, createFactsStore, renderFactsBlock,
-  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createThinkTool,
+  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
+  HeadController, HeadJournal, initHeadsTables,
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
 } from '@proteus/core';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
+import { createCLIHeadRuntime } from './head-runtime.js';
 
 /** Build the ai-SDK chat model both frontends drive runChat with — BYO-key
  *  OpenAI-compatible. Shared so model resolution lives in one place (the
@@ -90,6 +93,10 @@ export class LocalAgentSession implements BackendHost {
   private readonly orch: AgentOrchestrator;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly factsStore: FactsStore;
+  /** Branching-heads runtime (BackendHost seam) + its controller — local heads
+   *  run in-process over isolated ephemeral runtimes. */
+  readonly headRuntime: HeadRuntime;
+  private readonly headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
   private readonly sessionId = `local-${Date.now()}`;
   private readonly history: ModelMessage[] = [];
@@ -128,6 +135,11 @@ export class LocalAgentSession implements BackendHost {
     // agent_facts world model — exposes the `fact` tool (parity with the DO).
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
+
+    // Branching heads — in-process runtime + controller (drives think strategy=heads).
+    this.headRuntime = createCLIHeadRuntime({ model: this.model });
+    initHeadsTables(this.rt.storage.execRaw);
+    this.headController = new HeadController(this.headRuntime, new HeadJournal(this.rt.storage.sql));
 
     // The full built-in surface, now wrapped so >30s calls auto-background:
     // think (single-shot + MCTS; heads needs a subprocess HeadRuntime — P6b),
@@ -378,19 +390,48 @@ export class LocalAgentSession implements BackendHost {
     return '';
   }
 
-  /** The unified `think` tool — single-shot + MCTS strategies. Heads is omitted
-   *  locally (it needs a subprocess HeadRuntime via host.headRuntime, P6b); MCTS
-   *  explores over rt.spawnBranch (createBranchSpawner) just like the DO. */
+  /** The unified `think` tool — single-shot + MCTS + heads. MCTS explores over
+   *  rt.spawnBranch; heads run in-process via the CLI HeadRuntime. Mirrors the
+   *  DO's getThinkTool defaultOptions (mcts session + heads controller/context/
+   *  onPhase). */
   private buildThinkTool(): ToolSet[string] {
     const registry = createStrategyRegistry();
     registry.register(createSingleShotStrategy());
     registry.register(createMCTSStrategy());
+    registry.register(createHeadsStrategy());
     return createThinkTool({
       registry,
       rt: this.rt,
       model: this.model,
-      defaultOptions: () => ({ mcts: { session: this.createMCTSSession() } }),
+      defaultOptions: () => ({
+        mcts: { session: this.createMCTSSession() },
+        heads: {
+          controller: this.headController,
+          inheritedContext: this.readInheritedContext(),
+          onPhase: (e: SplitPhaseEvent) => this.emitHeadPhase(e),
+        },
+      }),
     });
+  }
+
+  /** The recent conversation handed to each spawned head as inherited context
+   *  (capped to bound the head's LLM context). */
+  private readInheritedContext(): SerializedMessage[] {
+    const CAP = 50;
+    return this.history.slice(-CAP).map((m, i) => ({
+      id: `ctx-${i}`,
+      role: (m.role === 'system' || m.role === 'user' || m.role === 'assistant' || m.role === 'tool') ? m.role : 'assistant',
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      createdAt: i,
+    }));
+  }
+
+  /** Fan head_split / head_merge lifecycle out as broadcasts so the frontends
+   *  can render the branch timeline. */
+  private emitHeadPhase(event: SplitPhaseEvent): void {
+    this.broadcast(event.kind === 'split'
+      ? { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale }
+      : { type: 'head_merge', rootId: event.rootId, headCount: event.headCount, mergedNarrative: event.mergedNarrative });
   }
 
   /** A fresh SessionWriter for an MCTS run — an in-memory message tree that also
