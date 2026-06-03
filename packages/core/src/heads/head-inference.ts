@@ -17,8 +17,19 @@ import {
   budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
+import type { Shell } from '../types/primitives.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
+
+/** The VFS surface a head's private sandbox needs — narrowed to the `'utf8'`
+ *  encoding literal so BOTH the cf SqliteFS and the core VFS satisfy it without
+ *  an adapter (their readFile encoding params differ only in that literal). */
+export interface HeadSandboxVfs {
+  readFile(path: string, opts?: { encoding?: 'utf8' }): Promise<Uint8Array | string>;
+  writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  readdir(path: string): Promise<string[]>;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+}
 
 /** Hard ceiling on a head's reasoning steps (budget derives a tighter cap). */
 export const MAX_HEAD_STEPS = 16;
@@ -83,6 +94,78 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         capture.recordDecision(d);
         capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok');
         return 'decision recorded';
+      },
+    }),
+  };
+}
+
+/** A head's private ephemeral sandbox — sandbox_exec/read/write/list over a Shell
+ *  + VFS the backend owns (cf: a per-Facet SqliteFS; CLI: a per-head ephemeral
+ *  runtime). Siblings can't see it. Writes record a file ArtifactRef. */
+export function buildHeadSandboxTools(shell: Shell, vfs: HeadSandboxVfs, capture: HeadCapture): ToolSet {
+  return {
+    sandbox_exec: tool({
+      description: "Run a shell command in this head's ephemeral sandbox.",
+      inputSchema: jsonSchema<{ command: string }>({
+        type: 'object', required: ['command'], properties: { command: { type: 'string' } },
+      }),
+      execute: async ({ command }) => {
+        const r = await shell.exec(command);
+        capture.recordToolCall('sandbox_exec', { command }, `exit=${r.exitCode}`);
+        if (r.exitCode !== 0) return `Exit ${r.exitCode}${r.stderr ? ': ' + r.stderr : ''}`;
+        return r.stdout || '(no output)';
+      },
+    }),
+    sandbox_read: tool({
+      description: "Read a file from this head's ephemeral sandbox.",
+      inputSchema: jsonSchema<{ path: string }>({
+        type: 'object', required: ['path'], properties: { path: { type: 'string' } },
+      }),
+      execute: async ({ path }) => {
+        try {
+          const c = await vfs.readFile(path, { encoding: 'utf8' });
+          capture.recordToolCall('sandbox_read', { path }, 'ok');
+          return typeof c === 'string' ? c : new TextDecoder().decode(c);
+        } catch (err) {
+          capture.recordToolCall('sandbox_read', { path }, 'error');
+          return `read error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    }),
+    sandbox_write: tool({
+      description: "Write content to a file in this head's ephemeral sandbox.",
+      inputSchema: jsonSchema<{ path: string; content: string }>({
+        type: 'object', required: ['path', 'content'],
+        properties: { path: { type: 'string' }, content: { type: 'string' } },
+      }),
+      execute: async ({ path, content }) => {
+        try {
+          const dir = path.split('/').slice(0, -1).join('/');
+          if (dir) { try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ } }
+          await vfs.writeFile(path, content);
+          capture.recordArtifact({ kind: 'file', ref: path, description: `head-written (${content.length}b)` });
+          capture.recordToolCall('sandbox_write', { path, contentLen: content.length }, 'ok');
+          return `wrote ${content.length} bytes to ${path}`;
+        } catch (err) {
+          capture.recordToolCall('sandbox_write', { path }, 'error');
+          return `write error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    }),
+    sandbox_list: tool({
+      description: "List directory contents in this head's ephemeral sandbox.",
+      inputSchema: jsonSchema<{ path: string }>({
+        type: 'object', required: ['path'], properties: { path: { type: 'string' } },
+      }),
+      execute: async ({ path }) => {
+        try {
+          const names = await vfs.readdir(path);
+          capture.recordToolCall('sandbox_list', { path }, 'ok');
+          return names.join('\n');
+        } catch (err) {
+          capture.recordToolCall('sandbox_list', { path }, 'error');
+          return `list error: ${err instanceof Error ? err.message : String(err)}`;
+        }
       },
     }),
   };

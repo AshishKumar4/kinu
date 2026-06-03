@@ -286,9 +286,9 @@ export {
   type SplitPhaseEvent,
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
   extractHeadSteps, extractFinalText, synthesizeHeadSummary,
-  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
   buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
-  type HeadInferenceDeps,
+  type HeadInferenceDeps, type HeadSandboxVfs,
 } from './heads/index.js';
 
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
