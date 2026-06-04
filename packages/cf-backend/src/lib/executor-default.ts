@@ -6,7 +6,7 @@
  */
 export interface ExecutorAvailability { name: string; available: boolean }
 
-const STATIC_PRIORITY = ["sandbox", "nimbus", "laptop"];
+const STATIC_PRIORITY = ["laptop", "nimbus", "sandbox"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
   const isAvailable = (name: string) => executors.some((e) => e.name === name && e.available);

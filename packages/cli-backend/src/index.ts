@@ -13,5 +13,10 @@ export {
   LocalAgentSession, resolveChatModel,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
 } from './local-session.js';
+export {
+  createLocalModelResolver,
+  type LocalModelResolver, type LocalModelResolverConfig,
+  type LocalProviderCredentials, type LocalOpenAICompatCredential,
+} from './model-resolver.js';
 export { createCLIHeadRuntime } from './head-runtime.js';
 export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp.js';

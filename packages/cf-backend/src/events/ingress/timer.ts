@@ -17,7 +17,7 @@
  */
 
 import {
-  type EventLog, type TriggerRegistry, type TriggerRow,
+  type EventLog, type TriggerRegistry,
   type TimerPayload,
 } from '@proteus/core';
 
@@ -40,7 +40,7 @@ export async function handleAlarm(
   let fired = 0;
 
   for (const trigger of due) {
-    const scheduled_fire_at = (trigger as TriggerRow & { next_fire_at?: number }).next_fire_at ?? now;
+    const scheduled_fire_at = trigger.next_fire_at ?? now;
     const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string };
 
     const payload: TimerPayload = {
@@ -75,7 +75,7 @@ export async function handleAlarm(
 
   // Find the next-soonest pending alarm for re-scheduling.
   const nextRow = deps.triggers.list({ state: 'active' })
-    .map(t => (t as TriggerRow & { next_fire_at?: number }).next_fire_at ?? null)
+    .map(t => t.next_fire_at)
     .filter((t): t is number => t !== null && t > now)
     .sort((a, b) => a - b)[0] ?? null;
 

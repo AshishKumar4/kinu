@@ -33,7 +33,7 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
 function installScriptResponse(origin: string): Response {
   // Users run:  PROTEUS_USER=<id> PROTEUS_TOKEN=<t> curl -fsSL <origin>/pc/install | bash
   // The token is user-level (one link, all agents). The script downloads
-  // daemon.js, writes ~/.proteus/{config.json,pc-agent.js}, and starts it.
+  // daemon.js, writes ~/.proteus/{device.json,pc-agent.js}, and starts it.
   // user+token come from env vars so they don't leak into shell history.
   const script = `#!/usr/bin/env bash
 set -eu
@@ -46,10 +46,10 @@ mkdir -p "\$DIR"
 chmod 700 "\$DIR"
 echo "Downloading Proteus device daemon…"
 curl -fsSL "\$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "\$DIR/pc-agent.js"
-cat > "\$DIR/config.json" <<EOF
+cat > "\$DIR/device.json" <<EOF
 {"user":"\$PROTEUS_USER","token":"\$PROTEUS_TOKEN","origin":"\$PROTEUS_ORIGIN"}
 EOF
-chmod 600 "\$DIR/config.json"
+chmod 600 "\$DIR/device.json"
 
 if command -v node >/dev/null 2>&1; then
   echo "Starting daemon (node)…"
@@ -120,7 +120,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 
-const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'config.json');
+const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'device.json');
 const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const USER = cfg.user, TOKEN = cfg.token;
 const ORIGIN = (cfg.origin || 'https://proteus.ashishkumarsingh.com').replace(/^http/, 'ws');

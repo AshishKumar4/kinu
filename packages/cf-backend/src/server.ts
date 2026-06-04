@@ -5,14 +5,15 @@
  *   1. proxyToSandbox — if the host is a preview URL (PORT-SANDBOX-TOKEN.host),
  *      forward to the sandbox container.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
- *   3. /api/health — public build-info endpoint (no auth).
- *   4. AUTH GATE — every other request must carry a valid CF Access JWT
+ *   3. /install.sh, /downloads/proteus, /api/cli/* — CLI install/auth/API.
+ *   4. /api/health — public build-info endpoint (no auth).
+ *   5. AUTH GATE — every other request must carry a valid CF Access JWT
  *      (or DEV_USER_EMAIL in local dev). Public paths are listed in
  *      `isPublicPath`.
- *   5. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
- *   6. /api/agents/<name>/* — owner check via UserDO.hasAgent.
- *   7. /agents/* — Think DOs (chat WebSocket).
- *   8. env.ASSETS fallback — SPA for everything else.
+ *   6. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
+ *   7. /api/agents/<name>/* — owner check via UserDO.hasAgent.
+ *   8. /agents/* — Think DOs (chat WebSocket).
+ *   9. env.ASSETS fallback — SPA for everything else.
  */
 
 import { routeAgentRequest } from "agents";
@@ -22,6 +23,7 @@ import { handleRunEventsRequest } from "./run-events-routes.js";
 import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
 import { handleUserRequest } from "./user/routes.js";
+import { handleCliRequest } from "./cli/routes.js";
 import { handleHubRequest } from "./events/routes.js";
 import {
   authenticateRequest, AccessAuthError, isPublicPath,
@@ -42,6 +44,7 @@ export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
 export { UserDO } from "./user/user-do.js";
+export { CLIAuthDO } from "./cli/auth-do.js";
 
 function authError(e: AccessAuthError): Response {
   return new Response(JSON.stringify({ error: e.message }), {
@@ -119,16 +122,20 @@ export default {
       return handlePcRequest(request, env);
     }
 
-    // 3. Public — build-info health.
+    // 3. CLI install + device-code auth + token-authenticated account API.
+    const cliResp = await handleCliRequest(request, env);
+    if (cliResp) return cliResp;
+
+    // 4. Public — build-info health.
     const healthResp = handleHealthRequest(request);
     if (healthResp) return healthResp;
 
-    // 4. Public bypass list.
+    // 5. Public bypass list.
     if (isPublicPath(url.pathname)) {
       return env.ASSETS.fetch(request);
     }
 
-    // 4b. Webhook delivery — public-but-per-trigger-authenticated. The
+    // 5b. Webhook delivery — public-but-per-trigger-authenticated. The
     //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
     if (isWebhookDeliveryPath(url.pathname)) {
       const m = url.pathname.match(/^\/api\/agents\/([^/]+)\/webhook\//);
@@ -138,7 +145,7 @@ export default {
       }
     }
 
-    // 5. Auth gate. Everything below requires an authenticated identity.
+    // 6. Auth gate. Everything below requires an authenticated identity.
     let identity: AccessIdentity;
     try { identity = await authenticateRequest(request, env); }
     catch (e) {
@@ -148,11 +155,11 @@ export default {
       });
     }
 
-    // 6. /api/user/* — user-scoped routes.
+    // 7. /api/user/* — user-scoped routes.
     const userResp = await handleUserRequest(request, env, identity);
     if (userResp) return userResp;
 
-    // 7. Per-agent routes — verify ownership.
+    // 8. Per-agent routes — verify ownership.
     const agentName = extractAgentName(url.pathname);
     if (agentName) {
       const denial = await ensureAgentOwnership(env, identity, agentName, request);
@@ -174,7 +181,7 @@ export default {
       if (agentResp) return agentResp;
     }
 
-    // 8. SPA fallback.
+    // 9. SPA fallback.
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;

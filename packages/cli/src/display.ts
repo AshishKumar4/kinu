@@ -291,22 +291,28 @@ export function printHelp(): void {
   console.log(`${DIM('Self-evolving AI agent with MCTS exploration')}\n`);
   console.log(`${chalk.bold('Usage:')}  proteus <command> [options]\n`);
   console.log(`${chalk.bold('Commands:')}`);
-  console.log(`  ${ACCENT('create')} <name>    Create a new agent identity`);
-  console.log(`  ${ACCENT('chat')}   <name>    Interactive conversation with an agent`);
-  console.log(`  ${ACCENT('status')} <name>    Show agent state and evolution history`);
-  console.log(`  ${ACCENT('evolve')} <name>    Trigger an MCTS evolution cycle`);
+  console.log(`  ${ACCENT('auth')}             Sign into your Proteus account`);
+  console.log(`  ${ACCENT('create')} [name]    Create a cloud or local agent`);
+  console.log(`  ${ACCENT('run')}    <name>    Run an agent once, or chat with local agents`);
+  console.log(`  ${ACCENT('chat')}   <name>    Interactive local conversation`);
+  console.log(`  ${ACCENT('alias')}  <agent>   Create an executable alias command`);
+  console.log(`  ${ACCENT('connect')}          Link this computer as the execution engine`);
+  console.log(`  ${ACCENT('status')} <name>    Show local agent state and evolution history`);
+  console.log(`  ${ACCENT('evolve')} <name>    Trigger a local MCTS evolution cycle`);
   console.log(`  ${ACCENT('list')}             List all agents`);
-  console.log(`  ${ACCENT('export')} <name>    Export agent database`);
-  console.log(`  ${ACCENT('import')} <file>    Import agent database`);
   console.log(`\n${chalk.bold('Options:')}`);
+  console.log(`  ${DIM('--origin <url>')}    Proteus app origin`);
+  console.log(`  ${DIM('--mode <mode>')}     Agent mode: cloud or local`);
+  console.log(`  ${DIM('--alias <name>')}    Alias command for create`);
   console.log(`  ${DIM('--model <id>')}      Model ID ${DIM('(env: PROTEUS_MODEL)')}`);
   console.log(`  ${DIM('--base-url <url>')}  LLM API base URL ${DIM('(env: PROTEUS_BASE_URL)')}`);
   console.log(`  ${DIM('--auth <header>')}   Auth header ${DIM('(env: PROTEUS_AUTH)')}`);
   console.log(`  ${DIM('--purpose <text>')}  Agent purpose (for create)`);
   console.log(`\n${chalk.bold('Examples:')}`);
-  console.log(`  ${DIM('$')} proteus create atlas --purpose "A code review expert"`);
-  console.log(`  ${DIM('$')} proteus chat atlas`);
-  console.log(`  ${DIM('$')} proteus evolve atlas --budget 3\n`);
+  console.log(`  ${DIM('$')} proteus auth`);
+  console.log(`  ${DIM('$')} proteus create jarvis --mode cloud --alias jarvis`);
+  console.log(`  ${DIM('$')} jarvis "review this repo"`);
+  console.log(`  ${DIM('$')} proteus desktop connect\n`);
 }
 
 // ── Chat slash-command help ──────────────────────────────────────
@@ -315,9 +321,12 @@ export function printSlashHelp(): void {
   console.log(`\n${chalk.bold('Commands:')}`);
   console.log(`  ${ACCENT('/status')}    Show agent status`);
   console.log(`  ${ACCENT('/tools')}     List available tools`);
+  console.log(`  ${ACCENT('/model')}     Show or set the active model (/model <spec>)`);
+  console.log(`  ${ACCENT('/models')}    List locally configured model providers`);
   console.log(`  ${ACCENT('/memory')}    Show agent memory`);
   console.log(`  ${ACCENT('/tree')}      Show MCTS search tree`);
   console.log(`  ${ACCENT('/always')}    Pin always-active skills (/always <name>… | none)`);
+  console.log(`  ${ACCENT('/approval')}  Show or set shell approval mode`);
   console.log(`  ${ACCENT('/help')}      Show this help`);
   console.log(`  ${ACCENT('/exit')}      End conversation\n`);
 }

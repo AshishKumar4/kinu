@@ -6,6 +6,10 @@
 import { Command } from 'commander';
 import { createCommand } from '../src/commands/create.js';
 import { chatCommand } from '../src/commands/chat.js';
+import { runCommand } from '../src/commands/run.js';
+import { authCommand, logoutCommand, whoamiCommand } from '../src/commands/auth.js';
+import { aliasCommand, aliasesCommand, unaliasCommand } from '../src/commands/alias.js';
+import { desktopCommand } from '../src/commands/desktop.js';
 import { evolveCommand } from '../src/commands/evolve.js';
 import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
@@ -29,10 +33,37 @@ const llmOpts = (cmd: Command) => cmd
 
 llmOpts(
   program
-    .command('create <name>')
+    .command('create [name]')
     .description('Create a new agent identity')
-    .option('--purpose <text>', 'Agent purpose'),
+    .option('--purpose <text>', 'Agent purpose')
+    .option('--mode <mode>', 'Agent mode: cloud or local')
+    .option('--alias <name>', 'Create an executable alias command')
+    .option('--no-alias-agent', 'Do not create an alias shim'),
 ).action(wrapAction(createCommand));
+
+program
+  .command('auth')
+  .description('Sign the CLI into your Proteus account')
+  .option('--origin <url>', 'Proteus app origin')
+  .action(wrapAction(authCommand));
+
+program
+  .command('whoami')
+  .description('Show the signed-in Proteus account')
+  .option('--origin <url>', 'Proteus app origin')
+  .action(wrapAction(whoamiCommand));
+
+program
+  .command('logout')
+  .description('Sign out of the Proteus CLI')
+  .option('--origin <url>', 'Proteus app origin')
+  .action(wrapAction(logoutCommand));
+
+llmOpts(
+  program
+    .command('run <name> [prompt...]')
+    .description('Run an agent once, or open chat when no prompt is provided'),
+).action(wrapAction(runCommand));
 
 llmOpts(
   program
@@ -59,6 +90,33 @@ program
   .command('list')
   .description('List all agents')
   .action(wrapAction(listCommand));
+
+program
+  .command('alias <agent> [alias]')
+  .description('Create an executable command alias for an agent')
+  .action(wrapAction(aliasCommand));
+
+program
+  .command('unalias <alias>')
+  .description('Remove an executable command alias')
+  .action(wrapAction(unaliasCommand));
+
+program
+  .command('aliases')
+  .description('List configured agent aliases')
+  .action(wrapAction(aliasesCommand));
+
+program
+  .command('desktop [action]')
+  .description('Connect or inspect the local desktop execution daemon')
+  .option('--label <name>', 'Device label')
+  .action(wrapAction(desktopCommand));
+
+program
+  .command('connect')
+  .description('Link this computer as the desktop execution daemon')
+  .option('--label <name>', 'Device label')
+  .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 
 program
   .command('export <name>')

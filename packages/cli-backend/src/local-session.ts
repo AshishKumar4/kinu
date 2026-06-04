@@ -17,30 +17,36 @@ import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
-  HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore,
+  HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
+  IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold,
   EventLog, initEventsHubTables,
+  TriggerRegistry, nextCronFire,
   EvolutionEngine,
   initAgentConfigTable, createAgentConfigStore,
   initFactsTable, createFactsStore, renderFactsBlock,
+  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
   HeadController, HeadJournal, initHeadsTables,
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
+  type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
+import { createLocalAgentSelfProvider } from './agent-self.js';
 import { createCLIHeadRuntime } from './head-runtime.js';
 import { detectOrphanedFibers } from './fiber.js';
 import { connectMcpServers, type McpServerConfig } from './mcp.js';
+import type { LocalModelResolver } from './model-resolver.js';
 
-/** Build the ai-SDK chat model both frontends drive runChat with — BYO-key
- *  OpenAI-compatible. Shared so model resolution lives in one place (the
- *  gateway path layers on here in P6). */
+/** Build the legacy ai-SDK chat model both frontends drive runChat with —
+ *  BYO-key OpenAI-compatible. Provider-style model switching uses
+ *  createLocalModelResolver and agent_config.model. */
 export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
   return createChatModel({
     kind: 'openai-compat', name: llm.name, baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
@@ -48,7 +54,7 @@ export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
 }
 
 /** Tools whose calls auto-detach to the background past the 30s threshold —
- *  the same set the cf-backend wraps (think is CF-only today; harmless here). */
+ *  the same set the cf-backend wraps. */
 const BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
 
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
@@ -68,12 +74,51 @@ export type SessionEvent =
   | { type: 'evolution'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent };
 
+export interface LocalPublishEventInput {
+  descriptor: IngressDescriptor;
+  now?: number;
+  caused_by?: string;
+}
+
+export interface LocalPublishEventResult {
+  event_id: string;
+  admitted: boolean;
+}
+
+export interface LocalTimerTriggerOpts {
+  cron?: string;
+  atMs?: number;
+  label?: string;
+  payload?: Record<string, unknown>;
+  trust?: 'authenticated' | 'owner';
+}
+
+export interface LocalTriggerView {
+  id: string;
+  kind: string;
+  spec: Record<string, unknown>;
+  creator_trust: TrustLevel;
+  state: TriggerRow['state'];
+  created_at: number;
+  paused_at: number | null;
+  revoked_at: number | null;
+  rate_limit_per_min: number;
+  next_fire_at: number | null;
+  last_fire_at: number | null;
+  fire_count: number;
+}
+
 export interface LocalAgentSessionOpts {
   rt: AgentRuntime;
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
   db: LocalSessionDb;
   /** The ai-SDK chat model runChat drives. Build via resolveChatModel(llmConfig). */
   model: LanguageModel;
+  /** Display/canonical spec for static-model sessions with no modelResolver. */
+  modelSpec?: string;
+  /** Optional provider-style resolver. When present, agent_config.model controls
+   *  the active chat model exactly like the DO backend's setModel/getModel path. */
+  modelResolver?: LocalModelResolver;
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
@@ -88,19 +133,31 @@ interface QueueItem {
   resolve: () => void;
 }
 
+type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
+
 export class LocalAgentSession implements BackendHost {
   private readonly rt: AgentRuntime;
-  private readonly model: LanguageModel;
-  private readonly tools: ToolSet;
+  private readonly fallbackModel: LanguageModel;
+  private readonly fallbackModelSpec: string;
+  private readonly modelResolver: LocalModelResolver | null;
+  private cachedModel: LanguageModel | null = null;
+  private cachedModelSpec: string | null = null;
+  private tools: ToolSet = {};
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
+  private readonly jobs: BackgroundJobStore;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
+  private readonly eventLog: EventLog;
+  private readonly triggerRegistry: TriggerRegistry;
+  private alarmTimer: ReturnType<typeof setTimeout> | null = null;
+  private scheduledAlarmAt: number | null = null;
+  private ended = false;
   /** Branching-heads runtime (BackendHost seam) + its controller — local heads
    *  run in-process over isolated ephemeral runtimes. */
-  readonly headRuntime: HeadRuntime;
-  private readonly headController: HeadController;
+  private _headRuntime: HeadRuntime;
+  private headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
   private readonly sessionId = `local-${Date.now()}`;
   private readonly history: ModelMessage[] = [];
@@ -126,7 +183,9 @@ export class LocalAgentSession implements BackendHost {
   constructor(opts: LocalAgentSessionOpts) {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
-    this.model = opts.model;
+    this.fallbackModel = opts.model;
+    this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
+    this.modelResolver = opts.modelResolver ?? null;
 
     this.engine = new EvolutionEngine(this.rt, { enabled: !opts.noAutoEvolve });
     this.engine.onEvent((e) => this.emit({ type: 'evolution', event: e.type, message: e.message }));
@@ -134,8 +193,9 @@ export class LocalAgentSession implements BackendHost {
     // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
     // this session as the BackendHost (enqueueTurn wakes the agent).
     initBackgroundJobsTable(this.rt.storage.execRaw);
+    this.jobs = new BackgroundJobStore(this.rt.storage.sql);
     this.jobRunner = new BackgroundJobRunner({
-      store: new BackgroundJobStore(this.rt.storage.sql),
+      store: this.jobs,
       fiber: this.rt.schedule.fiber,
       host: this,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
@@ -149,55 +209,43 @@ export class LocalAgentSession implements BackendHost {
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
 
-    // Branching heads — in-process runtime + controller (drives think strategy=heads).
-    // The agent's VFS backs the shared findings scratch sibling heads write to.
-    this.headRuntime = createCLIHeadRuntime({ model: this.model, sharedVfs: this.rt.storage.vfs });
+    // Voyager-style curriculum table (agent.* parity with the DO).
+    initCurriculumTable(this.rt.storage.execRaw);
+
     initHeadsTables(this.rt.storage.execRaw);
-    this.headController = new HeadController(this.headRuntime, new HeadJournal(this.rt.storage.sql));
+    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs });
+    this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
-    // The full built-in surface, now wrapped so >30s calls auto-background:
-    // think (single-shot + MCTS; heads needs a subprocess HeadRuntime — P6b),
-    // fact, skills, + the Node execute/craft factories.
-    const rawTools = buildBuiltinTools({
-      rt: this.rt,
-      craftedToolExecute: createNodeCraftedExecute(),
-      createExecuteTool: createNodeExecuteToolFactory({
-        vfs: this.rt.storage.vfs,
-        memory: this.rt.memory,
-        shell: this.rt.shell,
-      }) as never,
-      codemodeLoader: { __cli: true } as unknown,
-      thinkTool: this.buildThinkTool(),
-      facts: this.factsStore,
-      skills: {
-        vfs: this.getSkillsVfs(),
-        recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
-        currentlyInvoked: () => Array.from(this.turnInvokedSkills),
-      },
-    });
-    this.tools = this.wrapToolsForBackground(rawTools);
-
-    // The EventsHub substrate (reactor source of truth) — provisioned so the
-    // orchestrator's drain is wired; local trigger/MCP sources land in P6.
+    // The EventsHub substrate (reactor source of truth). Local external
+    // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
     const hubSql = makeHubSql(opts.db);
     initEventsHubTables(hubSql);
-    const eventLog = new EventLog(hubSql);
+    this.eventLog = new EventLog(hubSql);
+    const alarmScheduler: AlarmScheduler = {
+      scheduleAt: (ts) => this.scheduleLocalAlarm(ts),
+      currentAlarm: () => this.scheduledAlarmAt,
+    };
+    this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
 
     this.orch = new AgentOrchestrator({
       host: this,
       engine: this.engine,
-      eventLog,
+      eventLog: this.eventLog,
       sessionReflectionInterval: opts.sessionReflectionInterval,
     });
+    this.ensureModelState();
+    this.rearmLocalAlarm();
   }
 
   /** Tool names for the banner (built-ins + connected MCP). */
   toolNames(): string[] {
+    this.ensureModelState();
     return [...Object.keys(this.tools), ...Object.keys(this.extraTools)];
   }
 
   /** Built-in + MCP tools with descriptions for the /tools view. */
   describeTools(): Array<{ name: string; description: string }> {
+    this.ensureModelState();
     return Object.entries({ ...this.tools, ...this.extraTools }).map(([name, t]) => ({
       name, description: (t as { description?: string }).description ?? '',
     }));
@@ -207,10 +255,174 @@ export class LocalAgentSession implements BackendHost {
   getAlwaysActiveSkills(): string[] { return this.config.getAlwaysActiveSkills(); }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { this.config.setAlwaysActiveSkills(names); }
 
+  getShellApprovalMode(): { mode: ShellApprovalMode } {
+    return { mode: this.config.getShellApprovalMode() };
+  }
+
+  setShellApprovalMode(mode: ShellApprovalMode): { ok: true; mode: ShellApprovalMode } {
+    this.config.setShellApprovalMode(mode);
+    this.invalidateModelState();
+    this.ensureModelState();
+    return { ok: true, mode };
+  }
+
+  /** Stored model spec, or null when unset (parity with DO getStoredModelSpec). */
+  getStoredModelSpec(): { spec: string | null } {
+    return { spec: this.config.getModel() };
+  }
+
+  /** Effective normalized model spec used for new turns. */
+  getEffectiveModelSpec(): string {
+    return this.normalizeModelSpec(this.config.getModel());
+  }
+
+  /** Validate + store a new model spec. Effective on the next turn and for new
+   *  think/head runs, matching the DO backend's setModel behavior. */
+  setModel(spec: string): { ok: true; spec: string } {
+    const normalized = this.normalizeModelSpec(spec);
+    this.config.setModel(normalized);
+    this.invalidateModelState();
+    this.ensureModelState();
+    return { ok: true, spec: normalized };
+  }
+
+  listModelProviders() {
+    return this.modelResolver?.listProviders() ?? Promise.resolve([]);
+  }
+
+  listAvailableModels() {
+    return this.modelResolver?.listModels() ?? Promise.resolve([]);
+  }
+
+  /** Local ingress parity with the DO EventsHub routes: publish through the
+   *  append-only EventLog, then wake the same serialized turn queue. */
+  async publishEvent(input: LocalPublishEventInput): Promise<LocalPublishEventResult> {
+    const { id, admitted } = this.eventLog.publish({
+      descriptor: input.descriptor,
+      now: input.now ?? Date.now(),
+      caused_by: input.caused_by,
+    });
+    await this.orch.drainPendingEvents();
+    return { event_id: id, admitted };
+  }
+
+  pendingEvents(limit = 50): ProteusEvent[] {
+    return this.eventLog.pending({ limit });
+  }
+
+  listRecentEvents(opts: { variant?: EventVariant; since?: number; limit?: number } = {}): ProteusEvent[] {
+    return this.eventLog.query(opts);
+  }
+
+  deferEvent(eventId: string, revisitAt: RevisitCondition): { ok: true } {
+    this.eventLog.defer(eventId, revisitAt);
+    return { ok: true };
+  }
+
+  dismissEvent(eventId: string, reason: string): { ok: true } {
+    this.eventLog.dismiss(eventId, reason, 'tool');
+    return { ok: true };
+  }
+
+  listTriggers(): { triggers: LocalTriggerView[] } {
+    return { triggers: this.triggerRegistry.list().map(triggerToView) };
+  }
+
+  cancelTrigger(trigger_id: string): { ok: true; changed: boolean } {
+    const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
+    this.rearmLocalAlarm();
+    return { ok: true, changed };
+  }
+
+  createTimerTrigger(opts: LocalTimerTriggerOpts): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
+    const now = Date.now();
+    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
+    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
+    if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
+    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
+    const id = this.triggerRegistry.register({
+      kind,
+      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+      creator_trust: opts.trust ?? 'authenticated',
+      next_fire_at: nextFireAt ?? undefined,
+    }, now);
+    return { id, kind, nextFireAt };
+  }
+
+  async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
+    if (this.ended) return { fired: 0, nextAlarmAt: null };
+    if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
+    const due = this.triggerRegistry.due(now);
+    let fired = 0;
+    for (const trigger of due) {
+      if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
+      fired += 1;
+      const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string };
+      const scheduled_fire_at = trigger.next_fire_at ?? now;
+
+      this.eventLog.publish({
+        descriptor: {
+          ingress: 'timer_alarm',
+          variant: 'timer',
+          payload: {
+            trigger_id: trigger.id,
+            scheduled_fire_at,
+            label: spec.label,
+            user_payload: spec.payload,
+          },
+          trigger_creator_trust: trigger.creator_trust,
+        },
+        now,
+      });
+
+      if (trigger.kind === 'timer_cron') {
+        const next = spec.cron ? nextCronFire(spec.cron, now) : null;
+        this.triggerRegistry.markFired(trigger.id, now, next);
+      } else {
+        this.triggerRegistry.markFired(trigger.id, now, null);
+        this.triggerRegistry.revoke(trigger.id, now);
+      }
+    }
+
+    if (fired > 0) await this.orch.drainPendingEvents();
+    this.rearmLocalAlarm();
+    return { fired, nextAlarmAt: this.scheduledAlarmAt };
+  }
+
+  async jobResult(jobId: string): Promise<BackgroundJob | null> {
+    try { return this.jobs.get(jobId); } catch { return null; }
+  }
+
+  async listBackgroundJobs(limit = 20): Promise<BackgroundJob[]> {
+    try { return this.jobs.list(limit); } catch { return []; }
+  }
+
+  async proposeCurriculumTasks(count?: number) {
+    return proposeNextTasks({
+      rt: this.rt,
+      judge: this.rt.judgeModel ?? this.rt.llm,
+      count,
+    });
+  }
+
+  async listCurriculumTasks(status?: CurriculumStatus) {
+    return listProposedTasks(this.rt, status);
+  }
+
+  async setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<{ ok: true }> {
+    updateProposedTaskStatus(this.rt, id, status);
+    return { ok: true };
+  }
+
   // ── BackendHost ────────────────────────────────────────────────────
 
   broadcast(event: BroadcastEvent): void {
     this.emit({ type: 'broadcast', event });
+  }
+
+  get headRuntime(): HeadRuntime {
+    this.ensureModelState();
+    return this._headRuntime;
   }
 
   /** BackendHost seam — the connected MCP tools, merged into each turn. */
@@ -254,6 +466,8 @@ export class LocalAgentSession implements BackendHost {
 
   /** End the session: flush a partial evolution window + disconnect MCP. */
   async end(): Promise<void> {
+    this.ended = true;
+    this.clearLocalAlarm();
     await this.orch.flushSession();
     try { await this.mcpClose?.(); } catch { /* best effort */ }
   }
@@ -281,6 +495,44 @@ export class LocalAgentSession implements BackendHost {
     try { this.onEvent(event); } catch { /* a frontend render error must not kill the loop */ }
   }
 
+  private scheduleLocalAlarm(ts: number): void {
+    if (this.ended) return;
+    if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= ts) return;
+    this.clearLocalAlarm();
+    this.scheduledAlarmAt = ts;
+    const delay = Math.max(0, ts - Date.now());
+    this.alarmTimer = setTimeout(() => {
+      this.alarmTimer = null;
+      this.scheduledAlarmAt = null;
+      void this.fireDueTriggers();
+    }, Math.min(delay, 2_147_483_647));
+  }
+
+  private clearLocalAlarm(): void {
+    if (this.alarmTimer) clearTimeout(this.alarmTimer);
+    this.alarmTimer = null;
+    this.scheduledAlarmAt = null;
+  }
+
+  private rearmLocalAlarm(): void {
+    if (this.ended) return;
+    const next = this.nextScheduledTriggerAt();
+    if (next === null) {
+      if (this.scheduledAlarmAt !== null) this.clearLocalAlarm();
+      return;
+    }
+    if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt !== next) this.clearLocalAlarm();
+    this.scheduleLocalAlarm(next);
+  }
+
+  private nextScheduledTriggerAt(): number | null {
+    const upcoming = this.triggerRegistry.list({ state: 'active' })
+      .map((t) => t.next_fire_at)
+      .filter((t): t is number => typeof t === 'number')
+      .sort((a, b) => a - b)[0];
+    return upcoming ?? null;
+  }
+
   /** Single serialized drain of the turn queue — idempotent, so a concurrent
    *  enqueueTurn just appends and the running pump picks it up. */
   private async pump(): Promise<void> {
@@ -304,6 +556,7 @@ export class LocalAgentSession implements BackendHost {
     const startedAt = Date.now();
     this.orch.beginTurn(startedAt);
     this.turnInvokedSkills.clear();
+    const model = this.ensureModelState();
 
     const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
     const executorNames = (this.rt.executionRouter?.listExecutors() ?? []).map((e) => e.name);
@@ -325,7 +578,7 @@ export class LocalAgentSession implements BackendHost {
 
     try {
       for await (const ev of runChat({
-        model: this.model,
+        model,
         system: systemPrompt,
         history: this.history,
         tools: turnTools,
@@ -398,8 +651,8 @@ export class LocalAgentSession implements BackendHost {
     return this.skillsVfs;
   }
 
-  /** Resolve the skills active for this turn — explicit @invocations + builtin
-   *  auto-activation (always-active config is a CLI follow-up). Mirrors the DO's
+  /** Resolve the skills active for this turn — explicit @invocations,
+   *  always-active config, and builtin auto-activation. Mirrors the DO's
    *  beforeTurn: only scans the VFS when activation is plausible, and records the
    *  activated names onto the per-turn invoke tracker for skills.list. */
   private async resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
@@ -454,7 +707,7 @@ export class LocalAgentSession implements BackendHost {
     return createThinkTool({
       registry,
       rt: this.rt,
-      model: this.model,
+      model: this.cachedModel ?? this.fallbackModel,
       defaultOptions: () => ({
         mcts: { session: this.createMCTSSession() },
         heads: {
@@ -540,6 +793,56 @@ export class LocalAgentSession implements BackendHost {
     this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
       VALUES (${crypto.randomUUID()}, ${this.sessionId}, ${msgId}, ${'assistant'}, ${assistantText})`;
   }
+
+  private normalizeModelSpec(spec: string | null): string {
+    if (this.modelResolver) return this.modelResolver.normalizeSpecSync(spec);
+    const s = (spec ?? '').trim();
+    if (!s || s === this.fallbackModelSpec) return this.fallbackModelSpec;
+    throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
+  }
+
+  private ensureModelState(): LanguageModel {
+    const spec = this.normalizeModelSpec(this.config.getModel());
+    if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
+    const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.fallbackModel;
+    this.cachedModel = model;
+    this.cachedModelSpec = spec;
+    this.rebuildModelBoundState(model);
+    return model;
+  }
+
+  private invalidateModelState(): void {
+    this.cachedModel = null;
+    this.cachedModelSpec = null;
+  }
+
+  private rebuildModelBoundState(model: LanguageModel): void {
+    // Branching heads — in-process runtime + controller (drives think strategy=heads).
+    // The agent's VFS backs the shared findings scratch sibling heads write to.
+    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs });
+    this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
+
+    const rawTools = buildBuiltinTools({
+      rt: this.rt,
+      shellApprovalMode: this.config.getShellApprovalMode(),
+      craftedToolExecute: createNodeCraftedExecute(),
+      createExecuteTool: createNodeExecuteToolFactory({
+        vfs: this.rt.storage.vfs,
+        memory: this.rt.memory,
+        shell: this.rt.shell,
+        extraProviders: [createLocalAgentSelfProvider(this)],
+      }) as never,
+      codemodeLoader: { __cli: true } as unknown,
+      thinkTool: this.buildThinkTool(),
+      facts: this.factsStore,
+      skills: {
+        vfs: this.getSkillsVfs(),
+        recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
+        currentlyInvoked: () => Array.from(this.turnInvokedSkills),
+      },
+    });
+    this.tools = this.wrapToolsForBackground(rawTools);
+  }
 }
 
 /** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */
@@ -556,6 +859,23 @@ function makeHubSql(db: LocalSessionDb): {
       stmt.run(...bindings);
       return { toArray: () => [] };
     },
+  };
+}
+
+function triggerToView(t: TriggerRow): LocalTriggerView {
+  return {
+    id: t.id,
+    kind: t.kind,
+    spec: t.spec,
+    creator_trust: t.creator_trust,
+    state: t.state,
+    created_at: t.created_at,
+    paused_at: t.paused_at,
+    revoked_at: t.revoked_at,
+    rate_limit_per_min: t.rate_limit_per_min,
+    next_fire_at: t.next_fire_at,
+    last_fire_at: t.last_fire_at,
+    fire_count: t.fire_count,
   };
 }
 

@@ -7,11 +7,11 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 
-const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'config.json');
+const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'device.json');
 const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-const AGENT = cfg.agent, TOKEN = cfg.token;
+const USER = cfg.user, TOKEN = cfg.token;
 const ORIGIN = (cfg.origin || 'https://proteus.ashishkumarsingh.com').replace(/^http/, 'ws');
-const WS_URL = `${ORIGIN}/pc/connect?agent=${encodeURIComponent(AGENT)}&token=${encodeURIComponent(TOKEN)}`;
+const WS_URL = `${ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&token=${encodeURIComponent(TOKEN)}`;
 
 let WS;
 try { WS = require('ws'); } catch { /* Node 22+ has global WebSocket */ }
@@ -61,7 +61,7 @@ function connect() {
   ws.addEventListener('open', () => {
     log('Connected');
     backoff = 1000;
-    ws.send(JSON.stringify({ type: 'HELLO', agent: AGENT, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
+    ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
   });
   ws.addEventListener('message', (ev) => {
     try { handle(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), ws); }

@@ -1,8 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import * as readline from 'node:readline';
 import { Database } from 'bun:sqlite';
-import { openAgentCLI } from '@proteus/cli-backend';
-import { agentDbPath, listAgentDirs, resolveLLMConfig, resolveMcpServers } from '../config.js';
+import { createLocalModelResolver, openAgentCLI } from '@proteus/cli-backend';
+import { agentDbPath, listAgentDirs, resolveAgentRef, resolveLLMConfig, resolveMcpServers, resolveProviderCredentials } from '../config.js';
 import { runTuiChat } from '../tui/chat-app.js';
 import { runChatLoop } from '../chat-loop.js';
 import { printError, ACCENT, DIM } from '../display.js';
@@ -35,6 +35,13 @@ export async function chatCommand(name: string | undefined, opts: {
     }
   }
 
+  const configured = name ? resolveAgentRef(name) : null;
+  if (configured?.mode === 'cloud') {
+    console.log(`\n${DIM('Cloud agents currently use one-shot CLI turns:')} ${ACCENT(`proteus run ${configured.name} "do XYZ"`)}\n`);
+    return;
+  }
+  if (configured?.mode === 'local') name = configured.localName ?? configured.name;
+
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
     printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
@@ -42,18 +49,23 @@ export async function chatCommand(name: string | undefined, opts: {
   }
 
   const llmConfig = resolveLLMConfig(opts);
+  const providerCredentials = resolveProviderCredentials();
+  const modelResolver = createLocalModelResolver({
+    llm: llmConfig,
+    credentials: providerCredentials,
+  });
   const mcpServers = resolveMcpServers();
   const db = new Database(dbPath);
-  const { rt, info } = openAgentCLI(db, dbPath, { llm: llmConfig });
+  const { rt, info } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials });
   const dbSize = statSync(dbPath).size;
-  const refreshInfo = () => openAgentCLI(db, dbPath, { llm: llmConfig }).info;
+  const refreshInfo = () => openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials }).info;
 
   // Use TUI by default, fall back to classic readline with --classic flag
   // or when stdin is not a TTY (piped input)
   if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop({ rt, db, info, dbSize, llmConfig, refreshInfo, mcpServers });
+    await runChatLoop({ rt, db, info, dbSize, llmConfig, modelResolver, refreshInfo, mcpServers });
   } else {
-    await runTuiChat({ rt, db, info, dbSize, llmConfig, refreshInfo, noAutoEvolve: false, mcpServers });
+    await runTuiChat({ rt, db, info, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve: false, mcpServers });
   }
   db.close();
 }

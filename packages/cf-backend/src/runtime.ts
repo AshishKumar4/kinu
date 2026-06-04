@@ -209,8 +209,17 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
       const stub = userDOStubFor(agent);
       if (!stub) { deviceConnected = false; throw new Error('no device connected'); }
       try {
+        const cwd = typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
+          ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
+          : null;
+        const effectiveParams = method === 'exec' && cwd
+          ? [`cd ${shellQuote(cwd)} && ${String(params[0] ?? '')}`]
+          : params;
         // Pass the agent's name so the hub can enforce per-agent consent.
-        const result = await stub.deviceRpc(method, params, { agentName: agent.name });
+        const result = await stub.deviceRpc(method, effectiveParams, {
+          agentName: agent.name,
+          trustedCliTurn: cwd != null,
+        });
         deviceConnected = true;
         return result;
       } catch (err) {
@@ -265,6 +274,10 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     vectorStore,
     sandboxHandle,
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 // ── Adapters: agent-utils → core interfaces ──────────────────────

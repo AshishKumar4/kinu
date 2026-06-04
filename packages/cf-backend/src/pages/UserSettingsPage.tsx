@@ -20,9 +20,9 @@ import {
 import {
   getProfile, listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
-  listAvailableModels, getConfig, setConfig,
+  listAvailableModels, getConfig, setConfig, getCliSetup,
   type UserProfile, type CredentialSummary, type CodexStatus,
-  type ModelMenuEntry, type DeviceFlowStart,
+  type ModelMenuEntry, type DeviceFlowStart, type CliSetup,
 } from "../lib/user-api";
 
 const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
@@ -52,24 +52,27 @@ export default function UserSettingsPage() {
   const [codex, setCodex] = useState<CodexStatus | null>(null);
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
   const [defaults, setDefaults] = useState<{ model: string | null }>({ model: null });
+  const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       setErr(null);
-      const [p, c, k, m, defaultModel] = await Promise.all([
+      const [p, c, k, m, defaultModel, cli] = await Promise.all([
         getProfile().catch(() => null),
         listCredentials().catch(() => []),
         codexStatus().catch(() => null),
         listAvailableModels().catch(() => []),
         getConfig('default_model').catch(() => ({ key: 'default_model', value: null })),
+        getCliSetup().catch(() => null),
       ]);
       setProfile(p);
       setCreds(c ?? []);
       setCodex(k);
       setModels(m ?? []);
       setDefaults({ model: defaultModel?.value ?? null });
+      setCliSetup(cli);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -109,6 +112,13 @@ export default function UserSettingsPage() {
               <div className="p-text-3">Member since</div>
               <div>{profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString() : '—'}</div>
             </div>
+          </div>
+        </Card>
+
+        <Card title="CLI" icon={KeyIcon}>
+          <div className="space-y-2">
+            <CommandCopy label="Install" command={cliSetup?.installCommand ?? 'curl -fsSL https://proteus.ashishkmr472.workers.dev/install.sh | sh'} />
+            <CommandCopy label="Sign in" command={cliSetup?.authCommand ?? 'proteus auth --origin https://proteus.ashishkmr472.workers.dev'} />
           </div>
         </Card>
 
@@ -161,6 +171,27 @@ export default function UserSettingsPage() {
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function CommandCopy({ label, command }: { label: string; command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2 rounded-md border p-border p-2">
+      <div className="w-14 shrink-0 text-[11px] p-text-3">{label}</div>
+      <code className="font-mono text-[11px] p-text flex-1 truncate">{command}</code>
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(command).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1000);
+          });
+        }}
+        className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 text-xs p-text-2"
+      >
+        <CopyIcon size={11} />{copied ? "copied" : "Copy"}
+      </button>
     </div>
   );
 }

@@ -110,6 +110,21 @@ export function initUserTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token ON user_devices (token)`);
 
+  // CLI bearer tokens minted by the browser device-code approval flow. Tokens
+  // include the UserDO id as a routing hint, but only their SHA-256 hash is
+  // stored. The CLI presents the raw token as Authorization: Bearer <token>.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_cli_tokens (
+      token_hash  TEXT PRIMARY KEY,
+      label       TEXT NOT NULL,
+      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      expires_at  INTEGER NOT NULL,
+      last_used_at INTEGER,
+      revoked_at  INTEGER
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_cli_tokens_active ON user_cli_tokens (expires_at, revoked_at)`);
+
   // Per-(agent, device) consent policy. Ask-once-then-remember: a missing row
   // means ASK (the agent raises a card in chat the first time it touches the
   // device); 'allow' / 'deny' are the remembered decisions. One device, many

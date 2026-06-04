@@ -7,15 +7,21 @@
  */
 
 import type { BranchHandle, SpawnBranch, AbortBranch } from '@proteus/core';
-import type { CraftedTool } from '@proteus/core';
+import type { CraftedTool, LLMProviderConfig } from '@proteus/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
+import type { LocalProviderCredentials } from './model-resolver.js';
 
 const activeBranches = new Map<string, ChildProcess>();
 
-export function createBranchSpawner(basePath: string): { spawn: SpawnBranch; abort: AbortBranch } {
+export interface BranchSpawnerConfig {
+  llm: LLMProviderConfig;
+  providerCredentials?: LocalProviderCredentials;
+}
+
+export function createBranchSpawner(basePath: string, config: BranchSpawnerConfig): { spawn: SpawnBranch; abort: AbortBranch } {
   mkdirSync(`${basePath}/branches`, { recursive: true });
 
   const spawn: SpawnBranch = async (branchId: string): Promise<BranchHandle> => {
@@ -29,9 +35,12 @@ export function createBranchSpawner(basePath: string): { spawn: SpawnBranch; abo
       // Pass LLM credentials through env vars so the child can initialize its LLM
       env: {
         ...process.env,
-        PROTEUS_BASE_URL: process.env.PROTEUS_BASE_URL ?? '',
-        PROTEUS_AUTH: process.env.PROTEUS_AUTH ?? '',
-        PROTEUS_MODEL: process.env.PROTEUS_MODEL ?? '@cf/moonshotai/kimi-k2.6',
+        PROTEUS_LLM_NAME: config.llm.name,
+        PROTEUS_BASE_URL: config.llm.baseURL,
+        PROTEUS_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
+        PROTEUS_MODEL: config.llm.model,
+        PROTEUS_LLM_HEADERS: JSON.stringify(config.llm.headers),
+        PROTEUS_PROVIDER_CREDENTIALS: JSON.stringify(config.providerCredentials ?? {}),
         PROTEUS_PARENT_DB: `${basePath}.db`, // Parent DB path for loading crafted tools
       },
       // No execArgv needed — when running under bun, fork() inherits bun's runtime

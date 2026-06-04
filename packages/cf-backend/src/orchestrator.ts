@@ -44,6 +44,7 @@ import type {
 } from "@cloudflare/think";
 import {
   EvolutionEngine,
+  runChat,
   bootstrapScaffold,
   initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
   resolveMaxSteps,
@@ -569,6 +570,11 @@ export class OrchestratorAgent extends Think<Env> {
   // Set in beforeTurn, cleared in onChatResponse (after durable persist;
   // evolution is fire-and-forget and does not extend the busy window).
   private _inFlight = false;
+  private _cliCwd: string | null = null;
+
+  getCliCwdForDevice(): string | null {
+    return this._cliCwd;
+  }
 
   // ── Bound SQL executor ────────────────────────────────────────────────
   // `this.sql` is a plain method on the Agent base class — it needs `this`
@@ -765,6 +771,124 @@ export class OrchestratorAgent extends Think<Env> {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
     return { owner: current };
+  }
+
+  /** One-shot cloud CLI turn. The browser chat still uses Think's queued
+   *  WebSocket loop; this RPC gives `proteus run <agent> "task"` a blocking
+   *  HTTP path against the same Durable Object and durable state. */
+  @callable()
+  async cliTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<{
+    text: string;
+    toolCalls: Array<{ name: string; args: unknown; result?: string }>;
+    steps: number;
+  }> {
+    const prompt = (input.prompt ?? '').trim();
+    if (!prompt) throw new Error('prompt required');
+    await this.claimOwner(input.userId);
+    this.ensureSchema();
+
+    await this.restoreWorkspaceIfNeeded();
+    this.acc.reset(Date.now());
+    this._executorsUsedThisTurn.clear();
+    this._turnInvokedSkills.clear();
+    this._turnActiveSkills = null;
+    this._turnT0 = performance.now();
+    this._inFlight = true;
+    this._cliCwd = input.cwd || null;
+    this._currentRunId = `run-${nanoid()}`;
+
+    const userText = input.cwd
+      ? `Current terminal working directory: ${input.cwd}\n\n${prompt}`
+      : prompt;
+    try {
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'run_start',
+        agentId: this.name,
+        caused_by: 'chat',
+        userMessage: prompt.slice(0, 500),
+      });
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'turn_start',
+        turnIndex: this.orch.sessionTurnIndex,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at cliTurn:', err);
+    }
+
+    const historyRows = this.sql<{ role: string; content: string; created_at: number }>`
+      SELECT role, content, created_at FROM messages
+      WHERE session_id = ${'default'} AND role IN ('user', 'assistant')
+      ORDER BY created_at DESC LIMIT 40`;
+    const history: ModelMessage[] = historyRows
+      .reverse()
+      .map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content }));
+    history.push({ role: 'user', content: userText });
+
+    const toolCalls: Array<{ name: string; args: unknown; result?: string }> = [];
+    let text = '';
+    let steps = 0;
+    try {
+      for await (const ev of runChat({
+        model: this.getModel(),
+        system: this.getSystemPrompt(),
+        history,
+        tools: this.getTools(),
+        maxSteps: resolveMaxSteps(),
+      })) {
+        if (ev.type === 'text-delta') text += ev.delta;
+        else if (ev.type === 'step-finish') steps = ev.stepIndex;
+        else if (ev.type === 'tool-call') toolCalls.push({ name: ev.toolName, args: ev.args });
+        else if (ev.type === 'tool-result') {
+          const last = [...toolCalls].reverse().find((t) => t.name === ev.toolName && t.result === undefined);
+          if (last) last.result = ev.result;
+          else toolCalls.push({ name: ev.toolName, args: {}, result: ev.result });
+        } else if (ev.type === 'done') {
+          text = ev.text;
+        }
+      }
+
+      const userId = `cli-user-${nanoid()}`;
+      const assistantId = `cli-assistant-${nanoid()}`;
+      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+               VALUES (${userId}, ${'default'}, ${null}, ${'user'}, ${prompt}, ${Date.now()})`;
+      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+               VALUES (${assistantId}, ${'default'}, ${userId}, ${'assistant'}, ${text}, ${Date.now()})`;
+
+      const completed: CompletedTurn = {
+        userMessage: prompt,
+        assistantResponse: text,
+        toolCalls: toolCalls.map((tc) => ({
+          name: tc.name,
+          args: typeof tc.args === 'object' && tc.args !== null ? tc.args as Record<string, unknown> : { value: tc.args },
+          result: tc.result ?? '',
+        })) as ToolCallRecord[],
+        steps,
+        durationMs: Date.now() - this.acc.startedAt,
+        feedback: null,
+        hadError: false,
+      };
+      this.orch.recordTurn(completed);
+      void this.runShadowEvalSampled(prompt, text);
+      void this.runSleepTimeCompute(prompt, text, completed.toolCalls);
+      void this.maybeGenerateTitle(prompt);
+      this.backupWorkspaceIfDue();
+      this.maybeRunAutoGepa();
+      void this.orch.drainPendingEvents();
+
+      try {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'turn_end',
+          turnIndex: this.orch.sessionTurnIndex,
+          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
+        });
+        this.eventRecorder.emit(this._currentRunId, { type: 'run_end', reason: 'completed' });
+      } catch { /* nop */ }
+
+      return { text, toolCalls, steps };
+    } finally {
+      this._inFlight = false;
+      this._cliCwd = null;
+    }
   }
 
   /** Stored model spec, or null when unset (registry will pick the default). */
@@ -1876,7 +2000,7 @@ export class OrchestratorAgent extends Think<Env> {
         const spec = trigger.spec as {
           label?: string; payload?: unknown; cron?: string;
         };
-        const scheduled_fire_at = (trigger as typeof trigger & { next_fire_at?: number }).next_fire_at ?? now;
+        const scheduled_fire_at = trigger.next_fire_at ?? now;
 
         this.eventLog.publish({
           descriptor: {
@@ -1913,7 +2037,7 @@ export class OrchestratorAgent extends Think<Env> {
     try {
       const all = this.triggerRegistry.list({ state: 'active' });
       const upcoming = all
-        .map(t => (t as typeof t & { next_fire_at?: number }).next_fire_at)
+        .map(t => t.next_fire_at)
         .filter((t): t is number => typeof t === 'number' && t > now)
         .sort((a, b) => a - b)[0];
       if (upcoming) this.ctx.storage.setAlarm(upcoming);
@@ -3658,6 +3782,9 @@ export class OrchestratorAgent extends Think<Env> {
         paused_at: t.paused_at,
         revoked_at: t.revoked_at,
         rate_limit_per_min: t.rate_limit_per_min,
+        next_fire_at: t.next_fire_at,
+        last_fire_at: t.last_fire_at,
+        fire_count: t.fire_count,
       })),
     };
   }
@@ -4060,4 +4187,3 @@ function timingSafeEqual(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
-

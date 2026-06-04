@@ -95,7 +95,7 @@ export class TriggerRegistry {
   get(id: TriggerId): TriggerRow | null {
     const rows = this.sql.exec(
       `SELECT id, kind, spec, creator_trust, fork_policy, state, rate_limit_per_min,
-              created_at, paused_at, revoked_at
+              created_at, paused_at, revoked_at, next_fire_at, last_fire_at, fire_count
        FROM triggers WHERE id = ?`, id,
     ).toArray() as Array<Record<string, unknown>>;
     if (rows.length === 0) return null;
@@ -104,7 +104,8 @@ export class TriggerRegistry {
 
   list(filter?: { kind?: TriggerKind; state?: 'active' | 'paused' | 'revoked' }): TriggerRow[] {
     let sql = `SELECT id, kind, spec, creator_trust, fork_policy, state,
-                      rate_limit_per_min, created_at, paused_at, revoked_at
+                      rate_limit_per_min, created_at, paused_at, revoked_at,
+                      next_fire_at, last_fire_at, fire_count
                FROM triggers WHERE 1=1`;
     const bindings: unknown[] = [];
     if (filter?.kind) { sql += ` AND kind = ?`; bindings.push(filter.kind); }
@@ -202,7 +203,8 @@ export class TriggerRegistry {
   due(now: number): TriggerRow[] {
     const rows = this.sql.exec(
       `SELECT id, kind, spec, creator_trust, fork_policy, state,
-              rate_limit_per_min, created_at, paused_at, revoked_at
+              rate_limit_per_min, created_at, paused_at, revoked_at,
+              next_fire_at, last_fire_at, fire_count
        FROM triggers
        WHERE state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at <= ?`,
       now,
@@ -256,5 +258,8 @@ function rowToTrigger(r: Record<string, unknown>): TriggerRow {
     paused_at: r.paused_at as number | null,
     revoked_at: r.revoked_at as number | null,
     rate_limit_per_min: r.rate_limit_per_min as number,
+    next_fire_at: r.next_fire_at as number | null,
+    last_fire_at: r.last_fire_at as number | null,
+    fire_count: r.fire_count as number,
   };
 }

@@ -34,6 +34,7 @@ import {
 } from './mcp.js';
 
 const CODEX_CRED_KEY = 'codex.oauth';
+const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 
 /** Stable per-user OAuth callback path. The full URL is built from the
  *  request origin at add-time so it works in any environment without
@@ -79,6 +80,30 @@ export interface ConnectedProvider {
   label: string;
   /** Credential keys this provider can use. */
   credentialKeys: string[];
+}
+
+export interface CliTokenVerification {
+  ok: boolean;
+  user?: { id: string; email: string; displayName: string | null };
+  tokenHash?: string;
+  expiresAt?: number;
+  error?: string;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function parseCliTokenUserId(token: string): string | null {
+  const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
+  return match?.[1] ?? null;
+}
+
+function cleanCliTokenLabel(label?: string): string {
+  const trimmed = (label ?? '').trim().replace(/\s+/g, ' ');
+  return trimmed ? trimmed.slice(0, 80) : 'Proteus CLI';
 }
 
 export class UserDO extends Agent<Env> {
@@ -225,6 +250,79 @@ export class UserDO extends Agent<Env> {
     return !!row;
   }
 
+  // ── CLI auth tokens ────────────────────────────────────────────────
+
+  /** Mint a CLI bearer token after browser approval. The raw token is returned
+   *  once to the CLI; only its hash is stored. The userId is embedded solely so
+   *  edge routes can route directly to the correct UserDO before verification. */
+  @callable()
+  async mintCliToken(userId: string, label?: string): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
+    this.ensureInit();
+    if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
+    const token = `ptc_${userId}_${nanoid(44)}`;
+    const tokenHash = await sha256Hex(token);
+    const now = Date.now();
+    const expiresAt = now + CLI_TOKEN_TTL_MS;
+    this.sqlx(
+      `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at)
+       VALUES (?, ?, ?, ?)`,
+      tokenHash, cleanCliTokenLabel(label), now, expiresAt,
+    );
+    return { token, tokenHash, expiresAt };
+  }
+
+  /** Verify a CLI bearer token. Called by Worker HTTP routes after routing to
+   *  this UserDO via the user id embedded in the token. */
+  async verifyCliToken(token: string): Promise<CliTokenVerification> {
+    this.ensureInit();
+    const userId = parseCliTokenUserId(token);
+    if (!userId) return { ok: false, error: 'malformed token' };
+    const tokenHash = await sha256Hex(token);
+    const row = this.sqlx<{ expires_at: number; revoked_at: number | null }>(
+      `SELECT expires_at, revoked_at FROM user_cli_tokens WHERE token_hash = ? LIMIT 1`,
+      tokenHash,
+    )[0];
+    if (!row || row.revoked_at !== null) return { ok: false, error: 'invalid token' };
+    const now = Date.now();
+    if (row.expires_at <= now) return { ok: false, error: 'expired token' };
+    this.sqlx(`UPDATE user_cli_tokens SET last_used_at = ? WHERE token_hash = ?`, now, tokenHash);
+    const profile = await this.getProfile();
+    if (!profile) return { ok: false, error: 'profile missing' };
+    return {
+      ok: true,
+      user: { id: userId, email: profile.email, displayName: profile.displayName },
+      tokenHash,
+      expiresAt: row.expires_at,
+    };
+  }
+
+  @callable()
+  async listCliTokens(): Promise<Array<{ tokenHash: string; label: string; createdAt: number; expiresAt: number; lastUsedAt: number | null }>> {
+    this.ensureInit();
+    return this.sqlx<{ token_hash: string; label: string; created_at: number; expires_at: number; last_used_at: number | null }>(
+      `SELECT token_hash, label, created_at, expires_at, last_used_at
+       FROM user_cli_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC`,
+    ).map((r) => ({
+      tokenHash: r.token_hash,
+      label: r.label,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+      lastUsedAt: r.last_used_at,
+    }));
+  }
+
+  async revokeCliTokenHash(tokenHash: string): Promise<{ ok: boolean }> {
+    this.ensureInit();
+    this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
+    return { ok: true };
+  }
+
+  @callable()
+  async revokeCliToken(tokenHash: string): Promise<{ ok: boolean }> {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) throw new Error('invalid token hash');
+    return this.revokeCliTokenHash(tokenHash);
+  }
+
   // ── Connected devices (user-level laptop/PC tunnel hub) ──────────────
   //
   // The reverse-WS tunnel from a user's machine terminates HERE, not on a
@@ -300,10 +398,10 @@ export class UserDO extends Agent<Env> {
    *  chokepoint. Every agent call passes its name, so we can enforce the
    *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
    *  the agent to raise a consent card and await the user's decision. */
-  async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string }): Promise<unknown> {
+  async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string; trustedCliTurn?: boolean }): Promise<unknown> {
     const deviceId = this.connectedDeviceId(opts?.deviceId);
     if (!deviceId) throw new Error('no device connected');
-    if (opts?.agentName) {
+    if (opts?.agentName && !opts.trustedCliTurn) {
       const allowed = await this.checkDeviceConsent(opts.agentName, deviceId, method, params);
       if (!allowed) throw new Error('device use was not approved');
     }
@@ -967,4 +1065,3 @@ export class UserDO extends Agent<Env> {
     return out;
   }
 }
-

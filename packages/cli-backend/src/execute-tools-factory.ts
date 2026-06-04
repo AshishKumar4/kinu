@@ -16,7 +16,6 @@
 
 import { tool, jsonSchema } from 'ai';
 import type { VFS, Memory } from '@proteus/core';
-import type { ExecutorProvider } from '@proteus/core';
 import { appendMemoryNote } from '@proteus/core';
 
 interface ShellLike {
@@ -27,6 +26,14 @@ export interface NodeExecuteToolFactoryDeps {
   vfs: VFS;
   memory: Memory;
   shell?: ShellLike;
+  extraProviders?: NodeCodemodeProvider[];
+}
+
+export interface NodeCodemodeProvider {
+  name: string;
+  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  types?: string;
+  positionalArgs?: boolean;
 }
 
 /**
@@ -50,7 +57,11 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
     // codemode sandbox exposes each provider as a Proxy global; we eagerly
     // bind because Node has no RPC layer between sandbox and host.
     const providerBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
-    for (const p of opts.providers as Array<ExecutorProvider>) {
+    const providers = [
+      ...(opts.providers as NodeCodemodeProvider[]),
+      ...(deps.extraProviders ?? []),
+    ];
+    for (const p of providers) {
       if (!p || typeof p !== 'object' || !('name' in p) || !('tools' in p)) continue;
       const nsp: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
       for (const [toolName, t] of Object.entries(p.tools)) {

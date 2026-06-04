@@ -8,7 +8,7 @@
 
 import * as readline from 'node:readline';
 import type { AgentRuntime, AgentInfo, SearchNode, LLMProviderConfig } from '@proteus/core';
-import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
+import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
 import {
   printChatBanner, printSlashHelp, printAgentStatus,
   printSearchTree, printToolCall, printToolResult,
@@ -22,13 +22,14 @@ export interface ChatLoopOpts {
   info: AgentInfo;
   dbSize: number;
   llmConfig: LLMProviderConfig;
+  modelResolver?: LocalModelResolver;
   refreshInfo: () => AgentInfo;
   noAutoEvolve?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
-  const { rt, db, dbSize, llmConfig, refreshInfo, noAutoEvolve, mcpServers } = opts;
+  const { rt, db, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers } = opts;
   let info = opts.info;
 
   // Per-turn render state — reset on every turn-start so the agent-name header
@@ -37,7 +38,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   let headerPrinted = false;
 
   const session = new LocalAgentSession({
-    rt, db, model: resolveChatModel(llmConfig), noAutoEvolve,
+    rt, db, model: resolveChatModel(llmConfig), modelResolver, noAutoEvolve,
     onEvent: (event) => renderEvent(event, info.name, typing, () => headerPrinted, (v) => { headerPrinted = v; }),
   });
 
@@ -174,6 +175,55 @@ async function handleSlash(
         session.setAlwaysActiveSkills(names);
         console.log(DIM(names.length ? `  Always-active skills: ${names.join(', ')}` : '  Cleared always-active skills.'));
       }
+      return 'ok';
+    }
+    case '/approval': {
+      const mode = input.slice(cmd.length).trim();
+      if (!mode) {
+        console.log(`\n${DIM('Shell approval:')} ${session.getShellApprovalMode().mode}\n`);
+        return 'ok';
+      }
+      if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
+        console.log(WARN('  Usage: /approval strict | allow_all | deny_all'));
+        return 'ok';
+      }
+      const result = session.setShellApprovalMode(mode);
+      console.log(`\n${DIM('Shell approval:')} ${ACCENT(result.mode)}\n`);
+      return 'ok';
+    }
+    case '/model': {
+      const spec = input.slice(cmd.length).trim();
+      if (!spec) {
+        const stored = session.getStoredModelSpec().spec;
+        console.log(`\n${DIM('Stored model:')} ${stored ?? '(default)'}`);
+        console.log(`${DIM('Effective:')} ${session.getEffectiveModelSpec()}\n`);
+      } else {
+        try {
+          const result = session.setModel(spec);
+          console.log(`\n${DIM('Model:')} ${ACCENT(result.spec)}\n`);
+        } catch (err) {
+          console.log(`\n${ERR('error')} ${(err as Error).message}\n`);
+        }
+      }
+      return 'ok';
+    }
+    case '/models': {
+      const providers = await session.listModelProviders();
+      if (providers.length === 0) {
+        console.log(DIM('  No local provider registry is configured for this session.'));
+        return 'ok';
+      }
+      console.log(`\n${DIM('Providers:')}`);
+      for (const p of providers) {
+        console.log(`  ${p.available ? ACCENT(p.id) : MUTED(p.id)} ${DIM('—')} ${p.available ? 'available' : p.unavailableReason ?? 'unavailable'}`);
+      }
+      const models = await session.listAvailableModels();
+      if (models.length > 0) {
+        console.log(`\n${DIM('Models:')}`);
+        for (const m of models.slice(0, 40)) console.log(`  ${ACCENT(`${m.provider}/${m.id}`)} ${DIM('—')} ${m.label ?? m.id}`);
+        if (models.length > 40) console.log(DIM(`  … ${models.length - 40} more`));
+      }
+      console.log('');
       return 'ok';
     }
     case '/tree': {

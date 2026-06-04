@@ -318,7 +318,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
       }
 
-      const runtimeKey = args.runtime ?? 'workspace';
+      const defaultRuntime = router?.getProvider('laptop')?.isAvailable() ? 'laptop' : 'workspace';
+      const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
         if (!shell) return 'Error: no workspace shell available in this runtime.';
         const result = await shell.exec(args.command);

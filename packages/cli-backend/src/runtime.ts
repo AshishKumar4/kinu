@@ -9,6 +9,10 @@
 import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
 import type { Storage, Schedule, Memory, VFS, SqlExecutor, SqlValue, RawSqlExec } from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
+import type { ExecutorProvider } from '@proteus/core';
+import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import {
   createVercelAILLM, type LLMProviderConfig, buildRuntime,
   DefaultExecutionRouter, createInlineExecutor,
@@ -16,16 +20,17 @@ import {
 import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
-import { createShell } from '@proteus/agent-utils/shell';
 import { createSandboxedExecutor } from './executor.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
+import type { LocalProviderCredentials } from './model-resolver.js';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
   llm: LLMProviderConfig;
   judge?: LLMProviderConfig;
   agentName?: string;
+  providerCredentials?: LocalProviderCredentials;
 }
 
 export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void } }): SqlExecutor {
@@ -183,7 +188,10 @@ export function createCLIRuntime(
   };
 
   const basePath = config.dbPath.replace(/\.db$/, '');
-  const { spawn, abort } = createBranchSpawner(basePath);
+  const { spawn, abort } = createBranchSpawner(basePath, {
+    llm: config.llm,
+    providerCredentials: config.providerCredentials,
+  });
 
   // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
   const sqliteFs = new SqliteFS(sql);
@@ -200,12 +208,13 @@ export function createCLIRuntime(
   const craftStore = adaptCraftStore(craftStoreImpl);
 
   // v2.0: shell + executionRouter so the canonical `run` tool in core has a
-  // workspace provider and a bound POSIX shell. Same set the CF backend
-  // exposes — CLI only registers the inline executor (no Nimbus/Container/SSH
-  // bindings are relevant in a local Bun process).
-  const shell: Shell = createShell(sqliteFs);
+  // workspace provider and a bound POSIX shell. In CLI/local mode the shell is
+  // the user's real machine, rooted at the process cwd where `proteus` or an
+  // alias was invoked. Durable agent memory still lives in SQLite/VFS.
+  const shell: Shell = createHostShell(process.cwd());
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell));
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
@@ -213,4 +222,75 @@ export function createCLIRuntime(
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell,
   });
+}
+
+function createHostShell(cwd: string): Shell {
+  return {
+    exec(command: string, stdin?: string) {
+      return new Promise((resolve) => {
+        const child = spawn('/bin/sh', ['-lc', command], {
+          cwd,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: process.env,
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', (err) => resolve({ stdout, stderr: err.message, exitCode: 1 }));
+        child.on('close', (code) => resolve({ stdout, stderr, exitCode: code ?? 0 }));
+        if (stdin) child.stdin.end(stdin);
+        else child.stdin.end();
+      });
+    },
+  };
+}
+
+function createLocalLaptopExecutor(cwd: string, shell: Shell): ExecutorProvider {
+  const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
+  return {
+    name: 'laptop',
+    kind: 'laptop',
+    capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
+    positionalArgs: true,
+    isAvailable: () => true,
+    connect: async () => {},
+    disconnect: async () => {},
+    tools: {
+      exec: {
+        description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
+        execute: async (command: unknown) => {
+          const result = await shell.exec(String(command));
+          if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
+          return result.stdout || '(no output)';
+        },
+      },
+      readFile: {
+        description: 'Read a UTF-8 file from the local machine.',
+        execute: async (path: unknown) => fs.readFile(toHostPath(path), 'utf-8'),
+      },
+      writeFile: {
+        description: 'Write a UTF-8 file on the local machine. Parent directories are created.',
+        execute: async (path: unknown, content: unknown) => {
+          const p = toHostPath(path);
+          await fs.mkdir(resolvePath(p, '..'), { recursive: true });
+          await fs.writeFile(p, String(content), 'utf-8');
+          return `Written ${String(content).length} bytes to ${p}`;
+        },
+      },
+      listFiles: {
+        description: 'List local directory entries as {name,type}.',
+        execute: async (path: unknown = '.') => {
+          const entries = await fs.readdir(toHostPath(path), { withFileTypes: true });
+          return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
+        },
+      },
+    },
+    types: `declare const laptop: {
+  exec(command: string): Promise<string>;
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<string>;
+  listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;
+};`,
+  };
 }

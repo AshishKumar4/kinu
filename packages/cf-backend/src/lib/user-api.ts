@@ -48,6 +48,12 @@ export interface DeviceFlowStart {
   portalURL: string;
 }
 
+export interface CliSetup {
+  publicOrigin: string;
+  installCommand: string;
+  authCommand: string;
+}
+
 export interface PollResult {
   connected: boolean;
   accountId?: string;
@@ -70,6 +76,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 // ── Profile ────────────────────────────────────────────────────────
 export const getProfile = () => api<UserProfile | null>('GET', '/profile');
+export const getCliSetup = () => api<CliSetup>('GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
 export const listAgents     = () => api<AgentEntry[]>('GET', '/agents');

@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { runMCTS, type SearchNode } from '@proteus/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@proteus/core';
 import { openAgentCLI } from '@proteus/cli-backend';
-import { agentDbPath, resolveLLMConfig } from '../config.js';
+import { agentDbPath, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
 import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
@@ -12,6 +12,13 @@ import {
 export async function evolveCommand(name: string, opts: {
   budget?: string; branches?: string; model?: string; baseUrl?: string; auth?: string;
 }): Promise<void> {
+  const configured = resolveAgentRef(name);
+  if (configured?.mode === 'cloud') {
+    console.log(`\n${DIM('Cloud agent evolution runs in the Durable Object backend after turns.')}`);
+    console.log(`${DIM('Use:')} ${ACCENT(`proteus run ${configured.name} "improve yourself"`)}\n`);
+    return;
+  }
+  name = configured?.localName ?? configured?.name ?? name;
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
     printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
@@ -22,7 +29,10 @@ export async function evolveCommand(name: string, opts: {
   const branches = parseInt(opts.branches ?? '2', 10);
   const llmConfig = resolveLLMConfig(opts);
   const db = new Database(dbPath);
-  const { rt, info } = openAgentCLI(db, dbPath, { llm: llmConfig });
+  const { rt, info } = openAgentCLI(db, dbPath, {
+    llm: llmConfig,
+    providerCredentials: resolveProviderCredentials(),
+  });
 
   console.log('');
   console.log(`${BRAND} ${DIM('— Evolution')}`);

@@ -5,6 +5,7 @@
  *
  * Routes:
  *   GET    /api/user/profile                       — user info
+ *   GET    /api/user/cli                           — CLI setup commands
  *   GET    /api/user/agents                        — agent registry
  *   POST   /api/user/agents                        — register new agent
  *   POST   /api/user/agents/:name/touch            — update last_visited
@@ -63,6 +64,14 @@ export async function handleUserRequest(
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {
     return json(await stub.getProfile());
+  }
+  if (path === '/cli' && method === 'GET') {
+    const cliOrigin = (env.CLI_PUBLIC_ORIGIN || url.origin).replace(/\/+$/, '');
+    return json({
+      publicOrigin: cliOrigin,
+      installCommand: `curl -fsSL ${cliOrigin}/install.sh | sh`,
+      authCommand: `proteus auth --origin ${cliOrigin}`,
+    });
   }
 
   // ── Agents ─────────────────────────────────────────────────────────

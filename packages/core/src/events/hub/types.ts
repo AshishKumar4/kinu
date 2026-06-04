@@ -428,6 +428,12 @@ export interface TriggerRow {
   revoked_at: number | null;
   /** Per-trigger rate limits (events/minute). */
   rate_limit_per_min: number;
+  /** Next scheduled fire time for timer-like triggers, epoch ms. */
+  next_fire_at: number | null;
+  /** Last time this trigger fired, epoch ms. */
+  last_fire_at: number | null;
+  /** Number of times this trigger has fired. */
+  fire_count: number;
 }
 
 // ── Tool surface composition ─────────────────────────────────────

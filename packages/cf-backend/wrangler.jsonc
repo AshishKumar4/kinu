@@ -35,6 +35,9 @@
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by sha256(email) so the same user always lands on the same DO.
       { "class_name": "UserDO", "name": "UserDO" },
+      // CLI device-code flow coordinator. One global namespace; approved
+      // requests mint per-user CLI tokens inside UserDO.
+      { "class_name": "CLIAuthDO", "name": "CLIAuthDO" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -72,6 +75,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["UserDO"]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["CLIAuthDO"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
@@ -89,6 +96,7 @@
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
     "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
+    "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkmr472.workers.dev",
     // Cloudflare Access — verified against the team's JWKS on every
     // protected request. Public values (the AUD is an application
     // identifier, not a secret) so they can live in vars rather than
@@ -148,6 +156,7 @@
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
           { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "CLIAuthDO", "name": "CLIAuthDO" },
           { "class_name": "ProteusSandbox", "name": "Sandbox" }
         ]
       },
@@ -162,7 +171,8 @@
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
         { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
-        { "tag": "v3", "new_sqlite_classes": ["UserDO"] }
+        { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["CLIAuthDO"] }
       ],
       "ai": { "binding": "AI" },
       "r2_buckets": [
@@ -171,6 +181,7 @@
       "vars": {
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
         "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
+        "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
         "DEV_USER_EMAIL": "staging-tester@proteus.dev",
         "NIMBUS_ENDPOINT": "https://nimbus.ashishkumarsingh.com"
       }

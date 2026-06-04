@@ -10,6 +10,9 @@ import type { LanguageModel } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
+import type { LocalModelResolver } from '../src/model-resolver.js';
+import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
+import { createLocalAgentSelfProvider } from '../src/agent-self.js';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -69,6 +72,20 @@ function setup(answer = 'hello there', model?: LanguageModel) {
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
     rt, db, model: model ?? fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
+  });
+  return { db, rt, session, events };
+}
+
+function setupWithResolver(resolver: LocalModelResolver) {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    role TEXT NOT NULL, content TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+  const rt = createCLIRuntime(db as never, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+  const events: SessionEvent[] = [];
+  const session = new LocalAgentSession({
+    rt, db, model: fakeModel('fallback'), modelResolver: resolver, onEvent: (e) => events.push(e), noAutoEvolve: true,
   });
   return { db, rt, session, events };
 }
@@ -148,11 +165,152 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(session.getAlwaysActiveSkills()).toEqual([]);
   });
 
+  test('shell approval mode round-trips through agent_config', () => {
+    const { session } = setup();
+    expect(session.getShellApprovalMode()).toEqual({ mode: 'strict' });
+    expect(session.setShellApprovalMode('allow_all')).toEqual({ ok: true, mode: 'allow_all' });
+    expect(session.getShellApprovalMode()).toEqual({ mode: 'allow_all' });
+    expect(session.setShellApprovalMode('deny_all')).toEqual({ ok: true, mode: 'deny_all' });
+    expect(session.getShellApprovalMode()).toEqual({ mode: 'deny_all' });
+  });
+
+  test('setModel persists agent_config.model and drives the next turn model', async () => {
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
+      resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
+      listProviders: async () => [],
+      listModels: async () => [],
+    };
+    const { session, events } = setupWithResolver(resolver);
+
+    expect(session.getStoredModelSpec()).toEqual({ spec: null });
+    expect(session.getEffectiveModelSpec()).toBe('local/a');
+
+    await session.send('first');
+    expect((events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>).turn.assistantResponse).toBe('from a');
+
+    expect(session.setModel('local/b')).toEqual({ ok: true, spec: 'local/b' });
+    expect(session.getStoredModelSpec()).toEqual({ spec: 'local/b' });
+
+    await session.send('second');
+    const turns = events.filter((e): e is Extract<SessionEvent, { type: 'turn-end' }> => e.type === 'turn-end');
+    expect(turns[1]!.turn.assistantResponse).toBe('from b');
+  });
+
   test('broadcast fans out as a SessionEvent', () => {
     const { session, events } = setup();
     session.broadcast({ type: 'job_update', jobId: 'x' });
     const b = events.find((e) => e.type === 'broadcast') as Extract<SessionEvent, { type: 'broadcast' }>;
     expect(b.event.type).toBe('job_update');
+  });
+
+  test('publishEvent stores a hub event and wakes a programmatic turn', async () => {
+    const { session, events } = setup('handled event');
+    const result = await session.publishEvent({
+      descriptor: {
+        ingress: 'chat_ws',
+        variant: 'chat',
+        payload: { text: 'external wake' },
+        operator_user_id: 'owner-1',
+        session_id: 'local-test',
+      },
+      now: 123,
+    });
+
+    expect(result.admitted).toBe(true);
+    await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
+
+    const recent = session.listRecentEvents({ variant: 'chat', limit: 5 });
+    expect(recent).toHaveLength(1);
+    expect(recent[0]!.id).toBe(result.event_id);
+    expect(recent[0]!.trust).toBe('owner');
+    expect(recent[0]!.priority).toBe('urgent');
+
+    const starts = turnStarts(events);
+    expect(starts[0]!.kind).toBe('programmatic');
+    expect(starts[0]!.text).toContain('[chat]');
+    expect(session.pendingEvents()).toEqual([]);
+  });
+
+  test('one-shot timer triggers publish timer events and wake a programmatic turn', async () => {
+    const { session, events } = setup('handled timer');
+    const fireAt = Date.now() + 60_000;
+    const created = session.createTimerTrigger({
+      atMs: fireAt,
+      label: 'follow-up',
+      payload: { reason: 'test' },
+      trust: 'owner',
+    });
+
+    expect(created.kind).toBe('timer_oneshot');
+    expect(created.nextFireAt).toBe(fireAt);
+    expect(session.listTriggers().triggers[0]!.next_fire_at).toBe(fireAt);
+
+    const outcome = await session.fireDueTriggers(fireAt);
+    expect(outcome.fired).toBe(1);
+    await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
+
+    const recent = session.listRecentEvents({ variant: 'timer', limit: 5 });
+    expect(recent).toHaveLength(1);
+    expect(recent[0]!.trust).toBe('owner');
+    expect(recent[0]!.payload).toMatchObject({
+      trigger_id: created.id,
+      scheduled_fire_at: fireAt,
+      label: 'follow-up',
+      user_payload: { reason: 'test' },
+    });
+
+    const trigger = session.listTriggers().triggers.find((t) => t.id === created.id)!;
+    expect(trigger.state).toBe('revoked');
+    expect(trigger.next_fire_at).toBeNull();
+    expect(trigger.last_fire_at).toBe(fireAt);
+    expect(trigger.fire_count).toBe(1);
+  });
+
+  test('cron timer triggers reschedule after firing', async () => {
+    const { session, events } = setup('handled cron');
+    const created = session.createTimerTrigger({ cron: '*/5 * * * *', label: 'heartbeat' });
+    expect(created.kind).toBe('timer_cron');
+    expect(created.nextFireAt).toBeGreaterThan(Date.now());
+
+    const outcome = await session.fireDueTriggers(created.nextFireAt!);
+    expect(outcome.fired).toBe(1);
+    await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
+
+    const trigger = session.listTriggers().triggers.find((t) => t.id === created.id)!;
+    expect(trigger.state).toBe('active');
+    expect(trigger.last_fire_at).toBe(created.nextFireAt);
+    expect(trigger.fire_count).toBe(1);
+    expect(trigger.next_fire_at).toBeGreaterThan(created.nextFireAt!);
+    session.cancelTrigger(created.id);
+  });
+
+  test('Node execute fallback exposes the local agent.schedule namespace', async () => {
+    const { rt } = setup();
+    let received: { atMs?: number; label?: string } | null = null;
+    const executeTool = createNodeExecuteToolFactory({
+      vfs: rt.storage.vfs,
+      memory: rt.memory,
+      extraProviders: [createLocalAgentSelfProvider({
+        proposeCurriculumTasks: async () => [],
+        listCurriculumTasks: async () => [],
+        setCurriculumTaskStatus: async () => ({ ok: true }),
+        createTimerTrigger: (opts) => {
+          received = { atMs: opts.atMs, label: opts.label };
+          return { id: 'trg-local', kind: opts.cron ? 'timer_cron' : 'timer_oneshot', nextFireAt: opts.atMs ?? 123 };
+        },
+        cancelTrigger: async () => ({ ok: true }),
+        jobResult: async () => null,
+        listBackgroundJobs: async () => [],
+      })],
+    })({ tools: {}, providers: [], loader: {} });
+
+    const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
+      code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
+    });
+    expect(result).toMatchObject({ result: { id: 'trg-local', kind: 'timer_oneshot' } });
+    expect(received?.label).toBe('local wake');
+    expect(received?.atMs).toBeGreaterThan(Date.now());
   });
 
   test('a /skill activation filters the turn toolset to allowed_tools (+ skills)', async () => {

@@ -13,6 +13,7 @@ import type { OrchestratorAgent } from "./src/orchestrator.js";
 import type { ExplorationAgent } from "./src/exploration.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
+import type { CLIAuthDO } from "./src/cli/auth-do.js";
 
 // This file has top-level imports (for the DO class generics below), which
 // makes it a module — so `interface Env` here would be module-scoped, not
@@ -27,6 +28,8 @@ declare global {
     ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
+    /** Global CLI device-code flow coordinator. */
+    CLIAuthDO: DurableObjectNamespace<CLIAuthDO>;
     /** Sandbox container DO — @cloudflare/sandbox. One per agent.
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */
@@ -58,6 +61,10 @@ declare global {
     /** Local dev backdoor — synthesize an authenticated identity for this
      *  email without verifying CF Access. Production must leave this unset. */
     DEV_USER_EMAIL?: string;
+    /** Public origin for unauthenticated CLI install/auth endpoints. The custom
+     *  domain is covered by Cloudflare Access, so production points this at the
+     *  workers.dev route unless Access has explicit path bypasses. */
+    CLI_PUBLIC_ORIGIN?: string;
     /** Nimbus default-sandbox endpoint, e.g. https://nimbus.<acct>.workers.dev.
      *  When set, the `nimbus` runtime is registered for every agent at runtime
      *  construction. Unset → only `workspace` (+ `sandbox` stub) is available

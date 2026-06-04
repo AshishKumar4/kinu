@@ -16,9 +16,10 @@ describe("pickDefaultExecutor", () => {
     expect(pickDefaultExecutor(execs, "laptop")).toBe("sandbox");
   });
 
-  test("static priority favors a real shell (sandbox > nimbus > laptop)", () => {
-    expect(pickDefaultExecutor([...avail("nimbus", "laptop", "workspace")])).toBe("nimbus");
+  test("static priority favors the user's desktop when connected (laptop > nimbus > sandbox)", () => {
+    expect(pickDefaultExecutor([...avail("nimbus", "laptop", "workspace")])).toBe("laptop");
     expect(pickDefaultExecutor([...avail("laptop", "workspace")])).toBe("laptop");
+    expect(pickDefaultExecutor([...avail("nimbus", "sandbox", "workspace")])).toBe("nimbus");
   });
 
   test("falls back to workspace when nothing else is available", () => {

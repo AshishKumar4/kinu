@@ -11,8 +11,9 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { createVercelAILLM } from '@proteus/core';
-import type { CraftedTool } from '@proteus/core';
+import { generateText } from 'ai';
+import type { CraftedTool, LLMProviderConfig } from '@proteus/core';
+import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 
 const dbPath = process.argv[2];
 if (!dbPath) {
@@ -20,14 +21,19 @@ if (!dbPath) {
   process.exit(1);
 }
 
-const llmConfig = {
-  name: 'workers-ai',
+const llmConfig: LLMProviderConfig = {
+  name: process.env.PROTEUS_LLM_NAME ?? 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL ?? '',
-  headers: { 'Authorization': process.env.PROTEUS_AUTH ?? '' },
+  headers: readJson<Record<string, string>>(process.env.PROTEUS_LLM_HEADERS) ?? {
+    Authorization: process.env.PROTEUS_AUTH ?? '',
+  },
   model: process.env.PROTEUS_MODEL ?? '@cf/moonshotai/kimi-k2.6',
 };
 
-const llm = createVercelAILLM(llmConfig);
+const modelResolver = createLocalModelResolver({
+  llm: llmConfig,
+  credentials: readJson<LocalProviderCredentials>(process.env.PROTEUS_PROVIDER_CREDENTIALS) ?? {},
+});
 
 // Open the branch's SQLite DB for trace storage
 const db = new Database(dbPath);
@@ -40,15 +46,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS traces (
 
 // Load crafted tools from the parent DB if available
 let craftedToolHints = '';
+let parentDb: Database | null = null;
 try {
   const parentDbPath = process.env.PROTEUS_PARENT_DB;
   if (parentDbPath) {
-    const parentDb = new Database(parentDbPath, { readonly: true });
+    parentDb = new Database(parentDbPath, { readonly: true });
     const tools = parentDb.query('SELECT name, description FROM crafted_tools').all() as CraftedTool[];
     if (tools.length > 0) {
       craftedToolHints = '\nKnown patterns:\n' + tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
     }
-    parentDb.close();
   }
 } catch {}
 
@@ -65,7 +71,7 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
           .map(m => `${m.role}: ${m.content}`)
           .join('\n')
           .slice(-800);
-        const response = await llm.complete(
+        const response = await complete(
           `You are an expert exploring one approach to solve a task.${craftedToolHints}\n\n` +
           `Context:\n${context}\n\n` +
           `Propose ONE specific concrete approach in 2-3 sentences.`
@@ -78,7 +84,7 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
       }
       case 'evaluate': {
         const { task } = msg.args as { task: string };
-        const response = await llm.complete(
+        const response = await complete(
           `Rate this approach for effectiveness (0.0-1.0):\n${task.slice(0, 500)}\n\n` +
           `Respond ONLY with JSON: {"score": <float>, "reason": "<5 words>"}`
         );
@@ -91,7 +97,7 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
       }
       case 'reflect': {
         const { task } = msg.args as { task: string };
-        const response = await llm.complete(
+        const response = await complete(
           `What specifically went wrong with this approach?\n${task.slice(0, 500)}\n\n` +
           `One sentence only.`
         );
@@ -108,3 +114,29 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
 });
 
 process.send?.({ method: 'ready' });
+
+process.once('exit', () => {
+  try { parentDb?.close(); } catch {}
+  try { db.close(); } catch {}
+});
+
+function readStoredModelSpec(): string | null {
+  try {
+    const row = parentDb?.query("SELECT value FROM agent_config WHERE key = 'model' LIMIT 1").get() as { value: string } | null | undefined;
+    return row?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function complete(prompt: string): Promise<string> {
+  const model = modelResolver.resolveModel(readStoredModelSpec());
+  const { text } = await generateText({ model, prompt, maxOutputTokens: 2048 });
+  return text.trim();
+}
+
+function readJson<T>(raw: string | undefined): T | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as T; }
+  catch { return null; }
+}

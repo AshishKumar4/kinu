@@ -11,6 +11,7 @@ import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import { initAllTables, readSoul } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
+import type { LocalProviderCredentials } from './model-resolver.js';
 
 export interface AgentInfo {
   id: string;
@@ -27,6 +28,7 @@ export interface AgentInfo {
 export interface CLIOpenConfig {
   llm: LLMProviderConfig;
   judge?: LLMProviderConfig;
+  providerCredentials?: LocalProviderCredentials;
 }
 
 type AgentDb = {
@@ -96,6 +98,7 @@ export function openAgentCLI(
     dbPath,
     llm: config.llm,
     judge: config.judge,
+    providerCredentials: config.providerCredentials,
     agentName: identity.name,
   });
 

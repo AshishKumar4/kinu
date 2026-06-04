@@ -1,10 +1,12 @@
 import { statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { listAgentDirs, agentDbPath } from '../config.js';
+import { loadConfigFile, listAgentDirs, agentDbPath } from '../config.js';
 import { printAgentList } from '../display.js';
 
 export async function listCommand(): Promise<void> {
   const agents = listAgentDirs();
+  const registry = loadConfigFile().agents ?? {};
+  const registryOnly = Object.values(registry).filter(a => a.mode === 'cloud' || !agents.includes(a.localName ?? a.name));
 
   const agentInfos = agents.map(name => {
     const dbPath = agentDbPath(name);
@@ -20,6 +22,16 @@ export async function listCommand(): Promise<void> {
       return { name, purpose: '(error reading)', scaffoldVersion: 0, toolCount: 0 };
     }
   });
+
+  for (const agent of registryOnly) {
+    agentInfos.push({
+      name: agent.alias ? `${agent.name} (${agent.alias})` : agent.name,
+      purpose: agent.purpose ?? `${agent.mode} agent`,
+      scaffoldVersion: 0,
+      toolCount: 0,
+      dbSize: undefined,
+    });
+  }
 
   printAgentList(agentInfos);
 }

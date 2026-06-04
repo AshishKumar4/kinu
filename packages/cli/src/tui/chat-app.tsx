@@ -12,7 +12,7 @@ import { createCliRenderer } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AgentRuntime, AgentInfo, LLMProviderConfig, SearchNode } from '@proteus/core';
-import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
+import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
 
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
@@ -24,6 +24,7 @@ export interface ChatAppOpts {
   info: AgentInfo;
   dbSize: number;
   llmConfig: LLMProviderConfig;
+  modelResolver?: LocalModelResolver;
   refreshInfo: () => AgentInfo;
   noAutoEvolve?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
@@ -32,7 +33,7 @@ export interface ChatAppOpts {
 let globalExit: (() => void) | null = null;
 let globalSessionCleanup: (() => Promise<void>) | null = null;
 
-function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, noAutoEvolve, mcpServers }: ChatAppOpts) {
+function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers }: ChatAppOpts) {
   const { height } = useTerminalDimensions();
   const [messages, setMessages] = useState<DisplayMessage[]>([
     { id: 'welcome', role: 'system', content: `Connected to ${initialInfo.name}. Type a message or /help for commands.` },
@@ -41,6 +42,7 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
   const [isProcessing, setIsProcessing] = useState(false);
   const [mcpReady, setMcpReady] = useState(!mcpServers || Object.keys(mcpServers).length === 0);
   const [info, setInfo] = useState(initialInfo);
+  const [modelSpec, setModelSpec] = useState(llmConfig.model);
 
   const msgIdRef = useRef(0);
   const streamRef = useRef('');
@@ -54,7 +56,7 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
   const sessionRef = useRef<LocalAgentSession | null>(null);
   if (!sessionRef.current) {
     sessionRef.current = new LocalAgentSession({
-      rt, db, model: resolveChatModel(llmConfig), noAutoEvolve,
+      rt, db, model: resolveChatModel(llmConfig), modelResolver, noAutoEvolve,
       onEvent: (event: SessionEvent) => {
         switch (event.type) {
           case 'turn-start':
@@ -136,6 +138,52 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
         }
         return;
       }
+      case '/approval': {
+        const mode = input.slice(cmd.length).trim();
+        if (!mode) {
+          addMessage({ role: 'system', content: `Shell approval: ${session.getShellApprovalMode().mode}` });
+          return;
+        }
+        if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
+          addMessage({ role: 'system', content: 'Usage: /approval strict | allow_all | deny_all' });
+          return;
+        }
+        const result = session.setShellApprovalMode(mode);
+        addMessage({ role: 'system', content: `Shell approval: ${result.mode}` });
+        return;
+      }
+      case '/model': {
+        const spec = input.slice(cmd.length).trim();
+        if (!spec) {
+          addMessage({ role: 'system', content: `Stored model: ${session.getStoredModelSpec().spec ?? '(default)'}\nEffective: ${session.getEffectiveModelSpec()}` });
+          return;
+        }
+        try {
+          const result = session.setModel(spec);
+          setModelSpec(result.spec);
+          addMessage({ role: 'system', content: `Model: ${result.spec}` });
+        } catch (err) {
+          addMessage({ role: 'system', content: `Error: ${(err as Error).message}` });
+        }
+        return;
+      }
+      case '/models': {
+        const providers = await session.listModelProviders();
+        if (providers.length === 0) {
+          addMessage({ role: 'system', content: 'No local provider registry is configured for this session.' });
+          return;
+        }
+        const lines = ['Providers:'];
+        for (const p of providers) lines.push(`  ${p.id} — ${p.available ? 'available' : p.unavailableReason ?? 'unavailable'}`);
+        const models = await session.listAvailableModels();
+        if (models.length > 0) {
+          lines.push('', 'Models:');
+          for (const m of models.slice(0, 40)) lines.push(`  ${m.provider}/${m.id} — ${m.label ?? m.id}`);
+          if (models.length > 40) lines.push(`  ... ${models.length - 40} more`);
+        }
+        addMessage({ role: 'system', content: lines.join('\n') });
+        return;
+      }
       case '/tree': {
         const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
         if (nodes.length === 0) {
@@ -195,7 +243,7 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
     <box flexDirection="column" style={{ height: '100%' }}>
       <StatusBar
         info={info}
-        model={llmConfig.model}
+        model={modelSpec}
         toolCount={session.toolNames().length}
         autoEvolve={!noAutoEvolve}
         connected={true}
