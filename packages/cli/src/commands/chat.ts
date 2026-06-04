@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import * as readline from 'node:readline';
 import { Database } from 'bun:sqlite';
 import { openAgentCLI } from '@proteus/cli-backend';
-import { agentDbPath, listAgentDirs, resolveLLMConfig } from '../config.js';
+import { agentDbPath, listAgentDirs, resolveLLMConfig, resolveMcpServers } from '../config.js';
 import { runTuiChat } from '../tui/chat-app.js';
 import { runChatLoop } from '../chat-loop.js';
 import { printError, ACCENT, DIM } from '../display.js';
@@ -42,6 +42,7 @@ export async function chatCommand(name: string | undefined, opts: {
   }
 
   const llmConfig = resolveLLMConfig(opts);
+  const mcpServers = resolveMcpServers();
   const db = new Database(dbPath);
   const { rt, info } = openAgentCLI(db, dbPath, { llm: llmConfig });
   const dbSize = statSync(dbPath).size;
@@ -50,9 +51,9 @@ export async function chatCommand(name: string | undefined, opts: {
   // Use TUI by default, fall back to classic readline with --classic flag
   // or when stdin is not a TTY (piped input)
   if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop({ rt, db, info, dbSize, llmConfig, refreshInfo });
+    await runChatLoop({ rt, db, info, dbSize, llmConfig, refreshInfo, mcpServers });
   } else {
-    await runTuiChat({ rt, db, info, dbSize, llmConfig, refreshInfo, noAutoEvolve: false });
+    await runTuiChat({ rt, db, info, dbSize, llmConfig, refreshInfo, noAutoEvolve: false, mcpServers });
   }
   db.close();
 }

@@ -11,6 +11,7 @@ import { existsSync, readFileSync, mkdirSync, readdirSync, statSync } from 'node
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { LLMProviderConfig } from '@proteus/core';
+import type { McpServerConfig } from '@proteus/cli-backend';
 
 export const AGENT_HOME = join(homedir(), '.proteus');
 const CONFIG_PATH = join(AGENT_HOME, 'config.json');
@@ -20,6 +21,8 @@ interface ProteusConfig {
   baseUrl?: string;
   auth?: string;
   model?: string;
+  /** Stdio MCP servers to connect locally (standard mcpServers shape). */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export function ensureAgentHome(): void {
@@ -93,4 +96,9 @@ export function resolveLLMConfig(opts?: {
     headers: { 'Authorization': auth },
     model,
   };
+}
+
+/** Stdio MCP servers from ~/.proteus/config.json (`mcpServers`). Empty if none. */
+export function resolveMcpServers(): Record<string, McpServerConfig> {
+  return loadConfigFile().mcpServers ?? {};
 }

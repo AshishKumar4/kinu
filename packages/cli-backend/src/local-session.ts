@@ -36,6 +36,7 @@ import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { createCLIHeadRuntime } from './head-runtime.js';
 import { detectOrphanedFibers } from './fiber.js';
+import { connectMcpServers, type McpServerConfig } from './mcp.js';
 
 /** Build the ai-SDK chat model both frontends drive runChat with — BYO-key
  *  OpenAI-compatible. Shared so model resolution lives in one place (the
@@ -109,6 +110,11 @@ export class LocalAgentSession implements BackendHost {
    *  this stable Set, so the cached toolset never needs rebuilding. */
   private readonly turnInvokedSkills = new Set<string>();
   private skillsVfs: SkillsVfs | null = null;
+
+  /** Tools from connected MCP servers (resolveExtraTools seam), merged into the
+   *  turn surface. Connected lazily via connectMcp; closed on end. */
+  private extraTools: ToolSet = {};
+  private mcpClose: (() => Promise<void>) | null = null;
 
   /** FIFO of turns to run — user inputs + programmatic injects (reactor / job
    *  wake), drained by a single serialized pump so turns never interleave. */
@@ -185,14 +191,14 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** Tool names for the banner. */
+  /** Tool names for the banner (built-ins + connected MCP). */
   toolNames(): string[] {
-    return Object.keys(this.tools);
+    return [...Object.keys(this.tools), ...Object.keys(this.extraTools)];
   }
 
-  /** Built-in tools with descriptions for the /tools view. */
+  /** Built-in + MCP tools with descriptions for the /tools view. */
   describeTools(): Array<{ name: string; description: string }> {
-    return Object.entries(this.tools).map(([name, t]) => ({
+    return Object.entries({ ...this.tools, ...this.extraTools }).map(([name, t]) => ({
       name, description: (t as { description?: string }).description ?? '',
     }));
   }
@@ -205,6 +211,11 @@ export class LocalAgentSession implements BackendHost {
 
   broadcast(event: BroadcastEvent): void {
     this.emit({ type: 'broadcast', event });
+  }
+
+  /** BackendHost seam — the connected MCP tools, merged into each turn. */
+  resolveExtraTools(): ToolSet {
+    return this.extraTools;
   }
 
   /** Inject a programmatic turn into the same serialized loop the user drives —
@@ -232,9 +243,19 @@ export class LocalAgentSession implements BackendHost {
     this.currentAbort?.abort();
   }
 
-  /** End the session: flush a partial evolution window. Call on exit. */
+  /** Connect configured stdio MCP servers + merge their tools into the surface.
+   *  Call once at startup (no-op for empty config). Idempotent-safe to skip. */
+  async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
+    if (!servers || Object.keys(servers).length === 0) return;
+    const conn = await connectMcpServers(servers, (msg) => this.emit({ type: 'evolution', event: 'mcp', message: msg }));
+    this.extraTools = conn.tools;
+    this.mcpClose = conn.close;
+  }
+
+  /** End the session: flush a partial evolution window + disconnect MCP. */
   async end(): Promise<void> {
     await this.orch.flushSession();
+    try { await this.mcpClose?.(); } catch { /* best effort */ }
   }
 
   /**
@@ -292,7 +313,8 @@ export class LocalAgentSession implements BackendHost {
       registeredExecutors: executorNames,
       ...(activeSkills ? { activeSkills } : {}),
     }) + this.factsTail();
-    const turnTools = this.filterToolsBySkills(activeSkills);
+    // Skill-filtered built-ins + the connected MCP tools (always available).
+    const turnTools = { ...this.filterToolsBySkills(activeSkills), ...this.extraTools };
 
     this.history.push({ role: 'user', content: item.text });
 

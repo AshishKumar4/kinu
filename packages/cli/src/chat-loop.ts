@@ -8,7 +8,7 @@
 
 import * as readline from 'node:readline';
 import type { AgentRuntime, AgentInfo, SearchNode, LLMProviderConfig } from '@proteus/core';
-import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent } from '@proteus/cli-backend';
+import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
 import {
   printChatBanner, printSlashHelp, printAgentStatus,
   printSearchTree, printToolCall, printToolResult,
@@ -24,10 +24,11 @@ export interface ChatLoopOpts {
   llmConfig: LLMProviderConfig;
   refreshInfo: () => AgentInfo;
   noAutoEvolve?: boolean;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
-  const { rt, db, dbSize, llmConfig, refreshInfo, noAutoEvolve } = opts;
+  const { rt, db, dbSize, llmConfig, refreshInfo, noAutoEvolve, mcpServers } = opts;
   let info = opts.info;
 
   // Per-turn render state — reset on every turn-start so the agent-name header
@@ -40,8 +41,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     onEvent: (event) => renderEvent(event, info.name, typing, () => headerPrinted, (v) => { headerPrinted = v; }),
   });
 
+  if (mcpServers && Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
   printChatBanner(info, session.toolNames(), !noAutoEvolve);
-  // Recover any background jobs orphaned by a previous exit (durable detach).
+  // Recover background jobs orphaned by a previous exit.
   void session.recoverBackgroundJobs();
 
   const prompt = () => `${ACCENT(info.name)} ${DIM('›')} `;

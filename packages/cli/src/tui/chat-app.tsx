@@ -12,7 +12,7 @@ import { createCliRenderer } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AgentRuntime, AgentInfo, LLMProviderConfig, SearchNode } from '@proteus/core';
-import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent } from '@proteus/cli-backend';
+import { LocalAgentSession, resolveChatModel, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
 
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
@@ -26,18 +26,20 @@ export interface ChatAppOpts {
   llmConfig: LLMProviderConfig;
   refreshInfo: () => AgentInfo;
   noAutoEvolve?: boolean;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 let globalExit: (() => void) | null = null;
 let globalSessionCleanup: (() => Promise<void>) | null = null;
 
-function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, noAutoEvolve }: ChatAppOpts) {
+function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, noAutoEvolve, mcpServers }: ChatAppOpts) {
   const { height } = useTerminalDimensions();
   const [messages, setMessages] = useState<DisplayMessage[]>([
     { id: 'welcome', role: 'system', content: `Connected to ${initialInfo.name}. Type a message or /help for commands.` },
   ]);
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [mcpReady, setMcpReady] = useState(!mcpServers || Object.keys(mcpServers).length === 0);
   const [info, setInfo] = useState(initialInfo);
 
   const msgIdRef = useRef(0);
@@ -155,10 +157,14 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
     if (!text) return;
+    if (!mcpReady) {
+      addMessage({ role: 'system', content: 'MCP tools are still connecting.' });
+      return;
+    }
     if (text.startsWith('/')) { await handleSlash(text); return; }
     addMessage({ role: 'user', content: text });
     try { await session.send(text); } catch { /* errors surface as SessionEvents */ }
-  }, [addMessage, handleSlash, session]);
+  }, [addMessage, handleSlash, mcpReady, session]);
 
   // opentui's `input` intrinsic merges with React DOM's, so onSubmit's type is
   // the intersection of (value: string) and (event: SubmitEvent). opentui passes
@@ -167,12 +173,17 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
     if (typeof value === 'string') void handleSubmit(value);
   }, [handleSubmit]);
 
-  // Fire a partial-session evolution flush on exit; recover orphaned bg jobs once.
+  // Fire a partial-session evolution flush on exit; connect MCP + recover once.
   useEffect(() => {
+    let cancelled = false;
     globalSessionCleanup = async () => { await session.end(); };
-    void session.recoverBackgroundJobs();
-    return () => { globalSessionCleanup = null; };
-  }, [session]);
+    void (async () => {
+      if (mcpServers && Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
+      if (!cancelled) setMcpReady(true);
+      await session.recoverBackgroundJobs();
+    })();
+    return () => { cancelled = true; globalSessionCleanup = null; };
+  }, [session, mcpServers]);
 
   useKeyboard((key) => {
     if (key.name === 'escape') globalExit?.();
@@ -231,8 +242,8 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, refreshInfo, no
         title={isProcessing ? '⟳ processing…' : `${info.name} ›`}
       >
         <input
-          focused={!isProcessing}
-          placeholder={isProcessing ? 'Waiting for response…' : 'Type a message or /help'}
+          focused={mcpReady && !isProcessing}
+          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : 'Type a message or /help'}
           onSubmit={onInputSubmit}
         />
       </box>
