@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { cloudflareUserResultToProfile } from '../src/auth/routes.js';
 import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
@@ -55,10 +56,36 @@ describe('auth and desktop security invariants', () => {
       CLOUDFLARE_OAUTH_CLIENT_ID: 'cid',
       CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec',
     });
+    const routes = source('src/auth/routes.ts');
     expect(provider.id).toBe('cloudflare');
     expect(provider.kind).toBe('oauth');
     expect(provider.scopes).toBe('user-details.read');
     expect(provider.scopes).not.toContain('openid');
+    expect(routes).toContain('processGenericTokenEndpointResponse');
+  });
+
+  test('Cloudflare OAuth profile uses the Cloudflare API user shape', () => {
+    expect(cloudflareUserResultToProfile({
+      id: 'cf-user-1',
+      email: 'ashish@example.com',
+      first_name: null,
+      last_name: null,
+      username: 'ashish',
+    })).toEqual({
+      provider: 'cloudflare',
+      providerSub: 'cf-user-1',
+      email: 'ashish@example.com',
+      emailVerified: true,
+      displayName: 'ashish',
+      avatarUrl: null,
+    });
+
+    expect(cloudflareUserResultToProfile({
+      id: 'cf-user-2',
+      email: 'person@example.com',
+      first_name: 'Ada',
+      last_name: 'Lovelace',
+    }).displayName).toBe('Ada Lovelace');
   });
 
   test('browser UI uses app auth routes rather than Cloudflare Access logout/login URLs', () => {
