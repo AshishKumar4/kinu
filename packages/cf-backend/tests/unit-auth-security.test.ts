@@ -144,8 +144,9 @@ describe('auth and desktop security invariants', () => {
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
     const script = await installScript!.text();
     expect(script).toContain('#!/usr/bin/env bash');
-    expect(script).toContain('PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help');
-    expect(script).toContain('grep -F "setup"');
+    expect(script).toContain('PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help');
+    expect(script).toContain("grep -Eq '^[[:space:]]+setup[[:space:]]'");
+    expect(script).toContain("grep -F '$HOME/.proteus/bin'");
   });
 
   test('CLI shim does not hardcode GitHub archive directory names and supports checksum verification', async () => {
