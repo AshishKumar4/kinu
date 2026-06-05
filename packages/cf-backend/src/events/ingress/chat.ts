@@ -22,7 +22,7 @@ export interface IncomingChat {
   text: string;
   attachments?: ChatPayload['attachments'];
   session_id: string;       // WebSocket session id used as reply-channel holder
-  operator_user_id: string; // From CF Access JWT (server.ts middleware)
+  operator_user_id: string; // From browser auth middleware
   now: number;
 }
 

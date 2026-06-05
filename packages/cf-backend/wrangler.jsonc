@@ -33,11 +33,8 @@
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
-      // Keyed by sha256(email) so the same user always lands on the same DO.
+      // Keyed by stable Proteus userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
-      // CLI device-code flow coordinator. One global namespace; approved
-      // requests mint per-user CLI tokens inside UserDO.
-      { "class_name": "CLIAuthDO", "name": "CLIAuthDO" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -64,21 +61,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": ["ProteusSandbox"]
-    },
-    // Head mode + background review run inside the existing
-    // ExplorationAgent + EvolutionEngine — no additional DO classes.
-    {
-      "tag": "v3",
-      "new_sqlite_classes": ["UserDO"]
-    },
-    {
-      "tag": "v4",
-      "new_sqlite_classes": ["CLIAuthDO"]
+      "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
@@ -96,13 +79,17 @@
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
     "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
-    "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkmr472.workers.dev",
-    // Cloudflare Access — verified against the team's JWKS on every
-    // protected request. Public values (the AUD is an application
-    // identifier, not a secret) so they can live in vars rather than
-    // wrangler secrets.
-    "CF_ACCESS_TEAM_DOMAIN": "aksingh.cloudflareaccess.com",
-    "CF_ACCESS_AUD":         "9a0178af6f03c7e212619f79ffca603a758ce3d951e269568e017c870b8e5390",
+    "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
+    "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
+    "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
+    "CLOUDFLARE_OAUTH_SCOPES": "user-details.read",
+    "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_post",
+    // OAuth provider visibility is config-driven. A provider appears on
+    // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
+    // Set ids as vars and secrets via `wrangler secret put`:
+    //   GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET
+    //   GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET
+    //   CLOUDFLARE_OAUTH_CLIENT_ID / CLOUDFLARE_OAUTH_CLIENT_SECRET
     // ── Nimbus — the default lightweight sandbox ─────────────────────
     // A DO-backed Linux env (github.com/AshishKumar4/Nimbus), deployed at the
     // custom domain below. Registered for every agent as the `nimbus` runtime —
@@ -127,14 +114,25 @@
   "r2_buckets": [
     { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
   ],
+  // D1 auth/session store. Browser auth reads use D1 Sessions API so Cloudflare
+  // can route read-only verification queries to read replicas when replication
+  // is enabled on this database.
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "proteus-auth",
+      "database_id": "87ca0567-04e5-4c66-b0da-86442eb77bf6",
+      "migrations_dir": "migrations/auth"
+    }
+  ],
   // ── Staging environment (headless testing) ──────────────────────
   // A second deployment on *.workers.dev for testing think/tools directly
-  // without Cloudflare Access in the way. Differences from prod: a distinct
+  // without production OAuth secrets in the way. Differences from prod: a distinct
   // worker name (`proteus-staging`) — which gives it ISOLATED Durable Object
   // namespaces, so staging never touches prod data — no custom-domain route,
-  // and `DEV_USER_EMAIL` set with NO `CF_ACCESS_*` vars, so authenticateRequest()
-  // (auth/access.ts) synthesizes a fixed dev identity and the worker is
-  // reachable headlessly. Fully specified because wrangler does not inherit
+  // and `DEV_USER_EMAIL` set, so authenticateRequest() (auth/session.ts)
+  // synthesizes a fixed dev identity and the worker is reachable headlessly.
+  // Fully specified because wrangler does not inherit
   // bindings/vars into named environments. Deploy: `wrangler deploy --env staging`.
   "env": {
     "staging": {
@@ -156,7 +154,6 @@
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
           { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
-          { "class_name": "CLIAuthDO", "name": "CLIAuthDO" },
           { "class_name": "ProteusSandbox", "name": "Sandbox" }
         ]
       },
@@ -169,19 +166,25 @@
         }
       ],
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
-        { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
-        { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
-        { "tag": "v4", "new_sqlite_classes": ["CLIAuthDO"] }
+        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO"] }
       ],
       "ai": { "binding": "AI" },
       "r2_buckets": [
         { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
       ],
+      "d1_databases": [
+        {
+          "binding": "AUTH_DB",
+          "database_name": "proteus-auth-staging",
+          "database_id": "f81423fd-ece5-41ea-a217-b9540ebea502",
+          "migrations_dir": "migrations/auth"
+        }
+      ],
       "vars": {
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
         "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
         "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
+        "CLI_APPROVAL_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
         "DEV_USER_EMAIL": "staging-tester@proteus.dev",
         "NIMBUS_ENDPOINT": "https://nimbus.ashishkumarsingh.com"
       }

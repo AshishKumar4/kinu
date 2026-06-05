@@ -140,7 +140,7 @@ export class PreambleCraftedExecutor {
     providers: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
   ): Promise<{ result: unknown; error?: string; logs?: string[] }> {
     // Normalize to ResolvedProvider[]. Codemode passes an array in current
-    // versions; defensively accept the legacy `Record<name, fn>` shape.
+    // versions; defensively accept the object-shaped provider map too.
     const providerArr: ResolvedProvider[] = Array.isArray(providers)
       ? providers
       : [{ name: 'codemode', fns: providers }];

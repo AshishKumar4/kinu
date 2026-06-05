@@ -5,6 +5,7 @@ import { createLocalModelResolver, openAgentCLI } from '@proteus/cli-backend';
 import { agentDbPath, listAgentDirs, resolveAgentRef, resolveLLMConfig, resolveMcpServers, resolveProviderCredentials } from '../config.js';
 import { runTuiChat } from '../tui/chat-app.js';
 import { runChatLoop } from '../chat-loop.js';
+import { ensureLocalDaemonRunning } from './daemon.js';
 import { printError, ACCENT, DIM } from '../display.js';
 
 export async function chatCommand(name: string | undefined, opts: {
@@ -54,6 +55,7 @@ export async function chatCommand(name: string | undefined, opts: {
     llm: llmConfig,
     credentials: providerCredentials,
   });
+  ensureLocalDaemonRunning();
   const mcpServers = resolveMcpServers();
   const db = new Database(dbPath);
   const { rt, info } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials });

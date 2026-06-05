@@ -1,5 +1,6 @@
 /**
- * UserDO — per-user Durable Object. Keyed by `userId` = sha256(email) truncated.
+ * UserDO — per-user Durable Object. Keyed by the stable Proteus userId.
+ * OAuth identities are mapped by the D1 auth store before requests reach this DO.
  *
  * Owns:
  *   - identity (email, displayName, last_seen)
@@ -18,11 +19,26 @@ import {
   DurableObjectOAuthClientProvider,
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
-import { nanoid, DeviceTunnel, type Credential } from '@proteus/core';
+import {
+  nanoid,
+  DeviceTunnel,
+  createProductChangeStore,
+  productChangeSqlFromExec,
+  type Credential,
+  type ProductChangeBoard,
+  type ProductChangeApproval,
+  type ProductChangeCheck,
+  type ProductChangeRequest,
+  type ProductChangeStatus,
+  type ProductDeploymentRecord,
+  type ProductSourceBinding,
+  type ProductSourceBindingInput,
+} from '@proteus/core';
 import { initUserTables } from './schema.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
 import { resolveAgentTitle } from '../lib/agent-naming.js';
+import { DEVICE_CONSENT_SCOPE, summarizeDeviceAction, type DeviceConsentScope } from './device-consent.js';
 import {
   createCodexOAuthClient, tokensToCredential, CODEX_DEVICE_PORTAL,
   type DeviceCodeStart,
@@ -35,6 +51,7 @@ import {
 
 const CODEX_CRED_KEY = 'codex.oauth';
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 /** Stable per-user OAuth callback path. The full URL is built from the
  *  request origin at add-time so it works in any environment without
@@ -106,6 +123,13 @@ function cleanCliTokenLabel(label?: string): string {
   return trimmed ? trimmed.slice(0, 80) : 'Proteus CLI';
 }
 
+function randomToken(bytes: number): string {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  let bin = '';
+  for (const b of data) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 export class UserDO extends Agent<Env> {
   private _initialized = false;
 
@@ -128,6 +152,11 @@ export class UserDO extends Agent<Env> {
   private sqlx<T = SqlRow>(query: string, ...bindings: unknown[]): T[] {
     this.ensureInit();
     return this.ctx.storage.sql.exec(query, ...bindings).toArray() as T[];
+  }
+
+  private productChanges() {
+    this.ensureInit();
+    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName });
   }
 
   // ── Profile ────────────────────────────────────────────────────────
@@ -332,24 +361,68 @@ export class UserDO extends Agent<Env> {
   // Agents reach a device by forwarding to `deviceRpc()` over a DO-to-DO call.
   private readonly _deviceTunnels = new Map<string, DeviceTunnel>();
 
-  /** Mint a device + connect token. The CLI/UI hands the token to the daemon. */
+  /** Mint a device + connect token. The authenticated CLI receives the raw
+   *  token once and writes it to the local daemon config; only its hash is
+   *  stored here. */
   @callable()
   async registerDevice(label?: string): Promise<{ deviceId: string; token: string }> {
     const deviceId = `dev-${nanoid(10)}`;
-    const token = `pdt_${nanoid(32)}`;
+    const token = `pdt_${randomToken(32)}`;
+    const tokenHash = await sha256Hex(token);
     this.sqlx(
-      `INSERT INTO user_devices (id, token, label, created_at) VALUES (?, ?, ?, ?)`,
-      deviceId, token, (label && label.trim()) || 'My device', Date.now(),
+      `INSERT INTO user_devices (id, token_hash, label, created_at) VALUES (?, ?, ?, ?)`,
+      deviceId, tokenHash, (label && label.trim()) || 'My device', Date.now(),
     );
     return { deviceId, token };
   }
 
-  /** Verify a presented device token (called by pc-handler before WS upgrade). */
+  /** Verify a presented device token against the stored hash. */
   async verifyDeviceToken(token: string): Promise<{ ok: boolean; deviceId?: string }> {
+    if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
+    const tokenHash = await sha256Hex(token);
     const row = this.sqlx<{ id: string }>(
-      `SELECT id FROM user_devices WHERE token = ? AND revoked_at IS NULL LIMIT 1`, token,
+      `SELECT id FROM user_devices WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`, tokenHash,
     )[0];
     return row ? { ok: true, deviceId: row.id } : { ok: false };
+  }
+
+  /** Exchange the daemon's local long-lived token for a one-minute WebSocket
+   *  ticket. The ticket is scoped to this UserDO and can be consumed once. */
+  async issueDeviceConnectTicket(token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
+    const verified = await this.verifyDeviceToken(token);
+    if (!verified.ok || !verified.deviceId) return { ok: false };
+    const now = Date.now();
+    this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
+    const ticket = `pct_${randomToken(32)}`;
+    const expiresAt = now + DEVICE_CONNECT_TICKET_TTL_MS;
+    this.sqlx(
+      `INSERT INTO device_connect_tickets (ticket_hash, device_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+      await sha256Hex(ticket),
+      verified.deviceId,
+      now,
+      expiresAt,
+    );
+    return { ok: true, ticket, expiresAt };
+  }
+
+  /** Consume a short-lived WebSocket connect ticket. */
+  async verifyDeviceConnectTicket(ticket: string): Promise<{ ok: boolean; deviceId?: string }> {
+    if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) return { ok: false };
+    const now = Date.now();
+    this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
+    const ticketHash = await sha256Hex(ticket);
+    const row = this.sqlx<{ device_id: string; expires_at: number; used_at: number | null }>(
+      `SELECT device_id, expires_at, used_at
+         FROM device_connect_tickets
+        WHERE ticket_hash = ? LIMIT 1`,
+      ticketHash,
+    )[0];
+    if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false };
+    this.sqlx(`UPDATE device_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
+    const active = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, row.device_id,
+    )[0];
+    return active ? { ok: true, deviceId: row.device_id } : { ok: false };
   }
 
   /** Accept the daemon's WebSocket and wire it to a DeviceTunnel. Called by
@@ -398,10 +471,10 @@ export class UserDO extends Agent<Env> {
    *  chokepoint. Every agent call passes its name, so we can enforce the
    *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
    *  the agent to raise a consent card and await the user's decision. */
-  async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string; trustedCliTurn?: boolean }): Promise<unknown> {
+  async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string }): Promise<unknown> {
     const deviceId = this.connectedDeviceId(opts?.deviceId);
     if (!deviceId) throw new Error('no device connected');
-    if (opts?.agentName && !opts.trustedCliTurn) {
+    if (opts?.agentName) {
       const allowed = await this.checkDeviceConsent(opts.agentName, deviceId, method, params);
       if (!allowed) throw new Error('device use was not approved');
     }
@@ -417,18 +490,32 @@ export class UserDO extends Agent<Env> {
 
   // ── Device consent (ask-once-then-remember) ──────────────────────────
 
-  private getDeviceConsentPolicy(agentName: string, deviceId: string): 'allow' | 'deny' | null {
-    const row = this.sqlx<{ policy: string }>(
-      `SELECT policy FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
+  private getDeviceConsentPolicy(agentName: string, deviceId: string): { policy: 'allow' | 'deny'; scope: DeviceConsentScope } | null {
+    const row = this.sqlx<{ policy: string; scope: string }>(
+      `SELECT policy, scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
     )[0];
-    return row?.policy === 'allow' || row?.policy === 'deny' ? row.policy : null;
+    if (row?.policy !== 'allow' && row?.policy !== 'deny') return null;
+    return { policy: row.policy, scope: DEVICE_CONSENT_SCOPE };
   }
 
-  private setDeviceConsentPolicy(agentName: string, deviceId: string, policy: 'allow' | 'deny'): void {
+  private setDeviceConsentPolicy(
+    agentName: string,
+    deviceId: string,
+    policy: 'allow' | 'deny',
+    lastAction?: { method: string; command: string },
+  ): void {
     this.sqlx(
-      `INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(agent_name, device_id) DO UPDATE SET policy = excluded.policy, updated_at = excluded.updated_at`,
-      agentName, deviceId, policy, Date.now(),
+      `INSERT INTO device_consent
+         (agent_name, device_id, policy, scope, last_method, last_summary, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(agent_name, device_id) DO UPDATE SET
+         policy = excluded.policy,
+         scope = excluded.scope,
+         last_method = excluded.last_method,
+         last_summary = excluded.last_summary,
+         updated_at = excluded.updated_at`,
+      agentName, deviceId, policy, DEVICE_CONSENT_SCOPE,
+      lastAction?.method ?? null, lastAction?.command ?? null, Date.now(),
     );
   }
 
@@ -436,31 +523,61 @@ export class UserDO extends Agent<Env> {
    *  circuit; otherwise the agent renders a card and the user decides. */
   private async checkDeviceConsent(agentName: string, deviceId: string, method: string, params: unknown[]): Promise<boolean> {
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    if (policy === 'allow') return true;
-    if (policy === 'deny') return false;
-    const command = method === 'exec' ? String(params[0] ?? '') : `${method}(${params.map((p) => String(p)).join(', ').slice(0, 80)})`;
+    if (policy?.policy === 'allow' && policy.scope === DEVICE_CONSENT_SCOPE) return true;
+    if (policy?.policy === 'deny') return false;
+    const action = summarizeDeviceAction(method, params);
     let decision: 'once' | 'always' | 'deny';
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName)) as unknown as {
-        awaitDeviceConsent(req: { deviceId: string; deviceLabel: string; command: string }): Promise<'once' | 'always' | 'deny'>;
+        awaitDeviceConsent(req: {
+          deviceId: string;
+          deviceLabel: string;
+          method: string;
+          command: string;
+          scope: DeviceConsentScope;
+        }): Promise<'once' | 'always' | 'deny'>;
       };
-      decision = await stub.awaitDeviceConsent({ deviceId, deviceLabel: this.deviceLabel(deviceId), command });
+      decision = await stub.awaitDeviceConsent({
+        deviceId,
+        deviceLabel: this.deviceLabel(deviceId),
+        method: action.method,
+        command: action.command,
+        scope: DEVICE_CONSENT_SCOPE,
+      });
     } catch {
       return false; // agent unreachable / timed out → fail closed (not remembered)
     }
     // Only "always" is remembered; "once" and "deny" are per-call decisions.
     if (decision === 'deny') return false;
-    if (decision === 'always') this.setDeviceConsentPolicy(agentName, deviceId, 'allow');
+    if (decision === 'always') this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action);
     return true;
   }
 
   /** The remembered consent policies (Devices tab — see/revoke which agents may
    *  use a device). */
   @callable()
-  async listDeviceConsents(): Promise<Array<{ agentName: string; deviceId: string; policy: string }>> {
-    return this.sqlx<{ agent_name: string; device_id: string; policy: string }>(
-      `SELECT agent_name, device_id, policy FROM device_consent ORDER BY updated_at DESC`,
-    ).map((r) => ({ agentName: r.agent_name, deviceId: r.device_id, policy: r.policy }));
+  async listDeviceConsents(): Promise<Array<{
+    agentName: string;
+    deviceId: string;
+    policy: string;
+    scope: string;
+    lastMethod: string | null;
+    lastSummary: string | null;
+  }>> {
+    return this.sqlx<{
+      agent_name: string; device_id: string; policy: string; scope: string;
+      last_method: string | null; last_summary: string | null;
+    }>(
+      `SELECT agent_name, device_id, policy, scope, last_method, last_summary
+       FROM device_consent ORDER BY updated_at DESC`,
+    ).map((r) => ({
+      agentName: r.agent_name,
+      deviceId: r.device_id,
+      policy: r.policy,
+      scope: r.scope,
+      lastMethod: r.last_method,
+      lastSummary: r.last_summary,
+    }));
   }
 
   /** Forget a remembered consent (next use re-asks). */
@@ -495,6 +612,77 @@ export class UserDO extends Agent<Env> {
     this._deviceTunnels.delete(deviceId);
     this.sqlx(`UPDATE user_devices SET revoked_at = ?, connected_at = NULL WHERE id = ?`, Date.now(), deviceId);
     return { ok: true };
+  }
+
+  // ── Product changes ─────────────────────────────────────────────────
+
+  @callable()
+  async listProductSourceBindings(): Promise<ProductSourceBinding[]> {
+    return this.productChanges().listSourceBindings();
+  }
+
+  @callable()
+  async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
+    return this.productChanges().upsertSourceBinding(input);
+  }
+
+  @callable()
+  async createProductChange(agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
+    return this.productChanges().createChange(agentName, input);
+  }
+
+  @callable()
+  async listProductChanges(agentName?: string, limit = 20): Promise<ProductChangeRequest[]> {
+    return this.productChanges().listChanges(agentName, limit);
+  }
+
+  @callable()
+  async updateProductChange(
+    changeId: string,
+    patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
+  ): Promise<ProductChangeRequest> {
+    return this.productChanges().updateChange(changeId, patch);
+  }
+
+  @callable()
+  async transitionProductChange(changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest> {
+    return this.productChanges().transitionChange(changeId, to);
+  }
+
+  @callable()
+  async recordProductChangeCheck(
+    changeId: string,
+    input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
+  ): Promise<ProductChangeCheck> {
+    return this.productChanges().recordCheck(changeId, input);
+  }
+
+  @callable()
+  async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval> {
+    return this.productChanges().requestApproval(changeId, approvalType);
+  }
+
+  @callable()
+  async decideProductChangeApproval(
+    approvalId: string,
+    decision: 'approved' | 'rejected',
+    approvedBy: string,
+    note?: string | null,
+  ): Promise<ProductChangeApproval> {
+    return this.productChanges().decideApproval(approvalId, decision, approvedBy, note);
+  }
+
+  @callable()
+  async recordProductDeployment(
+    changeId: string,
+    input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
+  ): Promise<ProductDeploymentRecord> {
+    return this.productChanges().recordDeployment(changeId, input);
+  }
+
+  @callable()
+  async getProductChangeBoard(agentName?: string, limit = 20): Promise<ProductChangeBoard> {
+    return this.productChanges().board(agentName, limit);
   }
 
   // ── Credentials ────────────────────────────────────────────────────
@@ -827,7 +1015,7 @@ export class UserDO extends Agent<Env> {
     );
     authProvider.serverId = id;
 
-    // Header passthrough for non-OAuth servers behind CF Access / Bearer.
+	    // Header passthrough for non-OAuth servers behind private/bearer auth.
     // Set both eventSourceInit (SSE path) and requestInit (Streamable HTTP)
     // so `transport: 'auto'` works either way.
     const headerOpts = cfg.headers

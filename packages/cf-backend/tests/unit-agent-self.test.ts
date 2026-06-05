@@ -51,9 +51,11 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const p = createAgentSelfProvider(host);
     expect(await p.tools.schedule.execute({})).toEqual({ error: expect.stringContaining("provide { cron } or { atMs }") });
     expect(await p.tools.schedule.execute({ atMs: 1 })).toEqual({ error: expect.stringContaining("must be in the future") });
-    const ok = await p.tools.schedule.execute({ cron: "0 * * * *", label: "hourly" });
+    expect(await p.tools.schedule.execute({ cron: "not a cron" })).toEqual({ error: expect.stringContaining("unsupported cron expression") });
+    expect(host.calls).toEqual([]);
+    const ok = await p.tools.schedule.execute({ cron: "0 12 * * *", label: "daily" });
     expect(ok).toMatchObject({ id: "trg1", kind: "timer_cron" });
-    expect(host.calls).toContain("timer:0 * * * *");
+    expect(host.calls).toContain("timer:0 12 * * *");
   });
 
   test("error from the host surfaces as an envelope, not a throw", async () => {

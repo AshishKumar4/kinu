@@ -6,7 +6,7 @@
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
@@ -55,6 +55,18 @@ function capturingModel(answer: string, sink: (toolNames: string[]) => void): La
     ...base,
     doStream: async (options: { tools?: Array<{ name: string }> }) => {
       sink((options.tools ?? []).map((t) => t.name));
+      return inner(options);
+    },
+  } as unknown as LanguageModel;
+}
+
+function historyCapturingModel(answer: string, sink: (messages: ModelMessage[]) => void): LanguageModel {
+  const base = fakeModel(answer) as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+  const inner = base.doStream.bind(base);
+  return {
+    ...base,
+    doStream: async (options: { messages?: ModelMessage[]; prompt?: ModelMessage[] }) => {
+      sink(options.messages ?? options.prompt ?? []);
       return inner(options);
     },
   } as unknown as LanguageModel;
@@ -126,7 +138,47 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows.map((r) => r.role)).toEqual(['user', 'assistant']);
     expect(rows[1]!.content).toBe('hello there');
   });
+
+  test('restores persisted history for the same durable session id', async () => {
+    const { db, rt, session } = setup('remembered answer');
+    await session.send('remember this');
+    await session.end();
+
+    let observed: ModelMessage[] = [];
+    const events: SessionEvent[] = [];
+    const resumed = new LocalAgentSession({
+      rt,
+      db,
+      sessionId: 'default',
+      model: historyCapturingModel('next answer', (messages) => { observed = messages; }),
+      onEvent: (e) => events.push(e),
+      noAutoEvolve: true,
+    });
+
+    await resumed.send('what did I say?');
+    await resumed.end();
+
+    const text = observed.map(messageText);
+    expect(text).toContain('remember this');
+    expect(text).toContain('remembered answer');
+    expect(text.at(-1)).toBe('what did I say?');
+    expect(text.indexOf('remember this')).toBeLessThan(text.indexOf('remembered answer'));
+    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+  });
 });
+
+function messageText(message: ModelMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((part) => {
+        if (part && typeof part === 'object' && 'text' in part) return String(part.text);
+        return JSON.stringify(part);
+      })
+      .join('');
+  }
+  return JSON.stringify(message.content);
+}
 
 describe('LocalAgentSession — programmatic turns (reactor / background-job wake)', () => {
   test('enqueueTurn runs serialized after the user turn, marked with its event', async () => {
@@ -147,11 +199,10 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
   test('enqueueTurn self-starts the pump when idle (a wake with no user turn)', async () => {
     const { session, events } = setup('woke');
     await session.enqueueTurn({ text: 'wake up', metadata: { proteusEvent: 'background_job' } });
-    // Give the self-started pump a tick to finish.
-    await new Promise<void>((r) => setTimeout(r, 5));
     const starts = turnStarts(events);
     expect(starts).toHaveLength(1);
     expect(starts[0]!.kind).toBe('programmatic');
+    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
   });
 });
 

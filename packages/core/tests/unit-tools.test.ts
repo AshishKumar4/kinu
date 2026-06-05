@@ -8,6 +8,7 @@
  *   - think            ← thinkTool (StrategyRegistry; subsumes the old bare
  *                        `explore` + `split_heads` tools via strategy ids)
  *   - fact             ← facts (FactsStore; remember/recall/forget actions)
+ *   - product_change   ← productChanges (source bindings + approvals store)
  *
  * BUILTIN_TOOLS lists every canonical name so crafted-tool filtering
  * (BUILT_IN_TOOL_NAMES) excludes them all from craft suggestions, regardless
@@ -71,9 +72,9 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-// skills, think, and fact are conditional on their deps. Base = everything
+// skills, think, fact, and product_change are conditional on their deps. Base = everything
 // else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'think', 'fact'] as const;
+const CONDITIONAL_TOOLS = ['skills', 'think', 'fact', 'product_change'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
@@ -115,6 +116,54 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
       recordInvoke() { /* nop */ },
       currentlyInvoked: () => [],
     };
+    const stubProductChanges = {
+      board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
+      bindSource: async () => ({
+        id: 'psb-test',
+        kind: 'local' as const,
+        label: 'test',
+        repoUrl: null,
+        defaultBranch: null,
+        localDeviceId: null,
+        localRoot: '/tmp/proteus',
+        deployTarget: null,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
+      create: async () => ({ id: 'pc-test' }),
+      update: async () => ({ id: 'pc-test' }),
+      transition: async () => ({ id: 'pc-test' }),
+      recordCheck: async () => ({
+        id: 'pcc-test',
+        changeId: 'pc-test',
+        name: 'check',
+        status: 'passed' as const,
+        stdout: null,
+        stderr: null,
+        durationMs: null,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
+      requestApproval: async () => ({
+        id: 'pca-test',
+        changeId: 'pc-test',
+        approvalType: 'apply' as const,
+        decision: 'pending' as const,
+        approvedBy: null,
+        note: null,
+        createdAt: 0,
+        decidedAt: null,
+      }),
+      recordDeployment: async () => ({
+        id: 'pcd-test',
+        changeId: 'pc-test',
+        environment: 'staging' as const,
+        workerVersionId: null,
+        deploymentId: null,
+        rollbackTarget: null,
+        deployedAt: 0,
+      }),
+    };
     const t = buildBuiltinTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
@@ -123,6 +172,7 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
       thinkTool: stubThink,
       facts: stubFacts,
       skills: stubSkillsDeps,
+      productChanges: stubProductChanges,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);

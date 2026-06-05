@@ -19,7 +19,8 @@
  *                           see each other.
  *
  * Both modes share: Facet class, getModel() helper, lifecycle, parallel-
- * spawn infrastructure (rt.spawnBranch). No separate `HeadAgent` class.
+ * spawn infrastructure (rt.spawnBranch). Heads are a mode of this Facet, not
+ * a separate agent class.
  *
  * Constraints (Agent SDK facets):
  *   • schedule(), keepAlive(), runFiber() all throw in facets

@@ -37,6 +37,13 @@ import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
+import type {
+  ProductChangeApproval,
+  ProductChangeCheck,
+  ProductChangeStatus,
+  ProductDeploymentRecord,
+  ProductSourceBinding,
+} from '../product-change/index.js';
 
 /**
  * Narrow local shape of @cloudflare/think/tools/execute#createExecuteTool.
@@ -124,6 +131,39 @@ export interface BuiltinToolDeps {
    *  per-turn invocation state and passes it back via `recordInvoke` /
    *  `currentlyInvoked`. */
   skills?: SkillsToolDeps;
+  /** Product self-customization lane. Backend-supplied because persistence,
+   *  source bindings, approval identity, and deployments are platform-owned. */
+  productChanges?: ProductChangeToolDeps;
+}
+
+export interface ProductChangeToolDeps {
+  board(): Promise<unknown>;
+  bindSource(input: {
+    kind: 'local' | 'github';
+    label: string;
+    repoUrl?: string | null;
+    defaultBranch?: string | null;
+    localDeviceId?: string | null;
+    localRoot?: string | null;
+    deployTarget?: string | null;
+  }): Promise<ProductSourceBinding>;
+  create(input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<unknown>;
+  update(changeId: string, patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null }): Promise<unknown>;
+  transition(changeId: string, status: ProductChangeStatus): Promise<unknown>;
+  recordCheck(changeId: string, input: {
+    name: string;
+    status: ProductChangeCheck['status'];
+    stdout?: string | null;
+    stderr?: string | null;
+    durationMs?: number | null;
+  }): Promise<ProductChangeCheck>;
+  requestApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval>;
+  recordDeployment(changeId: string, input: {
+    environment: ProductDeploymentRecord['environment'];
+    workerVersionId?: string | null;
+    deploymentId?: string | null;
+    rollbackTarget?: string | null;
+  }): Promise<ProductDeploymentRecord>;
 }
 
 /**
@@ -216,8 +256,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // ── 1. execute_tools ─────────────────────────────────────────────────────
   // single code path. Crafted tools always dispatch through
   // deps.craftedToolExecute (CF → LOADER Worker, CLI → Node eval).
-  // Host-side codegen is GONE — the Proxy live-lookup that used it is
-  // deleted, and the legacy in-process compile path is no longer here.
+  // Host-side codegen is gone; crafted tools dispatch through the configured
+  // runtime executor instead of compiling inside this module.
   const preexistingCraftNames = new Set<string>();
   const craftedToolSet = deps.craftedToolExecute
     ? buildCraftedToolSetFromExecute(
@@ -392,9 +432,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   // ── 3. think — unified exploration dispatcher (single-shot / mcts / heads) ──
   // Built by the orchestrator (which owns the StrategyRegistry + HeadController +
-  // MCTS session). The legacy `explore` (bare MCTS) and `split_heads` (bare
-  // heads) tools were removed — `think` subsumes both via strategy ids, keeping
-  // the agent's tool surface small (fewer tools → better selection).
+  // MCTS session). `think` subsumes bare MCTS and heads entrypoints via
+  // strategy ids, keeping the agent's tool surface small.
   if (deps.thinkTool) {
     tools.think = deps.thinkTool;
   }
@@ -486,6 +525,160 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         const existed = facts.recall(args.key) !== null;
         facts.forget(args.key);
         return { ok: true, key: args.key, existed };
+      },
+    });
+  }
+
+  // ── 6. product_change — governed product/UI self-customization lane ───────
+  if (deps.productChanges) {
+    const productChanges = deps.productChanges;
+    tools.product_change = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.product_change,
+      inputSchema: jsonSchema<{
+        action:
+          | 'board'
+          | 'bind_source'
+          | 'create'
+          | 'update'
+          | 'transition'
+          | 'record_check'
+          | 'request_approval'
+          | 'record_deployment';
+        binding?: {
+          kind?: 'local' | 'github';
+          label?: string;
+          repoUrl?: string | null;
+          defaultBranch?: string | null;
+          localDeviceId?: string | null;
+          localRoot?: string | null;
+          deployTarget?: string | null;
+        };
+        changeId?: string;
+        bindingId?: string;
+        userPrompt?: string;
+        plan?: string | null;
+        summary?: string | null;
+        patch?: string | null;
+        previewUrl?: string | null;
+        status?: ProductChangeStatus;
+        check?: { name?: string; status?: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null };
+        approvalType?: ProductChangeApproval['approvalType'];
+        deployment?: {
+          environment?: ProductDeploymentRecord['environment'];
+          workerVersionId?: string | null;
+          deploymentId?: string | null;
+          rollbackTarget?: string | null;
+        };
+      }>({
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment'],
+          },
+          binding: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['local', 'github'] },
+              label: { type: 'string' },
+              repoUrl: { type: 'string' },
+              defaultBranch: { type: 'string' },
+              localDeviceId: { type: 'string' },
+              localRoot: { type: 'string' },
+              deployTarget: { type: 'string' },
+            },
+          },
+          changeId: { type: 'string' },
+          bindingId: { type: 'string' },
+          userPrompt: { type: 'string' },
+          plan: { type: 'string' },
+          summary: { type: 'string' },
+          patch: { type: 'string', description: 'Unified diff for display. The backend redacts sensitive-looking lines before storage.' },
+          previewUrl: { type: 'string' },
+          status: {
+            type: 'string',
+            enum: ['draft', 'planning', 'patching', 'validating', 'preview_ready', 'awaiting_approval', 'applying', 'deployed', 'rejected', 'rolled_back', 'failed'],
+          },
+          check: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              status: { type: 'string', enum: ['pending', 'running', 'passed', 'failed', 'skipped'] },
+              stdout: { type: 'string' },
+              stderr: { type: 'string' },
+              durationMs: { type: 'number' },
+            },
+          },
+          approvalType: { type: 'string', enum: ['apply', 'deploy_staging', 'deploy_production', 'rollback'] },
+          deployment: {
+            type: 'object',
+            properties: {
+              environment: { type: 'string', enum: ['local', 'staging', 'production'] },
+              workerVersionId: { type: 'string' },
+              deploymentId: { type: 'string' },
+              rollbackTarget: { type: 'string' },
+            },
+          },
+        },
+        required: ['action'],
+      }),
+      execute: async (args) => {
+        try {
+          switch (args.action) {
+            case 'board':
+              return await productChanges.board();
+            case 'bind_source': {
+              const b = args.binding ?? {};
+              if (b.kind !== 'local' && b.kind !== 'github') return { error: 'binding.kind must be local or github' };
+              if (!b.label) return { error: 'binding.label is required' };
+              return await productChanges.bindSource({
+                kind: b.kind,
+                label: b.label,
+                repoUrl: b.repoUrl,
+                defaultBranch: b.defaultBranch,
+                localDeviceId: b.localDeviceId,
+                localRoot: b.localRoot,
+                deployTarget: b.deployTarget,
+              });
+            }
+            case 'create':
+              if (!args.bindingId || !args.userPrompt) return { error: 'create requires bindingId and userPrompt' };
+              return await productChanges.create({ bindingId: args.bindingId, userPrompt: args.userPrompt, plan: args.plan });
+            case 'update':
+              if (!args.changeId) return { error: 'update requires changeId' };
+              return await productChanges.update(args.changeId, {
+                plan: args.plan,
+                summary: args.summary,
+                patch: args.patch,
+                previewUrl: args.previewUrl,
+              });
+            case 'transition':
+              if (!args.changeId || !args.status) return { error: 'transition requires changeId and status' };
+              return await productChanges.transition(args.changeId, args.status);
+            case 'record_check':
+              if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
+              return await productChanges.recordCheck(args.changeId, {
+                name: args.check.name,
+                status: args.check.status,
+                stdout: args.check.stdout,
+                stderr: args.check.stderr,
+                durationMs: args.check.durationMs,
+              });
+            case 'request_approval':
+              if (!args.changeId || !args.approvalType) return { error: 'request_approval requires changeId and approvalType' };
+              return await productChanges.requestApproval(args.changeId, args.approvalType);
+            case 'record_deployment':
+              if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
+              return await productChanges.recordDeployment(args.changeId, {
+                environment: args.deployment.environment,
+                workerVersionId: args.deployment.workerVersionId,
+                deploymentId: args.deployment.deploymentId,
+                rollbackTarget: args.deployment.rollbackTarget,
+              });
+          }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
       },
     });
   }

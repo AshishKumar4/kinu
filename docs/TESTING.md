@@ -1,10 +1,8 @@
 # Testing Proteus
 
-> Edited & maintained by Claude, presented as-is.
-
-The project ships with a 320+ test suite — unit, integration, e2e, contract.
-This doc covers the conventions, where things live, and how to add tests
-when you ship a new feature.
+Proteus uses Bun's test runner across the shared core, Cloudflare backend,
+local backend, and root end-to-end suites. This doc covers the conventions,
+where things live, and how to add tests when shipping a new feature.
 
 ## TL;DR
 
@@ -13,10 +11,16 @@ bash scripts/test.sh                     # all tests
 bash scripts/test.sh --coverage          # + coverage report
 bash scripts/test.sh --bail              # exit on first failure
 bash scripts/test.sh packages/core/tests/contract-providers.test.ts   # one file
+bun run check                            # TypeScript type-check
 ```
 
-Baseline: **321 pass, 0 fail, 3 skip** across 44 files. Line coverage ~75%,
-function coverage ~72%.
+For focused local checks:
+
+```bash
+bun test --cwd packages/core
+bun test packages/cf-backend/tests
+bun test packages/cli-backend/tests
+```
 
 ## Test categories
 
@@ -37,17 +41,20 @@ config:
 ```
 packages/
 ├─ core/tests/
-│  ├─ unit-*.test.ts          (38 files — pure logic)
-│  ├─ integration-*.test.ts   (2 files — multi-module flows)
+│  ├─ unit-*.test.ts          (pure logic)
+│  ├─ integration-*.test.ts   (multi-module flows)
 │  ├─ contract-providers.test.ts  (HTTP wire format per provider)
-│  ├─ e2e/                    (scaffold-e2e.test.ts, mcts-e2e.test.ts)
-│  └─ helpers.ts              (legacy — most have moved to @proteus/test-utils)
+│  └─ helpers.ts              (package-local helpers)
 ├─ cf-backend/tests/
 │  ├─ unit-agent-registry.test.ts  (provider registry composition)
-│  ├─ unit-codex-oauth.test.ts     (device-code flow with mock fetch)
-│  ├─ unit-credentials-store.test.ts  (DO-SQL store contract)
+│  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
+│  ├─ unit-cli-auth-store.test.ts  (D1-backed device-code flow)
 │  ├─ unit-rlm.test.ts             (Recursive Language Model bridge)
-│  └─ unit-auth-routes.test.ts     (URL parser, pure)
+│  └─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
+├─ cli-backend/tests/
+│  ├─ local-session.test.ts        (local agent session behavior)
+│  ├─ model-resolver.test.ts       (provider/model selection)
+│  └─ executor.test.ts             (local execution tools)
 └─ test-utils/src/
    ├─ sql.ts            ── createTestSql()
    ├─ llm.ts            ── createScriptedLLM / JSONLLM / EchoLLM / FailingLLM
@@ -57,6 +64,11 @@ packages/
    ├─ events.ts         ── assertEventSequence / collectEvents
    ├─ credentials.ts    ── createTestCredentials / freshOAuthCredential
    └─ facts.ts          ── createTestFactsStore
+tests/
+├─ e2e-lifecycle.test.ts
+├─ e2e-full-lifecycle.test.ts
+├─ deep-evolution.test.ts
+└─ evolution-proof.test.ts
 ```
 
 ## Mocking philosophy

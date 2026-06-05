@@ -98,8 +98,8 @@ export interface ScaffoldRunOptions {
    * this runs the standard host inference (the AI SDK streamText the agent
    * would otherwise use) and streams its UI message chunks back as
    * 'ui_chunk' events. Lets a scaffold delegate to / wrap the default loop
-   * instead of reimplementing the tool-call loop. Absent → host.defaultInference
-   * returns an error.
+   * instead of reimplementing the tool-call loop. Absent means this host
+   * capability is unavailable and host.defaultInference returns an error.
    */
   defaultInference?: () => AsyncIterable<unknown>;
   /** Hard timeout in milliseconds. Default 5 min. */
@@ -140,7 +140,7 @@ function buildHostProvider(opts: {
     },
     callTool: async (name: unknown, args: unknown) => {
       if (typeof name !== 'string') return { error: 'host.callTool: name must be a string' };
-      if (!callTool) return { error: 'host.callTool: no callTool wired (parent provides ToolSet only when scaffold mode is enabled)' };
+      if (!callTool) return { error: 'host.callTool: unavailable in this runtime (parent provides ToolSet only when scaffold mode is enabled)' };
       const callId = `tc-${Math.random().toString(36).slice(2, 10)}`;
       const parsedArgs = (args && typeof args === 'object' && !Array.isArray(args)) ? args as Record<string, unknown> : {};
       await pushEvent({ type: 'tool_call', name, args: parsedArgs, toolCallId: callId });
@@ -178,7 +178,7 @@ function buildHostProvider(opts: {
       // default loop without reimplementing it. The chunks are emitted
       // host-side — they do NOT round-trip through the sandbox per chunk.
       if (!defaultInference) {
-        return { error: 'host.defaultInference: not wired on this runtime' };
+        return { error: 'host.defaultInference: unavailable in this runtime' };
       }
       try {
         for await (const chunk of defaultInference()) {
@@ -329,8 +329,8 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
  * or `async function* run(rt, task)`, the wrapper code drives it correctly
  * and emits done at the end.
  *
- * We inject the scaffold source verbatim, then call `run`. For legacy
- * generator scaffolds, we iterate the generator and forward each yield
+ * We inject the scaffold source verbatim, then call `run`. For generator
+ * scaffolds, we iterate the generator and forward each yield
  * to host.emit (mapping `{type:'chunk', data}` → text_delta).
  */
 function buildScaffoldWrapperCode(scaffoldSource: string, task: string): string {
@@ -340,7 +340,7 @@ function buildScaffoldWrapperCode(scaffoldSource: string, task: string): string 
   //
   // The task is injected as a JSON literal (the live `rt` object cannot cross
   // the codemode sandbox boundary, so the scaffold uses `host.*` + this task).
-  // `rt` is passed as the literal task string for the legacy 2-arg generator
+  // `rt` is passed as the literal task string for the 2-arg generator
   // signature `run(rt, task)` — both params receive the task so a scaffold
   // can read it from either; neither is the host `rt` object.
   //

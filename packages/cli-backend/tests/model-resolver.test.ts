@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createLocalModelResolver } from '../src/model-resolver.js';
 
 describe('createLocalModelResolver', () => {
-  test('normalizes legacy Workers AI model ids to provider-style specs', async () => {
+  test('normalizes Workers AI model ids to provider-style specs', async () => {
     const resolver = createLocalModelResolver({
       llm: {
         name: 'workers-ai',
@@ -50,5 +50,38 @@ describe('createLocalModelResolver', () => {
     for (const id of ['openai', 'anthropic', 'openrouter', 'openai-compat', 'openai-compat:groq']) {
       expect(providers.find((p) => p.id === id)?.available).toBe(true);
     }
+  });
+
+  test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
+    const resolver = createLocalModelResolver({
+      llm: {
+        name: 'anthropic',
+        baseURL: 'https://api.anthropic.com/v1',
+        headers: { 'x-api-key': 'sk-ant', 'anthropic-version': '2023-06-01' },
+        model: 'claude-sonnet-4-5',
+      },
+      credentials: {},
+      fetch: async () => new Response('{}'),
+    });
+
+    expect(resolver.normalizeSpecSync(null)).toBe('anthropic/claude-sonnet-4-5');
+    const providers = await resolver.listProviders();
+    expect(providers.find((p) => p.id === 'anthropic')?.available).toBe(true);
+  });
+
+  test('uses the direct OpenAI provider as default when configured from OpenAI credentials', () => {
+    const resolver = createLocalModelResolver({
+      llm: {
+        name: 'openai',
+        baseURL: 'https://api.openai.com/v1',
+        headers: { Authorization: 'Bearer sk-openai' },
+        model: 'gpt-4o-mini',
+      },
+      credentials: {},
+      fetch: async () => new Response('{}'),
+    });
+
+    expect(resolver.normalizeSpecSync(null)).toBe('openai/gpt-4o-mini');
+    expect(resolver.normalizeSpecSync('gpt-5')).toBe('openai/gpt-5');
   });
 });

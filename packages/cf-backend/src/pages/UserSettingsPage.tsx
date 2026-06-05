@@ -116,9 +116,11 @@ export default function UserSettingsPage() {
         </Card>
 
         <Card title="CLI" icon={KeyIcon}>
-          <div className="space-y-2">
-            <CommandCopy label="Install" command={cliSetup?.installCommand ?? 'curl -fsSL https://proteus.ashishkmr472.workers.dev/install.sh | sh'} />
-            <CommandCopy label="Sign in" command={cliSetup?.authCommand ?? 'proteus auth --origin https://proteus.ashishkmr472.workers.dev'} />
+          <div className="space-y-3">
+            <p className="text-xs p-text-2">
+              Install the CLI, sign in through the browser, and configure local execution from one terminal command.
+            </p>
+            <CommandCopy label="Setup" command={cliSetup?.installCommand ?? "curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash"} />
           </div>
         </Card>
 

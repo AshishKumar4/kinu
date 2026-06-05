@@ -7,9 +7,9 @@
  *   - On create: shows the URL + secret ONCE + an inline curl test command
  *   - Cancel button per trigger (revokes; idempotent)
  *
- * Step-up auth: creating a durable webhook requires a fresh CF Access JWT
- * (≤5 min since login). If POST returns 401 with the step-up message,
- * we send the user to CF Access to re-authenticate and return.
+ * Step-up auth: creating a durable webhook requires a fresh Proteus browser
+ * session (≤5 min since login). If POST returns 401 with the step-up message,
+ * we send the user through Proteus login and return here.
  */
 import { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
@@ -23,8 +23,6 @@ import {
   listTriggers, createDurableWebhook, cancelTrigger,
   type TriggerSummary, type CreateWebhookResult,
 } from "../lib/user-api";
-
-const STEP_UP_LOGIN_PATH = '/cdn-cgi/access/login/proteus.ashishkumarsingh.com';
 
 const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
   + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
@@ -270,7 +268,10 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
       const msg = (e as Error).message;
       if (msg.includes('step-up')) {
         if (confirm('A fresh login is required to create webhook URLs. Redirect to sign in?')) {
-          window.location.href = STEP_UP_LOGIN_PATH;
+          const login = new URL('/login', window.location.origin);
+          login.searchParams.set('prompt', 'login');
+          login.searchParams.set('return_to', window.location.pathname + window.location.search);
+          window.location.href = login.toString();
         }
       } else {
         setErr(msg);

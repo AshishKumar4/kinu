@@ -165,7 +165,7 @@ describe('runGepa with Merge end-to-end', () => {
     expect(result.winner.aggregateScore).toBeCloseTo(0.95, 3);
   });
 
-  test('useMerge: false disables the operator (legacy behavior)', async () => {
+  test('useMerge: false disables the operator', async () => {
     const evalSet: EvalInstance<string>[] = [
       { id: 'i1', input: 'a' }, { id: 'i2', input: 'b' },
     ];

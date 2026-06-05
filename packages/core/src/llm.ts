@@ -7,6 +7,7 @@
  */
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import type { LLM } from './types/primitives.js';
@@ -33,13 +34,7 @@ export interface LLMProviderConfig {
  * - Any OpenAI-compatible provider
  */
 export function createVercelAILLM(config: LLMProviderConfig): LLM {
-  const provider = createOpenAICompatible({
-    name: config.name,
-    baseURL: config.baseURL,
-    headers: config.headers,
-  });
-
-  const model = provider.chatModel(config.model);
+  const model = createModelFromLLMConfig(config);
   const maxOutputTokens = config.maxTokens ?? 2048;
 
   return {
@@ -136,6 +131,12 @@ export type ChatModelConfig =
       baseURL: string;
       headers: Record<string, string>;
       modelId: string;
+    }
+  | {
+      kind: 'anthropic';
+      baseURL?: string;
+      headers: Record<string, string>;
+      modelId: string;
     };
 
 export function createChatModel(config: ChatModelConfig): LanguageModel {
@@ -146,9 +147,54 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
       headers: { Authorization: config.auth },
     }).chatModel(config.modelId);
   }
+  if (config.kind === 'anthropic') {
+    return createAnthropicModel({
+      name: 'anthropic',
+      baseURL: config.baseURL ?? 'https://api.anthropic.com/v1',
+      headers: config.headers,
+      model: config.modelId,
+    });
+  }
   return createOpenAICompatible({
     name: config.name ?? 'openai-compat',
     baseURL: config.baseURL,
     headers: config.headers,
   }).chatModel(config.modelId);
+}
+
+function createModelFromLLMConfig(config: LLMProviderConfig): LanguageModel {
+  if (config.name === 'anthropic') return createAnthropicModel(config);
+  return createOpenAICompatible({
+    name: config.name,
+    baseURL: config.baseURL,
+    headers: config.headers,
+  }).chatModel(config.model);
+}
+
+function createAnthropicModel(config: Pick<LLMProviderConfig, 'name' | 'baseURL' | 'headers' | 'model'>): LanguageModel {
+  const headers = { ...config.headers };
+  const apiKey = headers['x-api-key'] ?? headers['X-Api-Key'];
+  delete headers['x-api-key'];
+  delete headers['X-Api-Key'];
+
+  const authorization = headers.Authorization ?? headers.authorization;
+  const authToken = apiKey ? undefined : bearerToken(authorization);
+  if (authToken) {
+    delete headers.Authorization;
+    delete headers.authorization;
+  }
+
+  const provider = createAnthropic({
+    name: config.name,
+    baseURL: config.baseURL,
+    ...(apiKey ? { apiKey } : {}),
+    ...(authToken ? { authToken } : {}),
+    headers,
+  });
+  return provider.languageModel(config.model);
+}
+
+function bearerToken(value: string | undefined): string | undefined {
+  const match = /^Bearer\s+(.+)$/i.exec(value ?? '');
+  return match?.[1]?.trim() || undefined;
 }

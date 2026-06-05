@@ -114,6 +114,8 @@ import {
   initGepaTables, startGepaRun, finishGepaRun, makePersistingHook, listGepaRuns,
   loadGepaCandidates,
   type EvalInstance, type MetricOutcome, type GepaRunSummary,
+  type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
+  type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
 } from "@proteus/core";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
@@ -125,6 +127,11 @@ import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
 import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
+import {
+  initWebhookRateLimitTables,
+  normalizeWebhookRateLimitPerMin,
+  tryConsumeWebhookRateLimit,
+} from "./events/webhook-rate-limit.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
@@ -739,6 +746,33 @@ export class OrchestratorAgent extends Think<Env> {
     } catch { return null; }
   }
 
+  private getOwnerUserDO(): DurableObjectStub<UserDO> | null {
+    const userId = this.getOwnerUserId();
+    if (!userId) return null;
+    return this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  }
+
+  private requireOwnerUserDO(): DurableObjectStub<UserDO> {
+    const stub = this.getOwnerUserDO();
+    if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
+    return stub;
+  }
+
+  private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
+    const userDO = this.getOwnerUserDO();
+    if (!userDO) return undefined;
+    return {
+      board: () => userDO.getProductChangeBoard(this.name, 20),
+      bindSource: (input) => userDO.upsertProductSourceBinding(input),
+      create: (input) => userDO.createProductChange(this.name, input),
+      update: (changeId, patch) => userDO.updateProductChange(changeId, patch),
+      transition: (changeId, status) => userDO.transitionProductChange(changeId, status),
+      recordCheck: (changeId, input) => userDO.recordProductChangeCheck(changeId, input),
+      requestApproval: (changeId, approvalType) => userDO.requestProductChangeApproval(changeId, approvalType),
+      recordDeployment: (changeId, input) => userDO.recordProductDeployment(changeId, input),
+    };
+  }
+
   /** Worker calls this on every authenticated request before any other RPC.
    *  Claims the agent for `userId` if unclaimed; 403s on cross-user collision.
    *
@@ -1046,6 +1080,7 @@ export class OrchestratorAgent extends Think<Env> {
           recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
+        productChanges: this.getProductChangeToolDeps(),
       });
 
       // Anthropic prompt-caching: one breakpoint on the last tool caches the
@@ -1600,8 +1635,8 @@ export class OrchestratorAgent extends Think<Env> {
         judge,
         llmStream: this.makeScaffoldLLMStream(),
         // Pass the same tool dispatcher the production chat path uses, so the
-        // pending scaffold runs with the real tool surface — not the stubbed
-        // disabled-tools path that used to penalise any tool-using pending.
+        // pending scaffold runs with the real tool surface, not the disabled
+        // tool-call fallback that would penalize any tool-using pending.
         callTool: this.makeScaffoldCallTool(),
         // host.defaultInference for the pending: run the standard inference for
         // the shadow task so a pending that delegates to the default loop is
@@ -1757,18 +1792,24 @@ export class OrchestratorAgent extends Think<Env> {
   // resolveDeviceConsent RPC. "Always" is persisted on the hub, not here.
   private readonly _pendingConsents = new Map<string, {
     resolve: (d: 'once' | 'always' | 'deny') => void;
-    deviceLabel: string; command: string; createdAt: number;
+    deviceLabel: string; method: string; command: string; scope: string; createdAt: number;
   }>();
 
   /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides
    *  (or denies after 5 min so a device call never hangs forever). */
-  async awaitDeviceConsent(req: { deviceId: string; deviceLabel: string; command: string }): Promise<'once' | 'always' | 'deny'> {
+  async awaitDeviceConsent(req: {
+    deviceId: string;
+    deviceLabel: string;
+    method: string;
+    command: string;
+    scope: string;
+  }): Promise<'once' | 'always' | 'deny'> {
     const consentId = `cons-${nanoid(10)}`;
     this.logActivity('device_consent_requested', `${req.deviceLabel}: ${req.command.slice(0, 80)}`);
     try {
       this.broadcast(JSON.stringify({
         type: 'device_consent', consentId, deviceId: req.deviceId,
-        deviceLabel: req.deviceLabel, command: req.command,
+        deviceLabel: req.deviceLabel, method: req.method, command: req.command, scope: req.scope,
       }));
     } catch { /* nop */ }
     return new Promise<'once' | 'always' | 'deny'>((resolve) => {
@@ -1780,7 +1821,11 @@ export class OrchestratorAgent extends Think<Env> {
       }, 5 * 60_000);
       this._pendingConsents.set(consentId, {
         resolve: (d) => { clearTimeout(timer); resolve(d); },
-        deviceLabel: req.deviceLabel, command: req.command, createdAt: Date.now(),
+        deviceLabel: req.deviceLabel,
+        method: req.method,
+        command: req.command,
+        scope: req.scope,
+        createdAt: Date.now(),
       });
     });
   }
@@ -1798,9 +1843,21 @@ export class OrchestratorAgent extends Think<Env> {
 
   /** Pending consent requests — so the chat re-renders cards after a reload. */
   @callable()
-  async listPendingConsents(): Promise<Array<{ consentId: string; deviceLabel: string; command: string; createdAt: number }>> {
+  async listPendingConsents(): Promise<Array<{
+    consentId: string;
+    deviceLabel: string;
+    method: string;
+    command: string;
+    scope: string;
+    createdAt: number;
+  }>> {
     return [...this._pendingConsents.entries()].map(([consentId, p]) => ({
-      consentId, deviceLabel: p.deviceLabel, command: p.command, createdAt: p.createdAt,
+      consentId,
+      deviceLabel: p.deviceLabel,
+      method: p.method,
+      command: p.command,
+      scope: p.scope,
+      createdAt: p.createdAt,
     }));
   }
 
@@ -1887,6 +1944,7 @@ export class OrchestratorAgent extends Think<Env> {
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
     // + reactor_budget_log + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
     initEventsHubTables(this.ctx.storage.sql);
+    initWebhookRateLimitTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
     initHeadsTables(execRaw);
     // Scaffold shadow-mode tables (scaffold_evaluations + status col)
@@ -2055,6 +2113,70 @@ export class OrchestratorAgent extends Think<Env> {
 
   private getDisplayName(): string {
     return this.config.getDisplayName() ?? this.name;
+  }
+
+  @callable()
+  async getProductChangeBoard(limit: number = 20) {
+    return this.requireOwnerUserDO().getProductChangeBoard(this.name, limit);
+  }
+
+  @callable()
+  async listProductSourceBindings() {
+    return this.requireOwnerUserDO().listProductSourceBindings();
+  }
+
+  @callable()
+  async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }) {
+    return this.requireOwnerUserDO().upsertProductSourceBinding(input);
+  }
+
+  @callable()
+  async createProductChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
+    return this.requireOwnerUserDO().createProductChange(this.name, input);
+  }
+
+  @callable()
+  async updateProductChange(
+    changeId: string,
+    patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
+  ) {
+    return this.requireOwnerUserDO().updateProductChange(changeId, patch);
+  }
+
+  @callable()
+  async transitionProductChange(changeId: string, status: ProductChangeStatus) {
+    return this.requireOwnerUserDO().transitionProductChange(changeId, status);
+  }
+
+  @callable()
+  async recordProductChangeCheck(
+    changeId: string,
+    input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
+  ) {
+    return this.requireOwnerUserDO().recordProductChangeCheck(changeId, input);
+  }
+
+  @callable()
+  async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']) {
+    return this.requireOwnerUserDO().requestProductChangeApproval(changeId, approvalType);
+  }
+
+  @callable()
+  async decideProductChangeApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
+    const userDO = this.requireOwnerUserDO();
+    const decided = await userDO.decideProductChangeApproval(approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+    if (decision === 'rejected') {
+      try { await userDO.transitionProductChange(decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
+    }
+    return decided;
+  }
+
+  @callable()
+  async recordProductDeployment(
+    changeId: string,
+    input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
+  ) {
+    return this.requireOwnerUserDO().recordProductDeployment(changeId, input);
   }
 
   @callable()
@@ -3800,6 +3922,7 @@ export class OrchestratorAgent extends Think<Env> {
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
+    const rateLimit = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
     // Secret stored opaquely; lookup later by trigger id.
     const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
     const id = this.triggerRegistry.register({
@@ -3811,7 +3934,7 @@ export class OrchestratorAgent extends Think<Env> {
         accepted_content_type: opts.accepted_content_type ?? 'application/json',
       },
       creator_trust: 'owner',
-      rate_limit_per_min: opts.rate_limit_per_min ?? 60,
+      rate_limit_per_min: rateLimit,
     }, Date.now());
 
     // Store the secret in the per-agent webhook_secrets table (kept
@@ -3861,13 +3984,15 @@ export class OrchestratorAgent extends Think<Env> {
     label?: string;
     payload?: Record<string, unknown>;
     trust?: 'authenticated' | 'owner';
-  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
-    const now = Date.now();
-    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
-    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
-    const id = this.triggerRegistry.register({
-      kind,
-      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+	  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
+	    const now = Date.now();
+	    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
+	    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
+	    if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
+	    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
+	    const id = this.triggerRegistry.register({
+	      kind,
+	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
       creator_trust: opts.trust ?? 'authenticated',
       next_fire_at: nextFireAt ?? undefined,
     }, now);
@@ -4000,6 +4125,15 @@ export class OrchestratorAgent extends Think<Env> {
       ingress = 'webhook_mtls';
     }
 
+    const rate = tryConsumeWebhookRateLimit(this.ctx.storage.sql, opts.trigger_id, trigger.rate_limit_per_min, opts.now);
+    if (!rate.allowed) {
+      return {
+        status: 'rejected',
+        http_status: 429,
+        reason: `rate limit exceeded (${rate.limit}/min)`,
+      };
+    }
+
     // Parse body.
     let parsedBody: unknown;
     try {
@@ -4008,9 +4142,9 @@ export class OrchestratorAgent extends Think<Env> {
 
     const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 
-    // Open reply channel (http_pending). v1: we always return 202 immediately
-    // so the channel is opened-then-immediately-aborted; v2 will hold the
-    // HTTP request open against this channel.
+	    // Open a reply channel for the event system. HTTP delivery itself returns
+	    // 202 immediately; a future held-response path can wait on this channel
+	    // without changing the durable event shape.
     const reply_channel_id = this.replyChannels.open({
       event_id: 'pending',
       kind: 'http_pending',

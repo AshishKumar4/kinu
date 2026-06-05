@@ -10,19 +10,18 @@
  * The webhook route is the only one that DOES NOT require operator auth —
  * it has its own per-trigger HMAC / Bearer / mTLS gate.
  *
- * All operator routes (triggers/events) require the CF Access JWT from the
+ * All operator routes (triggers/events) require browser auth from the
  * auth middleware AND ownership verification (handled by server.ts).
  *
  * `createDurableWebhook` is gated behind a fresh-auth (step-up) check: the
- * incoming request must carry a JWT issued within the last 5 minutes. CF
- * Access exposes `iat` in the JWT; we read it from the JWT directly.
+ * incoming request must carry a session auth time within the last 5 minutes.
+ * The auth middleware forwards this as `x-proteus-auth-time`.
  */
 
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator.js';
-import {
-  handleWebhookIngress, type WebhookIngressDeps, type WebhookIngressEnv,
-} from './ingress/webhook.js';
+import { readWebhookBodyText } from './body.js';
+import { normalizeWebhookRateLimitPerMin } from './webhook-rate-limit.js';
 
 const STEP_UP_WINDOW_MS = 5 * 60 * 1000;   // 5-min window for sensitive ops
 
@@ -37,28 +36,10 @@ function err(status: number, message: string): Response {
   return json({ error: message }, { status });
 }
 
-/** Returns the issued-at timestamp from the CF Access JWT (unix-seconds),
- *  or null if not parseable. */
-function jwtIatMs(request: Request): number | null {
-  const token = request.headers.get('cf-access-jwt-assertion');
-  if (!token) {
-    // Cookie form
-    const cookie = request.headers.get('cookie');
-    if (!cookie) return null;
-    const m = cookie.match(/CF_Authorization=([^;]+)/);
-    if (!m) return null;
-    return parseJwtIat(decodeURIComponent(m[1]));
-  }
-  return parseJwtIat(token);
-}
-
-function parseJwtIat(token: string): number | null {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  try {
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))) as { iat?: number };
-    return typeof payload.iat === 'number' ? payload.iat * 1000 : null;
-  } catch { return null; }
+function requestAuthTimeMs(request: Request): number | null {
+  const forwarded = Number(request.headers.get('x-proteus-auth-time') ?? '');
+  if (Number.isFinite(forwarded) && forwarded > 0) return forwarded;
+  return null;
 }
 
 // ── Route entry point ────────────────────────────────────────────
@@ -112,7 +93,7 @@ async function handleWebhookDelivery(
     trigger_id,
     method: request.method,
     headers: extractHeaders(request),
-    body_text: await readBodyCapped(request, 1024 * 1024),
+    body_text: await readWebhookBodyText(request),
     cf_mtls_verified: ((request as Request & { cf?: { tlsClientAuth?: { certVerified?: string } } }).cf
       ?.tlsClientAuth?.certVerified) === 'SUCCESS',
     delivery_id: request.headers.get('idempotency-key')
@@ -128,11 +109,9 @@ async function handleWebhookDelivery(
   if (result.status === 'rejected') {
     return err(result.http_status ?? 400, result.reason ?? 'rejected');
   }
-  // Synchronous reply path: hold the response until the reply channel is
-  // resolved or TTL expires. v1 simplification: always return 202 Accepted
-  // with the event id. The agent's reply (via reply() tool) is dispatched
-  // to the ws_session channel if the operator is connected; held-open
-  // HTTP replies are deferred to v2.
+  // Webhook v1 acknowledges after durable publish. Agent replies are handled
+  // through the event/reply-channel system; held-open HTTP webhook responses are
+  // intentionally not exposed until that channel has a production-safe waiter.
   return json({
     accepted: true,
     event_id: result.event_id,
@@ -157,7 +136,7 @@ async function handleTriggersRoute(
     }
     if (method === 'POST') {
       // Step-up auth required for trigger creation.
-      const iat = jwtIatMs(request);
+      const iat = requestAuthTimeMs(request);
       if (!iat || Date.now() - iat > STEP_UP_WINDOW_MS) {
         return err(401, 'step-up auth required (re-login within 5 minutes)');
       }
@@ -171,13 +150,19 @@ async function handleTriggersRoute(
       if (!body || !body.label || !body.auth_mode) {
         return err(400, 'label and auth_mode required');
       }
+      let rateLimit: number;
+      try {
+        rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
+      } catch (e) {
+        return err(400, e instanceof Error ? e.message : String(e));
+      }
       try {
         return json(await agent.createDurableWebhook({
           label: body.label,
           auth_mode: body.auth_mode,
           secret: body.secret,
           accepted_content_type: body.accepted_content_type,
-          rate_limit_per_min: body.rate_limit_per_min,
+          rate_limit_per_min: rateLimit,
         }), { status: 201 });
       } catch (e) {
         return err(500, (e as Error).message);
@@ -219,22 +204,6 @@ function extractHeaders(request: Request): Record<string, string> {
   const out: Record<string, string> = {};
   request.headers.forEach((value, key) => { out[key] = value; });
   return out;
-}
-
-async function readBodyCapped(request: Request, max: number): Promise<string> {
-  const reader = request.body?.getReader();
-  if (!reader) return '';
-  const decoder = new TextDecoder();
-  let total = 0;
-  let text = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) return text + '__OVERFLOW__';
-    text += decoder.decode(value, { stream: true });
-  }
-  return text + decoder.decode();
 }
 
 async function safeJson<T = unknown>(request: Request): Promise<T | null> {

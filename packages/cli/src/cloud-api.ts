@@ -31,7 +31,6 @@ export interface CloudDeviceRegistration {
   token: string;
   userId: string;
   origin: string;
-  installCommand: string;
 }
 
 export interface CloudTurnResult {

@@ -3,7 +3,7 @@
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
-**Workers.dev:** https://proteus.ashishkmr472.workers.dev
+**Workers.dev fallback:** https://proteus.ashishkmr472.workers.dev
 
 ## Local Development
 
@@ -41,15 +41,15 @@ Open http://localhost:5173 in your browser. The Vite cloudflare() plugin runs re
 ### CLI
 
 ```bash
-cd packages/cli && bun link
-
-export PROTEUS_BASE_URL="https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway>/workers-ai/v1"
-export PROTEUS_AUTH="Bearer <your-token>"
-export NODE_TLS_REJECT_UNAUTHORIZED=0
-
-proteus create myagent --purpose "A helpful coding assistant"
-proteus chat myagent
+curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash
+proteus setup
+proteus create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
+jarvis "summarize this checkout"
 ```
+
+For a source checkout, use `bun run cli -- setup` and `bun run cli -- ...`.
+The CLI app origin defaults to `https://proteus.ashishkumarsingh.com`; use
+`--origin` or `PROTEUS_ORIGIN` only for alternate deployments.
 
 ## Cloudflare Deployment
 
@@ -71,6 +71,12 @@ cd packages/cf-backend
 
 # Set the AI Gateway auth token as a Wrangler secret (encrypted, never in code)
 printf 'Bearer <your-token>' | bunx wrangler secret put AI_GATEWAY_AUTH
+
+# OAuth providers appear only when both id and secret are configured.
+# Client ids can live in wrangler vars; client secrets must be Wrangler secrets.
+printf '<google-client-secret>' | bunx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
+printf '<github-client-secret>' | bunx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
+printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_CLIENT_SECRET
 ```
 
 ### 3. Build and Deploy
@@ -90,6 +96,42 @@ curl -X PUT "https://api.cloudflare.com/client/v4/accounts/<account-id>/workers/
   -H "Content-Type: application/json" \
   -d '{"hostname":"proteus.yourdomain.com","zone_id":"<zone-id>","service":"proteus","environment":"production"}'
 ```
+
+Do not put the custom domain behind Cloudflare Access. Proteus serves a public
+landing page and protects the dashboard with its own OAuth session. If an Access
+application is attached to `proteus.ashishkumarsingh.com`, unauthenticated users
+will see the Access login page before the Worker can serve `/`.
+
+## OAuth Setup
+
+Proteus supports Google, GitHub, and Cloudflare OAuth. A provider is shown on
+`/login` only when both its client id and client secret are configured.
+
+### Callback URLs
+
+Register these exact redirect URLs on each provider:
+
+```text
+https://proteus.ashishkumarsingh.com/auth/google/callback
+https://proteus.ashishkumarsingh.com/auth/github/callback
+https://proteus.ashishkumarsingh.com/auth/cloudflare/callback
+```
+
+### Cloudflare OAuth
+
+Use response type `Code`, grant type `Authorization Code, Refresh Token`, and
+token authentication method `Client Secret POST`. Use the `user-details.read`
+scope only;
+do not request `openid` for Cloudflare OAuth.
+
+Set:
+
+```bash
+bunx wrangler secret put CLOUDFLARE_OAUTH_CLIENT_SECRET
+```
+
+The production client id, scope, and token auth method are non-secret vars in
+`packages/cf-backend/wrangler.jsonc`.
 
 ## AI Gateway Setup
 
@@ -114,10 +156,24 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 |----------|-------|-------------|
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | AI Gateway endpoint URL |
 | `AI_GATEWAY_AUTH` | Wrangler secret | `Bearer <token>` (NEVER in code) |
-| `CLOUDFLARE_ACCOUNT_ID` | Shell env (dev only) | Account ID for `vite dev` |
-| `PROTEUS_BASE_URL` | Shell env (CLI) | Same as AI_GATEWAY_URL |
-| `PROTEUS_AUTH` | Shell env (CLI) | Same as AI_GATEWAY_AUTH |
-| `PROTEUS_MODEL` | Shell env (CLI) | Override default model |
+| `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
+| `PREVIEW_HOSTNAME` | wrangler.jsonc `vars` | Hostname used for sandbox preview URLs |
+| `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
+| `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
+| `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Wrangler secret | Google OAuth client secret |
+| `GITHUB_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | GitHub OAuth client id |
+| `GITHUB_OAUTH_CLIENT_SECRET` | Wrangler secret | GitHub OAuth client secret |
+| `CLOUDFLARE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Cloudflare OAuth client id |
+| `CLOUDFLARE_OAUTH_CLIENT_SECRET` | Wrangler secret | Cloudflare OAuth client secret |
+| `CLOUDFLARE_OAUTH_SCOPES` | wrangler.jsonc `vars` | Cloudflare OAuth scopes, currently `user-details.read` |
+| `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity |
+| `PROTEUS_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
+| `PROTEUS_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
+| `PROTEUS_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
+| `PROTEUS_MODEL` | CLI shell env | Override local agent model |
+| `PROTEUS_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override |
+| `PROTEUS_SOURCE_SHA256` | CLI shell env | Optional SHA-256 for the source tarball override |
 | `PROTEUS_MAX_STEPS` | Shell env | Max tool-call steps (default: 500) |
 
 ## Wrangler Bindings
@@ -126,6 +182,8 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 |---------|------|-------------|
 | `OrchestratorAgent` | Durable Object | Main chat agent (extends Think) |
 | `ExplorationAgent` | Durable Object | MCTS branch agents (Facets) |
+| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, product changes |
+| `AUTH_DB` | D1 database | OAuth users, sessions, one-time OAuth state, and CLI browser approval state |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `NIMBUS_SESSION` | Cross-Worker DO | Nimbus dev env (`script_name: "nimbus"`) |
 
@@ -186,4 +244,3 @@ npx wrangler rollback --version-id <version-id>
 Proteus and Nimbus roll back independently. If you rolled Nimbus back but
 kept Proteus on the latest, the `NIMBUS_SESSION` binding still points to
 the sibling Worker — the binding resolves to whichever version is live.
-

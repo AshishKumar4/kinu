@@ -1,6 +1,8 @@
+import { initProductChangeTables } from '@proteus/core';
+
 // UserDO SQL schema. All tables live inside a single Durable Object instance
-// keyed by userId (sha256(email) truncated). Idempotent — safe to call on
-// every DO boot.
+// keyed by the stable Proteus userId resolved by the D1 auth store.
+// Idempotent — safe to call on every DO boot.
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
@@ -73,7 +75,7 @@ export function initUserTables(sql: SqlExec): void {
   //
   // `transport` is one of: 'auto' (streamable-http with SSE fallback) | 'sse'
   // | 'streamable-http'. `headers` is an optional JSON object of static
-  // request headers (e.g. CF Access service tokens, Bearer for self-hosted).
+	  // request headers (e.g. Bearer tokens for self-hosted/private servers).
   // `allowed_tools` is a JSON array of MCP tool names; null = expose all.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
@@ -90,15 +92,14 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_name ON user_mcp_servers (name)`);
 
   // User-level connected devices (laptops/PCs). One row per device the user has
-  // linked via `proteus connect` / the Devices tab. The reverse-WS tunnel + the
-  // live socket live on THIS UserDO (the user-level hub) so every one of the
-  // user's agents can request the device — not per-agent like the old scheme.
-  // `token` is the device's connect secret; the daemon presents it on
-  // /pc/connect. os/hostname arrive in the daemon HELLO.
+  // linked via `proteus connect`. The reverse-WS tunnel + the live socket live
+  // on THIS UserDO (the user-level hub) so every one of the user's agents can
+  // request the device. `token_hash` is the device's long-lived connect secret;
+  // raw tokens are returned only once to the authenticated CLI and never stored.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_devices (
       id            TEXT PRIMARY KEY,
-      token         TEXT NOT NULL,
+      token_hash    TEXT NOT NULL,
       label         TEXT NOT NULL,
       os            TEXT,
       hostname      TEXT,
@@ -108,7 +109,7 @@ export function initUserTables(sql: SqlExec): void {
       revoked_at    INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token ON user_devices (token)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
@@ -134,8 +135,37 @@ export function initUserTables(sql: SqlExec): void {
       agent_name  TEXT NOT NULL,
       device_id   TEXT NOT NULL,
       policy      TEXT NOT NULL,
+      scope       TEXT NOT NULL DEFAULT 'all_local_actions',
+      last_method TEXT,
+      last_summary TEXT,
       updated_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       PRIMARY KEY (agent_name, device_id)
     )
   `);
+  ensureColumn(sql, 'device_consent', 'scope', "TEXT NOT NULL DEFAULT 'all_local_actions'");
+  ensureColumn(sql, 'device_consent', 'last_method', 'TEXT');
+  ensureColumn(sql, 'device_consent', 'last_summary', 'TEXT');
+
+  // Short-lived, single-use WebSocket tickets for device daemon reconnects.
+  // The daemon exchanges its long-lived local device token over HTTPS, then
+  // connects the WebSocket with this scoped ticket in the URL. That keeps raw
+  // long-lived device tokens out of request URLs and edge logs.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS device_connect_tickets (
+      ticket_hash TEXT PRIMARY KEY,
+      device_id   TEXT NOT NULL,
+      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      expires_at  INTEGER NOT NULL,
+      used_at     INTEGER
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
+
+  initProductChangeTables(sql);
+}
+
+function ensureColumn(sql: SqlExec, table: string, column: string, ddl: string): void {
+  const rows = sql.exec(`PRAGMA table_info(${table})`).toArray();
+  if (rows.some((r) => r.name === column)) return;
+  sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }

@@ -1,7 +1,7 @@
 /**
- * Typed client for the `/api/user/*` HTTP API. CF Access JWT is attached
- * automatically by the browser's cookie (or local dev's DEV_USER_EMAIL is
- * synthesized server-side), so these fetches are bare.
+ * Typed client for the `/api/user/*` HTTP API. The Proteus browser session is
+ * attached automatically by the HttpOnly cookie (or local dev's DEV_USER_EMAIL
+ * is synthesized server-side), so these fetches are bare.
  */
 
 export interface UserProfile {
@@ -51,6 +51,7 @@ export interface DeviceFlowStart {
 export interface CliSetup {
   publicOrigin: string;
   installCommand: string;
+  setupCommand?: string;
   authCommand: string;
 }
 
@@ -100,9 +101,6 @@ export interface UserDevice {
   lastSeenAt: number | null;
 }
 export interface RegisteredDevice {
-  deviceId: string;
-  token: string;
-  userId: string;
   origin: string;
   installCommand: string;
 }

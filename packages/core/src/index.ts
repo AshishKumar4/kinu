@@ -14,8 +14,8 @@ export {
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types.js';
-// Canonical `buildBuiltinTools` is exported below. The legacy
-// `buildAgentTools` surface has been removed.
+// Canonical `buildBuiltinTools` is exported below; the older `buildAgentTools`
+// surface is no longer exported.
 
 // Configuration
 export { DEFAULT_CONFIG, DEFAULT_MAX_STEPS, mergeConfig, resolveMaxSteps } from './config.js';
@@ -38,6 +38,34 @@ export type * from './types/craft.js';
 export type * from './types/scaffold.js';
 export type * from './types/evaluation.js';
 
+// Product self-customization lane — separate from scaffold evolution.
+export {
+  assertProductChangeTransition,
+  ProductChangeStore,
+  createProductChangeStore,
+  initProductChangeTables,
+  isProductChangeTerminal,
+  isSecretProductPath,
+  normalizeProductSourcePath,
+  productChangeSqlFromExec,
+  redactProductDiff,
+  validateProductPatchPath,
+  type ProductChangeBoard,
+  type ProductChangeApproval,
+  type ProductChangeCheck,
+  type ProductChangeRequest,
+  type ProductChangeSqlExec,
+  type ProductChangeSqlStore,
+  type ProductChangeStatus,
+  type ProductChangeStoreOptions,
+  type ProductChangeTransitionResult,
+  type ProductDeploymentRecord,
+  type ProductPathValidation,
+  type ProductSourceBinding,
+  type ProductSourceBindingInput,
+  type ProductSourceKind,
+} from './product-change/index.js';
+
 // Chat engine (shared between server and CLI)
 export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 
@@ -53,7 +81,7 @@ export {
   BUILTIN_TOOL_DESCRIPTIONS,
   type BuiltinToolName,
 } from './tools/registry.js';
-export { buildBuiltinTools, type BuiltinToolDeps } from './tools/builtins.js';
+export { buildBuiltinTools, type BuiltinToolDeps, type ProductChangeToolDeps } from './tools/builtins.js';
 export {
   codegenDisallowed,
   toCraftedToolSource,
@@ -160,7 +188,6 @@ export {
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   createSSHTunnelExecutor, type DeviceTransport,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED,
-  // Legacy (shelved) — kept for type imports only.
   createNimbusExecutor, type NimbusExecutorOpts,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
@@ -348,4 +375,3 @@ export type {
   RunCraftedToolGepaOpts, RunCraftedToolGepaResult,
   GepaRunSummary,
 } from './evolution/gepa/index.js';
-

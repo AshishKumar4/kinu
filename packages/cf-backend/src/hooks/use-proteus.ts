@@ -223,7 +223,14 @@ export function useProteus(agentId?: string) {
           rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
-            : [...prev, { consentId: msg.consentId, deviceLabel: msg.deviceLabel, command: msg.command, createdAt: Date.now() }]);
+            : [...prev, {
+              consentId: msg.consentId,
+              deviceLabel: msg.deviceLabel,
+              method: msg.method ?? "exec",
+              command: msg.command,
+              scope: msg.scope === "all_local_actions" ? "all_local_actions" : "all_local_actions",
+              createdAt: Date.now(),
+            }]);
         } else if (msg.type === "device_consent_resolved") {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
         }

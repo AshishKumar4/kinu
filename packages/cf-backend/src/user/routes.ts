@@ -1,7 +1,7 @@
 /**
  * `/api/user/*` HTTP routes. All operations are user-scoped — the auth
- * middleware injects the caller's `userId` (sha256(email) from CF Access
- * JWT) before any of these handlers run.
+ * middleware resolves the caller's Proteus `userId` before any of these
+ * handlers run.
  *
  * Routes:
  *   GET    /api/user/profile                       — user info
@@ -28,8 +28,9 @@
  *   PATCH  /api/user/mcp/servers/:id               — edit name / headers / allowed_tools
  *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
-import type { AccessIdentity } from '../auth/access.js';
+import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
+import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels } from './available-models.js';
 
 function json(body: unknown, init: ResponseInit = {}): Response {
@@ -50,7 +51,7 @@ function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
 export async function handleUserRequest(
   request: Request,
   env: Env,
-  identity: AccessIdentity,
+  identity: AuthIdentity,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/user')) return null;
@@ -59,18 +60,19 @@ export async function handleUserRequest(
 
   const stub = getUserDOStub(env, identity.userId);
   // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
-  await stub.ensureProfile(identity.email);
+  await stub.ensureProfile(identity.email, identity.displayName ?? undefined);
 
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {
     return json(await stub.getProfile());
   }
   if (path === '/cli' && method === 'GET') {
-    const cliOrigin = (env.CLI_PUBLIC_ORIGIN || url.origin).replace(/\/+$/, '');
+    const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
     return json({
       publicOrigin: cliOrigin,
-      installCommand: `curl -fsSL ${cliOrigin}/install.sh | sh`,
-      authCommand: `proteus auth --origin ${cliOrigin}`,
+      installCommand: buildCliInstallCommand({ origin: cliOrigin }),
+      setupCommand: buildCliSetupCommand(cliOrigin),
+      authCommand: buildCliAuthCommand(cliOrigin),
     });
   }
 
@@ -106,12 +108,14 @@ export async function handleUserRequest(
   }
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson<{ label?: string }>(request);
-    const { deviceId, token } = await stub.registerDevice(body?.label);
-    // One-liner the user pastes on their machine (token is user-level — links
-    // the device to every one of the user's agents at once).
-    const installCommand =
-      `PROTEUS_USER=${identity.userId} PROTEUS_TOKEN=${token} curl -fsSL ${url.origin}/pc/install | bash`;
-    return json({ deviceId, token, userId: identity.userId, origin: url.origin, installCommand }, { status: 201 });
+    const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+    const installCommand = buildCliInstallCommand({
+      origin: cliOrigin,
+      setup: false,
+      connect: true,
+      label: body?.label,
+    });
+    return json({ origin: cliOrigin, installCommand }, { status: 201 });
   }
   const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
   if (deviceMatch && method === 'DELETE') {
@@ -210,9 +214,8 @@ export async function handleUserRequest(
   if (path === '/mcp/callback' && method === 'GET') {
     // The OAuth provider stamps `<nonce>.<serverId>` in `state`; we don't
     // need to extract it here — `userMcp_handleOAuthCallback` does the validation
-    // inside UserDO. The Worker's CF Access middleware (above) already
-    // resolved the caller's identity from the browser cookie, so we know
-    // which UserDO to dispatch to.
+    // inside UserDO. The Worker's browser auth middleware (above) already
+    // resolved the caller's identity, so we know which UserDO to dispatch to.
     const result = await stub.userMcp_handleOAuthCallback(request.url);
     // Redirect the browser back to the settings page regardless of outcome.
     // The page polls userMcp_list and the per-server status surfaces the

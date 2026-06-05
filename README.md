@@ -58,13 +58,14 @@ CLOUDFLARE_ACCOUNT_ID=<your-id> npx vite dev --port 5173 --host 0.0.0.0
 ### CLI
 
 ```bash
-cd packages/cli && bun link
-export PROTEUS_BASE_URL="https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat/chat/completions"
-export PROTEUS_AUTH="Bearer <your-token>"
-
-proteus create myagent --purpose "A helpful coding assistant"
-proteus chat myagent
+curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash
+proteus setup
+proteus create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
+jarvis "summarize this repository"
 ```
+
+`proteus setup` opens the browser OAuth flow, stores the app session locally,
+and can also configure local provider keys for fully local agents.
 
 ## Documentation
 

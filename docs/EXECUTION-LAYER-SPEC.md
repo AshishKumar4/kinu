@@ -202,7 +202,7 @@ interface ExecutorInfo {
 }
 ```
 
-**Key difference from original spec**: The router does NOT route individual commands. Instead, it manages providers whose tools are injected into the codemode sandbox. The LLM calls `namespace.tool(args)` directly — the "routing" is the LLM choosing which namespace to use. The `AgentRuntime` keeps both `executor: Executor` (the legacy single-function interface) and `executionRouter?: ExecutionRouter` (optional, additive — not a replacement).
+**Key difference from original spec**: The router does NOT route individual commands. Instead, it manages providers whose tools are injected into the codemode sandbox. The LLM calls `namespace.tool(args)` directly — the "routing" is the LLM choosing which namespace to use. The `AgentRuntime` keeps both `executor: Executor` (the baseline single-command interface) and `executionRouter?: ExecutionRouter` (optional, additive — not a replacement).
 
 ---
 
@@ -351,9 +351,9 @@ ROUTE(command, requiredCapabilities):
   8. RETURN failure
 ```
 
-### Capability Inference **(Design — not implemented)**
+### Capability Inference **(Design decision: not part of runtime)**
 
-The capability inference function described in v1.0 of this spec is not implemented. In the current architecture, the LLM chooses which namespace to use (workspace, nimbus, sandbox, laptop) based on the task description — routing is implicit in the LLM's tool selection.
+The capability inference function described in v1.0 of this spec is intentionally not part of the current runtime. The LLM chooses which namespace to use (workspace, nimbus, sandbox, laptop) based on the task description; routing is implicit in the LLM's tool selection.
 
 ### Priority Order
 

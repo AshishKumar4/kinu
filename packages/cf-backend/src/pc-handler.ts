@@ -2,14 +2,15 @@
  * Device tunnel — reverse-WebSocket from the user's laptop, at the USER level.
  *
  * Routes:
- *   GET  /pc/install                — one-line curl install script
+ *   GET  /pc/install                — daemon updater/starter for an existing local config
  *   GET  /pc/daemon.js              — the Node daemon binary (JS)
- *   WS   /pc/connect?user=U&token=T — daemon WS upgrade
+ *   POST /pc/connect-ticket         — exchange local device token for short-lived WS ticket
+ *   WS   /pc/connect?user=U&ticket=T — daemon WS upgrade
  *
  * A device links ONCE to the user (token minted by UserDO.registerDevice), and
- * every one of that user's agents can then reach it. On connect we resolve the
- * user's UserDO, verify the token, and hand it the socket (attachDeviceSocket) —
- * the UserDO owns the tunnel + does the JSON-RPC the agents forward to.
+ * every one of that user's agents can then reach it. The daemon stores that
+ * token locally, exchanges it over HTTPS for a one-minute ticket, then connects
+ * the WebSocket with the ticket so long-lived secrets do not appear in URLs.
  */
 
 const DAEMON_JS_URL = "/pc/daemon.js";
@@ -24,6 +25,9 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
   if (path === "/pc/daemon.js") {
     return daemonJsResponse();
   }
+  if (path === "/pc/connect-ticket") {
+    return handlePcConnectTicket(request, env);
+  }
   if (path === "/pc/connect") {
     return handlePcConnect(request, env);
   }
@@ -31,24 +35,23 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
 }
 
 function installScriptResponse(origin: string): Response {
-  // Users run:  PROTEUS_USER=<id> PROTEUS_TOKEN=<t> curl -fsSL <origin>/pc/install | bash
-  // The token is user-level (one link, all agents). The script downloads
-  // daemon.js, writes ~/.proteus/{device.json,pc-agent.js}, and starts it.
-  // user+token come from env vars so they don't leak into shell history.
+  // `proteus connect` writes ~/.proteus/device.json with the device token over
+  // an authenticated HTTPS API call. This script only updates/starts the daemon
+  // for users who already have that local config.
   const script = `#!/usr/bin/env bash
 set -eu
-: "\${PROTEUS_USER:?set PROTEUS_USER=<user-id> before running}"
-: "\${PROTEUS_TOKEN:?set PROTEUS_TOKEN=<device-token> before running}"
 PROTEUS_ORIGIN="\${PROTEUS_ORIGIN:-${origin}}"
 
 DIR="\$HOME/.proteus"
 mkdir -p "\$DIR"
 chmod 700 "\$DIR"
+if [ ! -f "\$DIR/device.json" ]; then
+  echo "No Proteus device config found at \$DIR/device.json."
+  echo "Run: proteus auth --origin \$PROTEUS_ORIGIN && proteus connect"
+  exit 1
+fi
 echo "Downloading Proteus device daemon…"
 curl -fsSL "\$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "\$DIR/pc-agent.js"
-cat > "\$DIR/device.json" <<EOF
-{"user":"\$PROTEUS_USER","token":"\$PROTEUS_TOKEN","origin":"\$PROTEUS_ORIGIN"}
-EOF
 chmod 600 "\$DIR/device.json"
 
 if command -v node >/dev/null 2>&1; then
@@ -78,26 +81,43 @@ function daemonJsResponse(): Response {
   });
 }
 
+async function handlePcConnectTicket(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+  const body = await safeJson<{ user?: string; token?: string }>(request);
+  if (!body?.user || !body.token) return json({ error: "user and token required" }, { status: 400 });
+  if (!/^[a-f0-9]{32}$/.test(body.user)) return json({ error: "invalid user" }, { status: 400 });
+
+  const ns = env.UserDO;
+  if (!ns) return json({ error: "No UserDO binding" }, { status: 500 });
+  const stub = ns.get(ns.idFromName(body.user)) as unknown as {
+    issueDeviceConnectTicket(token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }>;
+  };
+  const issued = await stub.issueDeviceConnectTicket(body.token);
+  if (!issued.ok || !issued.ticket || !issued.expiresAt) return json({ error: "unauthorized" }, { status: 401 });
+  return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
+}
+
 async function handlePcConnect(request: Request, env: Env): Promise<Response> {
   const upgrade = request.headers.get("Upgrade");
   if (upgrade !== "websocket") return new Response("Expected WebSocket", { status: 426 });
 
   const url = new URL(request.url);
   const userId = url.searchParams.get("user");
-  const token = url.searchParams.get("token");
-  if (!userId || !token) {
-    return new Response("Missing ?user or ?token", { status: 400 });
+  const ticket = url.searchParams.get("ticket");
+  if (!userId || !ticket) {
+    return new Response("Missing ?user or ?ticket", { status: 400 });
   }
+  if (!/^[a-f0-9]{32}$/.test(userId)) return new Response("invalid user", { status: 400 });
 
   const ns = env.UserDO;
   if (!ns) return new Response("No UserDO binding", { status: 500 });
   const stub = ns.get(ns.idFromName(userId)) as unknown as {
-    verifyDeviceToken(token: string): Promise<{ ok: boolean; deviceId?: string }>;
+    verifyDeviceConnectTicket(ticket: string): Promise<{ ok: boolean; deviceId?: string }>;
     attachDeviceSocket(deviceId: string, ws: WebSocket): Promise<void>;
   };
 
-  // Verify the device token against the user's hub before upgrading.
-  const verified = await stub.verifyDeviceToken(token);
+  // Verify and consume the short-lived ticket before upgrading.
+  const verified = await stub.verifyDeviceConnectTicket(ticket);
   if (!verified?.ok || !verified.deviceId) return new Response("unauthorized", { status: 401 });
 
   // Accept the WebSocket and hand the server side to the UserDO (it accepts +
@@ -115,16 +135,16 @@ const PC_AGENT_DAEMON_SOURCE = `#!/usr/bin/env node
 // Proteus PC agent — reverse-WebSocket daemon.
 // Node 18+. No external deps (uses global fetch + WebSocket polyfill via ws fallback).
 'use strict';
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const { spawn } = require('node:child_process');
+	const fs = require('node:fs');
+	const path = require('node:path');
+	const os = require('node:os');
+	const { spawn, execFileSync } = require('node:child_process');
 
 const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'device.json');
 const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const USER = cfg.user, TOKEN = cfg.token;
-const ORIGIN = (cfg.origin || 'https://proteus.ashishkumarsingh.com').replace(/^http/, 'ws');
-const WS_URL = \`\${ORIGIN}/pc/connect?user=\${encodeURIComponent(USER)}&token=\${encodeURIComponent(TOKEN)}\`;
+const HTTP_ORIGIN = (cfg.origin || 'https://proteus.ashishkumarsingh.com').replace(/\\/+$/, '');
+const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
 
 let WS;
 try { WS = require('ws'); } catch { /* Node 22+ has global WebSocket */ }
@@ -132,11 +152,67 @@ const mkWs = (url) => WS ? new WS(url) : new WebSocket(url);
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
-function rpc(ws, id, result, error) {
-  ws.send(JSON.stringify(error ? { id, error } : { id, result }));
-}
+	function rpc(ws, id, result, error) {
+	  ws.send(JSON.stringify(error ? { id, error } : { id, result }));
+	}
 
-function handle(msg, ws) {
+	function runCommand(cmd, args) {
+	  try {
+	    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+	  } catch {
+	    return null;
+	  }
+	}
+
+	function listListeningPorts() {
+	  const rows = [];
+	  const seen = new Set();
+	  const add = (port, host, command, pid) => {
+	    const n = Number(port);
+	    if (!Number.isInteger(n) || n <= 0 || n > 65535) return;
+	    const key = (host || '') + ':' + n + ':' + (pid || '') + ':' + (command || '');
+	    if (seen.has(key)) return;
+	    seen.add(key);
+	    rows.push({ port: n, host: host || '0.0.0.0', protocol: 'tcp', command: command || null, pid: pid ? Number(pid) : null });
+	  };
+
+	  const lsof = runCommand('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
+	  if (lsof) {
+	    for (const line of lsof.split('\\n').slice(1)) {
+	      const parts = line.trim().split(/\\s+/);
+	      const name = parts.slice(8).join(' ');
+	      const m = name.match(/(.+):(\\d+)\\s+\\(LISTEN\\)$/);
+	      if (m) add(m[2], m[1].replace(/^\\[|\\]$/g, ''), parts[0], parts[1]);
+	    }
+	    if (rows.length) return rows;
+	  }
+
+	  const ss = runCommand('ss', ['-ltnp']);
+	  if (ss) {
+	    for (const line of ss.split('\\n').slice(1)) {
+	      const parts = line.trim().split(/\\s+/);
+	      const local = parts[3] || '';
+	      const m = local.match(/^(.*):(\\d+)$/);
+	      const proc = line.match(/users:\\(\\("([^"]+)",pid=(\\d+)/);
+	      if (m) add(m[2], m[1].replace(/^\\[|\\]$/g, ''), proc?.[1], proc?.[2]);
+	    }
+	    if (rows.length) return rows;
+	  }
+
+	  const netstat = runCommand('netstat', ['-anv']);
+	  if (netstat) {
+	    for (const line of netstat.split('\\n')) {
+	      if (!/\\bLISTEN\\b/i.test(line) || !/^tcp/i.test(line.trim())) continue;
+	      const parts = line.trim().split(/\\s+/);
+	      const local = parts[3] || parts[1] || '';
+	      const m = local.match(/^(.*)\\.(\\d+)$/) || local.match(/^(.*):(\\d+)$/);
+	      if (m) add(m[2], m[1].replace(/^\\[|\\]$/g, ''), null, null);
+	    }
+	  }
+	  return rows;
+	}
+
+	function handle(msg, ws) {
   const { id, method, params } = msg;
   try {
     if (method === 'exec') {
@@ -152,13 +228,15 @@ function handle(msg, ws) {
     } else if (method === 'writeFile') {
       fs.mkdirSync(path.dirname(params[0]), { recursive: true });
       fs.writeFileSync(params[0], params[1]);
-      rpc(ws, id, 'ok');
+      rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
       const p = params[0] || os.homedir();
       const entries = fs.readdirSync(p, { withFileTypes: true });
       rpc(ws, id, entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })));
-    } else if (method === 'listPorts') {
-      rpc(ws, id, []); // PC-local port listing not implemented in v1
+	    } else if (method === 'exists') {
+	      rpc(ws, id, fs.existsSync(params[0]));
+	    } else if (method === 'listPorts') {
+	      rpc(ws, id, listListeningPorts());
     } else {
       rpc(ws, id, null, 'unknown method: ' + method);
     }
@@ -168,8 +246,29 @@ function handle(msg, ws) {
 }
 
 let backoff = 1000;
-function connect() {
-  log('Connecting to', WS_URL);
+async function getTicket() {
+  const res = await fetch(HTTP_ORIGIN + '/pc/connect-ticket', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ user: USER, token: TOKEN }),
+  });
+  let body = {};
+  try { body = await res.json(); } catch { /* nop */ }
+  if (!res.ok || !body.ticket) throw new Error(body.error || ('ticket exchange failed: HTTP ' + res.status));
+  return body.ticket;
+}
+
+async function connect() {
+  let ticket;
+  try { ticket = await getTicket(); }
+  catch (err) {
+    log('Ticket exchange failed:', err.message || err);
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 60_000);
+    return;
+  }
+  const WS_URL = \`\${WS_ORIGIN}/pc/connect?user=\${encodeURIComponent(USER)}&ticket=\${encodeURIComponent(ticket)}\`;
+  log('Connecting to', WS_ORIGIN + '/pc/connect');
   const ws = mkWs(WS_URL);
   ws.addEventListener('open', () => {
     log('Connected');
@@ -189,3 +288,14 @@ function connect() {
 }
 connect();
 `;
+
+function json(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), {
+    ...init,
+    headers: { "content-type": "application/json", ...(init.headers as Record<string, string> | undefined) },
+  });
+}
+
+async function safeJson<T = unknown>(request: Request): Promise<T | null> {
+  try { return (await request.json()) as T; } catch { return null; }
+}

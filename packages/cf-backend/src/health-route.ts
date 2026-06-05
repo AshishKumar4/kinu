@@ -2,7 +2,9 @@
 // hit the URL, see the feature list + endpoint map. Public — no auth required.
 
 const FEATURES: ReadonlyArray<string> = [
-  'cf-access-auth',
+  'd1-oauth-session-auth',
+  'd1-read-replica-sessions',
+  'd1-cli-auth-state',
   'user-do',
   'multi-tenant',
   'multi-provider-registry',

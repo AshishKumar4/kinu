@@ -5,15 +5,16 @@
  *   1. proxyToSandbox — if the host is a preview URL (PORT-SANDBOX-TOKEN.host),
  *      forward to the sandbox container.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
- *   3. /install.sh, /downloads/proteus, /api/cli/* — CLI install/auth/API.
- *   4. /api/health — public build-info endpoint (no auth).
- *   5. AUTH GATE — every other request must carry a valid CF Access JWT
- *      (or DEV_USER_EMAIL in local dev). Public paths are listed in
- *      `isPublicPath`.
- *   6. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
- *   7. /api/agents/<name>/* — owner check via UserDO.hasAgent.
- *   8. /agents/* — Think DOs (chat WebSocket).
- *   9. env.ASSETS fallback — SPA for everything else.
+ *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
+ *   4. / — public landing page when no Proteus session is present.
+ *   5. /install, /install.sh, /downloads/proteus, /api/cli/* — CLI install/auth/API.
+ *   6. /api/health — public build-info endpoint (no auth).
+ *   7. AUTH GATE — every other request needs a Proteus browser session
+ *      (or DEV_USER_EMAIL in local/staging dev).
+ *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
+ *   9. /api/agents/<name>/* — owner check via UserDO.hasAgent.
+ *   10. /agents/* — Think DOs (chat WebSocket).
+ *   11. env.ASSETS fallback — SPA for everything else.
  */
 
 import { routeAgentRequest } from "agents";
@@ -24,14 +25,17 @@ import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
 import { handleUserRequest } from "./user/routes.js";
 import { handleCliRequest } from "./cli/routes.js";
+import { handleAuthRequest } from "./auth/routes.js";
+import { handleLandingRequest } from "./landing-route.js";
 import { handleHubRequest } from "./events/routes.js";
 import {
-  authenticateRequest, AccessAuthError, isPublicPath,
-  type AccessIdentity,
-} from "./auth/access.js";
+  authenticateRequest, AuthError, isPublicPath,
+  type AuthIdentity,
+} from "./auth/session.js";
+import { d1BookmarkCookie } from "./auth/d1-store.js";
 
 /** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
- *  the only `/api/agents/<name>/...` route that bypasses CF Access (it has
+ *  the only `/api/agents/<name>/...` route that bypasses browser OAuth (it has
  *  its own per-trigger HMAC / Bearer / mTLS gate). */
 function isWebhookDeliveryPath(pathname: string): boolean {
   return /^\/api\/agents\/[^/]+\/webhook\/[^/]+$/.test(pathname);
@@ -44,9 +48,17 @@ export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
 export { UserDO } from "./user/user-do.js";
-export { CLIAuthDO } from "./cli/auth-do.js";
 
-function authError(e: AccessAuthError): Response {
+function authError(request: Request, e: AuthError): Response {
+  if (e.status === 401 && wantsHtml(request)) {
+    const url = new URL(request.url);
+    const login = new URL('/login', url.origin);
+    login.searchParams.set('return_to', url.pathname + url.search + url.hash);
+    return new Response(null, {
+      status: 302,
+      headers: { location: login.toString(), 'cache-control': 'no-store' },
+    });
+  }
   return new Response(JSON.stringify({ error: e.message }), {
     status: e.status,
     headers: { 'content-type': 'application/json' },
@@ -58,7 +70,7 @@ function authError(e: AccessAuthError): Response {
  *  agent creation works, but other routes require it to already exist. */
 async function ensureAgentOwnership(
   env: Env,
-  identity: AccessIdentity,
+  identity: AuthIdentity,
   agentName: string,
   request: Request,
 ): Promise<Response | null> {
@@ -117,25 +129,33 @@ export default {
     const previewResp = await proxyPreviewRequest(request, env);
     if (previewResp) return previewResp;
 
-    // 2. PC agent tunnel — its own auth (token in connect message).
+    // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
     if (url.pathname.startsWith("/pc/")) {
       return handlePcRequest(request, env);
     }
 
-    // 3. CLI install + device-code auth + token-authenticated account API.
+    // 3. OAuth/OIDC login, callback, session, logout.
+    const appAuthResp = await handleAuthRequest(request, env, ctx);
+    if (appAuthResp) return appAuthResp;
+
+    // 4. Public landing page for visitors with no Proteus session.
+    const landingResp = await handleLandingRequest(request, env);
+    if (landingResp) return landingResp;
+
+    // 5. CLI install + device-code auth + token-authenticated account API.
     const cliResp = await handleCliRequest(request, env);
     if (cliResp) return cliResp;
 
-    // 4. Public — build-info health.
+    // 6. Public — build-info health.
     const healthResp = handleHealthRequest(request);
     if (healthResp) return healthResp;
 
-    // 5. Public bypass list.
+    // 7. Public bypass list.
     if (isPublicPath(url.pathname)) {
       return env.ASSETS.fetch(request);
     }
 
-    // 5b. Webhook delivery — public-but-per-trigger-authenticated. The
+    // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
     //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
     if (isWebhookDeliveryPath(url.pathname)) {
       const m = url.pathname.match(/^\/api\/agents\/([^/]+)\/webhook\//);
@@ -145,49 +165,68 @@ export default {
       }
     }
 
-    // 6. Auth gate. Everything below requires an authenticated identity.
-    let identity: AccessIdentity;
+    // 8. Auth gate. Everything below requires an authenticated identity.
+    let identity: AuthIdentity;
     try { identity = await authenticateRequest(request, env); }
     catch (e) {
-      if (e instanceof AccessAuthError) return authError(e);
+      if (e instanceof AuthError) return authError(request, e);
       return new Response(JSON.stringify({ error: (e as Error).message }), {
         status: 500, headers: { 'content-type': 'application/json' },
       });
     }
 
-    // 7. /api/user/* — user-scoped routes.
+    // 9. /api/user/* — user-scoped routes.
     const userResp = await handleUserRequest(request, env, identity);
-    if (userResp) return userResp;
+    if (userResp) return withD1Bookmark(userResp, identity);
 
-    // 8. Per-agent routes — verify ownership.
+    // 10. Per-agent routes — verify ownership.
     const agentName = extractAgentName(url.pathname);
     if (agentName) {
       const denial = await ensureAgentOwnership(env, identity, agentName, request);
-      if (denial) return denial;
+      if (denial) return withD1Bookmark(denial, identity);
       // Inject the userId so downstream handlers can resolve UserDO without
       // re-running auth. Worker → DO requests preserve headers.
       const reqWithId = new Request(request, {
-        headers: appendHeader(request.headers, 'x-proteus-user-id', identity.userId),
+        headers: appendIdentityHeaders(request.headers, identity),
       });
 
       const runEventsResp = await handleRunEventsRequest(reqWithId, env);
-      if (runEventsResp) return runEventsResp;
+      if (runEventsResp) return withD1Bookmark(runEventsResp, identity);
       const mcpResp = await handleMcpRequest(reqWithId, env);
-      if (mcpResp) return mcpResp;
+      if (mcpResp) return withD1Bookmark(mcpResp, identity);
       // EventsHub authenticated routes: /triggers, /events
       const hubResp = await handleHubRequest(reqWithId, env, agentName);
-      if (hubResp) return hubResp;
+      if (hubResp) return withD1Bookmark(hubResp, identity);
       const agentResp = await routeAgentRequest(reqWithId, env);
-      if (agentResp) return agentResp;
+      if (agentResp) return withD1Bookmark(agentResp, identity);
     }
 
-    // 9. SPA fallback.
-    return env.ASSETS.fetch(request);
+    // 11. SPA fallback.
+    return withD1Bookmark(await env.ASSETS.fetch(request), identity);
   },
 } satisfies ExportedHandler<Env>;
 
-function appendHeader(h: Headers, name: string, value: string): Headers {
+function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);
-  next.set(name, value);
+  next.set('x-proteus-user-id', identity.userId);
+  if (identity.authTime) next.set('x-proteus-auth-time', String(identity.authTime));
   return next;
+}
+
+function wantsHtml(request: Request): boolean {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/agents/') || url.pathname.startsWith('/mcp/')) {
+    return false;
+  }
+  const accept = request.headers.get('accept') ?? '';
+  return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
+}
+
+function withD1Bookmark(response: Response, identity: AuthIdentity): Response {
+  if (response.status === 101) return response;
+  const cookie = d1BookmarkCookie(identity.d1Bookmark ?? null);
+  if (!cookie) return response;
+  const headers = new Headers(response.headers);
+  headers.append('set-cookie', cookie);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

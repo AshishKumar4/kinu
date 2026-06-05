@@ -12,6 +12,7 @@
  * a second one would be a drift-prone shadow system).
  */
 import type { CodemodeProvider } from './rlm.js';
+import { nextCronFire } from '@proteus/core';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
@@ -90,6 +91,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const cron = typeof opts.cron === 'string' && opts.cron ? opts.cron : undefined;
           const atMs = typeof opts.atMs === 'number' && Number.isFinite(opts.atMs) ? opts.atMs : undefined;
           if (!cron && atMs === undefined) return { error: 'agent.schedule: provide { cron } or { atMs }' };
+          if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
           if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
           try {
             return host.createTimerTrigger({

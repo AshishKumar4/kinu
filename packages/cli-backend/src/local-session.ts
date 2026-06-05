@@ -19,6 +19,7 @@ import type {
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
   HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
+  ProductChangeStore, ProductChangeToolDeps,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
@@ -34,6 +35,7 @@ import {
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
+  createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -44,10 +46,15 @@ import { detectOrphanedFibers } from './fiber.js';
 import { connectMcpServers, type McpServerConfig } from './mcp.js';
 import type { LocalModelResolver } from './model-resolver.js';
 
-/** Build the legacy ai-SDK chat model both frontends drive runChat with —
- *  BYO-key OpenAI-compatible. Provider-style model switching uses
+/** Build the ai-SDK chat model both frontends drive runChat with.
+ *  Provider-style model switching uses
  *  createLocalModelResolver and agent_config.model. */
 export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
+  if (llm.name === 'anthropic') {
+    return createChatModel({
+      kind: 'anthropic', baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
+    });
+  }
   return createChatModel({
     kind: 'openai-compat', name: llm.name, baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
   });
@@ -124,6 +131,12 @@ export interface LocalAgentSessionOpts {
   noAutoEvolve?: boolean;
   /** Turns between session-level reflections (default 5, matching the DO). */
   sessionReflectionInterval?: number;
+  /** Durable conversation key in the local messages table. Default: `default`. */
+  sessionId?: string;
+  /** Persist user/assistant messages to SQLite. Default: true. */
+  persistMessages?: boolean;
+  /** Number of recent messages to restore into LLM context. Default: 40. */
+  historyLimit?: number;
 }
 
 interface QueueItem {
@@ -151,6 +164,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly config: AgentConfigStore;
   private readonly eventLog: EventLog;
   private readonly triggerRegistry: TriggerRegistry;
+  private readonly productChanges: ProductChangeStore;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
   private ended = false;
@@ -159,7 +173,8 @@ export class LocalAgentSession implements BackendHost {
   private _headRuntime: HeadRuntime;
   private headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
-  private readonly sessionId = `local-${Date.now()}`;
+  private readonly sessionId: string;
+  private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
 
   /** Skills invoked this turn (explicit/auto-activation + the skills tool's
@@ -183,6 +198,8 @@ export class LocalAgentSession implements BackendHost {
   constructor(opts: LocalAgentSessionOpts) {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
+    this.sessionId = opts.sessionId ?? 'default';
+    this.persistMessagesEnabled = opts.persistMessages !== false;
     this.fallbackModel = opts.model;
     this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
     this.modelResolver = opts.modelResolver ?? null;
@@ -220,6 +237,12 @@ export class LocalAgentSession implements BackendHost {
     // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
     const hubSql = makeHubSql(opts.db);
     initEventsHubTables(hubSql);
+    initProductChangeTables(hubSql);
+    this.productChanges = createProductChangeStore(productChangeSqlFromExec(hubSql), {
+      validateAgentName: (name) => {
+        if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) throw new Error('invalid agent name');
+      },
+    });
     this.eventLog = new EventLog(hubSql);
     const alarmScheduler: AlarmScheduler = {
       scheduleAt: (ts) => this.scheduleLocalAlarm(ts),
@@ -233,6 +256,7 @@ export class LocalAgentSession implements BackendHost {
       eventLog: this.eventLog,
       sessionReflectionInterval: opts.sessionReflectionInterval,
     });
+    this.restoreHistory(opts.historyLimit ?? 40);
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -434,9 +458,15 @@ export class LocalAgentSession implements BackendHost {
    *  backs the reactor + background-job wake. Self-starts the pump when idle so
    *  a job that settles mid-idle wakes the agent immediately. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    this.queue.push({ text: input.text, metadata: input.metadata, kind: 'programmatic', resolve: () => {} });
-    void this.pump();
-    return Promise.resolve({ status: 'queued' });
+    return new Promise((resolve) => {
+      this.queue.push({
+        text: input.text,
+        metadata: input.metadata,
+        kind: 'programmatic',
+        resolve: () => resolve({ status: 'queued' }),
+      });
+      void this.pump();
+    });
   }
 
   // ── Public driver API ──────────────────────────────────────────────
@@ -651,6 +681,27 @@ export class LocalAgentSession implements BackendHost {
     return this.skillsVfs;
   }
 
+  private agentName(): string {
+    try {
+      return this.rt.storage.sql<{ name: string }>`SELECT name FROM agent_identity LIMIT 1`[0]?.name ?? 'local';
+    } catch {
+      return 'local';
+    }
+  }
+
+  private productChangeToolDeps(): ProductChangeToolDeps {
+    return {
+      board: async () => this.productChanges.board(this.agentName(), 20),
+      bindSource: async (input) => this.productChanges.upsertSourceBinding(input),
+      create: async (input) => this.productChanges.createChange(this.agentName(), input),
+      update: async (changeId, patch) => this.productChanges.updateChange(changeId, patch),
+      transition: async (changeId, status) => this.productChanges.transitionChange(changeId, status),
+      recordCheck: async (changeId, input) => this.productChanges.recordCheck(changeId, input),
+      requestApproval: async (changeId, approvalType) => this.productChanges.requestApproval(changeId, approvalType),
+      recordDeployment: async (changeId, input) => this.productChanges.recordDeployment(changeId, input),
+    };
+  }
+
   /** Resolve the skills active for this turn — explicit @invocations,
    *  always-active config, and builtin auto-activation. Mirrors the DO's
    *  beforeTurn: only scans the VFS when activation is plausible, and records the
@@ -787,11 +838,31 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private persist(userText: string, assistantText: string): void {
+    if (!this.persistMessagesEnabled) return;
     const msgId = crypto.randomUUID();
     this.rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
       VALUES (${msgId}, ${this.sessionId}, ${'user'}, ${userText})`;
     this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
       VALUES (${crypto.randomUUID()}, ${this.sessionId}, ${msgId}, ${'assistant'}, ${assistantText})`;
+  }
+
+  private restoreHistory(limit: number): void {
+    if (limit <= 0) return;
+    try {
+      const rows = this.rt.storage.sql<{ role: string; content: string; created_at: number; rowid: number }>`
+        SELECT role, content, created_at
+        FROM messages
+        WHERE session_id = ${this.sessionId} AND role IN ('user', 'assistant')
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT ${limit}`;
+      for (const row of rows.reverse()) {
+        if (row.role === 'user' || row.role === 'assistant') {
+          this.history.push({ role: row.role, content: row.content });
+        }
+      }
+    } catch {
+      // Old or partial databases should still open; they just start with no restored transcript.
+    }
   }
 
   private normalizeModelSpec(spec: string | null): string {
@@ -840,6 +911,7 @@ export class LocalAgentSession implements BackendHost {
         recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
+      productChanges: this.productChangeToolDeps(),
     });
     this.tools = this.wrapToolsForBackground(rawTools);
   }

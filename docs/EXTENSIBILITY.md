@@ -1,21 +1,19 @@
 # Proteus extensibility
 
-How to plug in a new agentic idea — model provider, exploration strategy,
-inference loop — without touching the orchestrator.
+How to plug in a new agentic idea: model provider, exploration strategy,
+inference loop, or runtime surface without touching the orchestrator.
 
-> Edited & maintained by Claude, presented as-is.
-
-## Hardening (post-Rounds 1–10 audit)
+## Runtime hardening
 
 Production-class guarantees in the runtime today. Each item below earns its
-keep — paranoid safety mechanisms that would hurt model UX or performance
+keep: paranoid safety mechanisms that would hurt model UX or performance
 without addressing a real threat were deliberately rejected. Specifically
 rejected: agent_facts secret-pattern redaction (secrets the agent sees are
 already in conversation context — blocking remember_fact rejects legitimate
 values), crafted-tool description sanitization (tools are agent-self-authored,
 no external attacker, and the cap truncates useful "when to use" guidance).
 
-- **OAuth error sanitization.** `auth/codex-oauth.ts` strips token-shaped
+- **OAuth error sanitization.** `cf-backend/src/user/codex-oauth.ts` strips token-shaped
   substrings from upstream error bodies before they're attached to thrown
   errors — defense-in-depth against the OAuth server echoing tokens. No
   LLM-path impact (only error-log path).
@@ -40,7 +38,7 @@ no external attacker, and the cap truncates useful "when to use" guidance).
 - **`Last-Event-ID` validation.** SSE resume now requires a non-negative
   integer (or `-1` sentinel); malformed values replay from start instead of
   silently rewinding via `NaN`.
-- **Credential key validation.** `auth/routes.ts` restricts credential keys
+- **Credential key validation.** `cf-backend/src/user/validate.ts` restricts credential keys
   to `[a-zA-Z0-9._-]{1,128}` so path-traversal-shaped URLs can't reach the
   store.
 - **MCTS evaluation tolerates missing `task_history`.** Calibration step

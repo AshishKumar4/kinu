@@ -48,28 +48,28 @@ export interface LocalModelResolverConfig {
  *
  * The DO backend resolves model specs through UserDO-scoped credentials. The
  * CLI has no UserDO, so this adapter supplies the same registry contract from
- * local config/env credentials while preserving the legacy PROTEUS_BASE_URL /
- * PROTEUS_AUTH path as an OpenAI-compatible endpoint.
+ * local config/env credentials while preserving the advanced PROTEUS_BASE_URL /
+ * PROTEUS_AUTH path as a direct OpenAI-compatible endpoint.
  */
 export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalModelResolver {
   const registry = createProviderRegistry();
-  const legacy = opts.llm;
+  const localEndpoint = opts.llm;
   const credentials = opts.credentials ?? {};
-  const authStore = buildAuthStore(legacy, credentials);
+  const authStore = buildAuthStore(localEndpoint, credentials);
 
-  const defaultProvider = defaultProviderFor(legacy);
+  const defaultProvider = defaultProviderFor(localEndpoint);
   if (defaultProvider === 'workers-ai') {
     registry.register(createGatewayBackedProvider({
       id: 'workers-ai',
       label: 'Cloudflare Workers AI (local gateway)',
-      defaultModel: legacy.model,
-      llm: legacy,
+      defaultModel: localEndpoint.model,
+      llm: localEndpoint,
     }));
     registry.register(createGatewayBackedProvider({
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
-      defaultModel: legacy.model.startsWith('workers-ai/') ? legacy.model : `workers-ai/${legacy.model}`,
-      llm: legacy,
+      defaultModel: localEndpoint.model.startsWith('workers-ai/') ? localEndpoint.model : `workers-ai/${localEndpoint.model}`,
+      llm: localEndpoint,
     }));
   }
 
@@ -95,7 +95,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   };
 
   const fallbackProvider = registry.get(defaultProvider) ? defaultProvider : 'openai-compat';
-  const fallbackModel = fallbackProvider === 'workers-ai' ? legacy.model : legacy.model;
+  const fallbackModel = localEndpoint.model;
 
   function normalizeSpecSync(specOrNull?: string | null): string {
     const s = (specOrNull ?? '').trim();
@@ -106,9 +106,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     if (slash > 0) {
       const first = s.slice(0, slash);
       if (registry.get(first)) return s;
-      // Preserve legacy behavior: slashful model IDs (for example minimax/m3)
-      // are model IDs under the configured local endpoint, not necessarily
-      // provider prefixes.
+      // Slashful model IDs (for example minimax/m3) are model IDs under the
+      // configured local endpoint unless the first path segment is a provider.
       return `${fallbackProvider}/${s}`;
     }
 
@@ -156,19 +155,26 @@ function createGatewayBackedProvider(opts: {
   };
 }
 
-function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'openai-compat' {
+function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' {
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
+  if (llm.name === 'openai') return 'openai';
+  if (llm.name === 'anthropic') return 'anthropic';
+  if (llm.name === 'openrouter') return 'openrouter';
   return 'openai-compat';
 }
 
 function buildAuthStore(
-  legacy: LLMProviderConfig,
+  localEndpoint: LLMProviderConfig,
   credentials: LocalProviderCredentials,
 ): Map<string, AuthResolution> {
   const store = new Map<string, AuthResolution>();
 
   if (credentials.openaiApiKey) {
     store.set('openai.bearer', bearer(credentials.openaiApiKey));
+  }
+  if (!store.has('openai.bearer') && localEndpoint.name === 'openai') {
+    const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
+    if (auth) store.set('openai.bearer', { headers: { Authorization: auth } });
   }
   if (credentials.anthropicApiKey) {
     store.set('anthropic.bearer', {
@@ -178,16 +184,31 @@ function buildAuthStore(
       },
     });
   }
+  if (!store.has('anthropic.bearer') && localEndpoint.name === 'anthropic') {
+    const key = localEndpoint.headers['x-api-key'] ?? localEndpoint.headers['X-Api-Key'];
+    if (key) {
+      store.set('anthropic.bearer', {
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': localEndpoint.headers['anthropic-version'] ?? '2023-06-01',
+        },
+      });
+    }
+  }
   if (credentials.openrouterApiKey) {
     store.set('openrouter.bearer', bearer(credentials.openrouterApiKey));
+  }
+  if (!store.has('openrouter.bearer') && localEndpoint.name === 'openrouter') {
+    const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
+    if (auth) store.set('openrouter.bearer', { headers: { Authorization: auth } });
   }
   if (credentials.codexAccessToken) {
     store.set('codex.oauth', bearer(credentials.codexAccessToken));
   }
 
   store.set('openai-compat.default', {
-    headers: legacy.headers,
-    baseURL: legacy.baseURL,
+    headers: localEndpoint.headers,
+    baseURL: localEndpoint.baseURL,
   });
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {

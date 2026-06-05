@@ -53,7 +53,7 @@ export type PayloadPolicy =
 /** The codepath that converted an external signal into an event row.
  *  The *only* place trust is derived (see `trust.ts`). */
 export type IngressKind =
-  | 'chat_ws'         // operator UI over CF Access JWT
+  | 'chat_ws'         // operator UI over the authenticated app session
   | 'webhook_hmac'    // HMAC-SHA256(timestamp || '.' || body)
   | 'webhook_bearer'  // bearer secret in header or path
   | 'webhook_mtls'    // client certificate

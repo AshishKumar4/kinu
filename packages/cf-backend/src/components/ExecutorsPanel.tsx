@@ -568,7 +568,7 @@ function YourPcConnect() {
           >{issuing ? "Generating…" : "Connect a device"}</button>
         ) : (
           <div className="space-y-2">
-            <p className="text-xs p-text-2">Paste this on the machine you want to connect:</p>
+            <p className="text-xs p-text-2">Paste this on the machine you want to connect. It installs the CLI, signs in, and starts the local daemon:</p>
             <div className="rounded-md p-elevated border p-border p-3 font-mono text-[11px] p-text break-all select-all leading-relaxed">
               {install}
             </div>
@@ -580,7 +580,7 @@ function YourPcConnect() {
               <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
             </div>
             <p className="text-[11px] p-text-3 mt-1 flex items-center gap-1.5">
-              <WarningIcon size={11} /> This token links the device to your account. Prefer the CLI: <code className="font-mono">proteus connect</code>.
+              <WarningIcon size={11} /> Device secrets are written locally by <code className="font-mono">proteus connect</code>; they are not shown in this command.
             </p>
           </div>
         )}

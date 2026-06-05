@@ -3,21 +3,26 @@ import * as readline from 'node:readline';
 import { Database } from 'bun:sqlite';
 import {
   createAgent,
+  createAgentConfigStore,
   initSearchTables,
+  initAgentConfigTable,
   initScaffoldTables,
   initCraftScoreTables,
+  type LLMProviderConfig,
 } from '@proteus/core';
 import {
-  agentDbPath, agentDir, ensureAgentHome, resolveLLMConfig,
+  agentDbPath, agentDir, ensureAgentHome, loadConfigFile, resolveLLMConfig,
   upsertAgentConfig, writeAliasShim, pathHint, requireAuthConfig,
   type AgentMode,
 } from '../config.js';
 import { createCloudAgent } from '../cloud-api.js';
 import { ACCENT, DIM, OK, createSpinner, printCreatedCard, printError } from '../display.js';
+import { authCommand } from './auth.js';
+import { ensureLocalDaemonRunning } from './daemon.js';
 
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
-  mode?: string; alias?: string; aliasAgent?: boolean;
+  mode?: string; alias?: string; aliasAgent?: boolean; origin?: string;
 }): Promise<void> {
   ensureAgentHome();
   const interactive = process.stdin.isTTY && (!name || !opts.mode);
@@ -34,7 +39,7 @@ export async function createCommand(name: string | undefined, opts: {
     : opts.alias ?? (interactive ? await ask('Alias command', name) : name);
 
   if (mode === 'cloud') {
-    const auth = requireAuthConfig();
+    const auth = await resolveCloudAuth(opts.origin);
     const spinner = createSpinner('Creating cloud agent...');
     spinner.start();
     const agent = await createCloudAgent(auth.origin, auth.token, { name, displayName: name, purpose });
@@ -73,10 +78,15 @@ export async function createCommand(name: string | undefined, opts: {
   const db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
 
-  createAgent(db, { name, purpose, llm: llmConfig });
+  const rt = createAgent(db, { name, purpose, llm: llmConfig });
   initSearchTables((ddl: string) => db.exec(ddl));
   initScaffoldTables((ddl: string) => db.exec(ddl));
   initCraftScoreTables((ddl: string) => db.exec(ddl));
+  initAgentConfigTable(rt.storage.execRaw);
+  const agentConfig = createAgentConfigStore(rt.storage.sql);
+  agentConfig.setModel(modelSpecForAgentConfig(llmConfig, opts.model));
+  agentConfig.setDisplayName(name);
+  agentConfig.setNameOrigin('user');
 
   db.close();
 
@@ -88,6 +98,7 @@ export async function createCommand(name: string | undefined, opts: {
     purpose,
   });
   if (alias) writeAliasShim(name, alias);
+  ensureLocalDaemonRunning();
 
   spinner.stop('Agent created');
   printCreatedCard(name, purpose, llmConfig.model, dbPath);
@@ -104,6 +115,27 @@ async function resolveMode(raw: string | undefined, interactive: boolean): Promi
   const answer = (await ask('Mode (cloud/local)', 'cloud')).toLowerCase();
   if (answer === 'local' || answer === 'l') return 'local';
   return 'cloud';
+}
+
+async function resolveCloudAuth(origin: string | undefined): Promise<{ origin: string; token: string }> {
+  try {
+    return requireAuthConfig();
+  } catch (err) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw err;
+    console.log(DIM('Sign in is required before creating a cloud agent.'));
+    await authCommand({ origin });
+    return requireAuthConfig();
+  }
+}
+
+function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
+  const configured = rawModel ?? loadConfigFile().model;
+  if (configured) return configured;
+  if (llm.name === 'workers-ai') return llm.model.startsWith('@cf/') ? `workers-ai/${llm.model}` : `workers-ai/${llm.model}`;
+  if (llm.name === 'openai') return `openai/${llm.model}`;
+  if (llm.name === 'openrouter') return `openrouter/${llm.model}`;
+  if (llm.name === 'anthropic') return `anthropic/${llm.model}`;
+  return `openai-compat/${llm.model}`;
 }
 
 async function ask(label: string, fallback: string): Promise<string> {

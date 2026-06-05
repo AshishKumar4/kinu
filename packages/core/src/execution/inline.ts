@@ -31,11 +31,9 @@ export interface InlineExecutorDeps {
   sql?: SqlExecutor;
   /**
    * Optional mid-turn notification — fires synchronously from workspace.createTool
-   * after a successful create/update. Legacy hook retained for forward
-   * compatibility; the PreambleCraftedExecutor does not need it because it
-   * reads craftStore.list() fresh on every execute. Kept in the interface
-   * so future adapters that want eager notification don't have to reshape
-   * InlineExecutorDeps.
+   * after a successful create/update. The PreambleCraftedExecutor does not need
+   * it because it reads craftStore.list() fresh on every execute; other adapters
+   * can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
 }
@@ -172,9 +170,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             scope: 'local',
             params: null,
           });
-          // Legacy hook; PreambleCraftedExecutor no longer needs it (reads
-          // craftStore.list() live). Kept as a no-op in CF; other adapters
-          // may still opt in.
+          // Optional eager notification; PreambleCraftedExecutor reads
+          // craftStore.list() live, so CF leaves this as a no-op.
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {

@@ -1,8 +1,8 @@
 /**
  * Supervise altitude — the agent over time (automation + research operations),
  * distinct from the per-run RUN altitude. One scrollable canvas of blocks, each
- * bound to a wired RPC. Honest about wired-vs-stub: the event reactor is not yet
- * live, so triggers are shown read-only with that stated plainly.
+ * bound to wired RPCs. Timers and webhooks are active; speculative trigger
+ * kinds stay represented in durable state until their operator flows are added.
  *
  * Blocks: Curriculum (Voyager self-proposed tasks — fully actionable),
  * Run history (cross-run list), Automations (triggers + honest reactor state),
@@ -11,14 +11,23 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import {
-  GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon, WarningIcon,
+  GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon,
 } from "@phosphor-icons/react";
 import { EmptyState } from "@/components/surfaces/shared";
 import type { Rpc, BackgroundJob } from "@/lib/protocol";
 
 interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
 interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number }
-interface TriggerRow { id: string; kind: string; state: string; created_at: number; rate_limit_per_min?: number }
+interface TriggerRow {
+  id: string;
+  kind: string;
+  state: string;
+  created_at: number;
+  rate_limit_per_min?: number;
+  next_fire_at?: number | null;
+  last_fire_at?: number | null;
+  fire_count?: number;
+}
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -191,16 +200,18 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
 function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const [triggers, setTriggers] = useState<TriggerRow[] | null>(null);
   useEffect(() => { rpc<{ triggers: TriggerRow[] }>("listTriggers", []).then((r) => setTriggers(r.triggers ?? [])).catch(() => setTriggers([])); }, [rpc]);
+  const active = (triggers ?? []).filter((t) => t.state === "active").length;
+  const nextFire = (triggers ?? [])
+    .map((t) => t.next_fire_at)
+    .filter((ts): ts is number => typeof ts === "number" && ts > Date.now())
+    .sort((a, b) => a - b)[0];
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
         <LightningIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Automations</h2>
-        {triggers && <Badge variant="secondary">{triggers.length}</Badge>}
-      </div>
-      <div className="flex items-start gap-2 text-[11px] p-text-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 mb-3">
-        <WarningIcon size={13} className="text-amber-400 mt-0.5 shrink-0" />
-        <span>The event reactor isn't wired into live turns yet — triggers are registered but don't auto-drive runs. Only webhooks are creatable today; timer/watch/peer/mcp triggers + reactor activation are in progress.</span>
+        {triggers && <Badge variant="secondary">{active}/{triggers.length} active</Badge>}
+        {nextFire && <span className="ml-auto text-[11px] p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
       </div>
       {triggers === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
         : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered.</p>
@@ -211,6 +222,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
                 <span className={`size-1.5 rounded-full shrink-0 ${t.state === "active" ? "bg-emerald-500" : "bg-zinc-500"}`} />
                 <span className="font-mono p-text-2">{t.kind}</span>
                 <span className="p-text-3 truncate flex-1">{t.id}</span>
+                {typeof t.fire_count === "number" && t.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{t.fire_count} fires</span>}
                 <span className="p-text-3 shrink-0">{t.state}</span>
               </div>
             ))}

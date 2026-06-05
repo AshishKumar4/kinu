@@ -71,7 +71,7 @@ export interface SerializedMessage {
   readonly toolName?: string;
 }
 
-/** Everything a HeadAgent needs to start working. */
+/** Everything a branching head needs to start working. */
 export interface HeadInput {
   readonly id: HeadId;
   readonly rootId: HeadId;                 // root of the split tree (== id if this is a root)

@@ -16,6 +16,7 @@ export const BUILTIN_TOOLS = [
   'think',
   'memory',
   'fact',
+  'product_change',
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
@@ -88,4 +89,9 @@ export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
     'One tool, three actions: "remember" (upsert key→value, value is any JSON, ' +
     'optional confidence), "recall" (read by key; top-recent facts are also ' +
     'auto-surfaced in your system prompt), "forget" (delete a stale/wrong fact).',
+  product_change:
+    'Governed lane for changing the Proteus product/UI itself. Use this when the user asks you ' +
+    'to customize or modify your own app experience. It records source bindings, change plans, ' +
+    'redacted diffs, validation checks, previews, explicit owner approvals, deployments, and rollback metadata. ' +
+    'Do not treat scaffold evolution as product UI changes, and do not deploy production without an approval record.',
 };

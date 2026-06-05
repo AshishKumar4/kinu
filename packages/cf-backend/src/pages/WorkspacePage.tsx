@@ -158,8 +158,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   );
 }
 
-/** Consent card: an agent wants to run a command on a connected device. The
- *  user decides — Allow once / Always allow this agent / Deny. */
+/** Consent card: an agent wants to use a connected device. */
 function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
@@ -170,9 +169,12 @@ function DeviceConsentCard({ consent, onResolve }: {
         <DesktopTowerIcon size={16} className="text-amber-400 shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">
-            This agent wants to run a command on <span className="font-medium">{consent.deviceLabel}</span>:
+            This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
           </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-elevated rounded px-2 py-1">{consent.command || "(command)"}</code>
+          <div className="mt-1 text-[10px] p-text-3">
+            Always allow grants this agent all future local actions on this device until revoked.
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-2 mt-2.5 justify-end">
@@ -181,7 +183,7 @@ function DeviceConsentCard({ consent, onResolve }: {
         <button onClick={() => onResolve(consent.consentId, "once")}
           className="px-2.5 py-1 text-[11px] rounded-md p-card hover:p-card-hover p-text-2">Allow once</button>
         <button onClick={() => onResolve(consent.consentId, "always")}
-          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Always allow</button>
+          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">Always allow local</button>
       </div>
     </div>
   );

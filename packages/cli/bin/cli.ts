@@ -10,6 +10,10 @@ import { runCommand } from '../src/commands/run.js';
 import { authCommand, logoutCommand, whoamiCommand } from '../src/commands/auth.js';
 import { aliasCommand, aliasesCommand, unaliasCommand } from '../src/commands/alias.js';
 import { desktopCommand } from '../src/commands/desktop.js';
+import { daemonCommand } from '../src/commands/daemon.js';
+import { setupCommand } from '../src/commands/setup.js';
+import { sessionsCommand } from '../src/commands/sessions.js';
+import { doctorCommand, uninstallCommand, updateCommand } from '../src/commands/self.js';
 import { evolveCommand } from '../src/commands/evolve.js';
 import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
@@ -38,6 +42,7 @@ llmOpts(
     .option('--purpose <text>', 'Agent purpose')
     .option('--mode <mode>', 'Agent mode: cloud or local')
     .option('--alias <name>', 'Create an executable alias command')
+    .option('--origin <url>', 'Proteus app origin for first-use sign-in')
     .option('--no-alias-agent', 'Do not create an alias shim'),
 ).action(wrapAction(createCommand));
 
@@ -59,10 +64,29 @@ program
   .option('--origin <url>', 'Proteus app origin')
   .action(wrapAction(logoutCommand));
 
+program
+  .command('setup')
+  .description('Configure account login and local model credentials')
+  .option('--origin <url>', 'Proteus app origin')
+  .option('--provider <name>', 'Provider: openai, openrouter, anthropic, openai-compatible, skip')
+  .option('--model <id>', 'Default model for the selected provider')
+  .option('-y, --yes', 'Accept recommended setup choices where possible')
+  .option('--skip-cloud', 'Skip account sign-in')
+  .action(wrapAction(setupCommand));
+
 llmOpts(
   program
     .command('run <name> [prompt...]')
-    .description('Run an agent once, or open chat when no prompt is provided'),
+    .description('Run an agent once, or open chat when no prompt is provided')
+    .option('-p, --print', 'Print response and exit')
+    .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
+    .option('-c, --continue', 'Continue the latest recorded CLI session')
+    .option('-r, --resume', 'Resume the latest recorded CLI session')
+    .option('--session <idOrPath>', 'Use a recorded CLI session')
+    .option('--fork <idOrPath>', 'Fork a recorded CLI session into a new session')
+    .option('--session-dir <dir>', 'Override CLI session storage directory')
+    .option('--no-session', 'Do not record this CLI run')
+    .option('-n, --name <label>', 'Human-readable session label'),
 ).action(wrapAction(runCommand));
 
 llmOpts(
@@ -107,10 +131,23 @@ program
   .action(wrapAction(aliasesCommand));
 
 program
+  .command('sessions [agent]')
+  .description('List recorded CLI sessions')
+  .option('--session-dir <dir>', 'Override CLI session storage directory')
+  .option('--path', 'Show session file paths')
+  .option('--show <idOrPath>', 'Show a specific session path')
+  .action(wrapAction(sessionsCommand));
+
+program
   .command('desktop [action]')
   .description('Connect or inspect the local desktop execution daemon')
   .option('--label <name>', 'Device label')
   .action(wrapAction(desktopCommand));
+
+program
+  .command('daemon [action]')
+  .description('Manage the local scheduler daemon for local agent alarms')
+  .action(wrapAction(daemonCommand));
 
 program
   .command('connect')
@@ -129,6 +166,24 @@ program
   .description('Import agent database')
   .option('-n, --name <name>', 'Agent name (default: derived from filename)')
   .action(wrapAction(importCommand));
+
+program
+  .command('update [target]')
+  .description('Update the installed Proteus command')
+  .option('--origin <url>', 'Proteus app origin')
+  .option('--force', 'Reinstall even if already current')
+  .action(wrapAction(updateCommand));
+
+program
+  .command('uninstall')
+  .description('Remove the installed Proteus command')
+  .option('--purge', 'Also remove ~/.proteus data')
+  .action(wrapAction(uninstallCommand));
+
+program
+  .command('doctor')
+  .description('Inspect local Proteus CLI installation state')
+  .action(wrapAction(doctorCommand));
 
 // No args or --help: show branded help
 if (process.argv.length <= 2 || process.argv.includes('--help') || process.argv.includes('-h')) {

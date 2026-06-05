@@ -74,7 +74,7 @@ export interface RunAutoShadowEvalOpts {
    * Tool-call dispatcher for the pending scaffold. When provided, the
    * pending runs with the same tool surface the live scaffold would —
    * which is the fair comparison the judge needs. When omitted, the
-   * pending's tool calls return the legacy "disabled" error, which
+   * pending's tool calls return the "disabled" error, which
    * unfairly penalises tool-using scaffolds.
    *
    * Side-effect note: enabling this lets the pending mutate VFS / SQL
@@ -149,11 +149,11 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       },
       llmStream: opts.llmStream,
       // Pass the caller's dispatcher straight through so the pending scaffold
-      // runs against the same tool surface the live turn did — the fix behind
-      // `proteus-scaffold-gap`. When omitted, runScaffold's own guard
-      // (executor.ts) returns the "no callTool wired" error; no second stub
-      // needed here. Side-effect note: the pending's tool calls hit the live
-      // env; autoApply stays off by default so promotion is still gated.
+      // runs against the same tool surface the live turn did. When omitted,
+      // runScaffold's own capability guard returns an unavailable-runtime
+      // error; no second stub is needed here. Side-effect note: the pending's
+      // tool calls hit the live env; autoApply stays off by default so
+      // promotion is still gated.
       callTool: opts.callTool,
       defaultInference: opts.defaultInference,
       scaffoldCodeOverride: pendingCode,

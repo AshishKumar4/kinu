@@ -1,44 +1,39 @@
 # Proteus Quick Start
 
-## CLI (local, no Cloudflare account needed)
+## CLI
 
 ```bash
-cd /workspace/proteus
+curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash
+proteus setup
+proteus create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
+jarvis "what changed in this repo?"
+```
+
+The installer works on macOS and Linux, adds `~/.proteus/bin` to your PATH when
+needed, and runs setup unless `--no-setup` is passed. `proteus setup` handles
+browser login and optional local model-provider credentials.
+
+Use `--mode cloud` for a persistent cloud agent that uses your desktop daemon as
+the local execution engine, or `--mode local` for a fully local bun:sqlite agent.
+
+## Web UI Development
+
+```bash
 bun install
-
-# Link the CLI globally
-cd packages/cli && bun link && cd ../..
-
-# Configure AI Gateway (get your token from the Cloudflare dashboard)
-export PROTEUS_BASE_URL="https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1"
-export PROTEUS_AUTH="Bearer <your-ai-gateway-token>"
-export NODE_TLS_REJECT_UNAUTHORIZED=0
-
-# Create and chat with an agent
-proteus create myagent --purpose "A helpful coding assistant"
-proteus chat myagent
-proteus status myagent
-proteus list
+bun run dev
 ```
 
-## Web UI (Cloudflare Workers + Durable Objects)
+Open the printed Vite URL. Dev servers must bind to `0.0.0.0`; port `3000` is
+reserved by the platform relay.
+
+## CLI From A Checkout
 
 ```bash
-cd /workspace/proteus/packages/cf-backend
-
-# Start the dev server (Vite + Wrangler)
-CLOUDFLARE_ACCOUNT_ID=fc895c5670cff9268b310a6a86bb6c35 npx vite dev --port 5173 --host 0.0.0.0
-
-# Open http://localhost:5173 in a browser
-# Type a mission to create a new agent, or click a recent agent to resume
+bun install
+bun run cli -- setup
+bun run cli -- create jarvis --mode local --alias jarvis
 ```
 
-## Available Models
-
-| Model | Speed | Best For |
-|-------|-------|----------|
-| `@cf/moonshotai/kimi-k2.5` (default) | Slow | Complex reasoning, CTF challenges |
-| `@cf/meta/llama-4-scout-17b-16e-instruct` | Fast | Quick tasks, simple questions |
-
-Change the model in the web UI via the dropdown next to the chat input,
-or in the CLI via `proteus chat --model <id>`.
+Source checkouts use `https://proteus.ashishkumarsingh.com` as the default app
+origin. Override with `--origin` or `PROTEUS_ORIGIN` only for alternate
+deployments.

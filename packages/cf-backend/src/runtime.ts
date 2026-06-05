@@ -88,9 +88,8 @@ export type CFRuntime = AgentRuntime & {
 export interface CFRuntimeHooks {
   /**
    * Fires synchronously from workspace.createTool after a successful
-   * create/update. Legacy hook: PreambleCraftedExecutor doesn't need it
-   * (reads craftStore.list() live). Retained for adapters that want eager
-   * notification.
+   * create/update. PreambleCraftedExecutor does not need it because it reads
+   * craftStore.list() live; other adapters can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
 }
@@ -140,7 +139,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     // sql is used by workspace.listTools() to look up EMA craft_scores.
     // Cast because adaptVFS returns core's SqlExecutor shape.
     sql: sql as unknown as import("@proteus/core").SqlExecutor,
-    // Legacy hook — PreambleCraftedExecutor ignores it (live-reads craftStore).
+    // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
@@ -218,7 +217,6 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
         // Pass the agent's name so the hub can enforce per-agent consent.
         const result = await stub.deviceRpc(method, effectiveParams, {
           agentName: agent.name,
-          trustedCliTurn: cwd != null,
         });
         deviceConnected = true;
         return result;

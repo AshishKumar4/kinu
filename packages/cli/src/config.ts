@@ -1,10 +1,6 @@
 /**
- * CLI configuration — resolves LLM config from:
- *   1. CLI flags (highest priority)
- *   2. Environment variables (PROTEUS_BASE_URL, PROTEUS_AUTH, PROTEUS_MODEL)
- *   3. Legacy env vars (AI_GATEWAY_BASE_URL, AI_GATEWAY_AUTH, AI_GATEWAY_MODEL)
- *   4. Config file (~/.proteus/config.json)
- *   5. Defaults
+ * CLI configuration. App auth is stored in ~/.proteus/config.json after
+ * `proteus setup`; direct LLM env vars remain as explicit local overrides.
  */
 
 import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
@@ -17,7 +13,10 @@ export const AGENT_HOME = join(homedir(), '.proteus');
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
 export const BIN_DIR = join(AGENT_HOME, 'bin');
 const DEFAULT_MODEL = '@cf/moonshotai/kimi-k2.6';
-const DEFAULT_ORIGIN = 'https://proteus.ashishkmr472.workers.dev';
+const DEFAULT_ORIGIN = 'https://proteus.ashishkumarsingh.com';
+const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 
 export type AgentMode = 'local' | 'cloud';
 
@@ -60,6 +59,7 @@ export interface ProteusConfig {
 
 export function ensureAgentHome(): void {
   mkdirSync(AGENT_HOME, { recursive: true });
+  try { chmodSync(AGENT_HOME, 0o700); } catch { /* nop on filesystems without chmod */ }
 }
 
 export function ensureBinDir(): void {
@@ -112,7 +112,7 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 export function requireAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
   const config = loadConfigFile();
   const origin = resolveCloudOrigin();
-  const token = process.env.PROTEUS_TOKEN ?? config.accessToken;
+  const token = config.accessToken;
   if (!token) {
     throw new Error('Not authenticated. Run: proteus auth');
   }
@@ -213,28 +213,34 @@ export function resolveLLMConfig(opts?: {
   const model = opts?.model
     ?? process.env.PROTEUS_MODEL
     ?? process.env.AI_GATEWAY_MODEL
-    ?? file.model
-    ?? DEFAULT_MODEL;
+    ?? file.model;
+
+  if (baseURL && auth) {
+    return {
+      name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
+      baseURL,
+      headers: { 'Authorization': auth },
+      model: directEndpointModelId(model ?? DEFAULT_MODEL),
+    };
+  }
+
+  const derived = deriveLLMConfigFromProviderCredentials(file, model);
+  if (derived) return derived;
 
   if (!baseURL) {
     throw new Error(
       'No LLM base URL configured.\n' +
-      '  Set PROTEUS_BASE_URL env var, pass --base-url, or add to ~/.proteus/config.json'
+      '  Run proteus setup and configure a local provider, or pass --base-url for an advanced override.'
     );
   }
   if (!auth) {
     throw new Error(
       'No LLM auth configured.\n' +
-      '  Set PROTEUS_AUTH env var, pass --auth, or add to ~/.proteus/config.json'
+      '  Run proteus setup and configure a local provider, or pass --auth for an advanced override.'
     );
   }
 
-  return {
-    name: 'workers-ai',
-    baseURL,
-    headers: { 'Authorization': auth },
-    model,
-  };
+  return { name: 'openai-compat', baseURL, headers: { 'Authorization': auth }, model: directEndpointModelId(model ?? DEFAULT_MODEL) };
 }
 
 /** Local provider credentials used by the CLI backend's provider registry.
@@ -253,4 +259,79 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
 /** Stdio MCP servers from ~/.proteus/config.json (`mcpServers`). Empty if none. */
 export function resolveMcpServers(): Record<string, McpServerConfig> {
   return loadConfigFile().mcpServers ?? {};
+}
+
+function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: string | undefined): LLMProviderConfig | null {
+  const providerModel = model ?? preferredModelFromCredentials(file);
+  const openaiKey = process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey;
+  if (openaiKey && (!providerModel || providerModel.startsWith('openai/') || !providerModel.includes('/'))) {
+    return {
+      name: 'openai',
+      baseURL: OPENAI_BASE_URL,
+      headers: { Authorization: `Bearer ${openaiKey}` },
+      model: stripProvider(providerModel ?? 'gpt-4o-mini', 'openai'),
+    };
+  }
+
+  const openrouterKey = process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey;
+  if (openrouterKey && providerModel?.startsWith('openrouter/')) {
+    return {
+      name: 'openrouter',
+      baseURL: OPENROUTER_BASE_URL,
+      headers: {
+        Authorization: `Bearer ${openrouterKey}`,
+        'HTTP-Referer': DEFAULT_ORIGIN,
+        'X-Title': 'Proteus CLI',
+      },
+      model: stripProvider(providerModel, 'openrouter'),
+    };
+  }
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey;
+  if (anthropicKey && providerModel?.startsWith('anthropic/')) {
+    return {
+      name: 'anthropic',
+      baseURL: ANTHROPIC_BASE_URL,
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+      },
+      model: stripProvider(providerModel, 'anthropic'),
+    };
+  }
+
+  const compat = file.providers?.openaiCompat?.default;
+  if (compat) {
+    return {
+      name: 'openai-compat',
+      baseURL: compat.baseURL,
+      headers: {
+        ...(compat.headers ?? {}),
+        ...(compat.apiKey ? { Authorization: `Bearer ${compat.apiKey}` } : {}),
+        ...(compat.extraHeaders ?? {}),
+      },
+      model: stripProvider(providerModel ?? 'gpt-4o-mini', 'openai-compat'),
+    };
+  }
+
+  return null;
+}
+
+function preferredModelFromCredentials(file: ProteusConfig): string | undefined {
+  if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return 'openai/gpt-4o-mini';
+  if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return 'openrouter/openai/gpt-4o-mini';
+  if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return 'anthropic/claude-sonnet-4-5';
+  return file.model;
+}
+
+function stripProvider(model: string, provider: string): string {
+  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
+}
+
+function directEndpointModelId(model: string): string {
+  if (model.startsWith('workers-ai/')) return model.slice('workers-ai/'.length);
+  if (model.startsWith('openai/')) return model.slice('openai/'.length);
+  if (model.startsWith('openrouter/')) return model.slice('openrouter/'.length);
+  if (model.startsWith('openai-compat/')) return model.slice('openai-compat/'.length);
+  return model;
 }

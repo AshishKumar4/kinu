@@ -280,12 +280,12 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
           placeholder="https://mcp.example.com/v1" />
       </div>
       <div className="space-y-1">
-        <label className="text-xs p-text-3">
-          Static headers (optional JSON, for non-OAuth servers behind CF Access / Bearer)
-        </label>
-        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)}
-          rows={2} className={inputCls + ' font-mono'}
-          placeholder='{"Authorization": "Bearer xyz", "CF-Access-Client-Id": "..."}' />
+	        <label className="text-xs p-text-3">
+	          Static headers (optional JSON, for private or bearer-protected servers)
+	        </label>
+	        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)}
+	          rows={2} className={inputCls + ' font-mono'}
+	          placeholder='{"Authorization": "Bearer xyz"}' />
       </div>
       <div className="space-y-1">
         <label className="text-xs p-text-3">Allowed tools (optional, comma-separated; empty = all)</label>

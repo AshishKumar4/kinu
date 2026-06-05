@@ -130,7 +130,7 @@ export default function Sidebar() {
               <span>Settings</span>
             </Link>
             <a
-              href="/cdn-cgi/access/logout"
+              href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
             >
               <SignOutIcon size={14} />

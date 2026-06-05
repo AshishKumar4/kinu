@@ -61,15 +61,11 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     },
 
     readFile: {
-      description: 'Read a file from the user\'s local filesystem via SSH tunnel.',
+      description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
       execute: async (path: unknown): Promise<string> => {
         if (!isConnected()) return NOT_CONNECTED;
         try {
-          // Delegate to exec cat — simple and universal
-          const result = await rpc('exec', [`cat ${String(path)}`]) as
-            { stdout: string; stderr: string; exitCode: number };
-          if (result.exitCode !== 0) return `File not found: ${path}`;
-          return result.stdout;
+          return String(await rpc('readFile', [String(path)]));
         } catch (err) {
           return `readFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -81,11 +77,12 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
       execute: async (path: unknown, content: unknown): Promise<string> => {
         if (!isConnected()) return NOT_CONNECTED;
         try {
-          // Use tee for writing — handles arbitrary content via stdin
-          const result = await rpc('writeFile', [String(path), String(content)]) as
-            { success: boolean; error?: string };
-          if (!result.success) return `writeFile failed: ${result.error ?? 'unknown error'}`;
-          return `Written ${String(content).length} bytes to ${path}`;
+          const result = await rpc('writeFile', [String(path), String(content)]);
+          if (result !== 'ok' && !(isRecord(result) && result.success === true)) {
+            const error = isRecord(result) && typeof result.error === 'string' ? result.error : 'unknown error';
+            return `writeFile failed: ${error}`;
+          }
+          return `Written ${String(content).length} bytes to ${String(path)}`;
         } catch (err) {
           return `writeFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -97,10 +94,12 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
       execute: async (path: unknown): Promise<unknown> => {
         if (!isConnected()) return NOT_CONNECTED;
         try {
-          const result = await rpc('exec', [`ls -1a ${String(path || '/')}`]) as
-            { stdout: string; stderr: string; exitCode: number };
-          if (result.exitCode !== 0) return `readdir failed: ${result.stderr}`;
-          return result.stdout.split('\n').filter(Boolean);
+          const result = await rpc('listFiles', [String(path || '/')]);
+          if (!Array.isArray(result)) return result;
+          return result.map((entry) => {
+            if (isRecord(entry) && typeof entry.name === 'string') return entry.name;
+            return String(entry);
+          });
         } catch (err) {
           return `readdir error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -112,9 +111,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
       execute: async (path: unknown): Promise<unknown> => {
         if (!isConnected()) return NOT_CONNECTED;
         try {
-          const result = await rpc('exec', [`test -e ${String(path)} && echo true || echo false`]) as
-            { stdout: string; exitCode: number };
-          return result.stdout.trim() === 'true';
+          return Boolean(await rpc('exists', [String(path)]));
         } catch { return false; }
       },
     },
@@ -167,4 +164,8 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
   };
 
   return provider;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
