@@ -31,7 +31,7 @@ import { MessageList, type DisplayMessage } from './messages.js';
 import { renderSessionBrowser, selectSession, transcriptToMessages } from './session-browser.js';
 import { clipText } from './format.js';
 import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js';
-import { normalizeModelEntries, type TuiModelEntry } from './model-types.js';
+import { contextWindowForSpec, normalizeModelEntries, type TuiModelEntry } from './model-types.js';
 import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
 import { estimateContextTokens, formatContextUsage, modelDisplayName } from './context-status.js';
 
@@ -59,6 +59,8 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const localResolverOpts: LocalModelResolverOptions = { model: requestedModel, baseUrl, auth };
   const [model, setModel] = useState(() => initialCloudCliModel(agentName, localResolverOpts));
+  const [modelCatalog, setModelCatalog] = useState<TuiModelEntry[]>([]);
+  const [modelContextWindow, setModelContextWindow] = useState<number | undefined>(undefined);
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ models: TuiModelEntry[]; loading: boolean; error: string | null } | null>(null);
   const [draft, setDraft] = useState('');
@@ -84,6 +86,20 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       .catch(() => {});
     return () => { cancelled = true; };
   }, [agentName, auth, baseUrl, cloudName, origin, requestedModel, token]);
+
+  useEffect(() => {
+    setModelContextWindow(contextWindowForSpec(modelCatalog, model));
+  }, [model, modelCatalog]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listCloudAndLocalModels(origin, token, localResolverOpts)
+      .then((models) => {
+        if (!cancelled) setModelCatalog(models);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [auth, baseUrl, origin, requestedModel, token]);
 
   const resumeSession = useCallback((input: string, available?: CliSessionInfo[]) => {
     const sessions = available ?? listCliSessions(agentName, sessionOptions);
@@ -112,6 +128,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
     setModelPicker({ models: [], loading: true, error: null });
     try {
       const models = await listCloudAndLocalModels(origin, token, localResolverOpts);
+      setModelCatalog(models);
       setModelPicker({ models, loading: false, error: null });
     } catch (err) {
       setModelPicker({
@@ -129,6 +146,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         await setCloudAgentModel(origin, token, cloudName, entry.spec);
       }
       setModel(entry.spec);
+      setModelContextWindow(entry.contextWindow);
       setModelPicker(null);
       addMessage({ role: 'system', content: `Model: ${entry.spec}` });
     } catch (err) {
@@ -343,7 +361,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         <text>
           <span fg="#d1d5db">{clipText(modelDisplayName(model), 24)}</span>
           {'  '}
-          <span fg="#6b7280">{formatContextUsage(model, contextTokens)}</span>
+          <span fg="#6b7280">{formatContextUsage(model, contextTokens, modelContextWindow)}</span>
           {'  '}
           <span fg="#4ade80">● connected</span>
         </text>

@@ -10,6 +10,7 @@ import {
   createOpenAIProvider,
   createOpenRouterProvider,
   createProviderRegistry,
+  listModelsDevProviderModels,
   type AuthResolution,
   type ModelInfo,
   type ModelProvider,
@@ -107,12 +108,15 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       label: 'Cloudflare Workers AI (local gateway)',
       defaultModel: localEndpoint.model,
       llm: localEndpoint,
+      catalogProviderId: 'cloudflare-workers-ai',
     }));
     registry.register(createGatewayBackedProvider({
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
       defaultModel: localEndpoint.model.startsWith('workers-ai/') ? localEndpoint.model : `workers-ai/${localEndpoint.model}`,
       llm: localEndpoint,
+      catalogProviderId: 'cloudflare-workers-ai',
+      catalogModelPrefix: 'workers-ai/',
     }));
   }
 
@@ -176,6 +180,8 @@ function createGatewayBackedProvider(opts: {
   label: string;
   defaultModel: string;
   llm: LLMProviderConfig;
+  catalogProviderId?: 'cloudflare-workers-ai';
+  catalogModelPrefix?: string;
 }): ModelProvider {
   return {
     id: opts.id,
@@ -183,9 +189,21 @@ function createGatewayBackedProvider(opts: {
     defaultModel: opts.defaultModel,
     isAvailable: () => !!opts.llm.baseURL && Object.keys(opts.llm.headers).length > 0,
     unavailableReason: () => 'PROTEUS_BASE_URL and PROTEUS_AUTH are required for the local gateway provider.',
-    listModels: () => [
-      { id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] },
-    ],
+    async listModels(deps): Promise<ModelInfo[]> {
+      const fallback: ModelInfo[] = [{ id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] }];
+      if (!opts.catalogProviderId) return fallback;
+      const models = await listModelsDevProviderModels(opts.catalogProviderId, deps, {
+        fallback,
+        preferredIds: [opts.defaultModel.replace(/^workers-ai\//, '')],
+      });
+      const prefix = opts.catalogModelPrefix ?? '';
+      if (!prefix) return models;
+      return models.map((model) => ({
+        ...model,
+        id: model.id.startsWith(prefix) ? model.id : `${prefix}${model.id}`,
+        capabilities: model.capabilities ? [...model.capabilities] : undefined,
+      }));
+    },
     createModel(modelId): LanguageModel {
       return createChatModel({
         kind: 'openai-compat',

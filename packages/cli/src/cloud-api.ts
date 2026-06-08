@@ -106,6 +106,7 @@ export interface CloudModelMenuEntry {
   label: string;
   provider: string;
   capabilities?: string[];
+  contextWindow?: number;
 }
 
 export interface CloudWebhookTriggerInput {

@@ -18,7 +18,7 @@ import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { StatusView } from './help-view.js';
 import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js';
-import { normalizeModelEntries, type TuiModelEntry } from './model-types.js';
+import { contextWindowForSpec, normalizeModelEntries, type TuiModelEntry } from './model-types.js';
 import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
 import { estimateContextTokens } from './context-status.js';
 import {
@@ -65,6 +65,8 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
   const [mcpReady, setMcpReady] = useState(!mcpServers || Object.keys(mcpServers).length === 0);
   const [info, setInfo] = useState(initialInfo);
   const [modelSpec, setModelSpec] = useState(() => modelResolver?.normalizeSpecSync(null) ?? llmConfig.model);
+  const [modelCatalog, setModelCatalog] = useState<TuiModelEntry[]>([]);
+  const [modelContextWindow, setModelContextWindow] = useState<number | undefined>(undefined);
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ models: TuiModelEntry[]; loading: boolean; error: string | null } | null>(null);
   const [draft, setDraft] = useState('');
@@ -174,6 +176,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
     setModelPicker({ models: [], loading: true, error: null });
     try {
       const models = normalizeModelEntries(await (sessionRef.current ?? session).listAvailableModels());
+      setModelCatalog(models);
       setModelPicker({ models, loading: false, error: null });
     } catch (err) {
       setModelPicker({
@@ -188,6 +191,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
     try {
       const result = (sessionRef.current ?? session).setModel(model.spec);
       setModelSpec(result.spec);
+      setModelContextWindow(model.contextWindow);
       setModelPicker(null);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
@@ -272,6 +276,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         try {
           const result = currentSession.setModel(spec);
           setModelSpec(result.spec);
+          setModelContextWindow(contextWindowForSpec(modelCatalog, result.spec));
           addMessage({ role: 'system', content: `Model: ${result.spec}` });
         } catch (err) {
           addMessage({ role: 'system', content: `Error: ${(err as Error).message}` });
@@ -396,6 +401,20 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
   }, [session, mcpServers]);
 
   useEffect(() => {
+    let cancelled = false;
+    void (sessionRef.current ?? session).listAvailableModels()
+      .then((models) => {
+        if (!cancelled) setModelCatalog(normalizeModelEntries(models));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [session]);
+
+  useEffect(() => {
+    setModelContextWindow(contextWindowForSpec(modelCatalog, modelSpec));
+  }, [modelCatalog, modelSpec]);
+
+  useEffect(() => {
     if (!mcpReady || initialPromptSentRef.current) return;
     const prompt = initialPrompt?.trim();
     if (!prompt) return;
@@ -424,6 +443,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         autoEvolve={!noAutoEvolve}
         connected={true}
         contextTokens={contextTokens}
+        contextWindow={modelContextWindow}
       />
 
       <scrollbox

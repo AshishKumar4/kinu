@@ -1,5 +1,10 @@
 const WINDOWS: Array<[RegExp, number]> = [
   [/minimax\/m3/i, 1_000_000],
+  [/^codex\/gpt-5\.(?:5|4)\b/i, 272_000],
+  [/^codex\/gpt-5\.3-codex-spark\b/i, 128_000],
+  [/^codex\/gpt-5\.3-codex\b/i, 272_000],
+  [/(^|\/)gpt-5\.5\b/i, 1_050_000],
+  [/claude-(?:opus|sonnet)-4-[67]\b/i, 1_000_000],
   [/kimi-k2/i, 262_144],
   [/llama-4/i, 131_072],
   [/qwen/i, 131_072],

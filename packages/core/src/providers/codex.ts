@@ -20,12 +20,15 @@ import { asFetchFunction } from './fetch-shim.js';
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
 
-const MODELS: ModelInfo[] = [
-  { id: 'gpt-5.5',      label: 'GPT-5.5 (Codex)',      capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'gpt-5.4',      label: 'GPT-5.4 (Codex)',      capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini (Codex)', capabilities: ['tools', 'streaming'] },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',       capabilities: ['tools', 'streaming', 'reasoning'] },
+const FALLBACK_MODELS: ModelInfo[] = [
+  { id: 'gpt-5.5',       label: 'GPT-5.5 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
+  { id: 'gpt-5.4',       label: 'GPT-5.4 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
+  { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini (Codex)',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 272_000 },
+  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark', capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 128_000 },
 ];
+
+const CODEX_MODELS_TTL_MS = 5 * 60_000;
 
 export interface CodexProviderOptions {
   baseURL?: string;
@@ -33,6 +36,7 @@ export interface CodexProviderOptions {
 
 export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvider {
   const baseURL = opts.baseURL ?? CODEX_BASE_URL;
+  let modelCache: { at: number; models: ModelInfo[] } | null = null;
   return {
     id: 'codex',
     label: 'ChatGPT Codex (subscription)',
@@ -42,7 +46,25 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     unavailableReason() {
       return 'No Codex OAuth credential — connect ChatGPT via the device-code flow.';
     },
-    listModels: () => MODELS,
+    async listModels(deps) {
+      if (modelCache && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) return cloneModelInfos(modelCache.models);
+      const auth = await deps.getAuth(CODEX_CRED_KEY);
+      if (!auth) return cloneModelInfos(FALLBACK_MODELS);
+      try {
+        const fetchFn = deps.fetch ?? fetch;
+        const res = await fetchFn(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, {
+          headers: auth.headers,
+        });
+        if (!res.ok) return cloneModelInfos(FALLBACK_MODELS);
+        const body: unknown = await res.json();
+        const models = parseCodexModels(body);
+        if (models.length === 0) return cloneModelInfos(FALLBACK_MODELS);
+        modelCache = { at: Date.now(), models };
+        return cloneModelInfos(models);
+      } catch {
+        return cloneModelInfos(FALLBACK_MODELS);
+      }
+    },
 
     createModel(modelId, deps): LanguageModel {
       const baseFetch = deps.fetch ?? fetch;
@@ -114,6 +136,53 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
   };
 }
 
+interface CodexModelsResponse {
+  models?: CodexModelInfo[];
+}
+
+interface CodexModelInfo {
+  slug?: string;
+  display_name?: string;
+  visibility?: string;
+  supported_in_api?: boolean;
+  priority?: number;
+  context_window?: number;
+  max_context_window?: number;
+  supported_reasoning_levels?: unknown[];
+  input_modalities?: string[];
+}
+
+function parseCodexModels(body: unknown): ModelInfo[] {
+  if (!isRecord(body) || !Array.isArray((body as CodexModelsResponse).models)) return [];
+  const rows = (body as CodexModelsResponse).models ?? [];
+  const models: Array<ModelInfo & { priority: number }> = [];
+  for (const row of rows) {
+    if (row.visibility !== 'list' && row.visibility !== undefined) continue;
+    const id = nonEmptyString(row.slug);
+    if (!id) continue;
+    const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
+    if ((row.supported_reasoning_levels?.length ?? 0) > 0) capabilities.push('reasoning');
+    if (row.input_modalities?.includes('image')) capabilities.push('vision');
+    models.push({
+      id,
+      label: nonEmptyString(row.display_name) ?? id,
+      capabilities,
+      contextWindow: positiveInteger(row.context_window) ?? positiveInteger(row.max_context_window),
+      priority: typeof row.priority === 'number' ? row.priority : 0,
+    });
+  }
+  return models
+    .sort((a, b) => (b.priority - a.priority) || (a.label ?? a.id).localeCompare(b.label ?? b.id))
+    .map(({ priority: _priority, ...model }) => model);
+}
+
+function cloneModelInfos(models: readonly ModelInfo[]): ModelInfo[] {
+  return models.map((model) => ({
+    ...model,
+    capabilities: model.capabilities ? [...model.capabilities] : undefined,
+  }));
+}
+
 function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
   if (!init || typeof init.body !== 'string') return init;
 
@@ -166,6 +235,14 @@ function contentToText(content: unknown): string {
     .filter(Boolean)
     .join('\n')
     .trim();
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

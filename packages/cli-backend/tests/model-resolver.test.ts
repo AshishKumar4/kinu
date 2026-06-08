@@ -11,7 +11,19 @@ describe('createLocalModelResolver', () => {
         model: '@cf/moonshotai/kimi-k2.6',
       },
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: async () => Response.json({
+        'cloudflare-workers-ai': {
+          models: {
+            '@cf/moonshotai/kimi-k2.6': {
+              id: '@cf/moonshotai/kimi-k2.6',
+              name: 'Kimi K2.6',
+              tool_call: true,
+              reasoning: true,
+              limit: { context: 262_144 },
+            },
+          },
+        },
+      }),
     });
 
     expect(resolver.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
@@ -22,6 +34,10 @@ describe('createLocalModelResolver', () => {
     const providers = await resolver.listProviders();
     expect(providers.find((p) => p.id === 'workers-ai')?.available).toBe(true);
     expect(providers.find((p) => p.id === 'openai')?.available).toBe(false);
+
+    const models = await resolver.listModels();
+    expect(models.find((model) => model.provider === 'workers-ai' && model.id === '@cf/moonshotai/kimi-k2.6')?.contextWindow)
+      .toBe(262_144);
   });
 
   test('exposes local direct-provider credentials through the shared provider registry', async () => {

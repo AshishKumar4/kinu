@@ -11,7 +11,9 @@ describe("contextWindowForModel", () => {
     expect(contextWindowForModel("minimax/m3")).toBe(1_000_000);
     expect(contextWindowForModel("@cf/moonshotai/kimi-k2.6")).toBe(262_144);
     expect(contextWindowForModel("@cf/meta/llama-4-scout")).toBe(131_072);
-    expect(contextWindowForModel("anthropic/claude-opus-4")).toBe(200_000);
+    expect(contextWindowForModel("anthropic/claude-opus-4-7")).toBe(1_000_000);
+    expect(contextWindowForModel("openai/gpt-5.5")).toBe(1_050_000);
+    expect(contextWindowForModel("codex/gpt-5.5")).toBe(272_000);
     expect(contextWindowForModel("openai/gpt-5.1")).toBe(256_000);
     expect(contextWindowForModel("google/gemini-2.5-pro")).toBe(1_000_000);
   });

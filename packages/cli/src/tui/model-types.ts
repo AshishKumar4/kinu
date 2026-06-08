@@ -1,8 +1,10 @@
 export interface TuiModelEntry {
+  id?: string;
   spec: string;
   label: string;
   provider: string;
   capabilities?: string[];
+  contextWindow?: number;
   source?: 'cloud' | 'local' | 'both';
 }
 
@@ -23,10 +25,21 @@ export function normalizeModelEntries(rows: unknown[]): TuiModelEntry[] {
       label,
       provider: provider || spec.split('/', 1)[0] || 'model',
       capabilities,
+      contextWindow: numberValue(item.contextWindow),
     }];
   });
 }
 
+export function contextWindowForSpec(models: readonly TuiModelEntry[], spec: string | null | undefined): number | undefined {
+  const normalized = spec?.trim();
+  if (!normalized) return undefined;
+  return models.find((model) => model.spec === normalized)?.contextWindow;
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }

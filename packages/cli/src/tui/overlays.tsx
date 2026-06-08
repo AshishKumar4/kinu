@@ -2,6 +2,7 @@ import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
 import type { TuiCommand } from './commands.js';
 import type { TuiModelEntry } from './model-types.js';
+import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
 
 export interface OverlayGeometry {
@@ -46,7 +47,7 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
             <span fg={tuiColors.accent}>{command.name.padEnd(nameWidth)}</span>
           </text>
           <text style={{ flexGrow: 1 }}>
-            <span fg={tuiColors.muted}>{command.description}</span>
+            <span fg={tuiColors.muted}>{clipText(command.description, Math.max(12, paletteWidth - nameWidth - 6))}</span>
           </text>
         </box>
       ))}
@@ -69,15 +70,15 @@ interface ModelPickerProps {
 }
 
 export function ModelPickerOverlay({ models, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
+  const paletteWidth = clamp(Math.floor(terminal.width * 0.52), 56, 84);
   const options: SelectOption[] = models.map((model) => ({
-    name: `${model.spec === currentSpec ? '✓ ' : '  '}${model.label}`,
-    description: [
+    name: clipText(`${model.spec === currentSpec ? '✓ ' : '  '}${model.label}`, Math.max(20, paletteWidth - 6)),
+    description: clipText([
       model.spec,
       model.capabilities?.length ? model.capabilities.join(', ') : '',
-    ].filter(Boolean).join(' · '),
+    ].filter(Boolean).join(' · '), Math.max(20, paletteWidth - 6)),
     value: model,
   }));
-  const paletteWidth = clamp(Math.floor(terminal.width * 0.52), 56, 84);
   const paletteHeight = Math.min(Math.max(options.length + 6, 11), Math.max(11, terminal.height - 6), 22);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const selectedIndex = Math.max(0, models.findIndex((model) => model.spec === currentSpec));

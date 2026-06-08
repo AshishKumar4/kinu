@@ -11,15 +11,22 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
+import { listModelsDevProviderModels } from './models-dev.js';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 
-const MODELS: ModelInfo[] = [
-  { id: 'claude-opus-4-7',   label: 'Claude Opus 4.7',     capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'claude-opus-4-6',   label: 'Claude Opus 4.6',     capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'] },
+const FALLBACK_MODELS: ModelInfo[] = [
+  { id: 'claude-opus-4-7',   label: 'Claude Opus 4.7',     capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000 },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000 },
+  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'], contextWindow: 200_000 },
+];
+
+const PREFERRED_MODEL_IDS = [
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
+  'claude-opus-4-6',
+  'claude-sonnet-4-5',
+  'claude-haiku-4-5',
 ];
 
 export function createAnthropicProvider(): ModelProvider {
@@ -29,7 +36,10 @@ export function createAnthropicProvider(): ModelProvider {
     defaultModel: 'claude-opus-4-7',
     async isAvailable(deps) { return deps.hasCredential(ANTHROPIC_CRED_KEY); },
     unavailableReason() { return 'No Anthropic API key (cred key: `anthropic.bearer`).'; },
-    listModels: () => MODELS,
+    listModels: (deps) => listModelsDevProviderModels('anthropic', deps, {
+      fallback: FALLBACK_MODELS,
+      preferredIds: PREFERRED_MODEL_IDS,
+    }),
     createModel(modelId, deps): LanguageModel {
       const baseFetch = deps.fetch ?? fetch;
       const customFetch = asFetchFunction(async (input, init) => {

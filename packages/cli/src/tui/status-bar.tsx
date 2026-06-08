@@ -13,9 +13,10 @@ interface Props {
   autoEvolve: boolean;
   connected: boolean;
   contextTokens?: number;
+  contextWindow?: number;
 }
 
-export function StatusBar({ info, model, toolCount, autoEvolve, connected, contextTokens = 0 }: Props) {
+export function StatusBar({ info, model, toolCount, autoEvolve, connected, contextTokens = 0, contextWindow }: Props) {
   const statusDot = connected ? '●' : '○';
   const statusColor = connected ? '#4ade80' : '#f87171';
 
@@ -42,7 +43,7 @@ export function StatusBar({ info, model, toolCount, autoEvolve, connected, conte
       <text>
         <span fg="#d1d5db">{clipText(modelDisplayName(model), 24)}</span>
         {'  '}
-        <span fg="#6b7280">{formatContextUsage(model, contextTokens)}</span>
+        <span fg="#6b7280">{formatContextUsage(model, contextTokens, contextWindow)}</span>
         {'  '}
         <span fg="#6b7280">⚡ {toolCount} tools</span>
         {'  '}

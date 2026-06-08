@@ -9,16 +9,17 @@ import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
+import { listModelsDevProviderModels } from './models-dev.js';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
 
-const MODELS: ModelInfo[] = [
-  { id: 'gpt-5.5',    label: 'GPT-5.5',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'] },
-  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'] },
-  { id: 'gpt-5-mini', label: 'GPT-5 mini', capabilities: ['tools', 'streaming', 'json-mode'] },
-  { id: 'gpt-4.1',    label: 'GPT-4.1',    capabilities: ['tools', 'streaming', 'json-mode', 'vision'] },
-  { id: 'o4-mini',    label: 'o4-mini',    capabilities: ['streaming', 'reasoning'] },
+const FALLBACK_MODELS: ModelInfo[] = [
+  { id: 'gpt-5.5',    label: 'GPT-5.5',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
+  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
+  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000 },
 ];
+
+const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];
 
 export interface OpenAIOptions {
   /** Use the Responses API (default) vs Chat Completions. */
@@ -33,7 +34,10 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
     defaultModel: 'gpt-5.5',
     async isAvailable(deps) { return deps.hasCredential(OPENAI_CRED_KEY); },
     unavailableReason() { return 'No OpenAI API key (cred key: `openai.bearer`).'; },
-    listModels: () => MODELS,
+    listModels: (deps) => listModelsDevProviderModels('openai', deps, {
+      fallback: FALLBACK_MODELS,
+      preferredIds: PREFERRED_MODEL_IDS,
+    }),
     createModel(modelId, deps): LanguageModel {
       const baseFetch = deps.fetch ?? fetch;
       const customFetch = asFetchFunction(async (input, init) => {

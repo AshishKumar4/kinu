@@ -2,6 +2,7 @@
 // binding, ai-gateway env var-based) live in `cf-backend/src/providers/`.
 export * from './types.js';
 export * from './registry.js';
+export * from './models-dev.js';
 export * from './openai-compat.js';
 export * from './openrouter.js';
 export * from './openai.js';

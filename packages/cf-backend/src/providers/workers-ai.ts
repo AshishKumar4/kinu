@@ -4,9 +4,13 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
-import { asFetchFunction } from '@proteus/core';
+import { asFetchFunction, listModelsDevProviderModels } from '@proteus/core';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
-import { DEFAULT_WORKERS_AI_MODEL_ID, WORKERS_AI_MODEL_CATALOG } from './workers-ai-catalog.js';
+import {
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  WORKERS_AI_FALLBACK_MODEL_CATALOG,
+  WORKERS_AI_PREFERRED_MODEL_IDS,
+} from './workers-ai-catalog.js';
 
 export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */
@@ -31,7 +35,10 @@ export function createWorkersAIProvider(_opts: WorkersAIOptions = {}): ModelProv
       return !!auth?.baseURL;
     },
     unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
-    listModels: (): ModelInfo[] => WORKERS_AI_MODEL_CATALOG.map((model) => ({ ...model })),
+    listModels: (deps): Promise<ModelInfo[]> => listModelsDevProviderModels('cloudflare-workers-ai', deps, {
+      fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
+      preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
+    }),
     createModel(modelId, deps): LanguageModel {
       const baseFetch = deps.fetch ?? fetch;
       const placeholder = 'https://proteus-workers-ai.invalid';

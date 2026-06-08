@@ -17,6 +17,7 @@ export interface AgentEntry {
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
+  mode?: 'cloud' | 'local';
 }
 
 export interface CredentialSummary {
@@ -38,6 +39,7 @@ export interface ModelMenuEntry {
   label: string;
   provider: string;
   capabilities?: string[];
+  contextWindow?: number;
 }
 
 export interface DeviceFlowStart {
