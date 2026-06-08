@@ -1,7 +1,7 @@
 import type { OAuthCredential } from '@proteus/core';
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
-export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write';
+export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';

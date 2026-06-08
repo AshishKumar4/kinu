@@ -51,7 +51,7 @@ describe('auth and desktop security invariants', () => {
     }).map((p) => p.id)).toEqual(['google', 'github', 'cloudflare']);
   });
 
-  test('Cloudflare OAuth requests the scopes needed for login and user-billed Workers AI', () => {
+  test('Cloudflare OAuth requests the Cloudflare login scope accepted by the OAuth client', () => {
     const [provider] = getConfiguredOAuthProviders({
       CLOUDFLARE_OAUTH_CLIENT_ID: 'cid',
       CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec',
@@ -59,7 +59,7 @@ describe('auth and desktop security invariants', () => {
     const routes = source('src/auth/routes.ts');
     expect(provider.id).toBe('cloudflare');
     expect(provider.kind).toBe('oauth');
-    expect(provider.scopes).toBe('user-details.read account-settings.read ai.write');
+    expect(provider.scopes).toBe('user-details.read');
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
     expect(routes).toContain('cloudflare_credential');
