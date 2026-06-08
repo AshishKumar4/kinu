@@ -53,6 +53,7 @@ import {
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   accountIdFromCloudflareCredential,
+  cloudflareAIGatewayId,
   cloudflareWorkersAIBaseURL,
   isCloudflareCredentialExpiring,
   refreshCloudflareCredential,
@@ -777,7 +778,13 @@ export class UserDO extends Agent<Env> {
       }
     }
 
-    try { return credentialToHeaders(key, cred); }
+    try {
+      const headers = credentialToHeaders(key, cred);
+      if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
+        headers['cf-aig-gateway-id'] = cloudflareAIGatewayId(this.env);
+      }
+      return headers;
+    }
     catch { return null; }
   }
 

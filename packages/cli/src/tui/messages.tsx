@@ -3,6 +3,8 @@
  * evolution events, and system messages.
  */
 
+import { markdownSyntax, tuiColors } from './theme.js';
+
 export interface DisplayMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'evolution' | 'system';
@@ -25,23 +27,45 @@ function UserMessage({ content }: { content: string }) {
 
 function AssistantMessage({ content }: { content: string }) {
   return (
-    <box style={{ paddingLeft: 2, marginBottom: 1 }}>
+    <box flexDirection="column" style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
         <strong fg="#c4b5fd">Agent ›</strong>{' '}
-        <span fg="#d1d5db">{content}</span>
       </text>
+      <box style={{ paddingLeft: 2 }}>
+        <markdown
+          width="100%"
+          syntaxStyle={markdownSyntax}
+          streaming={false}
+          internalBlockMode="top-level"
+          tableOptions={{ style: 'grid', widthMode: 'content' }}
+          content={content}
+          fg={tuiColors.text}
+          bg={tuiColors.bg}
+        />
+      </box>
     </box>
   );
 }
 
 function StreamingMessage({ content }: { content: string }) {
   return (
-    <box style={{ paddingLeft: 2, marginBottom: 1 }}>
+    <box flexDirection="column" style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
         <strong fg="#c4b5fd">Agent ›</strong>{' '}
-        <span fg="#d1d5db">{content}</span>
-        <span fg="#7c3aed">▌</span>
       </text>
+      <box style={{ paddingLeft: 2 }}>
+        <markdown
+          width="100%"
+          syntaxStyle={markdownSyntax}
+          streaming={true}
+          internalBlockMode="top-level"
+          tableOptions={{ style: 'grid', widthMode: 'content' }}
+          content={content || ' '}
+          fg={tuiColors.text}
+          bg={tuiColors.bg}
+        />
+      </box>
+      <text><span fg="#7c3aed">  ▌</span></text>
     </box>
   );
 }

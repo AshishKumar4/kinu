@@ -39,8 +39,8 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   if (provider === 'cloudflare') {
     console.log('');
     console.log(ACCENT('Connect Cloudflare'));
-    console.log(DIM('Cloudflare Workers AI access is connected through your Proteus account sign-in.'));
-    console.log(DIM('When the browser opens, sign in with Cloudflare to attach that account.'));
+    console.log(DIM('Browser sign-in attaches your Cloudflare account for Workers AI and AI Gateway usage.'));
+    console.log(DIM('The OAuth consent must include User Details, Account Settings, Workers AI, and AI Gateway scopes.'));
     await authCommand({ origin: opts.origin });
     return;
   }
@@ -104,7 +104,7 @@ function printProviders(): void {
 
   if (config.accessToken) {
     connected('Proteus account', config.user?.email);
-    console.log(`    ${DIM('Cloud agents use this account. Cloudflare Workers AI is available when this account was connected with Cloudflare.')}`);
+    console.log(`    ${DIM('Cloud agents use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
   } else {
     missing('Proteus account', 'proteus provider connect cloudflare');
   }

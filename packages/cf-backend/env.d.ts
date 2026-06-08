@@ -64,6 +64,8 @@ declare global {
     CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
     CLOUDFLARE_OAUTH_SCOPES?: string;
     CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
+    /** AI Gateway id used with the user's Cloudflare OAuth token for Workers AI. */
+    CLOUDFLARE_AI_GATEWAY_ID?: string;
     /** Local dev backdoor — synthesize an authenticated identity for this
      *  email without an OAuth browser session. Production must leave this unset. */
     DEV_USER_EMAIL?: string;

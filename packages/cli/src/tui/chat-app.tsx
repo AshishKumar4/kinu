@@ -8,7 +8,7 @@
  * runtime directly.
  */
 
-import { createCliRenderer } from '@opentui/core';
+import { createCliRenderer, type InputRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AgentRuntime, AgentInfo, LLMProviderConfig, SearchNode } from '@proteus/core';
@@ -16,7 +16,10 @@ import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type Loca
 
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
-import { HelpView, StatusView } from './help-view.js';
+import { StatusView } from './help-view.js';
+import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js';
+import { normalizeModelEntries, type TuiModelEntry } from './model-types.js';
+import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
 import {
   createCliSession,
   defaultConversationIdForCliOptions,
@@ -57,14 +60,18 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
   const [messages, setMessages] = useState<DisplayMessage[]>(() => initialMessages(initialInfo.name, cliSession, sessionOptions, hydrateTranscript));
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [mcpReady, setMcpReady] = useState(!mcpServers || Object.keys(mcpServers).length === 0);
   const [info, setInfo] = useState(initialInfo);
   const [modelSpec, setModelSpec] = useState(llmConfig.model);
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ models: TuiModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(cliSession?.id ?? localSessionId ?? defaultAgentSessionId());
 
   const msgIdRef = useRef(0);
   const streamRef = useRef('');
+  const inputRef = useRef<InputRenderable | null>(null);
   const initialPromptSentRef = useRef(false);
   const activeCliSessionRef = useRef<CliSession | undefined>(cliSession);
 
@@ -88,6 +95,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           streamRef.current = '';
           setStreamingText('');
           setIsProcessing(true);
+          setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
           if (event.kind === 'programmatic') {
             addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
           }
@@ -95,11 +103,14 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         case 'text-delta':
           streamRef.current += event.delta;
           setStreamingText(streamRef.current);
+          setTurnPhase('writing');
           break;
         case 'tool-call':
+          setTurnPhase(`calling ${event.toolName}`);
           addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
           break;
         case 'tool-result':
+          setTurnPhase(`finished ${event.toolName}`);
           addMessage({ role: 'tool_result', content: event.result });
           break;
         case 'evolution':
@@ -107,10 +118,12 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           break;
         case 'error':
           addMessage({ role: 'system', content: `Error: ${event.message}` });
+          setTurnPhase(null);
           break;
         case 'turn-end':
           setStreamingText(null);
           setIsProcessing(false);
+          setTurnPhase(null);
           if (event.turn.assistantResponse.trim()) {
             addMessage({ role: 'assistant', content: event.turn.assistantResponse.trim() });
           }
@@ -143,8 +156,10 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
     activeCliSessionRef.current = nextCliSession;
     setActiveSessionId(nextCliSession.id);
     setSessionPicker(null);
+    setModelPicker(null);
     setStreamingText(null);
     setIsProcessing(false);
+    setTurnPhase(null);
     setMessages(transcriptToMessages(transcript));
     if (mcpServers && Object.keys(mcpServers).length > 0) {
       setMcpReady(false);
@@ -154,17 +169,46 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
     await nextAgentSession.recoverBackgroundJobs();
   }, [addMessage, createAgentSession, initialInfo.name, mcpServers, sessionOptions]);
 
+  const openModelPicker = useCallback(async () => {
+    setModelPicker({ models: [], loading: true, error: null });
+    try {
+      const models = normalizeModelEntries(await (sessionRef.current ?? session).listAvailableModels());
+      setModelPicker({ models, loading: false, error: null });
+    } catch (err) {
+      setModelPicker({
+        models: [],
+        loading: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [session]);
+
+  const selectModel = useCallback((model: TuiModelEntry) => {
+    try {
+      const result = (sessionRef.current ?? session).setModel(model.spec);
+      setModelSpec(result.spec);
+      setModelPicker(null);
+      addMessage({ role: 'system', content: `Model: ${result.spec}` });
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, session]);
+
   const handleSlash = useCallback(async (input: string) => {
     const [rawCmd, ...rest] = input.split(/\s+/);
     const cmd = rawCmd!.toLowerCase();
     const arg = rest.join(' ').trim();
+    const currentSession = sessionRef.current ?? session;
     switch (cmd) {
       case '/exit':
       case '/quit':
         onExit ? onExit() : globalExit?.();
         return;
       case '/cancel':
-        if (sessionPicker) {
+        if (modelPicker) {
+          setModelPicker(null);
+          addMessage({ role: 'system', content: 'Model selection cancelled.' });
+        } else if (sessionPicker) {
           setSessionPicker(null);
           addMessage({ role: 'system', content: 'Resume cancelled.' });
         } else {
@@ -172,7 +216,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         }
         return;
       case '/help':
-        addMessage({ role: 'system', content: 'HELP_VIEW' });
+        addMessage({ role: 'system', content: commandHelp('local') });
         return;
       case '/status': {
         setInfo(refreshInfo());
@@ -180,7 +224,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         return;
       }
       case '/tools': {
-        const builtIn = session.describeTools().map(({ name, description }) => `  ${name} — ${description}`);
+        const builtIn = currentSession.describeTools().map(({ name, description }) => `  ${name} — ${description}`);
         const crafted = rt.craftStore.list().map((t) => `  ${t.name} — ${t.description.slice(0, 50)}`);
         const lines = ['Built-in:', ...builtIn];
         if (crafted.length > 0) lines.push('', 'Crafted:', ...crafted);
@@ -195,11 +239,11 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       case '/always': {
         const args = input.split(/\s+/).slice(1);
         if (args.length === 0) {
-          const cur = session.getAlwaysActiveSkills();
+          const cur = currentSession.getAlwaysActiveSkills();
           addMessage({ role: 'system', content: cur.length ? `Always-active skills: ${cur.join(', ')}` : 'No always-active skills set. Usage: /always <name>… (or "none" to clear).' });
         } else {
           const names = args[0] === 'none' ? [] : args;
-          session.setAlwaysActiveSkills(names);
+          currentSession.setAlwaysActiveSkills(names);
           addMessage({ role: 'system', content: names.length ? `Always-active skills: ${names.join(', ')}` : 'Cleared always-active skills.' });
         }
         return;
@@ -207,25 +251,25 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       case '/approval': {
         const mode = input.slice(cmd.length).trim();
         if (!mode) {
-          addMessage({ role: 'system', content: `Shell approval: ${session.getShellApprovalMode().mode}` });
+          addMessage({ role: 'system', content: `Shell approval: ${currentSession.getShellApprovalMode().mode}` });
           return;
         }
         if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
           addMessage({ role: 'system', content: 'Usage: /approval strict | allow_all | deny_all' });
           return;
         }
-        const result = session.setShellApprovalMode(mode);
+        const result = currentSession.setShellApprovalMode(mode);
         addMessage({ role: 'system', content: `Shell approval: ${result.mode}` });
         return;
       }
       case '/model': {
         const spec = input.slice(cmd.length).trim();
         if (!spec) {
-          addMessage({ role: 'system', content: `Stored model: ${session.getStoredModelSpec().spec ?? '(default)'}\nEffective: ${session.getEffectiveModelSpec()}` });
+          await openModelPicker();
           return;
         }
         try {
-          const result = session.setModel(spec);
+          const result = currentSession.setModel(spec);
           setModelSpec(result.spec);
           addMessage({ role: 'system', content: `Model: ${result.spec}` });
         } catch (err) {
@@ -234,14 +278,14 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         return;
       }
       case '/models': {
-        const providers = await session.listModelProviders();
+        const providers = await currentSession.listModelProviders();
         if (providers.length === 0) {
           addMessage({ role: 'system', content: 'No local provider registry is configured for this session.' });
           return;
         }
         const lines = ['Providers:'];
         for (const p of providers) lines.push(`  ${p.id} — ${p.available ? 'available' : p.unavailableReason ?? 'unavailable'}`);
-        const models = await session.listAvailableModels();
+        const models = await currentSession.listAvailableModels();
         if (models.length > 0) {
           lines.push('', 'Models:');
           for (const m of models.slice(0, 40)) lines.push(`  ${m.provider}/${m.id} — ${m.label ?? m.id}`);
@@ -266,12 +310,12 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         return;
       }
       case '/stop': {
-        session.interrupt();
+        currentSession.interrupt();
         addMessage({ role: 'system', content: 'Stop requested for the active local turn.' });
         return;
       }
       case '/jobs': {
-        const jobs = await session.listBackgroundJobs(20);
+        const jobs = await currentSession.listBackgroundJobs(20);
         addMessage({
           role: 'system',
           content: jobs.length
@@ -296,7 +340,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       default:
         addMessage({ role: 'system', content: `Unknown command: ${cmd}. Type /help` });
     }
-  }, [addMessage, initialInfo.name, refreshInfo, resumeSession, rt, session, sessionOptions, sessionPicker]);
+  }, [addMessage, initialInfo.name, modelPicker, openModelPicker, refreshInfo, resumeSession, rt, session, sessionOptions, sessionPicker]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
@@ -313,24 +357,29 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       }
       return;
     }
-    if (text.startsWith('/')) {
+    const submitted = text.startsWith('/') ? resolveCommandDraft('local', text) : text;
+    if (submitted.startsWith('/')) {
       try {
-        await handleSlash(text);
+        await handleSlash(submitted);
       } catch (err) {
         addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
       }
       return;
     }
-    addMessage({ role: 'user', content: text });
-    activeCliSessionRef.current?.append('user', { text, cwd: process.cwd(), backend: 'local' });
-    try { await sessionRef.current?.send(text); } catch { /* errors surface as SessionEvents */ }
+    addMessage({ role: 'user', content: submitted });
+    activeCliSessionRef.current?.append('user', { text: submitted, cwd: process.cwd(), backend: 'local' });
+    try { await sessionRef.current?.send(submitted); } catch { /* errors surface as SessionEvents */ }
   }, [addMessage, handleSlash, mcpReady, resumeSession, sessionPicker]);
 
   // opentui's `input` intrinsic merges with React DOM's, so onSubmit's type is
   // the intersection of (value: string) and (event: SubmitEvent). opentui passes
   // the value string at runtime; accept the union and forward the string.
   const onInputSubmit = useCallback((value: string | object) => {
-    if (typeof value === 'string') void handleSubmit(value);
+    if (typeof value === 'string') {
+      setDraft('');
+      if (inputRef.current) inputRef.current.value = '';
+      void handleSubmit(value);
+    }
   }, [handleSubmit]);
 
   // Fire a partial-session evolution flush on exit; connect MCP + recover once.
@@ -354,10 +403,15 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
   }, [handleSubmit, initialPrompt, mcpReady]);
 
   useKeyboard((key) => {
+    if (key.name === 'escape' && modelPicker) {
+      setModelPicker(null);
+      return;
+    }
     if (key.name === 'escape') globalExit?.();
   });
 
   const scrollHeight = Math.max(1, height - 7);
+  const commandHints = !modelPicker && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands('local', draft) : [];
 
   return (
     <box flexDirection="column" style={{ height: '100%' }}>
@@ -383,20 +437,27 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         }}
       >
         {messages.map((msg) => {
-          if (msg.role === 'system' && msg.content === 'HELP_VIEW') return <HelpView key={msg.id} />;
           if (msg.role === 'system' && msg.content === 'STATUS_VIEW') return <StatusView key={msg.id} info={info} dbSize={dbSize} toolCount={session.toolNames().length} />;
           return null;
         })}
         <MessageList
-          messages={messages.filter((m) => !(m.role === 'system' && (m.content === 'HELP_VIEW' || m.content === 'STATUS_VIEW')))}
+          messages={messages.filter((m) => !(m.role === 'system' && m.content === 'STATUS_VIEW'))}
           streamingText={streamingText}
         />
-        {isProcessing && streamingText === '' && (
-          <box style={{ paddingLeft: 2 }}>
-            <text><span fg="#7c3aed">⟳ thinking…</span></text>
-          </box>
-        )}
+        <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
+
+      {modelPicker ? (
+        <ModelPickerOverlay
+          models={modelPicker.models}
+          currentSpec={modelSpec}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={selectModel}
+        />
+      ) : (
+        <CommandHintOverlay commands={commandHints} />
+      )}
 
       <box
         style={{
@@ -407,11 +468,14 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           backgroundColor: '#1a1a2e',
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing…' : sessionPicker ? 'Resume ›' : `${info.name} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing…' : modelPicker ? 'Model picker open' : sessionPicker ? 'Resume ›' : `${info.name} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <input
-          focused={mcpReady && !isProcessing}
-          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
+          ref={(value) => { inputRef.current = value; }}
+          focused={mcpReady && !isProcessing && !modelPicker}
+          value={draft}
+          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : modelPicker ? 'Select a model above or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
+          onInput={setDraft}
           onSubmit={onInputSubmit}
         />
       </box>

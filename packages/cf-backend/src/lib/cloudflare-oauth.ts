@@ -1,7 +1,8 @@
 import type { OAuthCredential } from '@proteus/core';
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
-export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read';
+export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.run';
+export const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
@@ -10,6 +11,7 @@ export interface CloudflareOAuthEnv {
   CLOUDFLARE_OAUTH_CLIENT_ID?: string;
   CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
+  CLOUDFLARE_AI_GATEWAY_ID?: string;
 }
 
 export interface CloudflareAccount {
@@ -140,6 +142,10 @@ export async function refreshCloudflareCredential(
 export function cloudflareWorkersAIBaseURL(accountId: string): string | null {
   if (!isCloudflareAccountId(accountId)) return null;
   return `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai/v1`;
+}
+
+export function cloudflareAIGatewayId(env: Pick<CloudflareOAuthEnv, 'CLOUDFLARE_AI_GATEWAY_ID'>): string {
+  return cleanEnv(env.CLOUDFLARE_AI_GATEWAY_ID) || DEFAULT_CLOUDFLARE_AI_GATEWAY_ID;
 }
 
 export function accountIdFromCloudflareCredential(credential: OAuthCredential): string | null {

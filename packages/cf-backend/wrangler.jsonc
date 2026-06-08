@@ -93,8 +93,9 @@
     "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
-    "CLOUDFLARE_OAUTH_SCOPES": "user-details.read",
+    "CLOUDFLARE_OAUTH_SCOPES": "user-details.read account-settings.read ai.write aig.run",
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
+    "CLOUDFLARE_AI_GATEWAY_ID": "default",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:

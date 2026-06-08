@@ -101,6 +101,13 @@ export interface CloudBackgroundJob {
   error?: string | null;
 }
 
+export interface CloudModelMenuEntry {
+  spec: string;
+  label: string;
+  provider: string;
+  capabilities?: string[];
+}
+
 export interface CloudWebhookTriggerInput {
   label: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
@@ -133,6 +140,10 @@ export async function logout(origin: string, token: string): Promise<{ ok: boole
 
 export async function listCloudAgents(origin: string, token: string): Promise<CloudAgent[]> {
   return cloudJson(origin, '/api/cli/agents', { token });
+}
+
+export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenuEntry[]> {
+  return cloudJson(origin, '/api/cli/models', { token });
 }
 
 export async function createCloudAgent(origin: string, token: string, input: {

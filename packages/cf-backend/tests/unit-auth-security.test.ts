@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes.js';
 import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers.js';
+import {
+  CLOUDFLARE_WORKERS_AI_SCOPES,
+  cloudflareAIGatewayId,
+} from '../src/lib/cloudflare-oauth.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
 
@@ -51,18 +55,28 @@ describe('auth and desktop security invariants', () => {
     }).map((p) => p.id)).toEqual(['google', 'github', 'cloudflare']);
   });
 
-  test('Cloudflare OAuth requests the Cloudflare login scope accepted by the OAuth client', () => {
+  test('Cloudflare OAuth requests user billing scopes for Workers AI', () => {
     const [provider] = getConfiguredOAuthProviders({
       CLOUDFLARE_OAUTH_CLIENT_ID: 'cid',
       CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec',
     });
     const routes = source('src/auth/routes.ts');
+    const userDO = source('src/user/user-do.ts');
     expect(provider.id).toBe('cloudflare');
     expect(provider.kind).toBe('oauth');
-    expect(provider.scopes).toBe('user-details.read');
+    expect(provider.scopes).toBe(CLOUDFLARE_WORKERS_AI_SCOPES);
+    expect(provider.scopes).toContain('account-settings.read');
+    expect(provider.scopes).toContain('ai.write');
+    expect(provider.scopes).toContain('aig.run');
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
     expect(routes).toContain('cloudflare_credential');
+    expect(userDO).toContain("'cf-aig-gateway-id'");
+  });
+
+  test('Cloudflare AI Gateway defaults to the account default gateway unless configured', () => {
+    expect(cloudflareAIGatewayId({})).toBe('default');
+    expect(cloudflareAIGatewayId({ CLOUDFLARE_AI_GATEWAY_ID: '  custom-gateway  ' })).toBe('custom-gateway');
   });
 
   test('Cloudflare OAuth profile uses the Cloudflare API user shape', () => {
@@ -241,5 +255,11 @@ describe('auth and desktop security invariants', () => {
       connect: true,
       label: "Ashish's Mac",
     })).toBe("curl -fsSL 'https://proteus.example.com/install.sh' | bash -s -- --no-setup --connect --label 'Ashish'\\''s Mac'");
+  });
+
+  test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
+    const cliRoutes = source('src/cli/routes.ts');
+    expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
+    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId)');
   });
 });

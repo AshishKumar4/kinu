@@ -6,6 +6,7 @@ import type { UserDO } from '../user/user-do.js';
 import { renderSoulMarkdown } from '@proteus/core';
 import { approveCliAuth, inspectCliAuth, pollCliAuth, startCliAuth } from './auth-store.js';
 import { buildCliInstallCommand } from './install-command.js';
+import { listAvailableModels } from '../user/available-models.js';
 
 interface CliIdentity {
   userId: string;
@@ -95,6 +96,10 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
 
   if (path === '/agents' && method === 'GET') {
     return json(await cli.userDO.listAgents());
+  }
+
+  if (path === '/models' && method === 'GET') {
+    return json(await listAvailableModels(env, cli.userId));
   }
 
   if (path === '/agents' && method === 'POST') {

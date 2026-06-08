@@ -19,7 +19,7 @@ export async function setupCommand(opts: {
 }): Promise<void> {
   console.log('');
   console.log(ACCENT('Proteus setup'));
-  console.log(DIM('Connect your account and configure providers for cloud or local agents.'));
+  console.log(DIM('Connect your account, Cloudflare Workers AI billing, and optional local providers.'));
   console.log('');
 
   const config = loadConfigFile();
@@ -30,7 +30,7 @@ export async function setupCommand(opts: {
   }
 
   if (!opts.skipCloud && !config.accessToken) {
-    const shouldLogin = opts.yes || await confirm('Sign in to your Proteus account now?', true);
+    const shouldLogin = opts.yes || await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true);
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });
       cloudReady = Boolean(loadConfigFile().accessToken);
@@ -42,6 +42,7 @@ export async function setupCommand(opts: {
   if (opts.accountOnly) {
     if (cloudReady) {
       console.log(`${OK('✓')} Proteus account ready.`);
+      console.log(DIM('Cloud agents can use Workers AI through your Cloudflare account when Cloudflare sign-in granted AI permissions.'));
       console.log(DIM('Run proteus provider connect codex for local agents that should use your ChatGPT Codex subscription.'));
     } else {
       console.log(`${WARN('!')} Proteus account was not connected.`);
@@ -52,6 +53,7 @@ export async function setupCommand(opts: {
 
   if (!process.stdin.isTTY && !opts.yes && !opts.provider && !opts.localModel && !cloudSkipped && cloudReady) {
     console.log(`${OK('✓')} Proteus account ready.`);
+    console.log(DIM('Workers AI is tied to the Cloudflare account used during browser sign-in.'));
     console.log(DIM('Run proteus provider connect <provider> to configure local agent model access.'));
     return;
   }

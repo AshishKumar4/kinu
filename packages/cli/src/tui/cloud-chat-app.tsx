@@ -1,4 +1,4 @@
-import { createCliRenderer } from '@opentui/core';
+import { createCliRenderer, type InputRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -7,6 +7,7 @@ import {
   getCloudAgentTools,
   getCloudMctsTree,
   getCloudMemoryContent,
+  listCloudAvailableModels,
   listCloudJobs,
   setCloudAgentModel,
   stopCloudAgent,
@@ -23,6 +24,9 @@ import {
 import { MessageList, type DisplayMessage } from './messages.js';
 import { renderSessionBrowser, selectSession, transcriptToMessages } from './session-browser.js';
 import { clipText } from './format.js';
+import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js';
+import { normalizeModelEntries, type TuiModelEntry } from './model-types.js';
+import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
 
 export interface CloudChatAppOpts {
   origin: string;
@@ -42,10 +46,14 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
   const [messages, setMessages] = useState<DisplayMessage[]>(() => initialMessages(agentName, session, sessionOptions, hydrateTranscript));
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [model, setModel] = useState('cloud');
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ models: TuiModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(session.id);
   const msgIdRef = useRef(0);
+  const inputRef = useRef<InputRenderable | null>(null);
   const initialPromptSentRef = useRef(false);
   const sessionRef = useRef(session);
 
@@ -74,6 +82,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
     sessionRef.current = nextSession;
     setActiveSessionId(nextSession.id);
     setSessionPicker(null);
+    setModelPicker(null);
     setMessages([
       ...transcriptToMessages(transcript),
       {
@@ -84,6 +93,31 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
     ]);
   }, [addMessage, agentName, sessionOptions]);
 
+  const openModelPicker = useCallback(async () => {
+    setModelPicker({ models: [], loading: true, error: null });
+    try {
+      const models = normalizeModelEntries(await listCloudAvailableModels(origin, token));
+      setModelPicker({ models, loading: false, error: null });
+    } catch (err) {
+      setModelPicker({
+        models: [],
+        loading: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [origin, token]);
+
+  const selectModel = useCallback(async (entry: TuiModelEntry) => {
+    try {
+      const result = await setCloudAgentModel(origin, token, cloudName, entry.spec);
+      setModel(result.spec);
+      setModelPicker(null);
+      addMessage({ role: 'system', content: `Model: ${result.spec}` });
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, cloudName, origin, token]);
+
   const handleSlash = useCallback(async (input: string) => {
     const [cmd, ...rest] = input.split(/\s+/);
     const arg = rest.join(' ').trim();
@@ -93,7 +127,10 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         cloudExit?.();
         return;
       case '/cancel':
-        if (sessionPicker) {
+        if (modelPicker) {
+          setModelPicker(null);
+          addMessage({ role: 'system', content: 'Model selection cancelled.' });
+        } else if (sessionPicker) {
           setSessionPicker(null);
           addMessage({ role: 'system', content: 'Resume cancelled.' });
         } else {
@@ -101,20 +138,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         }
         return;
       case '/help':
-        addMessage({ role: 'system', content: [
-          'Commands',
-          '  /help       Show this help',
-          '  /status     Agent state and stats',
-          '  /tools      List available tools',
-          '  /model      Show or set the active model',
-          '  /memory     Show memory',
-          '  /mcts       Show MCTS node count',
-          '  /sessions   List recorded CLI sessions',
-          '  /resume     Resume a recorded CLI session here',
-          '  /jobs       List background jobs',
-          '  /stop       Stop cloud work',
-          '  /exit       Exit chat',
-        ].join('\n') });
+        addMessage({ role: 'system', content: commandHelp('cloud') });
         return;
       case '/status': {
         const status = await getCloudAgentStatus(origin, token, cloudName);
@@ -137,8 +161,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       }
       case '/model': {
         if (!arg) {
-          const result = await getCloudAgentModel(origin, token, cloudName);
-          addMessage({ role: 'system', content: `Model: ${result.spec ?? '(default)'}` });
+          await openModelPicker();
           return;
         }
         const result = await setCloudAgentModel(origin, token, cloudName, arg);
@@ -185,7 +208,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       default:
         addMessage({ role: 'system', content: `Unknown command: ${cmd}. Type /help` });
     }
-  }, [addMessage, agentName, cloudName, origin, resumeSession, sessionOptions, sessionPicker, token]);
+  }, [addMessage, agentName, cloudName, modelPicker, openModelPicker, origin, resumeSession, sessionOptions, sessionPicker, token]);
 
   const send = useCallback(async (text: string) => {
     const prompt = text.trim();
@@ -198,36 +221,43 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       }
       return;
     }
-    if (prompt.startsWith('/')) {
+    const submitted = prompt.startsWith('/') ? resolveCommandDraft('cloud', prompt) : prompt;
+    if (submitted.startsWith('/')) {
       try {
-        await handleSlash(prompt);
+        await handleSlash(submitted);
       } catch (err) {
         addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
       }
       return;
     }
 
-    addMessage({ role: 'user', content: prompt });
-    sessionRef.current.append('user', { text: prompt, cwd: process.cwd(), backend: 'cloud' });
+    addMessage({ role: 'user', content: submitted });
+    sessionRef.current.append('user', { text: submitted, cwd: process.cwd(), backend: 'cloud' });
     setStreamingText('');
     setIsProcessing(true);
+    setTurnPhase('preparing cloud turn');
     try {
       const result = await runCloudTurnWithLocalModel({
         origin,
         token,
         name: cloudName,
-        prompt,
+        prompt: submitted,
         cwd: process.cwd(),
         onEvent: (event) => {
           if (event.type === 'text-delta') {
             setStreamingText((prev) => `${prev ?? ''}${event.delta}`);
+            setTurnPhase('writing');
+          } else if (event.type === 'tool-call') {
+            setTurnPhase(`calling ${event.toolName}`);
+            addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+          } else if (event.type === 'tool-result') {
+            setTurnPhase(`finished ${event.toolName}`);
+            addMessage({ role: 'tool_result', content: event.result });
+          } else if (event.type === 'step-finish') {
+            setTurnPhase(`step ${event.stepIndex}`);
           }
         },
       });
-      for (const call of result.toolCalls ?? []) {
-        addMessage({ role: 'tool_call', content: '', toolName: call.name, args: JSON.stringify(call.args) });
-        if (call.result !== undefined) addMessage({ role: 'tool_result', content: call.result });
-      }
       sessionRef.current.append('assistant', {
         text: result.text,
         toolCalls: result.toolCalls ?? [],
@@ -243,6 +273,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       setStreamingText(null);
     } finally {
       setIsProcessing(false);
+      setTurnPhase(null);
     }
   }, [addMessage, cloudName, handleSlash, isProcessing, origin, resumeSession, sessionPicker, token]);
 
@@ -254,13 +285,22 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
   }, [initialPrompt, send]);
 
   useKeyboard((key) => {
+    if (key.name === 'escape' && modelPicker) {
+      setModelPicker(null);
+      return;
+    }
     if (key.name === 'escape') cloudExit?.();
   });
 
   const onSubmit = useCallback((value: string | object) => {
-    if (typeof value === 'string') void send(value);
+    if (typeof value === 'string') {
+      setDraft('');
+      if (inputRef.current) inputRef.current.value = '';
+      void send(value);
+    }
   }, [send]);
   const scrollHeight = Math.max(1, height - 7);
+  const commandHints = !modelPicker && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands('cloud', draft) : [];
 
   return (
     <box flexDirection="column" style={{ height: '100%' }}>
@@ -293,12 +333,20 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         }}
       >
         <MessageList messages={messages} streamingText={streamingText} />
-        {isProcessing && streamingText === '' && (
-          <box style={{ paddingLeft: 2 }}>
-            <text><span fg="#7c3aed">thinking...</span></text>
-          </box>
-        )}
+        <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
+
+      {modelPicker ? (
+        <ModelPickerOverlay
+          models={modelPicker.models}
+          currentSpec={model}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={(entry) => { void selectModel(entry); }}
+        />
+      ) : (
+        <CommandHintOverlay commands={commandHints} />
+      )}
 
       <box
         style={{
@@ -309,11 +357,14 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
           backgroundColor: '#1a1a2e',
           paddingLeft: 1,
         }}
-        title={isProcessing ? 'processing...' : sessionPicker ? 'Resume >' : `${agentName} · ${activeSessionId.slice(0, 18)} >`}
+        title={isProcessing ? 'processing...' : modelPicker ? 'Model picker open' : sessionPicker ? 'Resume >' : `${agentName} · ${activeSessionId.slice(0, 18)} >`}
       >
         <input
-          focused={!isProcessing}
-          placeholder={isProcessing ? 'Waiting for response...' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
+          ref={(value) => { inputRef.current = value; }}
+          focused={!isProcessing && !modelPicker}
+          value={draft}
+          placeholder={isProcessing ? 'Waiting for response...' : modelPicker ? 'Select a model above or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
+          onInput={setDraft}
           onSubmit={onSubmit}
         />
       </box>

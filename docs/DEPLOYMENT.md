@@ -120,9 +120,14 @@ https://proteus.ashishkumarsingh.com/auth/cloudflare/callback
 ### Cloudflare OAuth
 
 Use response type `Code`, grant type `Authorization Code, Refresh Token`, and
-token authentication method `Client Secret POST`. Use the `user-details.read`
-scope only;
-do not request `openid` for Cloudflare OAuth.
+the token authentication method configured by `CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD`
+(`client_secret_basic` in production). Do not request `openid` for Cloudflare
+OAuth. Proteus requests these scopes so user-owned Cloudflare billing can power
+Workers AI and AI Gateway calls:
+
+```text
+user-details.read account-settings.read ai.write aig.run
+```
 
 Set:
 
@@ -166,7 +171,8 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 | `GITHUB_OAUTH_CLIENT_SECRET` | Wrangler secret | GitHub OAuth client secret |
 | `CLOUDFLARE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Cloudflare OAuth client id |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | Wrangler secret | Cloudflare OAuth client secret |
-| `CLOUDFLARE_OAUTH_SCOPES` | wrangler.jsonc `vars` | Cloudflare OAuth scopes, currently `user-details.read` |
+| `CLOUDFLARE_OAUTH_SCOPES` | wrangler.jsonc `vars` | Cloudflare OAuth scopes for profile, account lookup, Workers AI, and AI Gateway |
+| `CLOUDFLARE_AI_GATEWAY_ID` | wrangler.jsonc `vars` | User account AI Gateway id for Workers AI routing; defaults to `default` |
 | `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity |
 | `PROTEUS_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
 | `PROTEUS_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
