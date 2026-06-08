@@ -503,7 +503,8 @@ function summarizeOAuthFailure(error: unknown): { reason: string; log: string } 
     return { reason: sanitizeReason(error.code ?? error.name), log: `${error.code ?? error.name}: ${error.message}` };
   }
   if (error instanceof Error) {
-    return { reason: sanitizeReason(error.name || 'error'), log: error.message };
+    const message = error.message || error.name || 'error';
+    return { reason: sanitizeReason(message), log: message };
   }
   return { reason: 'unknown_error', log: String(error) };
 }

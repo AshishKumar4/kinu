@@ -7,6 +7,7 @@ import {
   CLOUDFLARE_WORKERS_AI_SCOPES,
   cloudflareAIGatewayId,
   cloudflareTokenToCredential,
+  isCloudflareCredentialUsable,
 } from '../src/lib/cloudflare-oauth.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
@@ -101,6 +102,42 @@ describe('auth and desktop security invariants', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test('Cloudflare OAuth token attachment accepts access-token-only responses', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+      return new Response(JSON.stringify({
+        success: true,
+        result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const credential = await cloudflareTokenToCredential({
+        access_token: 'cf-access',
+        token_type: 'bearer',
+        expires_in: 3600,
+        scope: CLOUDFLARE_WORKERS_AI_SCOPES,
+      });
+      expect(credential.kind).toBe('oauth');
+      expect(credential.accessToken).toBe('cf-access');
+      expect(credential.refreshToken).toBeUndefined();
+      expect(credential.metadata?.accountId).toBe('abc123abc123abc123abc123abc123ab');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('expired access-token-only Cloudflare credentials stop advertising Workers AI', () => {
+    const base = {
+      kind: 'oauth' as const,
+      accessToken: 'cf-access',
+      metadata: { accountId: 'abc123abc123abc123abc123abc123ab' },
+    };
+    expect(isCloudflareCredentialUsable({ ...base, expiresAt: Date.now() + 3_600_000 })).toBe(true);
+    expect(isCloudflareCredentialUsable({ ...base, expiresAt: Date.now() - 1_000 })).toBe(false);
+    expect(isCloudflareCredentialUsable({ ...base, refreshToken: 'cf-refresh', expiresAt: Date.now() - 1_000 })).toBe(true);
   });
 
   test('Cloudflare AI Gateway defaults to the account default gateway unless configured', () => {

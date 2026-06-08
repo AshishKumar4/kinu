@@ -56,6 +56,7 @@ import {
   cloudflareAIGatewayId,
   cloudflareWorkersAIBaseURL,
   isCloudflareCredentialExpiring,
+  isCloudflareCredentialUsable,
   refreshCloudflareCredential,
 } from '../lib/cloudflare-oauth.js';
 
@@ -711,6 +712,9 @@ export class UserDO extends Agent<Env> {
   async setCredential(key: string, credentialJson: unknown): Promise<void> {
     validateCredentialKey(key);
     const cred = validateCredential(credentialJson);
+    if (key === CODEX_CRED_KEY && cred.kind === 'oauth' && !cred.refreshToken) {
+      throw new Error('codex.oauth requires an OAuth refresh token.');
+    }
     const now = Date.now();
     this.sqlx(
       `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
@@ -742,6 +746,7 @@ export class UserDO extends Agent<Env> {
     const cred = this.getCredentialRow(key);
     if (cred?.kind === 'openai-compat') return cred.baseURL;
     if (key === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
+      if (!isCloudflareCredentialUsable(cred)) return null;
       const accountId = accountIdFromCloudflareCredential(cred);
       return accountId ? cloudflareWorkersAIBaseURL(accountId) : null;
     }
@@ -761,9 +766,11 @@ export class UserDO extends Agent<Env> {
 
     // Codex OAuth — auto-refresh if expiring or forced.
     if (key === CODEX_CRED_KEY && cred.kind === 'oauth') {
+      const refreshToken = cred.refreshToken;
+      if (!refreshToken) return null;
       const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
       if (needRefresh) {
-        const refreshed = await this.refreshCodexInternal(cred);
+        const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });
         if (refreshed) cred = refreshed;
         // If refresh failed we keep using the old (possibly-expired) creds —
         // the caller may still succeed, and if not it gets 401 and a clear
@@ -773,6 +780,7 @@ export class UserDO extends Agent<Env> {
     if (key === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
       const needRefresh = opts?.forceRefresh || isCloudflareCredentialExpiring(cred);
       if (needRefresh) {
+        if (!cred.refreshToken) return null;
         const refreshed = await this.refreshCloudflareInternal(cred);
         if (refreshed) cred = refreshed;
       }
@@ -802,7 +810,7 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  private async refreshCodexInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | null> {
+  private async refreshCodexInternal(current: Credential & { kind: 'oauth'; refreshToken: string }): Promise<(Credential & { kind: 'oauth' }) | null> {
     const client = createCodexOAuthClient();
     try {
       const fresh = await client.refresh(current.refreshToken);

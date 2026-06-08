@@ -15,11 +15,10 @@ export function validateCredential(input: unknown): Credential {
 
   if (kind === 'oauth') {
     if (typeof obj.accessToken !== 'string' || !obj.accessToken) throw new Error('oauth.accessToken (string) required');
-    if (typeof obj.refreshToken !== 'string' || !obj.refreshToken) throw new Error('oauth.refreshToken (string) required');
     return {
       kind: 'oauth',
       accessToken: obj.accessToken,
-      refreshToken: obj.refreshToken,
+      refreshToken: typeof obj.refreshToken === 'string' && obj.refreshToken ? obj.refreshToken : undefined,
       expiresAt: typeof obj.expiresAt === 'number' ? obj.expiresAt : undefined,
       metadata: typeof obj.metadata === 'object' && obj.metadata !== null
         ? obj.metadata as Record<string, unknown>

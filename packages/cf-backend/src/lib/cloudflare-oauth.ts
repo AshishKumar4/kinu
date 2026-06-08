@@ -91,20 +91,15 @@ export async function cloudflareTokenToCredential(
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
   const refreshToken = stringValue(token.refresh_token);
-  if (!refreshToken) {
-    throw new Error('Cloudflare OAuth did not return a refresh token. Enable the Refresh Token grant on the OAuth client.');
-  }
-
   const accounts = await fetchCloudflareAccounts(accessToken);
   const account = accounts[0] ?? null;
   if (!account) {
     throw new Error('Cloudflare OAuth did not expose an account for Workers AI billing.');
   }
 
-  return {
+  const credential: OAuthCredential = {
     kind: 'oauth',
     accessToken,
-    refreshToken,
     expiresAt: expiresAtFromToken(token),
     metadata: {
       accountId: account.id,
@@ -113,12 +108,15 @@ export async function cloudflareTokenToCredential(
       tokenType: stringValue(token.token_type) ?? 'bearer',
     },
   };
+  if (refreshToken) credential.refreshToken = refreshToken;
+  return credential;
 }
 
 export async function refreshCloudflareCredential(
   env: CloudflareOAuthEnv,
   current: OAuthCredential,
 ): Promise<OAuthCredential> {
+  if (!current.refreshToken) throw new Error('Cloudflare OAuth credential has no refresh token. Reconnect Cloudflare.');
   const token = await requestCloudflareOAuthToken(env, {
     grant_type: 'refresh_token',
     refresh_token: current.refreshToken,
@@ -151,6 +149,13 @@ export function cloudflareAIGatewayId(env: Pick<CloudflareOAuthEnv, 'CLOUDFLARE_
 export function accountIdFromCloudflareCredential(credential: OAuthCredential): string | null {
   const accountId = credential.metadata?.accountId;
   return typeof accountId === 'string' && isCloudflareAccountId(accountId) ? accountId : null;
+}
+
+export function isCloudflareCredentialUsable(credential: OAuthCredential, skewMs = 60_000): boolean {
+  if (!accountIdFromCloudflareCredential(credential)) return false;
+  if (typeof credential.expiresAt !== 'number') return true;
+  if (credential.expiresAt > Date.now() + skewMs) return true;
+  return typeof credential.refreshToken === 'string' && credential.refreshToken.length > 0;
 }
 
 export function isCloudflareCredentialExpiring(credential: OAuthCredential, skewMs = 60_000): boolean {
