@@ -17,6 +17,7 @@ interface CliIdentity {
 }
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
+const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
 
 export async function handleCliRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
@@ -32,7 +33,10 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
     return cliShimResponse(url.origin, method === 'HEAD');
   }
   if (url.pathname === CLI_SOURCE_TARBALL_PATH && (method === 'GET' || method === 'HEAD')) {
-    return cliSourceArchiveResponse(request, env, method === 'HEAD');
+    return cliDownloadAssetResponse(request, env, CLI_SOURCE_TARBALL_PATH, 'application/gzip', method === 'HEAD');
+  }
+  if (url.pathname === CLI_SOURCE_TARBALL_SHA256_PATH && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, CLI_SOURCE_TARBALL_SHA256_PATH, 'text/plain; charset=utf-8', method === 'HEAD');
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {
@@ -949,11 +953,17 @@ fi
   });
 }
 
-async function cliSourceArchiveResponse(request: Request, env: Env, head = false): Promise<Response> {
-  const assetUrl = new URL(CLI_SOURCE_TARBALL_PATH, request.url);
+async function cliDownloadAssetResponse(
+  request: Request,
+  env: Env,
+  pathname: string,
+  contentType: string,
+  head = false,
+): Promise<Response> {
+  const assetUrl = new URL(pathname, request.url);
   const assetRes = await env.ASSETS.fetch(new Request(assetUrl, { method: 'GET' }));
   const headers = new Headers(assetRes.headers);
-  headers.set('content-type', 'application/gzip');
+  headers.set('content-type', contentType);
   headers.set('x-content-type-options', 'nosniff');
   headers.set('cache-control', 'no-store');
   return new Response(head ? null : assetRes.body, { status: assetRes.status, headers });
