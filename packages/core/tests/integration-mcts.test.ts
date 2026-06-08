@@ -124,4 +124,30 @@ describe('MCTS integration', () => {
 
     expect(result.converged).toBe(false);
   });
+
+  test('branch evaluation rejection is backpropagated as 0, not neutral 0.5', async () => {
+    const { rt } = createTestRuntime();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'provider produced rollout', codeUsed: null }),
+      evaluate: async () => { throw new Error('judge provider failed'); },
+      generateReflection: async () => 'judge failure should penalize the branch',
+    });
+
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftScoreTables(rt.storage.execRaw);
+
+    const session = createMockSession();
+    const result = await runMCTS(rt, session, 'Audit a failing task', {
+      budget: 1,
+      branches: 1,
+    });
+
+    expect(result.converged).toBe(false);
+    const child = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL LIMIT 1
+    `[0]!;
+    expect(child.visits).toBe(1);
+    expect(child.value).toBe(0);
+  });
 });

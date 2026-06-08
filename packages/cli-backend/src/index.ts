@@ -18,5 +18,6 @@ export {
   type LocalModelResolver, type LocalModelResolverConfig,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver.js';
+export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store.js';
 export { createCLIHeadRuntime } from './head-runtime.js';
 export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp.js';

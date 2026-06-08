@@ -173,7 +173,62 @@ export function buildHeadSandboxTools(shell: Shell, vfs: HeadSandboxVfs, capture
 
 /** The head's system prompt — task framing + the head conventions (record_*,
  *  private sandbox vs shared scratch, recursive split, isolation discipline). */
-export function buildHeadSystemPrompt(input: HeadInput): string {
+const HEAD_PROMPT_TOOL_NAMES = [
+  'record_evidence',
+  'record_decision',
+  'sandbox_exec',
+  'sandbox_read',
+  'sandbox_write',
+  'sandbox_list',
+  'shared_write',
+  'shared_read',
+  'shared_list',
+  'split_subheads',
+] as const;
+
+function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
+  return names.some((name) => tools.has(name));
+}
+
+function renderHeadToolConventions(input: HeadInput, availableToolNames?: readonly string[]): string[] {
+  const tools = new Set(availableToolNames ?? HEAD_PROMPT_TOOL_NAMES);
+  const lines: string[] = ['Conventions:'];
+  if (hasHeadTool(tools, 'record_evidence')) {
+    lines.push('- record_evidence whenever you learn something worth surfacing in the merge.');
+  }
+  if (hasHeadTool(tools, 'record_decision')) {
+    lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
+  }
+  if (hasHeadTool(tools, 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list')) {
+    lines.push('- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can\'t see it).');
+  }
+  if (hasHeadTool(tools, 'shared_write', 'shared_read', 'shared_list')) {
+    lines.push('- shared_write / shared_read / shared_list = the COMMON scratch (shared/findings/), visible to sibling heads and the main agent. Put results worth sharing here; your writes are head-namespaced so siblings can\'t clobber them.');
+  }
+  if (hasHeadTool(tools, 'split_subheads')) {
+    lines.push('- split_subheads to recursively explore deeper if needed (depth-budgeted).');
+  }
+  lines.push(
+    '- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.',
+    '- Stay focused on YOUR task. Don\'t try to do sibling heads\' work.',
+  );
+  if (!hasHeadTool(tools, 'shared_write', 'shared_read', 'shared_list')) {
+    lines.push('- If you need to share findings but no shared scratch tool exists, put the finding in your final response and record_evidence if available.');
+  }
+  if (!hasHeadTool(tools, 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list')) {
+    lines.push('- If no sandbox tools exist, reason from inherited context and available accumulator/shared tools only.');
+  }
+  if (!hasHeadTool(tools, 'split_subheads')) {
+    lines.push('- Do not propose recursive subheads; split_subheads is not available in this run.');
+  }
+  return [
+    ...lines,
+    '',
+    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path or use shared_write when available. Read-only inspection of shared resources is always fine.`,
+  ];
+}
+
+export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: readonly string[]): string {
   return [
     `You are a "head" — one of several parallel reasoning threads in a self-evolving agent runtime.`,
     ``,
@@ -181,16 +236,7 @@ export function buildHeadSystemPrompt(input: HeadInput): string {
     `Why you were spawned: ${input.rationale}`,
     `Merge strategy: ${input.mergeStrategy} (your work will be combined with sibling heads via this strategy).`,
     ``,
-    `Conventions:`,
-    `- record_evidence whenever you learn something worth surfacing in the merge.`,
-    `- record_decision when you make a substantive choice the parent might want to reconcile.`,
-    `- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can't see it).`,
-    `- shared_write / shared_read / shared_list = the COMMON scratch (shared/findings/), visible to sibling heads and the main agent. Put results worth sharing here; your writes are head-namespaced so siblings can't clobber them.`,
-    `- split_subheads to recursively explore deeper if needed (depth-budgeted).`,
-    `- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.`,
-    `- Stay focused on YOUR task. Don't try to do sibling heads' work.`,
-    ``,
-    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path or use shared_write. Read-only inspection of shared resources is always fine.`,
+    ...renderHeadToolConventions(input, availableToolNames),
     ``,
     `Budget: depth ${input.budget.maxDepth}, ${input.budget.maxTokens} tokens, ${input.budget.maxWallClockMs}ms wall-clock.`,
   ].join('\n');
@@ -253,7 +299,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   try {
     const result = await generateText({
       model: deps.model,
-      system: buildHeadSystemPrompt(input),
+      system: buildHeadSystemPrompt(input, Object.keys(deps.tools)),
       messages: buildHeadMessages(input),
       tools: deps.tools,
       stopWhen: ({ steps }) => {

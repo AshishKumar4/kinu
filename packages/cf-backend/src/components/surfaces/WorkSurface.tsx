@@ -43,7 +43,16 @@ export interface WorkSurfaceProps {
   // Reasoning
   mctsTree: MCTSNode | null;
   // Devices (ExecutorsPanel)
-  executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
+  executors: Array<{
+    name: string;
+    kind: string;
+    capabilities: string[];
+    available: boolean;
+    configured?: boolean;
+    active?: boolean;
+    status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
+    reason?: string;
+  }>;
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;

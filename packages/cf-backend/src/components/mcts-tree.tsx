@@ -26,6 +26,18 @@ function nodeRadius(visits: number): number {
 	return Math.max(8, Math.min(24, 6 + visits * 2));
 }
 
+function cleanNodeLabel(value: string | null | undefined, fallback: string): string {
+	const raw = (value || fallback || "").split("\n").find((line) => line.trim().length > 0) ?? fallback;
+	const cleaned = raw
+		.replace(/^\s{0,3}#{1,6}\s*/, "")
+		.replace(/^\s*[-*>]+\s*/, "")
+		.replace(/\*\*/g, "")
+		.replace(/`/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return cleaned.length > 0 ? cleaned : fallback;
+}
+
 export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selectedNode }: Props) {
 	const svgRef = useRef<SVGSVGElement>(null);
 	const [tooltip, setTooltip] = useState<{ x: number; y: number; node: MCTSNode } | null>(null);
@@ -89,7 +101,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 				return "rgba(255,255,255,0.15)";
 			})
 			.attr("stroke-width", (d) => selectedNode?.id === d.data.id ? 3 : d.data.status === "terminal" ? 2 : 1)
-			.attr("opacity", (d) => d.data.status === "pruned" ? 0.2 : 1)
+			.attr("opacity", (d) => selectedNode?.id === d.data.id ? 1 : d.data.status === "pruned" ? 0.34 : 1)
 			.attr("filter", (d) => {
 				if (selectedNode?.id === d.data.id) return "url(#selectGlow)";
 				if (d.data.status === "terminal") return "url(#glow)";
@@ -110,12 +122,14 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 		// Action label below node (truncated)
 		nodes.append("text")
 			.text((d) => {
-				const label = d.data.action || STATUS_ICON[d.data.status] || "";
-				return label.length > 25 ? label.slice(0, 22) + "…" : label;
+				const selected = selectedNode?.id === d.data.id;
+				if (!selected && d.depth > 1 && d.data.status !== "terminal") return "";
+				const label = cleanNodeLabel(d.data.action, STATUS_ICON[d.data.status] || "");
+				return label.length > (selected ? 34 : 24) ? label.slice(0, selected ? 31 : 21) + "…" : label;
 			})
 			.attr("text-anchor", "middle")
 			.attr("dy", (d) => nodeRadius(d.data.visits) + 14)
-			.attr("fill", (d) => d.data.status === "pruned" ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.6)")
+			.attr("fill", (d) => selectedNode?.id === d.data.id ? "#c4b5fd" : d.data.status === "pruned" ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.6)")
 			.attr("font-size", "9px")
 			.attr("font-family", "var(--font-sans)");
 
@@ -171,10 +185,10 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 				style={{ left: tooltip.x + 16, top: tooltip.y, borderColor: "var(--c-border)" }}
 			>
 				<div className="font-semibold p-text mb-2 leading-tight">
-					{STATUS_ICON[n.status]} {n.action || "(root)"}
+					{STATUS_ICON[n.status]} {cleanNodeLabel(n.action, "(root)")}
 				</div>
 				<div className="grid grid-cols-2 gap-x-4 gap-y-1 p-text-2">
-					<span>Avg Reward</span>
+					<span>Score</span>
 					<span className={`font-mono ${scoreColor}`}>{n.value.toFixed(3)}</span>
 					<span>Visits</span>
 					<span className="p-text font-mono">{n.visits}</span>

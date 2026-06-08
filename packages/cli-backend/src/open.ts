@@ -9,9 +9,11 @@
 
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
+import type { OAuthCredential } from '@proteus/core';
 import { initAllTables, readSoul } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
+import type { LocalCodexAuthStore } from './codex-auth-store.js';
 
 export interface AgentInfo {
   id: string;
@@ -29,6 +31,9 @@ export interface CLIOpenConfig {
   llm: LLMProviderConfig;
   judge?: LLMProviderConfig;
   providerCredentials?: LocalProviderCredentials;
+  codexAuthStore?: LocalCodexAuthStore;
+  codexConfigPath?: string;
+  onCodexRefresh?: (credential: OAuthCredential) => void;
 }
 
 type AgentDb = {
@@ -99,6 +104,9 @@ export function openAgentCLI(
     llm: config.llm,
     judge: config.judge,
     providerCredentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore,
+    codexConfigPath: config.codexConfigPath,
+    onCodexRefresh: config.onCodexRefresh,
     agentName: identity.name,
   });
 

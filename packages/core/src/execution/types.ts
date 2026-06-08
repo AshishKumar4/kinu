@@ -28,6 +28,24 @@ export type ExecutorCapability =
 
 export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop';
 
+export type ExecutorLifecycleStatus =
+  | 'not_configured'
+  | 'idle'
+  | 'active'
+  | 'disconnected'
+  | 'error';
+
+export interface ExecutorStatus {
+  /** Binding/config exists, so the executor can be selected/provisioned. */
+  configured: boolean;
+  /** Callable right now from the agent's perspective. */
+  available: boolean;
+  /** A real remote session/container/device has been touched this activation. */
+  active: boolean;
+  status: ExecutorLifecycleStatus;
+  reason?: string;
+}
+
 /**
  * An executor that participates in the codemode sandbox as a named provider.
  *
@@ -47,6 +65,12 @@ export interface ExecutorProvider {
 
   /** Check if this executor is currently reachable */
   isAvailable(): boolean;
+
+  /**
+   * Rich lifecycle state for UI/status surfaces. This must be cheap and must
+   * not perform remote RPCs; dashboard loads must not provision sandboxes.
+   */
+  getStatus?(): ExecutorStatus;
 
   /** Lifecycle: set up the connection */
   connect(): Promise<void>;
@@ -124,6 +148,10 @@ export interface ExecutorInfo {
   kind: ExecutorKind;
   capabilities: string[];
   available: boolean;
+  configured: boolean;
+  active: boolean;
+  status: ExecutorLifecycleStatus;
+  reason?: string;
 }
 
 /**

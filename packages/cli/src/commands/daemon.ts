@@ -12,6 +12,8 @@ import {
 import {
   AGENT_HOME,
   agentDbPath,
+  CONFIG_PATH,
+  createCodexAuthStore,
   ensureAgentHome,
   listAgentDirs,
   resolveLLMConfig,
@@ -138,9 +140,10 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
 
     const llmConfig = resolveLLMConfig();
     const providerCredentials = resolveProviderCredentials();
-    const modelResolver = createLocalModelResolver({ llm: llmConfig, credentials: providerCredentials });
+    const codexAuthStore = createCodexAuthStore();
+    const modelResolver = createLocalModelResolver({ llm: llmConfig, credentials: providerCredentials, codexAuthStore });
     const mcpServers = resolveMcpServers();
-    const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials });
+    const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
     const session = new LocalAgentSession({
       rt,
       db,

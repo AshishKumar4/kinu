@@ -1,220 +1,310 @@
 /**
  * Canonical system-prompt builder. Both CF and CLI surfaces call this so the
- * LLM sees the same tool documentation and the same `codemode.*` / `workspace.*`
- * vocabulary — the drift fix for F1.
+ * model sees one backend-agnostic Proteus contract, with backend/model/mode
+ * details layered in only when they are actually true for the current turn.
  */
 
 import type { AgentRuntime } from './types/agent-runtime.js';
 import {
-  BUILTIN_TOOLS,
-  BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
 } from './tools/registry.js';
 import { renderActiveSkillsSection } from './skills/render.js';
 import type { ActiveSkillSet } from './skills/types.js';
+import {
+  compilePromptSurface,
+  type PromptExecutorInfo,
+  type PromptExternalToolInfo,
+  type PromptSurface,
+  type PromptSurfaceOptions,
+} from './prompting/surface.js';
 
-export interface SystemPromptOptions {
-  /** Executor provider names currently registered (e.g. ['workspace', 'nimbus']). */
-  registeredExecutors?: string[];
-  /** Extra knowledge to append — CLI pastes the first few KB of memory/MEMORY.md. */
+export type {
+  PromptBackend,
+  PromptExecutorInfo,
+  PromptExternalToolInfo,
+  PromptMode,
+} from './prompting/surface.js';
+export type {
+  PromptModelCapability,
+  PromptModelContext,
+  PromptModelFamily,
+  PromptModelProfile,
+} from './prompting/model-profile.js';
+
+export interface SystemPromptOptions extends PromptSurfaceOptions {
+  /** Extra knowledge to append — CLI pastes a bounded memory/MEMORY.md tail. */
   extraKnowledge?: string;
   /** Override the soul/purpose lookup. If omitted, reads from agent_soul. */
   purposeOverride?: string;
-  /** Active skills for this turn — body injected into prompt, tool surface
-   *  restricted to the union of their `allowed_tools`. Resolved at turn
-   *  start by `skills/loader.resolveActiveSkills`. */
+  /** Active skills for this turn, resolved by the backend at turn start. */
   activeSkills?: ActiveSkillSet;
+  /** Optional working directory hint for local/cloud execution surfaces. */
+  cwd?: string;
+  /** Optional date string. Kept opt-in so prompt cache prefixes remain stable. */
+  currentDate?: string;
 }
 
-export const FALLBACK_PURPOSE = 'You are Proteus, a powerful self-evolving agent. You spawn independent ' +
-  'sub-agents that run concurrently (`think` heads — each with shell + sandbox + tool access, ' +
-  'recursing to depth 3) and parallel tree-search (`think` mcts); you persist across turns (durable memory, ' +
-  'keyed world-model facts, crafted tools, and your own rewritable scaffold); you run real shells ' +
-  'and Linux sandboxes, fan out sub-LLM calls (llm.query), and improve yourself over time.';
+export interface SystemPromptParts {
+  stable: string;
+  context: string;
+  volatile: string;
+}
 
-function renderExecutorSection(names: string[]): string {
-  if (names.length === 0) return '';
-  const lines = names.map((n) => {
-    switch (n) {
+export const FALLBACK_PURPOSE = 'You are Proteus, a self-evolving agent runtime. ' +
+  'You help the user by reading real context, using available tools, coordinating parallel heads when useful, ' +
+  'saving durable facts and memory, and improving your reusable capabilities over time.';
+
+function renderRuntimeContext(opts: SystemPromptOptions): string {
+  const lines: string[] = [];
+  if (opts.backend) lines.push(`- Backend: ${opts.backend}`);
+  if (opts.mode && opts.mode !== 'chat') lines.push(`- Turn mode: ${opts.mode}`);
+  if (opts.model?.id) lines.push(`- Model: ${opts.model.provider ? `${opts.model.provider}/` : ''}${opts.model.id}`);
+  if (opts.cwd) lines.push(`- Working directory: ${opts.cwd}`);
+  if (opts.currentDate) lines.push(`- Current date: ${opts.currentDate}`);
+  return lines.length ? `## Runtime context\n${lines.join('\n')}` : '';
+}
+
+function renderOperatingGuidance(surface: PromptSurface): string {
+  const mode = surface.mode;
+  const family = surface.model.family;
+  const lines = [
+    '- Treat ambiguous "do this" requests as work to perform, not as invitations to only describe a plan.',
+    '- Inspect current code, state, logs, or tool results before making claims about them.',
+    '- Keep changes scoped to the user request and the existing architecture.',
+    '- Verify meaningful changes with the narrowest reliable checks available, then report what passed or failed.',
+    '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
+  ];
+
+  if (family === 'kimi') {
+    lines.push(
+      '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context, continue from observations, and avoid re-planning after every tool result.',
+      '- For long-horizon coding, write down durable decisions with fact/memory instead of relying on hidden reasoning.',
+    );
+  } else if (family === 'gpt') {
+    lines.push(
+      '- GPT/Codex-style reasoning models do best with direct success criteria: state assumptions briefly, use tools for current facts, and keep final answers outcome-focused.',
+      '- Prefer schema-backed outputs for machine-readable tasks; do not rely on prose-only JSON instructions when a schema/tool is available.',
+    );
+  }
+
+  if (mode === 'plan') {
+    lines.push('- Planning mode: do not edit, deploy, or mutate state. Produce a concrete plan with affected files and verification.');
+  } else if (mode === 'product_change') {
+    lines.push('- Product-change mode: use product_change to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
+    lines.push('- Never deploy Proteus product changes without an explicit approval record.');
+  } else if (mode === 'cron') {
+    lines.push('- Scheduled wake mode: identify why you were woken, do only the scheduled work, persist any durable outcome, then stop.');
+  } else if (mode === 'background_resume') {
+    lines.push('- Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.');
+  }
+
+  return `## Operating guidance\n${lines.join('\n')}`;
+}
+
+function renderBuiltinToolLine(name: BuiltinToolName): string {
+  const spec = BUILTIN_TOOL_SPECS[name];
+  return [
+    `- **${name}** — ${spec.summary}`,
+    `  Use: ${spec.whenToUse}`,
+    `  Avoid: ${spec.whenNotToUse}`,
+  ].join('\n');
+}
+
+function renderExternalToolLine(tool: PromptExternalToolInfo): string {
+  const source = tool.source === 'mcp' ? 'MCP' : tool.source ?? 'external';
+  const description = tool.description ? ` — ${tool.description}` : '';
+  return `- **${tool.name}** (${source})${description}`;
+}
+
+function renderToolsSection(surface: PromptSurface): string {
+  const builtins = surface.builtinTools.length === 0
+    ? '(none)'
+    : surface.builtinTools.map(renderBuiltinToolLine).join('\n');
+  const external = surface.externalTools.length === 0
+    ? ''
+    : [
+        '',
+        '### External tools',
+        'These tools are exposed by connected external providers for this turn. Use them when their names/descriptions match the task.',
+        surface.externalTools.map(renderExternalToolLine).join('\n'),
+      ].join('\n');
+  return [
+    '## Tools available this turn',
+    'Only call tools listed here or present in the model tool schema for this turn. If a tool/runtime is absent, do not assume it exists.',
+    '',
+    '### Built-in tools',
+    builtins,
+    external,
+  ].join('\n');
+}
+
+function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
+  if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
+  if (exec.active || exec.status === 'active') return 'active';
+  if (exec.status === 'idle' || exec.configured) return 'ready on demand';
+  return 'available';
+}
+
+function renderExecutorLine(exec: PromptExecutorInfo): string {
+  const suffix = ` (${executorAvailabilityLabel(exec)})`;
+  switch (exec.name) {
       case 'workspace':
-        return '  **workspace.*** — local VFS + shell (readFile, writeFile, readdir, exists, exec, listTools, createTool). For memory use the top-level `memory` tool (save / search), not workspace.*.';
+        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state; do not treat it as the user\'s PC or a full Linux sandbox.';
       case 'nimbus':
-        return '  **nimbus.*** — lightweight Linux env (fast cold start, native bash/node/python, own 10GB VFS). PREFER it for quick commands, scripts, and file work where a full container is overkill. No port exposure — switch to sandbox.* only for apps the user must see.';
+        return `- **nimbus.*** / \`runtime: "nimbus"\`${suffix}: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.`;
       case 'sandbox':
-        return '  **sandbox.*** — full Linux VM over Container. Use for port-listening apps the user must see (exposePort) or heavy installs; nimbus.* is lighter for everything else.';
+        return `- **sandbox.*** / \`runtime: "sandbox"\`${suffix}: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.`;
       case 'laptop':
-        return '  **laptop.*** — user\'s local machine over SSH tunnel';
+        return `- **laptop.*** / \`runtime: "laptop"\`${suffix}: the user's connected local machine through the Proteus device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment.`;
       default:
-        return `  **${n}.*** — registered executor`;
-    }
-  });
-  // Each executor is a SEPARATE filesystem — a file written via one namespace
-  // is NOT visible to another (workspace.* is the Worker VFS; sandbox.* is the
-  // container; laptop.* is the user's disk). Stay on one executor for a task,
-  // and read back with the SAME namespace you wrote with. (Prevents the
-  // "wrote in the sandbox, read an empty workspace" confusion.)
-  const disjointNote = names.length > 1
-    ? '\n\n**These namespaces are separate filesystems.** A file you write with one (e.g. `sandbox.writeFile`) is NOT readable through another (e.g. `workspace.readFile`). Pick the executor a task lives on and read/write/inspect it all through that same namespace.'
-    : '';
-  // When the sandbox executor is registered, append a "Showing apps" guide
-  // so the model knows that user-visible previews require exposePort. The
-  // app's UI auto-renders the returned URL as a live iframe in the chat
-  // and on the Executors tab. (STABILITY-AUDIT §C1.)
-  const showingApps = names.includes('sandbox')
-    ? `\n### Showing a running app to the user
-For the user to *see* a running web app, the flow is strict and in this order:
-
-  1. Write your files into \`/workspace/<app-dir>/\`.
-  2. **Start a server listening on a TCP port** inside the sandbox. The server
-     MUST be running before step 3 or \`exposePort\` returns an error.
-  3. Call \`sandbox.exposePort(port)\` to get the public preview URL. The UI
-     auto-renders it as a live iframe in the chat and on the Executors tab.
-
-Concrete examples — pick the one matching your app type:
-
-**Static site (HTML / CSS / JS only):**
-\`\`\`
-await sandbox.writeFile("/workspace/myapp/index.html", "<!doctype html>...")
-await sandbox.exec("cd /workspace/myapp && nohup python3 -m http.server 8080 > /tmp/srv-8080.log 2>&1 &")
-await new Promise(r => setTimeout(r, 800))     // let the server bind
-const url = await sandbox.exposePort(8080)
-\`\`\`
-
-**Node server:**
-\`\`\`
-await sandbox.exec("cd /workspace/myapp && nohup node server.js > /tmp/srv-8080.log 2>&1 &")
-await new Promise(r => setTimeout(r, 1500))    // node + framework boot is slower
-const url = await sandbox.exposePort(8080)
-\`\`\`
-
-**Dev server (Vite/Next/etc.):**
-\`\`\`
-await sandbox.exec("cd /workspace/myapp && npm install && nohup npx vite --host 0.0.0.0 --port 5173 > /tmp/srv-5173.log 2>&1 &")
-await new Promise(r => setTimeout(r, 5000))    // npm install + bundler boot
-const url = await sandbox.exposePort(5173)
-\`\`\`
-
-Rules:
-  - Always background the process: \`nohup ... > /tmp/srv.log 2>&1 &\` so \`exec\`
-    returns immediately.
-  - **Bind to \`0.0.0.0\` (or omit host), never just \`127.0.0.1\`** — the proxy
-    reaches the container over its internal network.
-  - Wait briefly (\`await new Promise(r => setTimeout(r, 800-5000))\`) after
-    starting the server so it has time to bind before \`exposePort\` probes.
-  - \`exposePort\` verifies the port is responsive before returning a URL. If
-    nothing is listening, you get an error telling you to start a server first;
-    do that, then call \`exposePort\` again.
-  - If your server takes a while to boot (e.g. Next.js), inspect
-    \`sandbox.readFile("/tmp/srv-<port>.log")\` to see what's happening.\n`
-    : '';
-  return `\n### Executor namespaces inside execute_tools\n${lines.join('\n')}${disjointNote}\n${showingApps}`;
+        return `- **${exec.name}.***${suffix}: available executor namespace.`;
+  }
 }
 
-function renderBuiltinToolsSection(): string {
-  return BUILTIN_TOOLS.map((name: BuiltinToolName) => {
-    return `- **${name}** — ${BUILTIN_TOOL_DESCRIPTIONS[name]}`;
-  }).join('\n');
+function renderExecutorSection(executors: readonly PromptExecutorInfo[], tools: readonly BuiltinToolName[]): string {
+  if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
+
+  if (executors.length === 0) return '';
+
+  const workspace = executors.find((exec) => exec.name === 'workspace');
+  const devices = executors.filter((exec) => exec.name !== 'workspace');
+  const lines = [...devices, ...(workspace ? [workspace] : [])].map(renderExecutorLine);
+
+  const parts = [
+    '## Execution environments',
+    'Only the environments listed here are selectable in this turn. If a namespace is absent, do not mention it, call it, or assume it can be used.',
+    'Choose the runtime that matches the task; keep reads/writes in the same runtime unless you intentionally copy data between runtimes.',
+    '',
+    ...lines,
+  ];
+  if (executors.length > 1) {
+    parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
+  }
+  if (devices.length > 1) {
+    parts.push('When more than one execution device is available, decide explicitly: laptop for the user machine, Nimbus for quick cloud execution, Sandbox for heavyweight/server work.');
+  }
+  if (devices.some((exec) => exec.name === 'sandbox')) {
+    parts.push(
+      '',
+      '### Showing a running app',
+      'For a user-visible web app, write files in the sandbox, start a server bound to 0.0.0.0 in the background, wait for it to bind, then call sandbox.exposePort(port). If exposePort fails, inspect the server log and retry after the server is actually listening.',
+    );
+  }
+  return parts.join('\n');
+}
+
+function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): boolean {
+  return tools.includes(name);
+}
+
+function renderAgentStateSection(tools: readonly BuiltinToolName[]): string {
+  const parts: string[] = [];
+
+  parts.push([
+    '## Persistence',
+    'You are NOT stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage when the backend supports them.',
+  ].join('\n'));
+
+  if (hasTool(tools, 'memory') || hasTool(tools, 'fact')) {
+    parts.push([
+      '## Memory and facts',
+      '- Use `fact` for keyed state the agent should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
+      '- Use `memory` for longer prose notes or lessons that are useful across turns.',
+      '- Prefer updating stale facts over adding contradictory new ones.',
+    ].join('\n'));
+  }
+
+  if (hasTool(tools, 'execute_tools')) {
+    parts.push([
+      '## Code execution and learned capabilities',
+      '- `execute_tools` runs JavaScript against the active executor/codemode namespaces.',
+      '- Crafted tools saved in the CraftStore become callable as `codemode.<name>(args)` / `tools.<name>(args)` when injected.',
+      '- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs; handle either a string result or `{ error }`.',
+      '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder.',
+      '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
+    ].join('\n'));
+  }
+
+  if (hasTool(tools, 'think')) {
+    parts.push([
+      '## Parallel sub-agents',
+      '`think({ strategy: "heads", task, heads })` spawns 2-6 INDEPENDENT heads that run concurrently, each with its own multi-step loop and a bounded recursive split depth of 3.',
+      '`think({ strategy: "mcts", task })` runs parallel tree-search rollouts over candidate approaches.',
+      'Use parallel heads only when work splits into genuinely independent subproblems. Avoid concurrent writes to the same mutable resource.',
+    ].join('\n'));
+  }
+
+  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'think')) {
+    parts.push([
+      '## Background work',
+      'Long `think`, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
+    ].join('\n'));
+  }
+
+  if (hasTool(tools, 'product_change')) {
+    parts.push([
+      '## Proteus product changes',
+      'When the user asks Proteus to modify its own app, route the work through `product_change`: bind source, record the plan, run checks, create a preview, request approval, deploy only after approval, and keep rollback metadata.',
+    ].join('\n'));
+  }
+
+  parts.push([
+    '## Output format',
+    'Final replies are plain markdown. Keep user-visible reasoning concise, name important files/checks, and do not dump raw JSON unless asked.',
+  ].join('\n'));
+
+  return parts.join('\n\n');
+}
+
+function renderKnowledgeSection(extraKnowledge?: string): string {
+  const text = extraKnowledge?.trim();
+  return text ? `## Knowledge\n${text}` : '';
+}
+
+function readPurpose(rt: AgentRuntime, override?: string): string {
+  if (override) return override;
+  try {
+    const rows = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
+    return rows[0]?.purpose ?? FALLBACK_PURPOSE;
+  } catch {
+    return FALLBACK_PURPOSE;
+  }
+}
+
+export function buildSystemPromptPartsSync(
+  rt: AgentRuntime,
+  opts: SystemPromptOptions = {},
+): SystemPromptParts {
+  const surface = compilePromptSurface(opts);
+  const stable = [
+    readPurpose(rt, opts.purposeOverride),
+    renderRuntimeContext(opts),
+    renderOperatingGuidance(surface),
+    renderToolsSection(surface),
+    renderExecutorSection(surface.selectableExecutors, surface.builtinTools),
+    renderAgentStateSection(surface.builtinTools),
+  ].filter(Boolean).join('\n\n');
+
+  const context = opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '';
+  const volatile = renderKnowledgeSection(opts.extraKnowledge);
+
+  return { stable, context, volatile };
 }
 
 /**
  * Synchronous form. CF's Think.getSystemPrompt returns string synchronously
- * and this runtime's sql executor is also synchronous, so no I/O barrier
- * exists — expose a sync form so CF doesn't need an await hack.
+ * and this runtime's sql executor is also synchronous.
  */
 export function buildSystemPromptSync(
   rt: AgentRuntime,
   opts: SystemPromptOptions = {},
 ): string {
-  let purpose = opts.purposeOverride;
-  if (!purpose) {
-    try {
-      const rows = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
-      purpose = rows[0]?.purpose ?? FALLBACK_PURPOSE;
-    } catch {
-      purpose = FALLBACK_PURPOSE;
-    }
-  }
-
-  const executorSection = renderExecutorSection(opts.registeredExecutors ?? []);
-  const knowledgeSection = opts.extraKnowledge
-    ? `\n## Knowledge\n${opts.extraKnowledge}\n`
-    : '';
-
-  return `${purpose}
-
-## Tools
-${renderBuiltinToolsSection()}
-
-### Crafted capabilities
-Tools you learn and save via the CraftStore become callable inside \`execute_tools\`
-as \`codemode.<name>(args)\`. They improve over time via EMA scoring; low-quality
-tools are filtered out automatically.
-
-### Recursive language model (inside execute_tools)
-You can spawn a flat LLM call from inside the sandbox to divide-and-conquer
-over large inputs:
-\`\`\`
-const text = await workspace.readFile('big.log')
-const chunks = text.match(/[\\s\\S]{1,4000}/g) ?? []
-const partials = await Promise.all(chunks.map(c => llm.query(\`Summarize: \${c}\`)))
-const answer = await llm.query(\`Synthesize: \${partials.join('\\n\\n')}\`)
-\`\`\`
-\`llm.query(text, { model?, reasoning_effort? })\` returns either a plain
-string OR an \`{ error: string }\` envelope on failure — handle both. The
-sub-call has no \`llm.query\` in scope, so recursion depth is bounded at 1.
-
-### Parallel sub-agents
-\`think({ strategy: 'heads', task, heads: [...] })\` spawns 2–6 INDEPENDENT
-sub-agents that run concurrently — each runs its own multi-step agentic loop
-with shell + sandbox + tool access, optionally a different model per head, and
-each can recurse (spawn its own sub-heads) down to depth 3. Their findings are
-merged via structured synthesis (synthesize / best_of / consensus). Reach for
-this when a task splits into 3+ genuinely independent sub-questions — e.g. survey
-prior art + draft a design + stress-test it, or analyse N files at once.
-Each head has a PRIVATE scratch VFS plus a COMMON one (\`shared/findings/\`,
-head-namespaced) that siblings and you can both read. Because heads run against
-the same resources, when several will TOUCH the same mutable thing, say so in
-their task: give each its own git worktree for a shared repo, or namespaced
-paths — never have two heads write the same file concurrently.
-\`think({ strategy: 'mcts' })\` runs parallel tree-search rollouts over candidate
-approaches. These are real concurrent agents, not a single sequential stream.
-
-### Long work runs in the background — yield and resume
-You do NOT have to block on slow work. Any \`think\`, \`execute_tools\`, or \`run\`
-call that exceeds 30s is automatically detached to the background: the tool
-returns \`{ background: true, jobId, message }\` instead of the result, while the
-work keeps running durably. When you get a background handle, STOP your turn
-immediately — do not wait or poll. You will be woken with a new message when the
-job completes; then call \`agent.jobResult(jobId)\` to fetch the result and
-synthesize/continue. Use this freely for deep multi-head research, long builds,
-or any heavy analysis — launch it, yield, and pick up the result when it lands.
-
-### You persist across turns
-You are NOT stateless between turns. Your conversation, long-term memory, keyed
-world-model facts, crafted tools, and your own scaffold all live durably in your
-storage and are present on every turn — work you save now is yours next turn.
-
-${executorSection}${opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills) : ''}
-## World model (agent_facts)
-Stable, keyed facts you've remembered appear at the bottom of this prompt.
-Use \`fact\` (action=remember) for re-readable keyed state: user preferences,
-project state, dates, names, URLs, configuration values. Prefer it over
-\`memory\` when the value is keyed; prefer \`memory\` (action=save) for prose /
-lessons / narratives.
-
-## Evolution
-After each turn the system scores tool usage, extracts successful patterns into
-new crafted tools, and (every few turns) reflects on the session. Your surface
-improves automatically — good patterns become reusable \`codemode.*\` functions.
-
-## Output format
-Your final user-facing message is plain markdown. Keep reasoning concise —
-internal thinking belongs inside tool calls or hidden reasoning tokens, not in
-the user reply. Don't dump raw JSON unless asked.
-${knowledgeSection}`;
+  const parts = buildSystemPromptPartsSync(rt, opts);
+  return [parts.stable, parts.context, parts.volatile].filter(Boolean).join('\n\n');
 }
 
-/** Async wrapper for symmetry with other core builders; CLI uses either form. */
+/** Async wrapper for symmetry with other core builders. */
 export async function buildSystemPrompt(
   rt: AgentRuntime,
   opts: SystemPromptOptions = {},

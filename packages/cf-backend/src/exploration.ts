@@ -25,7 +25,7 @@
  * Constraints (Agent SDK facets):
  *   • schedule(), keepAlive(), runFiber() all throw in facets
  *   • Own SQLite — independent from the orchestrator's
- *   • LLM config derived per-call from env.AI / AI_GATEWAY_*
+ *   • LLM config derived per-call from the owner user's provider registry
  */
 
 import { Agent, callable } from "agents";
@@ -55,6 +55,8 @@ import {
   runHeadInference,
   buildHeadAccumulatorTools,
   buildHeadSandboxTools,
+  extractJsonObject,
+  jsonObjectOnlyInstruction,
 } from "@proteus/core";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
@@ -221,17 +223,18 @@ export class ExplorationAgent extends Agent<Env> {
       model,
       messages: [{
         role: "user" as const,
-        content: `Task: ${task}\n\nTrajectory:\n${trajectory.slice(0, 2000)}\n\nRate 0.0-1.0. Respond ONLY: {"score": <float>, "reason": "<5 words>"}`,
+        content: `Task: ${task}\n\nTrajectory:\n${trajectory.slice(0, 2000)}\n\nRate 0.0-1.0.\nJSON shape: {"score": <float>, "reason": "<5 words>"}\n${jsonObjectOnlyInstruction()}`,
       }],
       maxOutputTokens: 100,
     });
 
     try {
-      const m = text.match(/\{[^}]+\}/);
-      const parsed = JSON.parse(m?.[0] ?? '{"score":0.5}');
-      return Math.min(1, Math.max(0, Number(parsed.score) || 0.5));
+      const parsed = extractJsonObject(text) as { score?: unknown };
+      const score = Number(parsed.score);
+      if (!Number.isFinite(score)) return 0;
+      return Math.min(1, Math.max(0, score));
     } catch {
-      return 0.5;
+      return 0;
     }
   }
 

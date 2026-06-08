@@ -259,6 +259,8 @@ async function resolveOrCreateIdentity(
   }
   if (!userId) userId = randomHex(16);
 
+  await upsertUser(session, userId, email, profile, now);
+
   if (!existing && profile.emailVerified) {
     const linked = await session.prepare(
       `INSERT INTO auth_email_links (email, user_id, created_at, updated_at)

@@ -6,5 +6,6 @@ export * from './openai-compat.js';
 export * from './openrouter.js';
 export * from './openai.js';
 export * from './codex.js';
+export * from './codex-oauth.js';
 export * from './anthropic.js';
 export * from './fetch-shim.js';

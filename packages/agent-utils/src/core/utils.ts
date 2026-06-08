@@ -7,7 +7,7 @@ export function withTimeout<T>(
 ): Promise<T> {
 	const signals: AbortSignal[] = [AbortSignal.timeout(ms)];
 	if (signal) signals.push(signal);
-	const combined = AbortSignal.any(signals);
+	const combined = combineAbortSignals(signals);
 
 	return new Promise<T>((resolve, reject) => {
 		if (combined.aborted) {
@@ -17,6 +17,23 @@ export function withTimeout<T>(
 		combined.addEventListener("abort", () => reject(combined.reason), { once: true });
 		promise.then(resolve, reject);
 	});
+}
+
+export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+	const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+	if (live.length === 1) return live[0];
+	const controller = new AbortController();
+	const abort = (signal: AbortSignal) => {
+		if (!controller.signal.aborted) controller.abort(signal.reason);
+	};
+	for (const signal of live) {
+		if (signal.aborted) {
+			abort(signal);
+			break;
+		}
+		signal.addEventListener("abort", () => abort(signal), { once: true });
+	}
+	return controller.signal;
 }
 
 export function extractError(err: unknown, fallback: string): string {

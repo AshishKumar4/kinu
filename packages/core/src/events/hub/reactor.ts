@@ -117,16 +117,16 @@ Several worker heads are currently running in parallel on this task:
 A new event (or batch of events) has arrived during execution:
 {{EVENTS_BLOCK}}
 
-Reason step-by-step (3-5 sentences):
+Write a concise private decision rationale in the "reasoning" field only:
  - Is the event relevant to any active head's work?
  - Is it time-critical (must act this turn) or can it wait?
  - Does it invalidate a head's premise, or merely add information?
  - What is the safest minimum action that handles the event correctly?
 
-Then output a JSON object with this exact shape:
+Return only a JSON object with this exact shape:
 
   {
-    "reasoning": "<your 3-5 sentence reasoning>",
+    "reasoning": "<1-3 short sentences>",
     "head_op": { "kind": "keep" } |
                { "kind": "abort_one",  "head_id": "...", "reason": "..." } |
                { "kind": "abort_all",  "reason": "..." } |

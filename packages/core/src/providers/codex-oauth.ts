@@ -1,25 +1,22 @@
-// Codex OAuth device-code flow (mirrors the official codex-rs CLI).
+// Codex OAuth device-code flow shared by web UserDO and local CLI.
 //
-//   client_id:  app_EMoamEEZ73f0CkXaXp7hrann   (public Codex CLI client_id)
-//   issuer:     https://auth.openai.com
-//   user-portal: https://auth.openai.com/codex/device
+// This mirrors the Codex CLI flow:
+//   1. POST auth.openai.com/api/accounts/deviceauth/usercode
+//   2. User enters the code at auth.openai.com/codex/device
+//   3. Poll auth.openai.com/api/accounts/deviceauth/token
+//   4. Exchange the authorization code at auth.openai.com/oauth/token
 //
-// Flow:
-//   1. POST {issuer}/api/accounts/deviceauth/usercode  {client_id}
-//      → { user_code, device_auth_id, interval }
-//   2. UI shows user_code + portal URL; user enters code at portal.
-//   3. Poll POST {issuer}/api/accounts/deviceauth/token {device_auth_id, user_code}
-//      until 200 → { authorization_code, code_verifier }
-//   4. POST {issuer}/oauth/token (grant_type=authorization_code, …)
-//      → { access_token, refresh_token, … }
-//
-// Refresh: POST {issuer}/oauth/token (grant_type=refresh_token, refresh_token, client_id)
-import type { OAuthCredential } from '@proteus/core';
+// Provider calls use the Codex CLI-style header bundle. Refresh ownership stays
+// with the credential store that calls createCodexOAuthClient().
+import type { OAuthCredential } from '../credentials/store.js';
 
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CODEX_ISSUER = 'https://auth.openai.com';
 export const CODEX_DEVICE_PORTAL = `${CODEX_ISSUER}/codex/device`;
 export const CODEX_TOKEN_URL = `${CODEX_ISSUER}/oauth/token`;
+export const CODEX_USER_AGENT = 'codex_cli_rs/0.0.0 (Proteus Agent)';
+export const CODEX_ORIGINATOR = 'codex_cli_rs';
+
 const DEVICE_CODE_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/usercode`;
 const DEVICE_POLL_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/token`;
 
@@ -63,7 +60,9 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         throw new Error(`Codex device-code request failed: ${res.status} ${sanitizeErrorBody(await res.text())}`);
       }
       const body = await res.json() as {
-        user_code?: string; device_auth_id?: string; interval?: string | number;
+        user_code?: string;
+        device_auth_id?: string;
+        interval?: string | number;
       };
       if (!body.user_code || !body.device_auth_id) {
         throw new Error('Codex device-code response missing required fields');
@@ -105,7 +104,10 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         throw new Error(`Codex token exchange failed: ${exchange.status} ${sanitizeErrorBody(await exchange.text())}`);
       }
       const tokens = await exchange.json() as {
-        access_token?: string; refresh_token?: string; id_token?: string; expires_in?: number;
+        access_token?: string;
+        refresh_token?: string;
+        id_token?: string;
+        expires_in?: number;
       };
       if (!tokens.access_token || !tokens.refresh_token) {
         throw new Error('Codex token exchange missing access_token/refresh_token');
@@ -152,4 +154,50 @@ export function tokensToCredential(t: DeviceCodeTokens, metadata?: Record<string
     expiresAt: t.expiresAt,
     metadata,
   };
+}
+
+export function decodeCodexAccountId(accessToken: string): string | null {
+  try {
+    const parts = accessToken.split('.');
+    if (parts.length < 2) return null;
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+    const json = JSON.parse(typeof atob === 'function'
+      ? atob(padded)
+      : Buffer.from(padded, 'base64').toString('utf-8'));
+    const id = json?.['https://api.openai.com/auth']?.chatgpt_account_id;
+    return typeof id === 'string' && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+export function codexCredentialToHeaders(cred: OAuthCredential): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${cred.accessToken}`,
+    'User-Agent': CODEX_USER_AGENT,
+    originator: CODEX_ORIGINATOR,
+  };
+  const metadataAccountId = cred.metadata?.accountId;
+  const accountId = decodeCodexAccountId(cred.accessToken)
+    ?? (typeof metadataAccountId === 'string' && metadataAccountId ? metadataAccountId : null);
+  if (accountId) headers['ChatGPT-Account-ID'] = accountId;
+  return headers;
+}
+
+export function codexAccessTokenExpiring(accessToken: string, skewSec = 60): boolean {
+  try {
+    const parts = accessToken.split('.');
+    if (parts.length < 2) return true;
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+    const json = JSON.parse(typeof atob === 'function'
+      ? atob(padded)
+      : Buffer.from(padded, 'base64').toString('utf-8'));
+    const exp = typeof json?.exp === 'number' ? json.exp : null;
+    if (exp == null) return false;
+    return Date.now() / 1000 + skewSec >= exp;
+  } catch {
+    return true;
+  }
 }

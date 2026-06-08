@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { runMCTS, type SearchNode } from '@proteus/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@proteus/core';
 import { openAgentCLI } from '@proteus/cli-backend';
-import { agentDbPath, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
+import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
 import {
   printSearchTree, printError, createSpinner,
   BRAND, DIM, OK, WARN, ACCENT, MUTED,
@@ -28,10 +28,13 @@ export async function evolveCommand(name: string, opts: {
   const budget = parseInt(opts.budget ?? '2', 10);
   const branches = parseInt(opts.branches ?? '2', 10);
   const llmConfig = resolveLLMConfig(opts);
+  const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
   const { rt, info } = openAgentCLI(db, dbPath, {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
+    codexAuthStore,
+    codexConfigPath: CONFIG_PATH,
   });
 
   console.log('');

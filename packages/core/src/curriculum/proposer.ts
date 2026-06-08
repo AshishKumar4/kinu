@@ -13,6 +13,7 @@
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
+import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured.js';
 
 export interface ProposedTask {
   id: string;
@@ -126,11 +127,11 @@ Propose ${count} candidate tasks. Each should:
 2. Be concretely formulated (no "explore X further" — give a specific task).
 3. Have predictedSuccess in the "barely succeeds" window.
 
-Respond ONLY with a JSON array of objects:
-[{"task": "<task statement>", "rationale": "<1-2 sentences why this task>",
-  "predictedSuccess": <0..1>, "targetsSkills": ["<skill name>", ...]}, ...]
+  JSON shape:
+  [{"task": "<task statement>", "rationale": "<1-2 sentences why this task>",
+    "predictedSuccess": <0..1>, "targetsSkills": ["<skill name>", ...]}, ...]
 
-Do not explain. Do not include any prose outside the JSON array.`;
+  ${jsonArrayOnlyInstruction()}`;
 }
 
 export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<ProposedTask[]> {
@@ -143,10 +144,8 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
   try { text = await opts.judge.complete(prompt); }
   catch (err) { throw new Error(`Curriculum LLM call failed: ${(err as Error).message}`); }
 
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('Curriculum response had no JSON array');
   let parsed: unknown;
-  try { parsed = JSON.parse(m[0]); }
+  try { parsed = extractJsonArray(text); }
   catch (err) { throw new Error(`Curriculum response not JSON: ${(err as Error).message}`); }
 
   const result = v.safeParse(ProposalListSchema, parsed);

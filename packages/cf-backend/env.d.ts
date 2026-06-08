@@ -13,6 +13,7 @@ import type { OrchestratorAgent } from "./src/orchestrator.js";
 import type { ExplorationAgent } from "./src/exploration.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
+import type { NimbusSession } from "@nimbus-sh/sdk/worker";
 
 // This file has top-level imports (for the DO class generics below), which
 // makes it a module — so `interface Env` here would be module-scoped, not
@@ -27,6 +28,8 @@ declare global {
     ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
+    /** Nimbus SDK session DO — built-in lightweight dev environment. */
+    NIMBUS_SESSION: DurableObjectNamespace<NimbusSession>;
     /** Sandbox container DO — @cloudflare/sandbox. One per agent.
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */
@@ -37,10 +40,8 @@ declare global {
     BACKUP_BUCKET?: R2Bucket;
     AI_GATEWAY_URL: string;
     AI_GATEWAY_AUTH: string;
-    /** Hostname used by @cloudflare/sandbox to build preview URLs.
-     *  Must match a host for which Cloudflare wildcard DNS resolves.
-     *  The account's workers.dev subdomain is the simplest choice because
-     *  *.<worker>.<sub>.workers.dev resolves automatically. */
+    /** Hostname used by Proteus to build authenticated path-style preview URLs.
+     *  No per-agent subdomain or wildcard TLS/DNS is required. */
     PREVIEW_HOSTNAME: string;
     /** Static asset binding — required for SPA fallback when the Worker
      *  runs first on every route (see `run_worker_first` in wrangler). */
@@ -71,14 +72,6 @@ declare global {
     /** Browser approval origin for CLI auth. In production this should be the
      *  public app origin so approval uses the user's browser session. */
     CLI_APPROVAL_ORIGIN?: string;
-    /** Nimbus default-sandbox endpoint, e.g. https://nimbus.<acct>.workers.dev.
-     *  When set, the `nimbus` runtime is registered for every agent at runtime
-     *  construction. Unset → only `workspace` (+ `sandbox` stub) is available
-     *  by default. See packages/core/src/execution/nimbus.ts. */
-    NIMBUS_ENDPOINT?: string;
-    /** HS256 JWT for Nimbus's `?nimbus_token=` query param. Required only when
-     *  the Nimbus deployment runs in 'enforce' mode. Store as wrangler secret. */
-    NIMBUS_TOKEN?: string;
   }
 }
 

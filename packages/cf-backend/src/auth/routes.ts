@@ -9,6 +9,10 @@ import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
   type OAuthProviderConfig, type OAuthProviderId,
 } from './providers.js';
+import {
+  CLOUDFLARE_OAUTH_CRED_KEY,
+  cloudflareTokenToCredential,
+} from '../lib/cloudflare-oauth.js';
 
 const SESSION_COOKIE_NAME = '__Host-proteus_session';
 
@@ -140,7 +144,7 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     const client: oauth.Client = { client_id: provider.clientId };
     stage = 'authorization_response';
     const callbackParams = oauth.validateAuthResponse(as, client, url.searchParams, state);
-    stage = 'token_exchange';
+    stage = 'token_request';
     const tokenResponse = await oauth.authorizationCodeGrantRequest(
       as,
       client,
@@ -149,16 +153,17 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
       savedState.redirectUri,
       savedState.codeVerifier,
     );
-    const tokens = provider.kind === 'oidc'
-      ? await oauth.processAuthorizationCodeResponse(as, client, tokenResponse, {
-          expectedNonce: savedState.nonce ?? oauth.expectNoNonce,
-          requireIdToken: true,
-        })
-      : await oauth.processGenericTokenEndpointResponse(as, client, tokenResponse);
+    stage = 'token_response';
+    const tokens = await processOAuthTokenResponse(provider, as, client, tokenResponse, savedState.nonce ?? null);
     stage = 'profile';
     const profile = await fetchOAuthProfile(provider, as, client, tokens);
     stage = 'session';
     const session = await createSession(env, profile);
+    if (provider.id === 'cloudflare') {
+      stage = 'cloudflare_credential';
+      const userDO = env.UserDO.get(env.UserDO.idFromName(session.identity.userId));
+      await userDO.setCredential(CLOUDFLARE_OAUTH_CRED_KEY, await cloudflareTokenToCredential(tokens));
+    }
     ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));
     const destination = new URL(savedState.returnTo, url.origin).toString();
     const headers = new Headers({ 'cache-control': 'no-store' });
@@ -169,13 +174,33 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
       headers,
     });
   } catch (e) {
-    console.warn(`[auth] OAuth callback failed at ${stage}:`, e instanceof Error ? e.message : e);
+    const failure = summarizeOAuthFailure(e);
+    console.warn(`[auth] OAuth callback failed at ${stage}: ${failure.log}`);
     return html('Sign in failed', `
       <p class="lede">The sign-in request could not be completed. Return to sign in and try again.</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
+      <p class="muted">Reason: <code>${escapeHtml(failure.reason)}</code></p>
       <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
     `, { status: 400 });
   }
+}
+
+async function processOAuthTokenResponse(
+  provider: OAuthProviderConfig,
+  as: oauth.AuthorizationServer,
+  client: oauth.Client,
+  response: Response,
+  nonce: string | null,
+): Promise<oauth.TokenEndpointResponse> {
+  if (provider.kind === 'oidc') {
+    return oauth.processAuthorizationCodeResponse(as, client, response, {
+      expectedNonce: nonce ?? oauth.expectNoNonce,
+      requireIdToken: true,
+    });
+  }
+
+  if (provider.id === 'cloudflare') return processCloudflareTokenResponse(response);
+  return oauth.processGenericTokenEndpointResponse(as, client, response);
 }
 
 async function logout(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -229,6 +254,64 @@ async function fetchOAuthProfile(
     displayName: stringClaim(userinfo?.name) ?? stringClaim(idClaims?.name) ?? null,
     avatarUrl: stringClaim(userinfo?.picture) ?? stringClaim(idClaims?.picture) ?? null,
   };
+}
+
+class OAuthProviderTokenError extends Error {
+  constructor(
+    public readonly providerError: string,
+    public readonly status?: number,
+    public readonly providerDescription?: string,
+  ) {
+    super(providerDescription || providerError);
+    this.name = 'OAuthProviderTokenError';
+  }
+}
+
+async function processCloudflareTokenResponse(response: Response): Promise<oauth.TokenEndpointResponse> {
+  const body = await readJsonObject(response, 'Cloudflare token endpoint');
+  if (!response.ok) {
+    const providerError = stringClaim(body.error) ?? `http_${response.status}`;
+    throw new OAuthProviderTokenError(providerError, response.status, stringClaim(body.error_description) ?? undefined);
+  }
+  if (stringClaim(body.error)) {
+    throw new OAuthProviderTokenError(
+      stringClaim(body.error) ?? 'token_error',
+      response.status,
+      stringClaim(body.error_description) ?? undefined,
+    );
+  }
+  return cloudflareTokenJsonToResponse(body);
+}
+
+export function cloudflareTokenJsonToResponse(input: unknown): oauth.TokenEndpointResponse {
+  if (!input || typeof input !== 'object') {
+    throw new Error('Cloudflare token endpoint returned an invalid JSON body.');
+  }
+
+  const body = input as Record<string, unknown>;
+  const accessToken = stringClaim(body.access_token);
+  if (!accessToken) throw new Error('Cloudflare token endpoint did not return an access token.');
+
+  const out: Record<string, oauth.JsonValue | undefined> = {
+    access_token: accessToken,
+    token_type: (stringClaim(body.token_type) ?? 'bearer').toLowerCase(),
+  };
+
+  const expiresIn = numberClaim(body.expires_in);
+  if (expiresIn !== null) out.expires_in = expiresIn;
+
+  const refreshToken = stringClaim(body.refresh_token);
+  if (refreshToken) out.refresh_token = refreshToken;
+
+  const scope = scopeClaim(body.scope);
+  if (scope) out.scope = scope;
+
+  for (const [key, value] of Object.entries(body)) {
+    if (key in out) continue;
+    if (isJsonValue(value)) out[key] = value;
+  }
+
+  return out as unknown as oauth.TokenEndpointResponse;
 }
 
 async function fetchCloudflareProfile(accessToken: string | undefined): Promise<OAuthProfile> {
@@ -347,6 +430,86 @@ function stringClaim(value: unknown): string | null {
 
 function boolClaim(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
+}
+
+function numberClaim(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function scopeClaim(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (Array.isArray(value)) {
+    const scopes = value
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map((item) => item.trim());
+    return scopes.length ? scopes.join(' ') : null;
+  }
+  return null;
+}
+
+async function readJsonObject(response: Response, label: string): Promise<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = await response.json();
+  } catch {
+    throw new Error(`${label} did not return JSON.`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${label} returned an invalid JSON body.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function summarizeOAuthFailure(error: unknown): { reason: string; log: string } {
+  if (error instanceof OAuthProviderTokenError) {
+    const reason = `provider_${sanitizeReason(error.providerError)}`;
+    return {
+      reason,
+      log: `${reason}${error.status ? ` status=${error.status}` : ''}${error.providerDescription ? ` description=${error.providerDescription}` : ''}`,
+    };
+  }
+  if (error instanceof oauth.ResponseBodyError) {
+    const reason = `provider_${sanitizeReason(error.error)}`;
+    return {
+      reason,
+      log: `${reason} status=${error.status}${error.error_description ? ` description=${error.error_description}` : ''}`,
+    };
+  }
+  if (error instanceof oauth.AuthorizationResponseError) {
+    const reason = `authorization_${sanitizeReason(error.error)}`;
+    return {
+      reason,
+      log: `${reason}${error.error_description ? ` description=${error.error_description}` : ''}`,
+    };
+  }
+  if (error instanceof oauth.WWWAuthenticateChallengeError) {
+    return { reason: 'www_authenticate_challenge', log: `www_authenticate_challenge status=${error.status}` };
+  }
+  if (error instanceof oauth.OperationProcessingError) {
+    return { reason: sanitizeReason(error.code ?? error.name), log: `${error.code ?? error.name}: ${error.message}` };
+  }
+  if (error instanceof Error) {
+    return { reason: sanitizeReason(error.name || 'error'), log: error.message };
+  }
+  return { reason: 'unknown_error', log: String(error) };
+}
+
+function sanitizeReason(value: string | undefined): string {
+  const cleaned = (value ?? 'unknown_error').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return cleaned || 'unknown_error';
+}
+
+function isJsonValue(value: unknown): value is oauth.JsonValue {
+  if (value === null) return true;
+  if (['string', 'number', 'boolean'].includes(typeof value)) return true;
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).every(isJsonValue);
+  return false;
 }
 
 function redirect(location: string, init: ResponseInit = {}): Response {

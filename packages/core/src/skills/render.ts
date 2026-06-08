@@ -15,7 +15,7 @@
  *   ### <skill-name> (<reason>)
  *   <body>
  *
- * `intersection` is the explicit `allowed_tools` lists of every active
+ * `restriction` is the explicit `allowed_tools` lists of every active
  * skill UNIONed together. Empty list = no restriction. The actual tool
  * gating happens at the runtime layer (see `tools/builtins.ts`), the
  * prompt just announces it so the LLM doesn't get confused about why a

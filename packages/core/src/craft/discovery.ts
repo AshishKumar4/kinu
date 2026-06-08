@@ -6,6 +6,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { upsertCraftedTool } from './conflict.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 
 /**
  * When a branch scores high (>0.8) and used codemode, try to generalize
@@ -22,22 +23,13 @@ export async function maybeStoreCraftedTool(
   // Ask LLM to generalize the pattern
   const generalized = await rt.llm.complete(
     `This JavaScript code was effective (score ${score.toFixed(2)}):\n\`\`\`js\n${codemodeCode}\n\`\`\`\n\n` +
-    `Rewrite as a parameterized reusable function. Return ONLY JSON:\n` +
-    `{"name":"snake_case","description":"one line","code":"async ({param1,param2}) => { ... }"}`,
+    `Rewrite as a parameterized reusable function.\n` +
+    `JSON shape: {"name":"snake_case","description":"one line","code":"async ({param1,param2}) => { ... }"}\n` +
+    jsonObjectOnlyInstruction(),
   );
 
   try {
-    // Find valid JSON by trying from each { position (handles nested braces in code field)
-    let parsed: { name?: string; description?: string; code?: string } = {};
-    const startIdx = generalized.indexOf('{');
-    if (startIdx >= 0) {
-      for (let end = generalized.length; end > startIdx; end--) {
-        if (generalized[end - 1] === '}') {
-          try { parsed = JSON.parse(generalized.slice(startIdx, end)); break; }
-          catch { continue; }
-        }
-      }
-    }
+    const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string };
     if (!parsed.name || !parsed.code) return;
 
     await upsertCraftedTool(rt, {

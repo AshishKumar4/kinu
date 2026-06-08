@@ -1,12 +1,13 @@
 /**
- * Union of models available to a user: always-on Workers AI + any
- * credential-gated providers they have connected.
+ * Union of models available to a user: Cloudflare OAuth-backed Workers AI +
+ * any credential-gated providers they have connected.
  *
  * UserDO knows which credentials exist; this module knows what models each
  * provider exposes. We don't construct any LanguageModel — we just describe
  * the menu for the UI's model picker.
  */
 import type { UserDO } from './user-do.js';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
 
 export interface ModelMenuEntry {
   /** Full spec — `<provider>/<modelId>`, used as the agent_config.model value. */
@@ -21,9 +22,8 @@ export interface ModelMenuEntry {
 
 const WORKERS_AI_MODELS: ModelMenuEntry[] = [
   { spec: 'workers-ai/@cf/moonshotai/kimi-k2.6',           label: 'Kimi K2.6',         provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  // MiniMax M3 — 1M-context partner model, routed via the env.AI binding. NOT
-  // free: needs a BYOK MiniMax key in the AI Gateway or gateway balance (else
-  // AiGatewayError 2021). Selectable; not the default until credentials exist.
+  // MiniMax M3 — 1M-context partner model. Availability and billing still flow
+  // through the user's Cloudflare OAuth account.
   { spec: 'workers-ai/minimax/m3',                         label: 'MiniMax M3 (1M ctx · BYOK/balance)', provider: 'workers-ai', capabilities: ['tools', 'streaming', 'reasoning'] },
   { spec: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',     label: 'Llama 4 Scout',     provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
   { spec: 'workers-ai/@cf/meta/llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick',  provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
@@ -32,9 +32,9 @@ const WORKERS_AI_MODELS: ModelMenuEntry[] = [
 
 const CODEX_MODELS: ModelMenuEntry[] = [
   { spec: 'codex/gpt-5.5',      label: 'GPT-5.5 (Codex)',      provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'codex/gpt-5',        label: 'GPT-5 (Codex)',        provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'codex/gpt-5-codex',  label: 'GPT-5 Codex',          provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning'] },
-  { spec: 'codex/gpt-5.5-mini', label: 'GPT-5.5 mini (Codex)', provider: 'codex', capabilities: ['tools', 'streaming'] },
+  { spec: 'codex/gpt-5.4',      label: 'GPT-5.4 (Codex)',      provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
+  { spec: 'codex/gpt-5.4-mini', label: 'GPT-5.4 mini (Codex)', provider: 'codex', capabilities: ['tools', 'streaming'] },
+  { spec: 'codex/gpt-5.3-codex', label: 'GPT-5.3 Codex',       provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning'] },
 ];
 
 const OPENAI_MODELS: ModelMenuEntry[] = [
@@ -64,8 +64,7 @@ export async function listAvailableModels(env: Env, userId: string): Promise<Mod
   const keys = new Set(creds.map((c) => c.key));
 
   const out: ModelMenuEntry[] = [];
-  // Workers AI is always on (binding present at the worker level).
-  if (env.AI) out.push(...WORKERS_AI_MODELS);
+  if (await stub.getCredentialBaseURL(CLOUDFLARE_OAUTH_CRED_KEY)) out.push(...WORKERS_AI_MODELS);
   if (keys.has('codex.oauth'))      out.push(...CODEX_MODELS);
   if (keys.has('openai.bearer'))    out.push(...OPENAI_MODELS);
   if (keys.has('anthropic.bearer')) out.push(...ANTHROPIC_MODELS);

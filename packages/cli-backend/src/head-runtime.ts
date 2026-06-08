@@ -16,7 +16,7 @@ import {
   type HeadRuntime, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
   type MergeStrategy, type VFS,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  HeadController, HeadJournal, initHeadsTables, budgetExhausted,
+  HeadController, HeadJournal, initHeadsTables, budgetExhausted, extractJsonObject,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { SqliteFS } from '@proteus/agent-utils/vfs';
@@ -222,7 +222,5 @@ function filterByAllowed(tools: ToolSet, allowed: readonly string[] | undefined)
  *  against MergeOutputSchema and falls back on a bad/throwing response. */
 async function mergeViaLLM(model: LanguageModel, prompt: string): Promise<MergeOutput> {
   const { text } = await generateText({ model, prompt, maxOutputTokens: 4096 });
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('merge LLM returned no JSON object');
-  return JSON.parse(match[0]) as MergeOutput;
+  return extractJsonObject(text) as MergeOutput;
 }

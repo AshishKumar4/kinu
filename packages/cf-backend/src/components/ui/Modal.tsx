@@ -30,7 +30,7 @@ export function Modal({ title, onClose, icon, children, footer, maxWidthClass = 
       onClick={onClose}
     >
       <div
-        className={`w-full ${maxWidthClass} rounded-xl border p-border p-elevated p-5 space-y-4 animate-fade-in`}
+        className={`w-full ${maxWidthClass} max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border p-border p-elevated p-4 sm:p-5 space-y-4 animate-fade-in`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

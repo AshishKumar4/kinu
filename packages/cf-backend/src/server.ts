@@ -28,6 +28,7 @@ import { handleCliRequest } from "./cli/routes.js";
 import { handleAuthRequest } from "./auth/routes.js";
 import { handleLandingRequest } from "./landing-route.js";
 import { handleHubRequest } from "./events/routes.js";
+import { handleNimbusPreviewRequest } from "./nimbus-route.js";
 import {
   authenticateRequest, AuthError, isPublicPath,
   type AuthIdentity,
@@ -48,6 +49,17 @@ export { OrchestratorAgent } from "./orchestrator.js";
 export { ExplorationAgent } from "./exploration.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
 export { UserDO } from "./user/user-do.js";
+export {
+  NimbusSession,
+  SupervisorRPC,
+  NimbusAssetsRPC,
+  NimbusLoaderRPC,
+  NimbusLoadedWorker,
+  NimbusLoadedEntrypoint,
+  NimbusDurableObjectNamespace,
+  NimbusDOStub,
+  CirrusHmrRPC,
+} from "@nimbus-sh/sdk/worker";
 
 function authError(request: Request, e: AuthError): Response {
   if (e.status === 401 && wantsHtml(request)) {
@@ -174,6 +186,9 @@ export default {
         status: 500, headers: { 'content-type': 'application/json' },
       });
     }
+
+    const nimbusResp = await handleNimbusPreviewRequest(request, env, identity.userId);
+    if (nimbusResp) return withD1Bookmark(nimbusResp, identity);
 
     // 9. /api/user/* — user-scoped routes.
     const userResp = await handleUserRequest(request, env, identity);

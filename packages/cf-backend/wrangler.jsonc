@@ -9,9 +9,9 @@
   // by its real flag name (e.g. `streaming_subrequests`).
   "compatibility_flags": ["nodejs_compat"],
   "worker_loaders": [{ "binding": "LOADER" }],
-  // Main site served by the custom domain. Sandbox preview URLs use the
-  // workers.dev subdomain (see PREVIEW_HOSTNAME) because workers.dev
-  // auto-resolves *.<worker>.<sub>.workers.dev without needing zone DNS.
+  // Main site served by the custom domain. Sandbox and Nimbus previews use
+  // authenticated path-style URLs on this same domain, so Proteus does not
+  // need per-agent subdomains or wildcard TLS/DNS.
   // custom_domain: true tells wrangler to auto-create the DNS record on
   // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
   // proxied DNS record on the zone (manual setup via the dashboard).
@@ -35,6 +35,10 @@
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by stable Proteus userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
+      // Nimbus SDK session DO. Used directly through Nimbus.fromEnv() — no
+      // endpoint/token secrets are required for Proteus's built-in Nimbus
+      // executor.
+      { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -59,9 +63,16 @@
     }
   ],
   "migrations": [
+    // Production's DO classes were registered together under v1 before launch.
+    // Keep this sequence stable; named environments below declare their own
+    // deployed class-registration history.
     {
       "tag": "v1",
       "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["NimbusSession"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
@@ -82,29 +93,21 @@
     "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
-    "CLOUDFLARE_OAUTH_SCOPES": "user-details.read",
-    "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_post",
+    "CLOUDFLARE_OAUTH_SCOPES": "user-details.read account-settings.read ai.write",
+    "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:
     //   GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET
     //   GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET
     //   CLOUDFLARE_OAUTH_CLIENT_ID / CLOUDFLARE_OAUTH_CLIENT_SECRET
-    // ── Nimbus — the default lightweight sandbox ─────────────────────
-    // A DO-backed Linux env (github.com/AshishKumar4/Nimbus), deployed at the
-    // custom domain below. Registered for every agent as the `nimbus` runtime —
-    // a first-class peer of `workspace` and `sandbox`, preferred for quick
-    // commands where a full container is overkill. NIMBUS_TOKEN is the HS256 JWT
-    // (issueNimbusToken()); set it as a secret only if the deployment enforces
-    // auth: `wrangler secret put NIMBUS_TOKEN`.
-    "NIMBUS_ENDPOINT": "https://nimbus.ashishkumarsingh.com"
+    // ── Nimbus — built-in lightweight sandbox ────────────────────────
+    // Uses the NIMBUS_SESSION Durable Object binding above through the
+    // official @nimbus-sh/sdk. No endpoint/token secrets are required.
   },
-  // Workers AI binding — the orchestrator's LLM resolver tries this FIRST,
-  // falling back to AI_GATEWAY_URL + AI_GATEWAY_AUTH only when env.AI is
-  // absent. With this binding present, no secret is required; Workers AI
-  // bills against the account directly. Powers chat LLM calls (Kimi K2.6,
-  // Llama 4 Scout) AND semantic-memory embeddings (bge-small-en-v1.5)
-  // when the Vectorize index below is also enabled.
+  // Workers AI binding — used for platform-side embeddings. Chat model calls
+  // use the logged-in user's Cloudflare OAuth credential so Workers AI usage
+  // bills to that user's Cloudflare account/quota.
   "ai": { "binding": "AI" },
   // R2 bucket for sandbox /workspace backups (squashfs archives). The SDK's
   // localBucket backup mode moves bytes straight through this binding — no
@@ -154,6 +157,7 @@
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
           { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
           { "class_name": "ProteusSandbox", "name": "Sandbox" }
         ]
       },
@@ -166,7 +170,10 @@
         }
       ],
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO"] }
+        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
+        { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
+        { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["NimbusSession"] }
       ],
       "ai": { "binding": "AI" },
       "r2_buckets": [
@@ -185,8 +192,7 @@
         "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
         "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
         "CLI_APPROVAL_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
-        "DEV_USER_EMAIL": "staging-tester@proteus.dev",
-        "NIMBUS_ENDPOINT": "https://nimbus.ashishkumarsingh.com"
+        "DEV_USER_EMAIL": "staging-tester@proteus.dev"
       }
     }
   }

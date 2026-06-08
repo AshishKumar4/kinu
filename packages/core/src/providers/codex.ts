@@ -22,9 +22,9 @@ export const CODEX_CRED_KEY = 'codex.oauth';
 
 const MODELS: ModelInfo[] = [
   { id: 'gpt-5.5',      label: 'GPT-5.5 (Codex)',      capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'gpt-5',        label: 'GPT-5 (Codex)',        capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { id: 'gpt-5-codex',  label: 'GPT-5 Codex',          capabilities: ['tools', 'streaming', 'reasoning'] },
-  { id: 'gpt-5.5-mini', label: 'GPT-5.5 mini (Codex)', capabilities: ['tools', 'streaming'] },
+  { id: 'gpt-5.4',      label: 'GPT-5.4 (Codex)',      capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini (Codex)', capabilities: ['tools', 'streaming'] },
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',       capabilities: ['tools', 'streaming', 'reasoning'] },
 ];
 
 export interface CodexProviderOptions {

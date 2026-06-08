@@ -1,5 +1,9 @@
 import { createChatModel, type LLMProviderConfig } from '@proteus/core';
 import {
+  CODEX_CRED_KEY,
+  codexAccessTokenExpiring,
+  codexCredentialToHeaders,
+  createCodexOAuthClient,
   createAnthropicProvider,
   createCodexProvider,
   createOpenAICompatProvider,
@@ -13,7 +17,11 @@ import {
   type ProviderInfo,
   type ProviderRegistry,
 } from '@proteus/core';
+import type { OAuthCredential } from '@proteus/core';
+import { generateText, streamText } from 'ai';
 import type { LanguageModel } from 'ai';
+import type { LLM } from '@proteus/core';
+import type { LocalCodexAuthStore } from './codex-auth-store.js';
 
 export interface LocalOpenAICompatCredential {
   baseURL: string;
@@ -27,6 +35,7 @@ export interface LocalProviderCredentials {
   anthropicApiKey?: string;
   openrouterApiKey?: string;
   codexAccessToken?: string;
+  codexOAuth?: OAuthCredential;
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
 }
 
@@ -40,7 +49,37 @@ export interface LocalModelResolver {
 export interface LocalModelResolverConfig {
   llm: LLMProviderConfig;
   credentials?: LocalProviderCredentials;
+  codexAuthStore?: LocalCodexAuthStore;
   fetch?: typeof fetch;
+  onCodexRefresh?: (credential: OAuthCredential) => void;
+}
+
+export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
+  const resolver = createLocalModelResolver(opts);
+  const maxOutputTokens = opts.llm.maxTokens ?? 2048;
+  const model = () => resolver.resolveModel(null);
+  return {
+    async *stream(input) {
+      const result = streamText({
+        model: model(),
+        system: input.system,
+        messages: input.messages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+        maxOutputTokens,
+      });
+      for await (const chunk of result.textStream) yield chunk;
+    },
+    async complete(prompt) {
+      const result = await generateText({
+        model: model(),
+        prompt,
+        maxOutputTokens,
+      });
+      return result.text.trim();
+    },
+  };
 }
 
 /**
@@ -55,7 +94,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const registry = createProviderRegistry();
   const localEndpoint = opts.llm;
   const credentials = opts.credentials ?? {};
-  const authStore = buildAuthStore(localEndpoint, credentials);
+  const authStore = buildAuthStore(localEndpoint, credentials, {
+    codexAuthStore: opts.codexAuthStore,
+    fetch: opts.fetch,
+    onCodexRefresh: opts.onCodexRefresh,
+  });
 
   const defaultProvider = defaultProviderFor(localEndpoint);
   if (defaultProvider === 'workers-ai') {
@@ -87,7 +130,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     env: {},
     fetch: opts.fetch,
     async getAuth(key, _authOpts) {
-      return authStore.get(key) ?? null;
+      return authStore.get(key, _authOpts);
     },
     async hasCredential(key) {
       return authStore.has(key);
@@ -155,8 +198,9 @@ function createGatewayBackedProvider(opts: {
   };
 }
 
-function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' {
+function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' {
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
+  if (llm.name === 'codex') return 'codex';
   if (llm.name === 'openai') return 'openai';
   if (llm.name === 'anthropic') return 'anthropic';
   if (llm.name === 'openrouter') return 'openrouter';
@@ -166,8 +210,17 @@ function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'openai' | '
 function buildAuthStore(
   localEndpoint: LLMProviderConfig,
   credentials: LocalProviderCredentials,
-): Map<string, AuthResolution> {
+  opts: {
+    codexAuthStore?: LocalCodexAuthStore;
+    fetch?: typeof fetch;
+    onCodexRefresh?: (credential: OAuthCredential) => void;
+  } = {},
+): {
+  has(key: string): boolean;
+  get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
+} {
   const store = new Map<string, AuthResolution>();
+  let codexCredential = credentials.codexOAuth;
 
   if (credentials.openaiApiKey) {
     store.set('openai.bearer', bearer(credentials.openaiApiKey));
@@ -202,14 +255,12 @@ function buildAuthStore(
     const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
     if (auth) store.set('openrouter.bearer', { headers: { Authorization: auth } });
   }
-  if (credentials.codexAccessToken) {
-    store.set('codex.oauth', bearer(credentials.codexAccessToken));
+  if (localEndpoint.name === 'openai-compat') {
+    store.set('openai-compat.default', {
+      headers: localEndpoint.headers,
+      baseURL: localEndpoint.baseURL,
+    });
   }
-
-  store.set('openai-compat.default', {
-    headers: localEndpoint.headers,
-    baseURL: localEndpoint.baseURL,
-  });
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
     const headers = {
@@ -223,7 +274,41 @@ function buildAuthStore(
     });
   }
 
-  return store;
+  return {
+    has(key: string): boolean {
+      if (key === CODEX_CRED_KEY && opts.codexAuthStore) return opts.codexAuthStore.hasCredential();
+      if (key === CODEX_CRED_KEY) return Boolean(codexCredential?.accessToken || credentials.codexAccessToken);
+      return store.has(key);
+    },
+    async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
+      if (key !== CODEX_CRED_KEY) return store.get(key) ?? null;
+      if (opts.codexAuthStore) return opts.codexAuthStore.getAuth(authOpts);
+      if (codexCredential?.accessToken) {
+        if (codexCredential.refreshToken && (authOpts?.forceRefresh || codexAccessTokenExpiring(codexCredential.accessToken))) {
+          const refreshed = await createCodexOAuthClient(opts.fetch).refresh(codexCredential.refreshToken);
+          codexCredential = {
+            kind: 'oauth',
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+            expiresAt: refreshed.expiresAt,
+            metadata: codexCredential.metadata,
+          };
+          opts.onCodexRefresh?.(codexCredential);
+        }
+        return { headers: codexCredentialToHeaders(codexCredential) };
+      }
+      if (credentials.codexAccessToken) {
+        return {
+          headers: codexCredentialToHeaders({
+            kind: 'oauth',
+            accessToken: credentials.codexAccessToken,
+            refreshToken: '',
+          }),
+        };
+      }
+      return null;
+    },
+  };
 }
 
 function bearer(token: string): AuthResolution {

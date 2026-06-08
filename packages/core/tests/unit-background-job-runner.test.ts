@@ -114,6 +114,24 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     expect(store.get(id)?.status).toBe('cancelled');        // NOT relabelled failed
     expect(enqueued).toHaveLength(0);                        // no synthesis wake
   });
+
+  test('cancelRunning aborts every running job and leaves settled jobs alone', async () => {
+    const { runner, store } = setup();
+    const c1 = new AbortController();
+    const c2 = new AbortController();
+    const id1 = runner.create('run', { one: true }, c1);
+    const id2 = runner.create('think', { two: true }, c2);
+    const done = runner.create('run', { done: true }, new AbortController());
+    store.settle(done, '"done"', Date.now());
+
+    expect(new Set(runner.cancelRunning())).toEqual(new Set([id1, id2]));
+
+    expect(store.get(id1)?.status).toBe('cancelled');
+    expect(store.get(id2)?.status).toBe('cancelled');
+    expect(store.get(done)?.status).toBe('completed');
+    expect(c1.signal.aborted).toBe(true);
+    expect(c2.signal.aborted).toBe(true);
+  });
 });
 
 describe('BackgroundJobRunner.recover — evict mid-flight', () => {

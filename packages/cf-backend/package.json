@@ -4,8 +4,9 @@
   "type": "module",
   "main": "src/server.ts",
   "scripts": {
-    "start": "vite dev",
-    "deploy": "vite build && wrangler deploy",
+    "start": "vite dev --host 0.0.0.0",
+    "deploy": "vite build && bash ../../scripts/build-cli-source-archive.sh && wrangler deploy",
+    "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },
   "dependencies": {
@@ -18,6 +19,8 @@
     "@cloudflare/sandbox": "^0.11.0",
     "@cloudflare/think": "^0.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nimbus-sh/sdk": "0.1.4",
+    "@nimbus-sh/worker": "0.1.5",
     "@phosphor-icons/react": "^2.1.10",
     "@proteus/agent-utils": "workspace:*",
     "@proteus/core": "workspace:*",

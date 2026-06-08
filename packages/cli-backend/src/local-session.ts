@@ -19,7 +19,7 @@ import type {
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
   HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
-  ProductChangeStore, ProductChangeToolDeps,
+  ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
@@ -34,6 +34,7 @@ import {
   HeadController, HeadJournal, initHeadsTables,
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
+  BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
@@ -144,6 +145,13 @@ interface QueueItem {
   metadata?: ProgrammaticTurn['metadata'];
   kind: 'user' | 'programmatic';
   resolve: () => void;
+}
+
+function promptModeForTurn(item: QueueItem): PromptMode {
+  const event = typeof item.metadata?.proteusEvent === 'string' ? item.metadata.proteusEvent : '';
+  if (event === 'background_job') return 'background_resume';
+  if (event.includes('timer') || event.includes('cron')) return 'cron';
+  return 'chat';
 }
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
@@ -421,6 +429,10 @@ export class LocalAgentSession implements BackendHost {
     try { return this.jobs.list(limit); } catch { return []; }
   }
 
+  cancelBackgroundJob(jobId: string): { ok: boolean } {
+    return { ok: this.jobRunner.cancel(jobId) };
+  }
+
   async proposeCurriculumTasks(count?: number) {
     return proposeNextTasks({
       rt: this.rt,
@@ -589,15 +601,27 @@ export class LocalAgentSession implements BackendHost {
     const model = this.ensureModelState();
 
     const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
-    const executorNames = (this.rt.executionRouter?.listExecutors() ?? []).map((e) => e.name);
+    const executors = this.rt.executionRouter?.listExecutors() ?? [];
     const activeSkills = await this.resolveTurnSkills(item.text);
+    // Skill-filtered built-ins + the connected MCP tools (always available).
+    const filteredBuiltins = this.filterToolsBySkills(activeSkills);
+    const turnTools = { ...filteredBuiltins, ...this.extraTools };
+    const availableBuiltins = Object.keys(filteredBuiltins).filter((name): name is BuiltinToolName =>
+      BUILTIN_TOOL_NAMES.has(name));
+    const externalTools = Object.keys(this.extraTools).map((name) => ({
+      name,
+      source: name.startsWith('tool_') ? 'mcp' as const : 'external' as const,
+    }));
     const systemPrompt = buildSystemPromptSync(this.rt, {
       extraKnowledge: knowledge || undefined,
-      registeredExecutors: executorNames,
+      executors,
+      availableTools: availableBuiltins,
+      externalTools,
+      backend: 'cli-local',
+      mode: promptModeForTurn(item),
+      model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       ...(activeSkills ? { activeSkills } : {}),
     }) + this.factsTail();
-    // Skill-filtered built-ins + the connected MCP tools (always available).
-    const turnTools = { ...this.filterToolsBySkills(activeSkills), ...this.extraTools };
 
     this.history.push({ role: 'user', content: item.text });
 
@@ -609,6 +633,7 @@ export class LocalAgentSession implements BackendHost {
     try {
       for await (const ev of runChat({
         model,
+        modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
         system: systemPrompt,
         history: this.history,
         tools: turnTools,
@@ -828,7 +853,7 @@ export class LocalAgentSession implements BackendHost {
         execute: (input: unknown, options: unknown) => {
           const controller = new AbortController();
           const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
+          const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
           const deps = this.jobRunner.thresholdDeps(key, input, controller);
           return withBackgroundThreshold(key, () => exec(input as never, { ...(options as object), abortSignal } as never), deps);
         },
@@ -915,6 +940,23 @@ export class LocalAgentSession implements BackendHost {
     });
     this.tools = this.wrapToolsForBackground(rawTools);
   }
+}
+
+function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (live.length === 1) return live[0];
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+  };
+  for (const signal of live) {
+    if (signal.aborted) {
+      abort(signal);
+      break;
+    }
+    signal.addEventListener('abort', () => abort(signal), { once: true });
+  }
+  return controller.signal;
 }
 
 /** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */

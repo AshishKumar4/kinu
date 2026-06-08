@@ -1,4 +1,5 @@
 import * as oauth from 'oauth4webapi';
+import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../lib/cloudflare-oauth.js';
 
 export type OAuthProviderId = 'google' | 'github' | 'cloudflare';
 
@@ -79,7 +80,7 @@ export function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProvide
     out.push({
       ...cloudflare,
       kind: 'oauth',
-      scopes: cleanScopes(env.CLOUDFLARE_OAUTH_SCOPES, 'user-details.read'),
+      scopes: cleanScopes(env.CLOUDFLARE_OAUTH_SCOPES, CLOUDFLARE_WORKERS_AI_SCOPES),
       issuer: 'https://dash.cloudflare.com',
       tokenAuthMethod: env.CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD === 'client_secret_post'
         ? 'client_secret_post'

@@ -117,7 +117,7 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
         options: { type: 'object', description: 'Advanced per-strategy tuning. Most callers leave unset.' },
       },
     }),
-    execute: async (input: ThinkInput) => {
+    execute: async (input: ThinkInput, toolOptions?: unknown) => {
       const strat = deps.registry.get(input.strategy);
       if (!strat) {
         return { error: `Unknown strategy "${input.strategy}". Available: ${strategies.join(', ')}` };
@@ -149,6 +149,7 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
         task: input.task,
         rt: deps.rt,
         model: deps.model,
+        signal: readAbortSignal(toolOptions),
         budget: {
           maxIterations: input.budget ?? 10,
           // Only set a wall-clock bound when the caller explicitly asks for one.
@@ -173,4 +174,12 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
       }
     },
   });
+}
+
+function readAbortSignal(options: unknown): AbortSignal | undefined {
+  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
+  const signal = (options as { abortSignal?: unknown }).abortSignal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

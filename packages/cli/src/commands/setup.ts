@@ -1,7 +1,12 @@
 import * as readline from 'node:readline';
+import {
+  createCodexOAuthClient,
+  decodeCodexAccountId,
+  tokensToCredential,
+} from '@proteus/core';
 import { loadConfigFile, saveConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
-import { authCommand } from './auth.js';
+import { authCommand, openBrowser } from './auth.js';
 
 export async function setupCommand(opts: {
   origin?: string;
@@ -9,26 +14,62 @@ export async function setupCommand(opts: {
   model?: string;
   yes?: boolean;
   skipCloud?: boolean;
+  localModel?: boolean;
 }): Promise<void> {
   console.log('');
   console.log(ACCENT('Proteus setup'));
-  console.log(DIM('Configure account login and local model credentials.'));
+  console.log(DIM('Connect your Proteus account. Local-only model credentials are optional.'));
   console.log('');
 
   const config = loadConfigFile();
+  let cloudReady = Boolean(config.accessToken);
+  let cloudSkipped = Boolean(opts.skipCloud);
   if (!opts.skipCloud && !config.accessToken) {
     const shouldLogin = opts.yes || await confirm('Sign in to your Proteus account now?', true);
-    if (shouldLogin) await authCommand({ origin: opts.origin });
+    if (shouldLogin) {
+      await authCommand({ origin: opts.origin });
+      cloudReady = Boolean(loadConfigFile().accessToken);
+    } else {
+      cloudSkipped = true;
+    }
   }
 
-  const provider = normalizeProvider(opts.provider ?? await chooseProvider());
+  const shouldConfigureLocalModel = opts.localModel || Boolean(opts.provider) || cloudSkipped || !cloudReady;
+  if (!shouldConfigureLocalModel) {
+    console.log(`${OK('✓')} Proteus account ready.`);
+    console.log(DIM('Cloud agents will use your signed-in Proteus account. For local-only agents, run proteus setup --local-model.'));
+    return;
+  }
+
+  const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'codex' : await chooseProvider()));
   if (provider === 'skip') {
     console.log(`${WARN('!')} Skipped local model setup.`);
-    console.log(DIM('Run proteus setup later before creating local agents.'));
+    console.log(DIM(cloudReady
+      ? 'Cloud agents remain ready. Run proteus setup --local-model later for local-only agents.'
+      : 'Run proteus setup later before creating agents.'));
     return;
   }
 
   const next = loadConfigFile();
+  if (provider === 'codex') {
+    const model = stripProviderPrefix(opts.model ?? await ask('Default Codex model', next.model?.startsWith('codex/') ? next.model.slice('codex/'.length) : 'gpt-5.5'), 'codex');
+    const credential = await runCodexDeviceFlow();
+    saveConfigFile(withProvider(next, {
+      model: `codex/${model}`,
+      providers: {
+        ...(next.providers ?? {}),
+        codex: {
+          accessToken: credential.accessToken,
+          refreshToken: credential.refreshToken,
+          expiresAt: credential.expiresAt,
+          metadata: credential.metadata,
+        },
+      },
+    }));
+    console.log(`${OK('✓')} Connected ChatGPT Codex subscription`);
+    return;
+  }
+
   if (provider === 'openai') {
     const key = await askSecret('OpenAI API key');
     const model = opts.model ?? await ask('Default model', next.model?.startsWith('openai/') ? next.model.slice('openai/'.length) : 'gpt-4o-mini');
@@ -100,23 +141,61 @@ function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' 
 
 async function chooseProvider(): Promise<string> {
   console.log(DIM('Local model provider:'));
-  console.log(`  ${ACCENT('1')} OpenAI`);
-  console.log(`  ${ACCENT('2')} OpenRouter`);
-  console.log(`  ${ACCENT('3')} Anthropic`);
-  console.log(`  ${ACCENT('4')} OpenAI-compatible`);
-  console.log(`  ${ACCENT('5')} Skip`);
+  console.log(`  ${ACCENT('1')} ChatGPT Codex subscription`);
+  console.log(`  ${ACCENT('2')} OpenAI API key`);
+  console.log(`  ${ACCENT('3')} OpenRouter`);
+  console.log(`  ${ACCENT('4')} Anthropic`);
+  console.log(`  ${ACCENT('5')} OpenAI-compatible`);
+  console.log(`  ${ACCENT('6')} Skip`);
   const value = await ask('Choice', '1');
   return value;
 }
 
-function normalizeProvider(value: string): 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'skip' {
+function normalizeProvider(value: string): 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'skip' {
   const v = value.trim().toLowerCase();
-  if (v === '1' || v === 'openai') return 'openai';
-  if (v === '2' || v === 'openrouter') return 'openrouter';
-  if (v === '3' || v === 'anthropic' || v === 'claude') return 'anthropic';
-  if (v === '4' || v === 'openai-compatible' || v === 'compat' || v === 'ollama') return 'openai-compatible';
-  if (v === '5' || v === 'skip' || v === 'none') return 'skip';
-  throw new Error('Provider must be openai, openrouter, anthropic, openai-compatible, or skip.');
+  if (v === '1' || v === 'codex' || v === 'chatgpt' || v === 'chatgpt-codex') return 'codex';
+  if (v === '2' || v === 'openai') return 'openai';
+  if (v === '3' || v === 'openrouter') return 'openrouter';
+  if (v === '4' || v === 'anthropic' || v === 'claude') return 'anthropic';
+  if (v === '5' || v === 'openai-compatible' || v === 'compat' || v === 'ollama') return 'openai-compatible';
+  if (v === '6' || v === 'skip' || v === 'none') return 'skip';
+  throw new Error('Provider must be codex, openai, openrouter, anthropic, openai-compatible, or skip.');
+}
+
+async function runCodexDeviceFlow() {
+  const client = createCodexOAuthClient();
+  const flow = await client.startDeviceFlow();
+  console.log('');
+  console.log(`${DIM('Open:')} ${ACCENT(flow.portalURL)}`);
+  console.log(`${DIM('Code:')} ${ACCENT(flow.userCode)}`);
+  console.log('');
+  openBrowser(flow.portalURL);
+
+  const deadline = Date.now() + 15 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await delay(Math.max(3, flow.pollIntervalSec) * 1000);
+    const tokens = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
+    if (!tokens) {
+      process.stdout.write('.');
+      continue;
+    }
+    console.log('');
+    const credential = tokensToCredential(tokens);
+    const accountId = decodeCodexAccountId(credential.accessToken);
+    return {
+      ...credential,
+      metadata: accountId ? { accountId } : credential.metadata,
+    };
+  }
+  throw new Error('Codex login expired. Run proteus setup again.');
+}
+
+function stripProviderPrefix(model: string, provider: string): string {
+  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function confirm(label: string, fallback: boolean): Promise<boolean> {

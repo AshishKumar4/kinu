@@ -1,380 +1,341 @@
 /**
- * NimbusExecutor — WebSocket client for github.com/AshishKumar4/Nimbus.
+ * Nimbus executor adapter.
  *
- * Nimbus is a Cloudflare-hosted Linux-like environment per Durable Object:
- *   • Full bash + 60+ POSIX commands
- *   • Native Node/Bun (via workerd), Python (Pyodide), Ruby (ruby.wasm)
- *   • 10 GB SQLite-backed VFS per session
- *   • Sub-500ms cold starts, $0 idle (DO hibernation)
- *
- * Public WebSocket protocol (per docs/RESEARCH_NOTES.md §C):
- *   • POST /new → 302 → /s/{sessionId}/
- *   • ws://{endpoint}/s/{sessionId}/ws
- *     ─ terminal:   {type:"input"|"resize", ...} → {type:"output", data}
- *     ─ filesystem: {type:"fs-read"|"fs-write"|"fs-list", reqId, ...}
- *                   → {type:"fs-*-result", reqId, ok, ...}
- *   • Auth: HS256 JWT via ?nimbus_token=<jwt>
- *
- * Shell exec strategy: terminal protocol doesn't return structured exit
- * codes, so we wrap each command with a sentinel marker:
- *   <user_cmd>; printf '\n__NIMBUS_DONE_<rid>_%s\n' $?
- * and consume `output` chunks until the sentinel matches.
- *
- * Namespace inside codemode sandbox: `nimbus.*`
+ * Core stays dependency-clean: the Cloudflare backend constructs the real
+ * @nimbus-sh/sdk sandbox handle with Nimbus.fromEnv(...).sandbox(...), then
+ * passes that handle here. This adapter only maps the handle's stable SDK
+ * shape into Proteus's ExecutorProvider contract.
  */
 
-import type { ExecutorProvider, ExecutorCapability } from './types.js';
+import type { ExecutorCapability, ExecutorProvider } from './types.js';
+
+export interface NimbusExecOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  stdin?: string;
+  signal?: AbortSignal;
+}
+
+type NimbusRunCodeOptions = NimbusExecOptions & {
+  language?: 'javascript' | 'typescript' | 'python' | 'ruby' | 'shell';
+  install?: 'never' | 'ifMissing';
+};
+
+export interface NimbusExecResult {
+  command: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  duration?: number;
+  timestamp?: number;
+}
+
+export interface NimbusStartResult extends NimbusExecResult {
+  pid?: number | null;
+  process?: unknown;
+  ports?: Array<{ port: number; pid?: number; registeredAt?: number }>;
+}
+
+export interface NimbusSandboxHandle {
+  ready(): Promise<void>;
+  exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
+  startProcess?(command: string, options?: NimbusExecOptions): Promise<NimbusStartResult>;
+  runCode?(code: string, options?: NimbusRunCodeOptions): Promise<NimbusExecResult>;
+  files: {
+    read(path: string): Promise<string | null>;
+    write(path: string, content: string | Uint8Array): Promise<void>;
+    list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
+    exists(path: string): Promise<boolean>;
+    mkdir?(path: string): Promise<void>;
+    delete(path: string, options?: { recursive?: boolean }): Promise<void>;
+  };
+  runtimes?: {
+    ensure?(specs: string | string[], options?: { force?: boolean }): Promise<unknown>;
+    install?(spec: string, options?: { force?: boolean }): Promise<unknown>;
+    list?(): Promise<unknown>;
+  };
+  processes?: {
+    list?(): Promise<unknown>;
+    kill?(pid: number): Promise<unknown>;
+    logs?(pid: number, options?: { lines?: number; bytes?: number }): Promise<unknown>;
+  };
+  ports?: {
+    expose?(port: number): Promise<{ port: number; url?: string; listening?: boolean; pid?: number | null; registeredAt?: number | null }>;
+    unexpose?(port: number): Promise<unknown>;
+    list?(): Promise<Array<{ port: number; url?: string; pid?: number; registeredAt?: number }>>;
+    url?(port: number): string | undefined;
+  };
+}
 
 export interface NimbusExecutorOpts {
-  /** Nimbus endpoint, e.g. "https://nimbus.example.workers.dev". No trailing slash. */
-  endpoint: string;
-  /** HS256 JWT issued via Nimbus's issueNimbusToken(). Required when Nimbus runs in 'enforce' mode. */
-  token?: string;
-  /**
-   * Existing session id to attach to. Omit to call POST /new on first
-   * connect() and remember the returned sessionId for subsequent calls.
-   */
-  sessionId?: string;
-  /** Override the WebSocket constructor (used for tests + Node compatibility). */
-  webSocketImpl?: typeof WebSocket;
-  /** Maximum wall-clock for any single exec, in milliseconds. Default 60s. */
-  execTimeoutMs?: number;
+  box?: NimbusSandboxHandle;
+  root?: string;
 }
 
 const NOT_CONFIGURED =
-  'Nimbus executor not configured. Call createNimbusExecutor({ endpoint, token?, sessionId? }) ' +
-  'with a reachable Nimbus deployment URL.';
+  'Nimbus executor not configured. Add the NIMBUS_SESSION Durable Object binding ' +
+  'and construct the executor with Nimbus.fromEnv(...).sandbox(...).';
 
-const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
-const FS_RPC_TIMEOUT_MS = 30_000;
-
-interface PendingFsOp {
-  resolve: (value: NimbusFsResult) => void;
-  reject: (err: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-interface PendingExec {
-  sentinel: string;
-  buffer: string;
-  resolve: (result: { stdout: string; stderr: string; exitCode: number }) => void;
-  reject: (err: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
+function normalizeExec(result: NimbusExecResult): string {
+  const stdout = result.stdout ?? '';
+  const stderr = result.stderr ?? '';
+  if (!result.success || result.exitCode !== 0) {
+    return `Exit ${result.exitCode}${stderr ? `\n${stderr}` : ''}${stdout ? `\n${stdout}` : ''}`.trim();
+  }
+  return stdout || stderr || '(no output)';
 }
 
-interface NimbusFsResult {
-  type: 'fs-read-result' | 'fs-write-result' | 'fs-list-result';
-  reqId: string | number;
-  ok: boolean;
-  error?: string;
-  content?: string;
-  files?: Array<{ name: string; isDir: boolean; size?: number }>;
+function stringifyResult(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
-/**
- * Create a NimbusExecutor backed by a Nimbus WebSocket session.
- *
- * Pass an `endpoint` (and optional `token`/`sessionId`) to enable real
- * operations. Without opts, returns stub-mode error messages.
- */
-export function createNimbusExecutor(opts?: NimbusExecutorOpts): ExecutorProvider {
-  const configured = opts != null;
-  let ws: WebSocket | null = null;
-  let connecting: Promise<void> | null = null;
-  let sessionId = opts?.sessionId ?? '';
-  let reqSeq = 0;
-  const pendingFs = new Map<string | number, PendingFsOp>();
-  const pendingExecs: PendingExec[] = [];
+export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorProvider {
+  const box = opts.box;
+  const configured = box != null;
+  const root = opts.root ?? '/home/user';
+  let active = false;
+  let lastError: string | undefined;
 
-  const execTimeoutMs = opts?.execTimeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
-
-  function nextReqId(): string {
-    return `r${++reqSeq}_${Date.now().toString(36)}`;
-  }
-
-  function buildWsUrl(sessId: string): string {
-    const u = new URL(`/s/${encodeURIComponent(sessId)}/ws`, opts!.endpoint);
-    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-    if (opts?.token) u.searchParams.set('nimbus_token', opts.token);
-    return u.toString();
-  }
-
-  async function createSession(): Promise<string> {
-    const url = new URL('/new', opts!.endpoint).toString();
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: opts?.token ? { Authorization: `Bearer ${opts.token}` } : {},
-      redirect: 'manual',
-    });
-    if (res.status === 302 || res.status === 303 || res.status === 307) {
-      const loc = res.headers.get('location');
-      const m = loc?.match(/\/s\/([^/?]+)/);
-      if (m) return m[1];
+  const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (!box) throw new Error(NOT_CONFIGURED);
+    active = true;
+    try {
+      const result = await fn();
+      lastError = undefined;
+      return result;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      throw err;
     }
-    if (res.ok) {
-      try {
-        const body = await res.json() as { sessionId?: string; id?: string };
-        if (body.sessionId) return body.sessionId;
-        if (body.id) return body.id;
-      } catch { /* fall through */ }
-    }
-    throw new Error(`Failed to create Nimbus session (status ${res.status})`);
-  }
-
-  function onMessage(raw: string): void {
-    let msg: { type?: string; reqId?: string | number; data?: string; ok?: boolean; error?: string; content?: string; files?: NimbusFsResult['files'] };
-    try { msg = JSON.parse(raw); } catch { return; }
-    if (!msg.type) return;
-
-    if (msg.type === 'fs-read-result' || msg.type === 'fs-write-result' || msg.type === 'fs-list-result') {
-      const reqId = msg.reqId;
-      if (reqId == null) return;
-      const pending = pendingFs.get(reqId);
-      if (!pending) return;
-      pendingFs.delete(reqId);
-      clearTimeout(pending.timeout);
-      // Narrow to NimbusFsResult — at this point we've already type-checked
-      // `msg.type` is one of the three fs-* result types and the shape of
-      // those messages matches the NimbusFsResult union by construction.
-      pending.resolve(msg as NimbusFsResult);
-      return;
-    }
-
-    if (msg.type === 'output' && typeof msg.data === 'string') {
-      for (const ex of pendingExecs) {
-        ex.buffer += msg.data;
-        const idx = ex.buffer.indexOf(ex.sentinel);
-        if (idx === -1) continue;
-        const rest = ex.buffer.slice(idx + ex.sentinel.length);
-        const m = rest.match(/^(\d+)/);
-        const exitCode = m ? Number(m[1]) : 0;
-        const stdout = ex.buffer.slice(0, idx).replace(/\r/g, '');
-        clearTimeout(ex.timeout);
-        const i = pendingExecs.indexOf(ex);
-        if (i >= 0) pendingExecs.splice(i, 1);
-        ex.resolve({ stdout, stderr: '', exitCode });
-      }
-    }
-  }
-
-  async function ensureConnected(): Promise<void> {
-    if (!configured) throw new Error(NOT_CONFIGURED);
-    if (ws && ws.readyState === 1) return;
-    if (connecting) return connecting;
-    connecting = (async () => {
-      if (!sessionId) sessionId = await createSession();
-      const url = buildWsUrl(sessionId);
-      const Ctor = opts?.webSocketImpl ?? (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
-
-      if (Ctor) {
-        const socket = new Ctor(url);
-        await new Promise<void>((resolve, reject) => {
-          const onOpen = () => { cleanup(); resolve(); };
-          const onErr = (e: Event) => { cleanup(); reject(new Error(`Nimbus WS error: ${(e as ErrorEvent).message ?? 'open failed'}`)); };
-          const onClose = () => { cleanup(); reject(new Error('Nimbus WS closed before open')); };
-          const cleanup = () => {
-            socket.removeEventListener('open', onOpen);
-            socket.removeEventListener('error', onErr);
-            socket.removeEventListener('close', onClose);
-          };
-          socket.addEventListener('open', onOpen);
-          socket.addEventListener('error', onErr);
-          socket.addEventListener('close', onClose);
-        });
-        socket.addEventListener('message', (e) =>
-          onMessage(typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data as ArrayBuffer)),
-        );
-        socket.addEventListener('close', () => { ws = null; });
-        ws = socket;
-        return;
-      }
-
-      // Cloudflare Workers style: fetch + Upgrade.
-      const res = await fetch(url, { headers: { Upgrade: 'websocket' } });
-      if (res.status !== 101) throw new Error(`Nimbus WS upgrade failed: ${res.status}`);
-      const wsObj = (res as Response & { webSocket?: WebSocket }).webSocket;
-      if (!wsObj) throw new Error('Nimbus WS upgrade: missing webSocket on response');
-      (wsObj as WebSocket & { accept(): void }).accept();
-      wsObj.addEventListener('message', (e: MessageEvent) =>
-        onMessage(typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data as ArrayBuffer)),
-      );
-      wsObj.addEventListener('close', () => { ws = null; });
-      ws = wsObj;
-    })();
-    try { await connecting; } finally { connecting = null; }
-  }
-
-  function sendOrThrow(payload: object): void {
-    if (!ws || ws.readyState !== 1) throw new Error('Nimbus WS not open');
-    ws.send(JSON.stringify(payload));
-  }
-
-  function fsRpc(payload: object, timeoutMs = FS_RPC_TIMEOUT_MS): Promise<NimbusFsResult> {
-    const reqId = nextReqId();
-    return new Promise<NimbusFsResult>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pendingFs.delete(reqId);
-        reject(new Error(`Nimbus FS RPC timeout: ${JSON.stringify(payload)}`));
-      }, timeoutMs);
-      pendingFs.set(reqId, { resolve, reject, timeout });
-      try {
-        sendOrThrow({ ...payload, reqId });
-      } catch (err) {
-        clearTimeout(timeout);
-        pendingFs.delete(reqId);
-        reject(err);
-      }
-    });
-  }
-
-  async function runExec(command: string, opts?: { cwd?: string; timeoutMs?: number }): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    await ensureConnected();
-    const sentinelId = nextReqId();
-    const sentinel = `__NIMBUS_DONE_${sentinelId}_`;
-    const wrapped = opts?.cwd
-      ? `cd ${shellQuote(opts.cwd)} && (${command}); printf '\\n${sentinel}%s\\n' $?\n`
-      : `(${command}); printf '\\n${sentinel}%s\\n' $?\n`;
-
-    return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-      const timeoutMs = opts?.timeoutMs ?? execTimeoutMs;
-      const ex: PendingExec = {
-        sentinel,
-        buffer: '',
-        resolve,
-        reject,
-        timeout: setTimeout(() => {
-          const i = pendingExecs.indexOf(ex);
-          if (i >= 0) pendingExecs.splice(i, 1);
-          try { sendOrThrow({ type: 'input', data: '\x03' }); } catch { /* nop */ }
-          resolve({ stdout: ex.buffer, stderr: `Nimbus exec timeout after ${timeoutMs}ms`, exitCode: 124 });
-        }, timeoutMs),
-      };
-      pendingExecs.push(ex);
-      try {
-        sendOrThrow({ type: 'input', data: wrapped });
-      } catch (err) {
-        clearTimeout(ex.timeout);
-        const i = pendingExecs.indexOf(ex);
-        if (i >= 0) pendingExecs.splice(i, 1);
-        reject(err);
-      }
-    });
-  }
+  };
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
-      description:
-        'Run a shell command in the Nimbus development environment. ' +
-        'Supports 60+ POSIX commands, npm, node, git, esbuild, vite.',
-      execute: async (command: unknown): Promise<string> => {
-        if (!configured) return NOT_CONFIGURED;
+      description: 'Run a shell command in the Nimbus development environment.',
+      execute: async (command: unknown, context?: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        const signal = readAbortSignal(context);
         try {
-          const r = await runExec(String(command));
-          if (r.exitCode !== 0) return `Exit ${r.exitCode}${r.stderr ? ': ' + r.stderr : ''}`;
-          return r.stdout || '(no output)';
+          return normalizeExec(await touch(() => box.exec(String(command), signal ? { signal } : undefined)));
         } catch (err) {
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
-
-    readFile: {
-      description: 'Read a file from the Nimbus development filesystem.',
-      execute: async (path: unknown): Promise<unknown> => {
-        if (!configured) return NOT_CONFIGURED;
+    runCode: {
+      description: 'Run code in Nimbus using the requested language runtime.',
+      execute: async (code: unknown, options?: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.runCode) return 'runCode error: Nimbus SDK handle does not expose runCode';
         try {
-          await ensureConnected();
-          const r = await fsRpc({ type: 'fs-read', path: String(path) });
-          if (!r.ok) return r.error ?? `File not found: ${path}`;
-          return r.content ?? '';
+          return normalizeExec(await touch(() => box.runCode!(String(code), options as NimbusRunCodeOptions)));
+        } catch (err) {
+          return `runCode error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    readFile: {
+      description: 'Read a file from the Nimbus filesystem.',
+      execute: async (path: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        try {
+          return await touch(() => box.files.read(String(path))) ?? '';
         } catch (err) {
           return `readFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
-
     writeFile: {
-      description: 'Write a file to the Nimbus development filesystem.',
+      description: 'Write a file to the Nimbus filesystem.',
       execute: async (path: unknown, content: unknown): Promise<string> => {
-        if (!configured) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED;
         try {
-          await ensureConnected();
-          const body = String(content);
-          const r = await fsRpc({ type: 'fs-write', path: String(path), content: body });
-          if (!r.ok) return `writeFile failed: ${r.error ?? 'unknown error'}`;
+          const body = typeof content === 'string' ? content : JSON.stringify(content);
+          await touch(() => box.files.write(String(path), body));
           return `Written ${body.length} bytes to ${path}`;
         } catch (err) {
           return `writeFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
-
-    readdir: {
-      description: 'List directory contents in the Nimbus filesystem.',
-      execute: async (path: unknown): Promise<unknown> => {
-        if (!configured) return NOT_CONFIGURED;
+    listFiles: {
+      description: 'List directory contents in Nimbus.',
+      execute: async (path: unknown = root): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
         try {
-          await ensureConnected();
-          const r = await fsRpc({ type: 'fs-list', dir: String(path || '/') });
-          if (!r.ok) return `readdir failed: ${r.error ?? path}`;
-          return (r.files ?? []).map((f) => `${f.isDir ? 'd' : '-'} ${f.name}${f.size != null ? ` (${f.size}b)` : ''}`).join('\n');
+          const entries = await touch(() => box.files.list(String(path || root)));
+          return entries.map((f) => `${(f.isDir ?? (f.type === 'directory' || f.type === 'dir')) ? 'd' : '-'} ${f.name}${f.size != null ? ` (${f.size}b)` : ''}`).join('\n');
         } catch (err) {
-          return `readdir error: ${err instanceof Error ? err.message : String(err)}`;
+          return `listFiles error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
-
+    readdir: {
+      description: 'Alias for listFiles.',
+      execute: async (path: unknown = root): Promise<string> => tools.listFiles.execute(path) as Promise<string>,
+    },
     exists: {
-      description: 'Check if a path exists in the Nimbus filesystem.',
-      execute: async (path: unknown): Promise<unknown> => {
-        if (!configured) return false;
+      description: 'Check whether a path exists in Nimbus.',
+      execute: async (path: unknown): Promise<boolean | string> => {
+        if (!box) return NOT_CONFIGURED;
         try {
-          const r = await runExec(`test -e ${shellQuote(String(path))} && echo yes || echo no`);
-          return r.stdout.trim().endsWith('yes');
-        } catch { return false; }
+          return await touch(() => box.files.exists(String(path)));
+        } catch {
+          return false;
+        }
       },
     },
-
     stat: {
-      description: 'Get file/directory metadata from the Nimbus filesystem.',
-      execute: async (path: unknown): Promise<unknown> => {
-        if (!configured) return NOT_CONFIGURED;
+      description: 'Get file or directory metadata from Nimbus.',
+      execute: async (path: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
         try {
-          // BSD/GNU stat differ; this matches Linux. Nimbus runs Linux containers.
-          const r = await runExec(`stat -c "%s %Y %F" ${shellQuote(String(path))}`);
-          if (r.exitCode !== 0) return `Not found: ${path}`;
-          const [size, mtime, ...kindParts] = r.stdout.trim().split(' ');
-          return `${kindParts.join(' ')} size=${size} mtime=${mtime}`;
+          const result = await touch(() => box.exec(`stat -c "%s %Y %F" ${shellQuote(String(path))}`));
+          return normalizeExec(result);
         } catch (err) {
           return `stat error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
-
     mkdir: {
-      description: 'Create a directory in the Nimbus filesystem (recursive).',
+      description: 'Create a directory in Nimbus.',
       execute: async (path: unknown): Promise<string> => {
-        if (!configured) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED;
         try {
-          const r = await runExec(`mkdir -p ${shellQuote(String(path))}`);
-          if (r.exitCode !== 0) return `mkdir failed: ${r.stderr}`;
+          if (box.files.mkdir) await touch(() => box.files.mkdir!(String(path)));
+          else await touch(() => box.exec(`mkdir -p ${shellQuote(String(path))}`));
           return `Created ${path}`;
         } catch (err) {
           return `mkdir error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
-
     rm: {
-      description: 'Delete a file from the Nimbus filesystem.',
+      description: 'Delete a file or directory in Nimbus.',
       execute: async (path: unknown): Promise<string> => {
-        if (!configured) return NOT_CONFIGURED;
+        if (!box) return NOT_CONFIGURED;
         try {
-          const r = await runExec(`rm -rf ${shellQuote(String(path))}`);
-          if (r.exitCode !== 0) return `rm failed: ${r.stderr}`;
+          await touch(() => box.files.delete(String(path), { recursive: true }));
           return `Deleted ${path}`;
         } catch (err) {
           return `rm error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    startProcess: {
+      description: 'Start a long-running process in Nimbus.',
+      execute: async (command: unknown, options?: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.startProcess) return 'startProcess error: Nimbus SDK handle does not expose startProcess';
+        try {
+          return stringifyResult(await touch(() => box.startProcess!(String(command), options as NimbusExecOptions)));
+        } catch (err) {
+          return `startProcess error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    killProcess: {
+      description: 'Kill a Nimbus process by pid.',
+      execute: async (input: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.processes?.kill) return 'killProcess error: Nimbus SDK handle does not expose process control';
+        const pid = typeof input === 'number' ? input : Number((input as { pid?: unknown })?.pid);
+        if (!Number.isFinite(pid)) return `killProcess error: invalid pid ${stringifyResult(input)}`;
+        try {
+          return stringifyResult(await touch(() => box.processes!.kill!(pid)));
+        } catch (err) {
+          return `killProcess error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    logs: {
+      description: 'Read Nimbus process logs.',
+      execute: async (input: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.processes?.logs) return 'logs error: Nimbus SDK handle does not expose process logs';
+        const pid = typeof input === 'number' ? input : Number((input as { pid?: unknown })?.pid);
+        if (!Number.isFinite(pid)) return `logs error: invalid pid ${stringifyResult(input)}`;
+        try {
+          return stringifyResult(await touch(() => box.processes!.logs!(pid, typeof input === 'number' ? {} : input as { lines?: number; bytes?: number })));
+        } catch (err) {
+          return `logs error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    exposePort: {
+      description: 'Expose an HTTP-like port from Nimbus and return its preview URL.',
+      execute: async (input: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.ports?.expose) return 'exposePort error: Nimbus SDK handle does not expose ports';
+        const port = typeof input === 'number' ? input : Number((input as { port?: unknown })?.port ?? input);
+        if (!Number.isFinite(port) || port <= 0 || port > 65535) return `exposePort error: invalid port ${stringifyResult(input)}`;
+        try {
+          const result = await touch(() => box.ports!.expose!(port));
+          return result.url ?? box.ports?.url?.(port) ?? stringifyResult(result);
+        } catch (err) {
+          return `exposePort error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    unexposePort: {
+      description: 'Stop exposing a Nimbus port.',
+      execute: async (input: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.ports?.unexpose) return 'unexposePort error: Nimbus SDK handle does not expose ports';
+        const port = typeof input === 'number' ? input : Number((input as { port?: unknown })?.port ?? input);
+        if (!Number.isFinite(port)) return `unexposePort error: invalid port ${stringifyResult(input)}`;
+        try {
+          await touch(() => box.ports!.unexpose!(port));
+          return `unexposed ${port}`;
+        } catch (err) {
+          return `unexposePort error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    listPorts: {
+      description: 'List Nimbus exposed ports.',
+      execute: async (): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.ports?.list) return '[]';
+        try {
+          const ports = await touch(() => box.ports!.list!());
+          return JSON.stringify(ports.map((p) => ({ ...p, url: p.url ?? box.ports?.url?.(p.port) })));
+        } catch (err) {
+          return `listPorts error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    installRuntime: {
+      description: 'Install or ensure a Nimbus runtime such as python, bun, or clang.',
+      execute: async (spec: unknown): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        try {
+          if (box.runtimes?.install) await touch(() => box.runtimes!.install!(String(spec)));
+          else if (box.runtimes?.ensure) await touch(() => box.runtimes!.ensure!(String(spec)));
+          else return 'installRuntime error: Nimbus SDK handle does not expose runtime installation';
+          return `installed ${spec}`;
+        } catch (err) {
+          return `installRuntime error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    },
+    listRuntimes: {
+      description: 'List Nimbus runtimes.',
+      execute: async (): Promise<string> => {
+        if (!box) return NOT_CONFIGURED;
+        if (!box.runtimes?.list) return 'listRuntimes error: Nimbus SDK handle does not expose runtime listing';
+        try {
+          return stringifyResult(await touch(() => box.runtimes!.list!()));
+        } catch (err) {
+          return `listRuntimes error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     },
@@ -384,64 +345,70 @@ export function createNimbusExecutor(opts?: NimbusExecutorOpts): ExecutorProvide
     name: 'nimbus',
     kind: 'nimbus',
     capabilities: new Set<ExecutorCapability>([
-      'javascript', 'typescript', 'shell', 'npm', 'git',
-      'fs_owned', 'net_outbound', 'net_inbound', 'process_spawn', 'process_long',
+      'javascript', 'typescript', 'python', 'native_binary', 'shell', 'npm', 'git',
+      'fs_owned', 'net_outbound', 'net_inbound', 'process_spawn', 'process_long', 'process_signal',
     ]),
-    isAvailable: () => configured && (ws == null || ws.readyState <= 1),
-    connect: async () => {
-      if (!configured) throw new Error(NOT_CONFIGURED);
-      await ensureConnected();
-    },
-    disconnect: async () => {
-      try { ws?.close(); } catch { /* nop */ }
-      ws = null;
-      for (const ex of pendingExecs) {
-        clearTimeout(ex.timeout);
-        ex.reject(new Error('Nimbus disconnected'));
-      }
-      pendingExecs.length = 0;
-      for (const [, op] of pendingFs) {
-        clearTimeout(op.timeout);
-        op.reject(new Error('Nimbus disconnected'));
-      }
-      pendingFs.clear();
-    },
+    isAvailable: () => configured,
+    getStatus: () => ({
+      configured,
+      available: configured,
+      active,
+      status: configured ? (lastError ? 'error' : active ? 'active' : 'idle') : 'not_configured',
+      ...(lastError ? { reason: lastError } : configured ? {} : { reason: NOT_CONFIGURED }),
+    }),
+    connect: async () => { if (!box) throw new Error(NOT_CONFIGURED); await touch(() => box.ready()); },
+    disconnect: async () => { active = false; },
     tools,
     types: `declare namespace nimbus {
-  /** Run a shell command (60+ POSIX commands, npm, node, git, esbuild, vite) */
   function exec(command: string): Promise<string>;
-  /** Read a file from the Nimbus development filesystem */
+  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string>;
   function readFile(path: string): Promise<string>;
-  /** Write a file to the Nimbus development filesystem */
   function writeFile(path: string, content: string): Promise<string>;
-  /** List directory contents */
-  function readdir(path: string): Promise<string>;
-  /** Check if a path exists */
+  function listFiles(path?: string): Promise<string>;
+  function readdir(path?: string): Promise<string>;
   function exists(path: string): Promise<boolean>;
-  /** Get file/directory metadata */
   function stat(path: string): Promise<string>;
-  /** Create a directory (recursive) */
   function mkdir(path: string): Promise<string>;
-  /** Delete a file */
   function rm(path: string): Promise<string>;
+  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string>;
+  function killProcess(pid: number | { pid: number }): Promise<string>;
+  function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
+  function exposePort(port: number | { port: number }): Promise<string>;
+  function unexposePort(port: number | { port: number }): Promise<string>;
+  function listPorts(): Promise<string>;
+  function installRuntime(spec: string): Promise<string>;
+  function listRuntimes(): Promise<string>;
 }`,
     positionalArgs: true,
-    // Nimbus runs over a WebSocket-tunnelled DO session — there's no
-    // inbound-port surface to expose. Use `sandbox` for anything that
-    // needs a previewable URL.
     async exposePort(port: number) {
+      if (!box?.ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
+      const result = await touch(() => box.ports!.expose!(port));
       return {
-        supported: false,
-        reason:
-          `nimbus executor uses a WebSocket-tunnelled session and cannot expose inbound TCP ports. ` +
-          `Use the 'sandbox' executor instead for port ${port}.`,
+        supported: true,
+        port,
+        url: result.url ?? box.ports?.url?.(port) ?? '',
+        verified_listening: result.listening ?? false,
       };
     },
-    async unexposePort() { /* nothing to do */ },
-    async listExposedPorts() { return []; },
+    async unexposePort(port: number) {
+      if (box?.ports?.unexpose) await touch(() => box.ports!.unexpose!(port));
+    },
+    async listExposedPorts() {
+      if (!box?.ports?.list) return [];
+      const ports = await touch(() => box.ports!.list!());
+      return ports.map((p) => ({
+        port: p.port,
+        url: p.url ?? box.ports?.url?.(p.port) ?? '',
+        status: 'unknown' as const,
+      })).filter((p) => p.url);
+    },
   };
 }
 
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
+function readAbortSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
+  const signal = (context as { signal?: unknown }).signal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

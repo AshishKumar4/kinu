@@ -522,6 +522,25 @@ export default function WorkspacePage() {
     prevPortCountRef.current = n;
   }, [state.pinnedPorts.length]);
 
+  // Port discovery is a real executor operation for some backends. Keep it
+  // scoped to the user-visible surfaces instead of polling from every page.
+  useEffect(() => {
+    if (state.connectionStatus !== "connected") return;
+    if (surface !== "Devices" && surface !== "Output") return;
+    const sandboxActive = state.executors.some((e) => e.name === "sandbox" && e.active);
+    if (!sandboxActive && state.pinnedPorts.length === 0) return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (!cancelled) await state.refreshPinnedPorts();
+    };
+    void refresh();
+    const id = window.setInterval(refresh, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [surface, state.connectionStatus, state.executors, state.pinnedPorts.length, state.refreshPinnedPorts]);
+
   // A timeline span drives the work surface (Column C): pin the selection and,
   // when the span maps to a specific surface, switch to it. Turning off Follow
   // so the spine stops auto-scrolling while the user inspects.

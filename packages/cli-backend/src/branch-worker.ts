@@ -12,8 +12,9 @@
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import type { CraftedTool, LLMProviderConfig } from '@proteus/core';
+import { extractJsonObject, jsonObjectOnlyInstruction, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
+import { createFileCodexAuthStore } from './codex-auth-store.js';
 
 const dbPath = process.argv[2];
 if (!dbPath) {
@@ -32,7 +33,13 @@ const llmConfig: LLMProviderConfig = {
 
 const modelResolver = createLocalModelResolver({
   llm: llmConfig,
-  credentials: readJson<LocalProviderCredentials>(process.env.PROTEUS_PROVIDER_CREDENTIALS) ?? {},
+  credentials: {
+    ...(readJson<LocalProviderCredentials>(process.env.PROTEUS_PROVIDER_CREDENTIALS) ?? {}),
+    ...(process.env.CODEX_ACCESS_TOKEN ? { codexAccessToken: process.env.CODEX_ACCESS_TOKEN } : {}),
+  },
+  codexAuthStore: process.env.PROTEUS_CONFIG_PATH
+    ? createFileCodexAuthStore(process.env.PROTEUS_CONFIG_PATH)
+    : undefined,
 });
 
 // Open the branch's SQLite DB for trace storage
@@ -86,13 +93,13 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         const { task } = msg.args as { task: string };
         const response = await complete(
           `Rate this approach for effectiveness (0.0-1.0):\n${task.slice(0, 500)}\n\n` +
-          `Respond ONLY with JSON: {"score": <float>, "reason": "<5 words>"}`
+          `JSON shape: {"score": <float>, "reason": "<5 words>"}\n${jsonObjectOnlyInstruction()}`
         );
         try {
-          const m = response.match(/\{[^}]+\}/);
-          const parsed = JSON.parse(m?.[0] ?? '{"score":0.5}');
-          result = Math.min(1, Math.max(0, Number(parsed.score) || 0.5));
-        } catch { result = 0.5; }
+          const parsed = extractJsonObject(response) as { score?: unknown };
+          const score = Number(parsed.score);
+          result = Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0;
+        } catch { result = 0; }
         break;
       }
       case 'reflect': {

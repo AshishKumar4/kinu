@@ -10,29 +10,9 @@
 
 import { generateText, type LanguageModel } from "ai";
 import * as v from "valibot";
+import { extractJsonObject, jsonObjectOnlyInstruction } from "@proteus/core";
 
-const FENCE = /```(?:json)?\s*([\s\S]*?)```/i;
-
-/** Extract the first balanced JSON object from model text (tolerates ```json
- *  fences and surrounding prose). Throws if none is present/terminated. */
-export function extractJsonObject(text: string): unknown {
-  const fenced = text.match(FENCE);
-  const src = fenced ? fenced[1] : text;
-  const start = src.indexOf("{");
-  if (start === -1) throw new Error("no JSON object in model output");
-  let depth = 0, inStr = false, esc = false;
-  for (let i = start; i < src.length; i++) {
-    const c = src[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-    } else if (c === '"') inStr = true;
-    else if (c === "{") depth++;
-    else if (c === "}" && --depth === 0) return JSON.parse(src.slice(start, i + 1));
-  }
-  throw new Error("unterminated JSON object in model output");
-}
+export { extractJsonObject };
 
 /** Generate a schema-validated object from a model via plain text + JSON parse.
  *  Throws on malformed output or schema mismatch — callers handle the failure
@@ -48,7 +28,7 @@ export async function generateJson<TOutput>(opts: {
     model: opts.model,
     prompt:
       opts.prompt +
-      "\n\nReturn ONLY a single minified JSON object — no markdown fences, no prose before or after.",
+      `\n\n${jsonObjectOnlyInstruction()}`,
     maxOutputTokens: opts.maxOutputTokens ?? 4096,
     ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
   });

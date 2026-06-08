@@ -1,5 +1,6 @@
 import { AuthError, authenticateRequest } from './auth/session.js';
 import { buildCliInstallCommand } from './cli/install-command.js';
+import { publicHtmlHeaders } from './lib/security-headers.js';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
@@ -421,13 +422,6 @@ function escapeHtml(value: string): string {
 
 function landingInit(): ResponseInit {
   return {
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'private, no-store',
-      'referrer-policy': 'strict-origin-when-cross-origin',
-      'x-frame-options': 'DENY',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
-    },
+    headers: publicHtmlHeaders(),
   };
 }

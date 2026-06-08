@@ -1,9 +1,11 @@
-// Workers AI provider — uses the `env.AI` binding (Cloudflare-billed, no API key).
-// CF-specific: depends on the `Ai` global from @cloudflare/workers-types, which
-// is why this lives in cf-backend rather than core.
-import { createWorkersAI } from 'workers-ai-provider';
+// Workers AI provider — uses the logged-in user's Cloudflare OAuth credential.
+// The model is constructed synchronously; the account-scoped base URL and
+// bearer token are resolved from UserDO inside customFetch on each request.
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
+import { asFetchFunction } from '@proteus/core';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
 
 const MODELS: ModelInfo[] = [
   { id: '@cf/moonshotai/kimi-k2.6',                       label: 'Kimi K2.6',            capabilities: ['tools', 'streaming'] },
@@ -30,23 +32,45 @@ export function agentAffinityKey(name: string): string {
   return `proteus-${name}`;
 }
 
-export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvider {
+export function createWorkersAIProvider(_opts: WorkersAIOptions = {}): ModelProvider {
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
     defaultModel: '@cf/moonshotai/kimi-k2.6',
-    isAvailable: deps => !!deps.env.AI && typeof deps.env.AI !== 'string',
-    unavailableReason: () => 'env.AI binding missing (`"ai": { "binding": "AI" }` in wrangler.jsonc).',
+    async isAvailable(deps) {
+      const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
+      return !!auth?.baseURL;
+    },
+    unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
     listModels: () => MODELS,
     createModel(modelId, deps): LanguageModel {
-      const binding = deps.env.AI;
-      if (!binding || typeof binding === 'string') {
-        throw new Error('Workers AI provider invoked without env.AI binding.');
-      }
-      // `binding` is the Cloudflare `Ai` runtime object — structurally what
-      // workers-ai-provider's factory accepts as its `binding` parameter.
-      const factory = createWorkersAI({ binding: binding as Ai });
-      return factory(modelId, opts.sessionAffinity ? { sessionAffinity: opts.sessionAffinity } : {});
+      const baseFetch = deps.fetch ?? fetch;
+      const placeholder = 'https://proteus-workers-ai.invalid';
+      const customFetch = asFetchFunction(async (input, init) => {
+        const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
+        if (!auth?.baseURL) {
+          return new Response(
+            JSON.stringify({ error: 'Cloudflare login is required before using Workers AI models.' }),
+            { status: 401, headers: { 'content-type': 'application/json' } },
+          );
+        }
+
+        const headers = new Headers(init?.headers);
+        for (const [key, value] of Object.entries(auth.headers)) headers.set(key, value);
+        const originalUrl = typeof input === 'string' ? input
+          : input instanceof URL ? input.toString()
+            : input.url;
+        const url = originalUrl.startsWith(placeholder)
+          ? auth.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
+          : originalUrl;
+        return baseFetch(url, { ...init, headers });
+      });
+
+      return createOpenAICompatible({
+        name: 'workers-ai',
+        baseURL: placeholder,
+        fetch: customFetch,
+      }).chatModel(modelId);
     },
   };
 }

@@ -112,6 +112,18 @@ export class BackgroundJobRunner {
     return true;
   }
 
+  /** Cancel all currently-running jobs, newest first. Used by visible Stop
+   *  controls that should cancel detached work instead of only stopping the
+   *  browser stream. */
+  cancelRunning(): string[] {
+    const cancelled: string[] = [];
+    for (const job of this.deps.store.list(100)) {
+      if (job.status !== 'running') continue;
+      if (this.cancel(job.id)) cancelled.push(job.id);
+    }
+    return cancelled;
+  }
+
   /** Recover an orphaned job after its fiber was evicted mid-flight (called from
    *  the backend's onFiberRecovered for bg:* fibers). Only a job stashed
    *  'running' is orphaned — one 'settled' already recorded its outcome + woke. */

@@ -9,7 +9,7 @@
  * Uses real Agent SDK APIs for infrastructure:
  *   Fibers   → Agent.runFiber() (durable, checkpoint/resume via stash)
  *   Branches → Agent.subAgent() (Facets — co-located child DOs)
- *   LLM      → Workers AI binding or AI Gateway fallback
+ *   LLM      → provider registry (Workers AI uses the user's Cloudflare OAuth)
  */
 
 import type {
@@ -23,14 +23,17 @@ import type {
 import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
-  createNimbusExecutor,
+  createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
   createAgentConfigStore,
+  extractJsonObject,
+  jsonObjectOnlyInstruction,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
+import { Nimbus } from "@nimbus-sh/sdk";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
@@ -43,6 +46,12 @@ import { ExplorationAgent } from "./exploration.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { agentAffinityKey } from "./providers/workers-ai.js";
 import type { UserDO } from "./user/user-do.js";
+import {
+  nimbusSandboxConfig,
+  nimbusSandboxIdForAgent,
+  nimbusSubjectForAgent,
+  nimbusTenantForUser,
+} from "./nimbus-route.js";
 
 /**
  * The agent surface these runtime builders need. `env`/`ctx` are `protected`
@@ -155,11 +164,13 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
-      const handle = getSandbox(
+      const rawHandle = getSandbox(
         env.Sandbox as Parameters<typeof getSandbox>[0],
         sandboxId,
         { normalizeId: true },
       ) as unknown as SandboxHandle;
+      const configStore = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
+      const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
       console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
@@ -172,28 +183,21 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     executionRouter.register(createSandboxExecutor());
   }
 
-  // Register Nimbus — the default lightweight sandbox. Registered for every
-  // agent when NIMBUS_ENDPOINT is set so the `run({runtime:'nimbus'})` call
-  // works without operator intervention. Token is optional (Nimbus enforces
-  // it only when its deployment is in 'enforce' mode); we forward whatever
-  // we have. Same lazy connect() semantics as the other executors — the WS
-  // session opens on first use, not at runtime construction.
-  const nimbusEndpoint = typeof env.NIMBUS_ENDPOINT === 'string' && env.NIMBUS_ENDPOINT.length > 0
-    ? env.NIMBUS_ENDPOINT
-    : undefined;
-  const nimbusToken = typeof env.NIMBUS_TOKEN === 'string' && env.NIMBUS_TOKEN.length > 0
-    ? env.NIMBUS_TOKEN
-    : undefined;
-  if (nimbusEndpoint) {
+  // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
+  // official SDK against the local NIMBUS_SESSION binding, so there are no
+  // endpoint/token secrets. The handle is lazy: no session is touched until
+  // the agent actually calls nimbus.*.
+  if (env.NIMBUS_SESSION) {
     try {
       executionRouter.register(createNimbusExecutor({
-        endpoint: nimbusEndpoint,
-        token: nimbusToken,
+        box: createAgentNimbusHandle(agent),
       }));
-      console.log(`[proteus] NimbusExecutor registered (endpoint=${nimbusEndpoint}, token=${nimbusToken ? 'set' : 'absent'})`);
+      console.log('[proteus] NimbusExecutor registered (NIMBUS_SESSION binding)');
     } catch (err) {
       console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
     }
+  } else {
+    executionRouter.register(createNimbusExecutor());
   }
 
   // Register the laptop executor. The device socket lives on the user's UserDO
@@ -276,6 +280,105 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
+  if (typeof env.CLI_PUBLIC_ORIGIN === "string" && env.CLI_PUBLIC_ORIGIN.length > 0) {
+    return env.CLI_PUBLIC_ORIGIN.replace(/\/+$/, "");
+  }
+  if (typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0) {
+    return `https://${env.PREVIEW_HOSTNAME}`;
+  }
+  return "https://proteus.local";
+}
+
+function createAgentNimbusHandle(agent: AgentHost): NimbusSandboxHandle {
+  let cachedKey = "";
+  let cachedBox: any = null;
+
+  const current = () => {
+    const env = agent.env as Env & Record<string, unknown>;
+    const tenant = nimbusTenantForUser(readOwnerUserId(agent));
+    const subject = nimbusSubjectForAgent(agent.name);
+    const sessionId = nimbusSandboxIdForAgent(agent.name);
+    const origin = publicOriginForNimbus(env);
+    const key = `${origin}|${tenant}|${subject}|${sessionId}`;
+    if (!cachedBox || cachedKey !== key) {
+      cachedKey = key;
+      cachedBox = Nimbus.fromEnv(
+        env as Record<string, unknown>,
+        nimbusSandboxConfig(origin, tenant, subject),
+        { binding: "NIMBUS_SESSION" },
+      ).sandbox(sessionId, {
+        tenant,
+        subject,
+        root: "/home/user",
+      });
+    }
+    return cachedBox;
+  };
+
+  return {
+    ready: () => current().ready(),
+    exec: (command, options) => current().exec(command, options),
+    startProcess: (command, options) => current().startProcess(command, options),
+    runCode: (code, options) => current().runCode(code, options),
+    files: {
+      read: (path) => current().files.read(path),
+      write: (path, content) => current().files.write(path, content),
+      list: (path) => current().files.list(path),
+      exists: (path) => current().files.exists(path),
+      mkdir: (path) => current().files.mkdir(path),
+      delete: (path, options) => current().files.delete(path, options),
+    },
+    runtimes: {
+      ensure: (specs, options) => current().runtimes.ensure(specs, options),
+      install: (spec, options) => current().runtimes.install(spec, options),
+      list: () => current().runtimes.list(),
+    },
+    processes: {
+      list: () => current().processes.list(),
+      kill: (pid) => current().processes.kill(pid),
+      logs: (pid, options) => current().processes.logs(pid, options),
+    },
+    ports: {
+      expose: (port) => current().ports.expose(port),
+      unexpose: (port) => current().ports.unexpose(port),
+      list: () => current().ports.list(),
+      url: (port) => current().ports.url(port),
+    },
+  };
+}
+
+function createRestoringSandboxHandle(
+  handle: SandboxHandle,
+  config: ReturnType<typeof createAgentConfigStore>,
+): SandboxHandle {
+  let restored = false;
+  const restoreOnce = async () => {
+    if (restored) return;
+    restored = true;
+    const backup = config.getWorkspaceBackup();
+    if (!backup) return;
+    try { await handle.restoreBackup(backup); }
+    catch (err) { console.warn('[proteus] workspace restore failed:', (err as Error).message); }
+  };
+  const before = async <T>(fn: () => Promise<T>): Promise<T> => {
+    await restoreOnce();
+    return fn();
+  };
+  return {
+    exec: (command, opts) => before(() => handle.exec(command, opts)),
+    readFile: (path) => before(() => handle.readFile(path)),
+    writeFile: (path, content) => before(() => handle.writeFile(path, content)),
+    listFiles: (path, opts) => before(() => handle.listFiles(path, opts)),
+    deleteFile: (path) => before(() => handle.deleteFile(path)),
+    exposePort: (port, opts) => before(() => handle.exposePort(port, opts)),
+    unexposePort: (port) => before(() => Promise.resolve(handle.unexposePort(port))),
+    getExposedPorts: (hostname) => before(() => handle.getExposedPorts(hostname)),
+    createBackup: (opts) => handle.createBackup(opts),
+    restoreBackup: (backup) => handle.restoreBackup(backup),
+  };
 }
 
 // ── Adapters: agent-utils → core interfaces ──────────────────────
@@ -497,13 +600,17 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
     evaluate: async (task) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: `Rate this approach (0-1): ${task.slice(0, 500)}\nRespond ONLY: {"score": <float>}` }],
+        messages: [{
+          role: "user" as const,
+          content: `Rate this approach (0-1): ${task.slice(0, 500)}\nJSON shape: {"score": <float>}\n${jsonObjectOnlyInstruction()}`,
+        }],
         maxOutputTokens: 100,
       });
       try {
-        const m = result.text.match(/\{[^}]+\}/);
-        return Math.min(1, Math.max(0, Number(JSON.parse(m?.[0] ?? '{"score":0.5}').score)));
-      } catch { return 0.5; }
+        const parsed = extractJsonObject(result.text) as { score?: unknown };
+        const score = Number(parsed.score);
+        return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0;
+      } catch { return 0; }
     },
     generateReflection: async (task) => {
       const result = await generateText({

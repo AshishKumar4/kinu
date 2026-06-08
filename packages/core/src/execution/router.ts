@@ -46,11 +46,24 @@ export class DefaultExecutionRouter implements ExecutionRouter {
   }
 
   listExecutors(): ExecutorInfo[] {
-    return [...this.providers.values()].map(p => ({
-      name: p.name,
-      kind: p.kind,
-      capabilities: [...p.capabilities],
-      available: p.isAvailable(),
-    }));
+    return [...this.providers.values()].map(p => {
+      const fallback = p.isAvailable();
+      const status = p.getStatus?.() ?? {
+        configured: fallback,
+        available: fallback,
+        active: fallback,
+        status: fallback ? 'active' as const : 'not_configured' as const,
+      };
+      return {
+        name: p.name,
+        kind: p.kind,
+        capabilities: [...p.capabilities],
+        available: status.available,
+        configured: status.configured,
+        active: status.active,
+        status: status.status,
+        ...(status.reason ? { reason: status.reason } : {}),
+      };
+    });
   }
 }

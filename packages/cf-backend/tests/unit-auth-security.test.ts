@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cloudflareUserResultToProfile } from '../src/auth/routes.js';
+import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes.js';
 import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../src/auth/providers.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
@@ -51,7 +51,7 @@ describe('auth and desktop security invariants', () => {
     }).map((p) => p.id)).toEqual(['google', 'github', 'cloudflare']);
   });
 
-  test('Cloudflare OAuth uses only the allowed user details scope', () => {
+  test('Cloudflare OAuth requests the scopes needed for login and user-billed Workers AI', () => {
     const [provider] = getConfiguredOAuthProviders({
       CLOUDFLARE_OAUTH_CLIENT_ID: 'cid',
       CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec',
@@ -59,9 +59,10 @@ describe('auth and desktop security invariants', () => {
     const routes = source('src/auth/routes.ts');
     expect(provider.id).toBe('cloudflare');
     expect(provider.kind).toBe('oauth');
-    expect(provider.scopes).toBe('user-details.read');
+    expect(provider.scopes).toBe('user-details.read account-settings.read ai.write');
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
+    expect(routes).toContain('cloudflare_credential');
   });
 
   test('Cloudflare OAuth profile uses the Cloudflare API user shape', () => {
@@ -86,6 +87,29 @@ describe('auth and desktop security invariants', () => {
       first_name: 'Ada',
       last_name: 'Lovelace',
     }).displayName).toBe('Ada Lovelace');
+  });
+
+  test('Cloudflare OAuth token parser accepts Cloudflare token response variants', () => {
+    expect(cloudflareTokenJsonToResponse({
+      access_token: 'cf-access',
+      token_type: 'bearer',
+      expires_in: '900',
+      scope: ['user-details.read'],
+      resource: 'https://dash.cloudflare.com',
+    })).toEqual({
+      access_token: 'cf-access',
+      token_type: 'bearer',
+      expires_in: 900,
+      scope: 'user-details.read',
+      resource: 'https://dash.cloudflare.com',
+    });
+
+    expect(cloudflareTokenJsonToResponse({
+      access_token: 'cf-access',
+    })).toMatchObject({
+      access_token: 'cf-access',
+      token_type: 'bearer',
+    });
   });
 
   test('browser UI uses app auth routes rather than Cloudflare Access logout/login URLs', () => {
@@ -157,6 +181,7 @@ describe('auth and desktop security invariants', () => {
     const installPage = await handleCliRequest(new Request('https://proteus.example.com/install'), {} as Env);
     expect(installPage?.status).toBe(200);
     expect(installPage?.headers.get('content-type')).toContain('text/html');
+    expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
     const html = await installPage!.text();
     expect(html).toContain('Install Proteus CLI');
     expect(html).toContain('curl -fsSL');
@@ -174,6 +199,11 @@ describe('auth and desktop security invariants', () => {
     expect(script).toContain('PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help');
     expect(script).toContain("grep -Eq '^[[:space:]]+setup[[:space:]]'");
     expect(script).toContain("grep -F '$HOME/.proteus/bin'");
+
+    const installScriptHead = await handleCliRequest(new Request('https://proteus.example.com/install.sh', { method: 'HEAD' }), {} as Env);
+    expect(installScriptHead?.status).toBe(200);
+    expect(installScriptHead?.headers.get('content-type')).toContain('text/x-shellscript');
+    expect(await installScriptHead!.text()).toBe('');
   });
 
   test('CLI shim does not hardcode GitHub archive directory names and supports checksum verification', async () => {
@@ -181,9 +211,16 @@ describe('auth and desktop security invariants', () => {
     expect(shim?.status).toBe(200);
     const script = await shim!.text();
     expect(script).toContain('SRC_DIR="$SOURCE_ROOT/current"');
+    expect(script).toContain('https://proteus.example.com/downloads/proteus-source.tar.gz');
+    expect(script).not.toContain('github.com');
     expect(script).not.toContain('Proteus-main');
     expect(script).toContain('PROTEUS_SOURCE_SHA256');
     expect(script).toContain('Source checksum mismatch');
+
+    const shimHead = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus', { method: 'HEAD' }), {} as Env);
+    expect(shimHead?.status).toBe(200);
+    expect(shimHead?.headers.get('content-type')).toContain('text/x-shellscript');
+    expect(await shimHead!.text()).toBe('');
   });
 
   test('supervise automation copy matches the live timer reactor', () => {

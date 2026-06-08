@@ -14,7 +14,14 @@ export interface ExecutorOutput {
 }
 
 export interface ExecutorInfo {
-  name: string; kind: string; capabilities: string[]; available: boolean;
+  name: string;
+  kind: string;
+  capabilities: string[];
+  available: boolean;
+  configured: boolean;
+  active: boolean;
+  status: "not_configured" | "idle" | "active" | "disconnected" | "error";
+  reason?: string;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -74,8 +81,8 @@ export function useProteus(agentId?: string) {
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
-  // Pinned (exposed) ports for the sandbox executor — polled hook-level so the
-  // Output/Devices port badge updates regardless of the active surface.
+  // Pinned (exposed) ports for sandbox previews. Refreshed only when the UI is
+  // looking at preview/device state; listing ports must not provision sandboxes.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
   // Background tasks (auto-detached >30s tool calls) — single source for the
   // Tasks surface + the Tasks-tab running badge (visible on any surface).
@@ -91,7 +98,10 @@ export function useProteus(agentId?: string) {
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
     // banner forever (STABILITY-AUDIT §A1).
-    onOpen: useCallback(() => setConnectionStatus("connected"), []),
+    onOpen: useCallback(() => {
+      setConnectionStatus("connected");
+      setError(null);
+    }, []),
     onClose: useCallback(() => setConnectionStatus("disconnected"), []),
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
@@ -205,6 +215,30 @@ export function useProteus(agentId?: string) {
     return () => clearInterval(interval);
   }, [isConnected, isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const refreshBackgroundJobs = useCallback(() => {
+    rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
+  }, [rpc]);
+
+  const refreshPinnedPorts = useCallback(async () => {
+    if (connectionStatus !== "connected") {
+      setPinnedPorts([]);
+      return;
+    }
+    try {
+      const r = await rpc<{ ports?: Array<{ port: number; url?: string; name?: string }> }>("getExposedPorts", ["sandbox"]);
+      setPinnedPorts((r.ports ?? [])
+        .filter(p => typeof p.port === "number" && p.url)
+        .map(p => ({ port: p.port, url: p.url!, name: p.name })));
+    } catch { /* ignore transient */ }
+  }, [rpc, connectionStatus]);
+
+  const abortChat = useCallback(() => {
+    stop();
+    rpc("cancelCurrentWork", [])
+      .then(() => refreshBackgroundJobs())
+      .catch(() => refreshBackgroundJobs());
+  }, [stop, rpc, refreshBackgroundJobs]);
+
   // Listen for MCTS progress broadcasts from the server. We attach to the
   // outer `agent` EventTarget — NOT the inner `_ws` private field — so the
   // listener survives partysocket auto-reconnects without a close→open gap
@@ -233,16 +267,14 @@ export function useProteus(agentId?: string) {
             }]);
         } else if (msg.type === "device_consent_resolved") {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
+        } else if (msg.type === "work_cancelled") {
+          refreshBackgroundJobs();
         }
       } catch { /* not JSON or not our message */ }
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent]);
-
-  const refreshBackgroundJobs = useCallback(() => {
-    rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
-  }, [rpc]);
+  }, [agent, rpc, refreshBackgroundJobs]);
 
   const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
     setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
@@ -255,6 +287,7 @@ export function useProteus(agentId?: string) {
     rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
     // Refresh tools so newly-crafted tools appear without reconnecting.
     rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
+    rpc<ExecutorInfo[]>("getExecutors", []).then(setExecutors).catch(() => {});
     refreshBackgroundJobs();
     // Re-hydrate any consent cards still pending after a reload.
     rpc<PendingConsent[]>("listPendingConsents", []).then(setPendingConsents).catch(() => {});
@@ -288,7 +321,10 @@ export function useProteus(agentId?: string) {
         for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
         setExecutorOutputs(outputs);
       })
-      .catch(() => {});
+      .catch((err) => {
+        fetched.current = false;
+        setError(`Workspace snapshot failed: ${errorMessage(err)}`);
+      });
   }
 
   useEffect(() => {
@@ -383,28 +419,6 @@ export function useProteus(agentId?: string) {
     return () => agent.removeEventListener("message", handler as EventListener);
   }, [agent]);
 
-  // Poll the sandbox executor's exposed ports every 4s while connected, so
-  // the Executors-tab badge + inline preview cards see new ports promptly
-  // even when the user is on a different tab. We hard-code "sandbox" here
-  // because that's the only executor that returns non-empty rows (others
-  // return [] cheaply). (STABILITY-AUDIT §C4.)
-  useEffect(() => {
-    if (connectionStatus !== "connected") { setPinnedPorts([]); return; }
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const r = await rpc<{ ports?: Array<{ port: number; url?: string; name?: string }> }>("getExposedPorts", ["sandbox"]);
-        if (cancelled) return;
-        setPinnedPorts((r.ports ?? [])
-          .filter(p => typeof p.port === "number" && p.url)
-          .map(p => ({ port: p.port, url: p.url!, name: p.name })));
-      } catch { /* ignore transient */ }
-    };
-    poll();
-    const id = setInterval(poll, 4000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [agent, connectionStatus]);
-
   return {
     messages,
     isStreaming,
@@ -417,7 +431,7 @@ export function useProteus(agentId?: string) {
     mctsTree,
     runTimeline,
     sendChat,
-    abortChat: stop,
+    abortChat,
     searchMemory,
     refreshTools: () => loadAllData(),
     clearHistory,
@@ -428,6 +442,7 @@ export function useProteus(agentId?: string) {
     executeInExecutor,
     /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
     pinnedPorts,
+    refreshPinnedPorts,
     /** Background tasks + a live running count for the Tasks-tab badge. */
     backgroundJobs,
     runningTaskCount: backgroundJobs.filter((j) => j.status === "running").length,
@@ -449,10 +464,17 @@ export function useProteus(agentId?: string) {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string" && err.trim()) return err;
+  try { return JSON.stringify(err); } catch { return "unknown error"; }
+}
+
 export interface MctsRow {
   id: string; parent_id: string | null; depth: number;
   visits: number; value: number; status: string; action: string;
-  task?: string; observation?: string; created_at?: number;
+  task?: string; observation?: string; code_used?: string | null;
+  branch_agent_key?: string | null; msg_id?: string | null; created_at?: number;
 }
 
 interface ToolDescResult {
@@ -475,7 +497,8 @@ function buildTree(nodes: MctsRow[]): MCTSNode {
     map.set(n.id, {
       id: n.id, parentId: n.parent_id, depth: n.depth, visits: n.visits,
       value: n.value, status: n.status as MCTSNode["status"], action: n.action,
-      task: n.task, observation: n.observation, createdAt: n.created_at,
+      task: n.task, observation: n.observation, codeUsed: n.code_used,
+      branchAgentKey: n.branch_agent_key, msgId: n.msg_id, createdAt: n.created_at,
       children: [],
     });
   }

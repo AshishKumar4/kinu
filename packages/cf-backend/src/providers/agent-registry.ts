@@ -2,7 +2,8 @@
 //
 // Composes:
 //   1. Cloudflare-specific providers from cf-backend/src/providers/
-//      (workers-ai env.AI binding, ai-gateway env vars)
+//      (workers-ai via the logged-in user's Cloudflare OAuth credential,
+//       ai-gateway env vars)
 //   2. Runtime-agnostic providers from @proteus/core
 //      (codex, openai, openrouter, openai-compat, anthropic)
 //
@@ -28,8 +29,8 @@ export interface AgentProviderDeps {
    *  allowed for short-lived "env-bound providers only" contexts (e.g. the
    *  inline-branch fallback in runtime.ts, where the spawn closure cannot
    *  reach the user's UserDO). In that case getAuth always returns null
-   *  and hasCredential always returns false — only workers-ai / ai-gateway
-   *  end up usable. */
+ *  and hasCredential always returns false — only env-bound providers end up
+ *  usable. */
   userDOStub?: DurableObjectStub<UserDO> | null;
   fetch?: typeof fetch;
   refererURL?: string;
@@ -71,12 +72,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     if (!stub) return null;
     const headers = await stub.getAuthHeaders(key, opts2);
     if (!headers) return null;
-    if (key.startsWith('openai-compat.')) {
-      const baseURL = await stub.getCredentialBaseURL(key);
-      if (!baseURL) return null;
-      return { headers, baseURL };
-    }
-    return { headers };
+    const baseURL = await stub.getCredentialBaseURL(key);
+    return baseURL ? { headers, baseURL } : { headers };
   };
 
   const hasCredential = async (key: string) => {
@@ -92,13 +89,13 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     fetch: opts.fetch,
   };
 
-  // Sync-resolvable provider = needs no credential read to construct.
-  // workers-ai (env.AI binding) and ai-gateway (env vars) qualify.
+  // Sync model construction does not mean sync credential access: providers
+  // that need user credentials resolve them inside custom fetch wrappers.
   function syncDefaultProvider(): string {
-    if (opts.env.AI && typeof opts.env.AI !== 'string') return 'workers-ai';
+    if (registry.get('workers-ai')) return 'workers-ai';
     if (typeof opts.env.AI_GATEWAY_URL === 'string' && opts.env.AI_GATEWAY_URL
      && typeof opts.env.AI_GATEWAY_AUTH === 'string' && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
-    throw new Error('No sync-resolvable provider (need env.AI or AI_GATEWAY_AUTH).');
+    throw new Error('No sync-resolvable provider registered.');
   }
   function syncDefaultModelId(provider: string): string {
     const fallback = registry.get('workers-ai')?.defaultModel ?? '';

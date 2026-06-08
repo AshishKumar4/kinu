@@ -57,13 +57,13 @@ export default function Sidebar() {
   }, []);
 
   const handleDelete = useCallback(async (name: string) => {
-    if (!confirm(`Remove agent "${name}" from your list? (The agent's data is retained server-side.)`)) return;
+    if (!confirm(`Delete agent "${name}" and clear its server-side state?`)) return;
     try { await removeAgent(name); await refreshAgents(); }
     catch (err) { alert(`Could not remove: ${(err as Error).message}`); }
   }, [refreshAgents]);
 
   return (
-    <aside className="w-64 shrink-0 h-full flex flex-col p-elevated border-r p-border">
+    <aside className="hidden w-64 shrink-0 h-full flex-col p-elevated border-r p-border md:flex">
       {/* Logo + new agent */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
         <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">

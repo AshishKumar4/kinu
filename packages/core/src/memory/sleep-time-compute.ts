@@ -18,6 +18,7 @@
 
 import type { LLM } from '../types/primitives.js';
 import type { FactsStore } from './facts.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 
 export interface SleepTimeInput {
   /** Last completed turn's task. */
@@ -55,11 +56,12 @@ Decide:
 2. Which existing facts should DECAY (lower confidence) because they weren't
    re-observed in this turn and may be stale? List their keys.
 
-Respond ONLY with this JSON:
+JSON shape:
 {
   "upserts": [{"key": "...", "value": ..., "confidence": 0.8, "rationale": "..."}],
   "decay": ["fact-key-1", "fact-key-2"]
-}`;
+}
+${jsonObjectOnlyInstruction()}`;
 
 export async function runSleepTimeCompute(
   judge: LLM,
@@ -67,9 +69,7 @@ export async function runSleepTimeCompute(
 ): Promise<SleepTimeUpdate | null> {
   try {
     const text = await judge.complete(PROMPT(input));
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]) as Partial<SleepTimeUpdate>;
+    const parsed = extractJsonObject(text) as Partial<SleepTimeUpdate>;
     return {
       upserts: Array.isArray(parsed.upserts) ? parsed.upserts.filter(u =>
         u && typeof u.key === 'string' && u.key.length > 0 && typeof u.confidence === 'number'

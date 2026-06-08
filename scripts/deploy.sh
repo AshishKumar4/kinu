@@ -2,8 +2,9 @@
 # Proteus deploy pipeline.
 #
 # Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
-# SANDBOX DO + Container binding. Nimbus has been shelved; the legacy
-# SKIP_NIMBUS flag is accepted for backward compat but does nothing.
+# Sandbox DO + Container binding, plus the configured Nimbus endpoint and
+# local-device executor routes. The legacy SKIP_NIMBUS flag is accepted for
+# backward compatibility but does not mutate the Worker config.
 #
 # Usage:
 #   bash scripts/deploy.sh
@@ -69,10 +70,10 @@ else
   fi
 fi
 
-# Legacy: SKIP_NIMBUS is accepted for backward compat but is a no-op now
-# (Nimbus has been shelved in favor of @cloudflare/sandbox).
+# Legacy: SKIP_NIMBUS is accepted for backward compat but is a no-op here.
+# Nimbus is selected by Worker config/env, not this deploy script.
 if [ "${SKIP_NIMBUS:-0}" = "1" ]; then
-  echo -e "${YELLOW}SKIP_NIMBUS=1 ignored — Nimbus has been shelved.${NC}"
+  echo -e "${YELLOW}SKIP_NIMBUS=1 ignored — Nimbus is configured through the Worker environment.${NC}"
 fi
 
 # ── Step 2: Deploy Proteus ───────────────────────────────────────
@@ -94,6 +95,9 @@ else
   echo "Running: bunx vite build"
   bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
 fi
+
+echo "Building CLI source archive"
+bash "$PROTEUS_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
 
 PROTEUS_DEPLOY_LOG="$(mktemp -t proteus-deploy.XXXXXX.log)"
 echo ""
@@ -148,6 +152,34 @@ else
   echo -e "${RED}❌ Proteus live site content missing 'Proteus'${NC}"
   SMOKE_FAIL=1
 fi
+
+CLI_SHIM=$(curl -s --max-time 15 "${PROTEUS_URL}downloads/proteus" 2>/dev/null)
+if echo "$CLI_SHIM" | grep -q 'downloads/proteus-source.tar.gz' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
+  echo -e "${GREEN}✅ Proteus CLI shim uses deployed source archive${NC}"
+else
+  echo -e "${RED}❌ Proteus CLI shim is not using the deployed source archive${NC}"
+  SMOKE_FAIL=1
+fi
+
+CLI_ARCHIVE_TMP="$(mktemp -t proteus-cli-source.XXXXXX.tar.gz)"
+CLI_ARCHIVE_LIST="$(mktemp -t proteus-cli-source.XXXXXX.list)"
+CLI_ARCHIVE_OK=0
+for attempt in 1 2 3 4 5 6; do
+  if curl -fsSL --max-time 30 "${PROTEUS_URL}downloads/proteus-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
+    && tar -tzf "$CLI_ARCHIVE_TMP" > "$CLI_ARCHIVE_LIST" \
+    && grep -Fq 'proteus/packages/cli/src/commands/setup.ts' "$CLI_ARCHIVE_LIST"; then
+    CLI_ARCHIVE_OK=1
+    break
+  fi
+  [ "$attempt" = "6" ] || sleep 5
+done
+if [ "$CLI_ARCHIVE_OK" = "1" ]; then
+  echo -e "${GREEN}✅ Proteus CLI source archive is downloadable${NC}"
+else
+  echo -e "${RED}❌ Proteus CLI source archive is missing or invalid${NC}"
+  SMOKE_FAIL=1
+fi
+rm -f "$CLI_ARCHIVE_TMP" "$CLI_ARCHIVE_LIST"
 
 if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo ""

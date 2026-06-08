@@ -6,24 +6,11 @@
 // account id derived from JWT + Bearer access token.
 // Bearer: simple Authorization header.
 // OpenAI-compat: Bearer + the user's extraHeaders (HTTP-Referer, X-Title, etc.).
-import type { Credential } from '@proteus/core';
-
-const CODEX_USER_AGENT = 'codex_cli_rs/0.0.0 (Proteus Agent)';
-const CODEX_ORIGINATOR = 'codex_cli_rs';
-
-function decodeChatGPTAccountId(accessToken: string): string | null {
-  try {
-    const parts = accessToken.split('.');
-    if (parts.length < 2) return null;
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-    const json = JSON.parse(typeof atob === 'function'
-      ? atob(padded)
-      : Buffer.from(padded, 'base64').toString('utf-8'));
-    const id = json?.['https://api.openai.com/auth']?.chatgpt_account_id;
-    return typeof id === 'string' && id ? id : null;
-  } catch { return null; }
-}
+import {
+  codexAccessTokenExpiring,
+  codexCredentialToHeaders,
+  type Credential,
+} from '@proteus/core';
 
 /** Header bundle for a given credential. The credential key tells us which
  *  flavor of headers to emit (codex.oauth = WAF-bypass set; openai/anthropic
@@ -31,14 +18,7 @@ function decodeChatGPTAccountId(accessToken: string): string | null {
 export function credentialToHeaders(key: string, cred: Credential): Record<string, string> {
   if (key === 'codex.oauth') {
     if (cred.kind !== 'oauth') throw new Error('codex.oauth credential must be oauth kind');
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${cred.accessToken}`,
-      'User-Agent': CODEX_USER_AGENT,
-      originator: CODEX_ORIGINATOR,
-    };
-    const acct = decodeChatGPTAccountId(cred.accessToken);
-    if (acct) headers['ChatGPT-Account-ID'] = acct;
-    return headers;
+    return codexCredentialToHeaders(cred);
   }
   if (key === 'anthropic.bearer') {
     if (cred.kind !== 'bearer') throw new Error('anthropic.bearer credential must be bearer kind');
@@ -65,17 +45,4 @@ export function credentialToHeaders(key: string, cred: Credential): Record<strin
 /** Whether the credential is OAuth and the access token is within `skewSec`
  *  of expiry (or undecodable / no exp). Used by UserDO to decide whether to
  *  refresh before returning headers. */
-export function accessTokenExpiring(accessToken: string, skewSec: number = 60): boolean {
-  try {
-    const parts = accessToken.split('.');
-    if (parts.length < 2) return true;
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-    const json = JSON.parse(typeof atob === 'function'
-      ? atob(padded)
-      : Buffer.from(padded, 'base64').toString('utf-8'));
-    const exp = typeof json?.exp === 'number' ? json.exp : null;
-    if (exp == null) return false;
-    return Date.now() / 1000 + skewSec >= exp;
-  } catch { return true; }
-}
+export const accessTokenExpiring = codexAccessTokenExpiring;

@@ -16,6 +16,7 @@
 
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid.js';
+import { jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import {
   type HeadId,
   type HeadInput,
@@ -349,7 +350,7 @@ ${recentContext || '(none)'}
 Heads' reports:
 ${headSections}
 
-Return ONLY a JSON object with EXACTLY these keys and types (use [] for empty lists):
+JSON object shape with EXACTLY these keys and types (use [] for empty lists):
 {
   "narrative": "<coherent unified narrative — the response the parent head writes back to the user>",
   "selected_decisions": [{ "question": "<question>", "choice": "<final answer>", "rationale": "<why>" }],
@@ -357,5 +358,6 @@ Return ONLY a JSON object with EXACTLY these keys and types (use [] for empty li
   "recommendations": ["<short imperative next step>"]
 }
 selected_decisions, unresolved_questions, and recommendations MUST be JSON arrays (never objects).
-The narrative should be specific and grounded in the heads' evidence; do not reference the merge process itself.`;
+The narrative should be specific and grounded in the heads' evidence; do not reference the merge process itself.
+${jsonObjectOnlyInstruction()}`;
 }

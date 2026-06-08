@@ -71,6 +71,7 @@ export async function runMCTS(
     };
 
     while (phase.budget > 0) {
+      throwIfAborted(config.signal);
       const selected = selectNode(rt.storage.sql, W);
       if (!selected || selected.depth >= maxDepth) break;
 
@@ -78,9 +79,15 @@ export async function runMCTS(
       const branchIds = Array.from({ length: N_BRANCHES }, () =>
         `${selected.id.slice(0, 8)}-${nanoid(8)}`,
       );
-      const branchHandles = await Promise.all(
-        branchIds.map(id => rt.spawnBranch(id)),
+      const abortBranches = async () => {
+        await Promise.allSettled(branchIds.map((id) => rt.abortBranch(id, 'aborted')));
+      };
+      const branchHandles = await abortable(
+        Promise.all(branchIds.map(id => rt.spawnBranch(id))),
+        config.signal,
+        abortBranches,
       );
+      throwIfAborted(config.signal);
 
       const priorHistory = selected.msg_id
         ? session.getHistory(selected.msg_id)
@@ -88,9 +95,12 @@ export async function runMCTS(
       const craftedTools = rt.craftStore.getAll();
 
       // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest)
-      const explorationResults = await Promise.allSettled(
-        branchHandles.map(handle => handle.explore(priorHistory, craftedTools)),
+      const explorationResults = await abortable(
+        Promise.allSettled(branchHandles.map(handle => handle.explore(priorHistory, craftedTools))),
+        config.signal,
+        abortBranches,
       );
+      throwIfAborted(config.signal);
       const explorations = explorationResults.map(r =>
         r.status === 'fulfilled' ? r.value : { text: '', codeUsed: null },
       );
@@ -117,12 +127,17 @@ export async function runMCTS(
         `;
       }
 
-      // EVALUATE — cross-model judging (allSettled: partial failures → score 0.5)
-      const scoreResults = await Promise.allSettled(
-        branchHandles.map(handle => handle.evaluate(task)),
+      // EVALUATE — cross-model judging. Evaluation failures score 0, not
+      // neutral 0.5; otherwise failed infrastructure can look like a balanced
+      // optimum and converge falsely.
+      const scoreResults = await abortable(
+        Promise.allSettled(branchHandles.map(handle => handle.evaluate(task))),
+        config.signal,
+        abortBranches,
       );
+      throwIfAborted(config.signal);
       const scores = scoreResults.map(r =>
-        r.status === 'fulfilled' ? r.value : 0.5,
+        r.status === 'fulfilled' ? r.value : 0,
       );
 
       // BACKPROPAGATE
@@ -137,7 +152,7 @@ export async function runMCTS(
       // REFLECT on failures + PRUNE
       const branchScores: BranchScore[] = [];
       for (let i = 0; i < N_BRANCHES; i++) {
-        const score = scores[i] ?? 0.5;
+        const score = scores[i] ?? 0;
         const nodeId = childNodeIds[i] ?? '';
         const branchId = branchIds[i] ?? '';
         let reflection: string | undefined;
@@ -146,6 +161,7 @@ export async function runMCTS(
           const handle = branchHandles[i];
           if (handle) {
             reflection = await handle.generateReflection(task);
+            throwIfAborted(config.signal);
             await rt.memory.append(
               'memory/MEMORY.md',
               `\n### Failure lesson (${isoDate()})\n${reflection}\n`,
@@ -157,6 +173,7 @@ export async function runMCTS(
         branchScores.push({ nodeId, agentKey: branchId, score, reflection });
       }
       await pruneAndReflect(rt, branchScores, pruneThreshold);
+      throwIfAborted(config.signal);
 
       // EXTRACT crafted tools from winners
       for (let i = 0; i < N_BRANCHES; i++) {
@@ -176,5 +193,47 @@ export async function runMCTS(
     }
 
     return converge(rt, session, minAcceptableScore);
+  });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted');
+}
+
+async function abortable<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbort: () => Promise<void>,
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    await onAbort();
+    throwIfAborted(signal);
+  }
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    const cleanup = () => signal.removeEventListener('abort', onSignalAbort);
+    const onSignalAbort = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      void onAbort().finally(() => reject(signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted')));
+    };
+    signal.addEventListener('abort', onSignalAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve(value);
+      },
+      (err) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        reject(err);
+      },
+    );
   });
 }

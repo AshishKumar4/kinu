@@ -29,6 +29,7 @@
  *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
 import type { AuthIdentity } from '../auth/session.js';
+import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from './user-do.js';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels } from './available-models.js';
@@ -88,6 +89,7 @@ export async function handleUserRequest(
     // mission (purpose) and AI-titles itself on the first turn.
     try {
       const entry = await stub.registerAgent(body.name, body.displayName, body.purpose);
+      await initializeOrchestrator(env, identity.userId, body.name, body.purpose);
       return json(entry, { status: 201 });
     } catch (e) { return err(400, (e as Error).message); }
   }
@@ -242,4 +244,18 @@ function publicOrigin(request: Request): string {
 
 async function safeJson<T = unknown>(request: Request): Promise<T | null> {
   try { return (await request.json()) as T; } catch { return null; }
+}
+
+async function initializeOrchestrator(
+  env: Env,
+  userId: string,
+  agentName: string,
+  purpose?: string,
+): Promise<void> {
+  const orchestrator = env.OrchestratorAgent.get(
+    env.OrchestratorAgent.idFromName(agentName),
+  ) as DurableObjectStub<OrchestratorAgent>;
+  await orchestrator.claimOwner(userId);
+  const trimmedPurpose = purpose?.trim();
+  if (trimmedPurpose) await orchestrator.setSoul(trimmedPurpose);
 }

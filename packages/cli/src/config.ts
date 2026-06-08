@@ -4,14 +4,50 @@
  */
 
 import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import type { LLMProviderConfig } from '@proteus/core';
-import type { LocalProviderCredentials, McpServerConfig } from '@proteus/cli-backend';
+import {
+  CODEX_BASE_URL,
+  type LLMProviderConfig,
+  type OAuthCredential,
+} from '@proteus/core';
+import {
+  createFileCodexAuthStore,
+  type LocalCodexAuthStore,
+  type LocalProviderCredentials,
+  type McpServerConfig,
+} from '@proteus/cli-backend';
 
-export const AGENT_HOME = join(homedir(), '.proteus');
+export const AGENT_HOME = resolve(process.env.PROTEUS_HOME?.trim() || join(homedir(), '.proteus'));
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
 export const BIN_DIR = join(AGENT_HOME, 'bin');
+const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const RESERVED_ALIASES = new Set([
+  'proteus',
+  'create',
+  'auth',
+  'whoami',
+  'logout',
+  'setup',
+  'run',
+  'chat',
+  'evolve',
+  'status',
+  'list',
+  'alias',
+  'unalias',
+  'aliases',
+  'sessions',
+  'desktop',
+  'daemon',
+  'connect',
+  'export',
+  'import',
+  'update',
+  'uninstall',
+  'doctor',
+]);
 const DEFAULT_MODEL = '@cf/moonshotai/kimi-k2.6';
 const DEFAULT_ORIGIN = 'https://proteus.ashishkumarsingh.com';
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -45,7 +81,12 @@ export interface ProteusConfig {
     openai?: { apiKey?: string };
     anthropic?: { apiKey?: string };
     openrouter?: { apiKey?: string };
-    codex?: { accessToken?: string };
+    codex?: {
+      accessToken?: string;
+      refreshToken?: string;
+      expiresAt?: number;
+      metadata?: Record<string, unknown>;
+    };
     openaiCompat?: Record<string, {
       baseURL: string;
       apiKey?: string;
@@ -68,16 +109,19 @@ export function ensureBinDir(): void {
 }
 
 export function agentDbPath(name: string): string {
+  validateAgentName(name);
   return join(AGENT_HOME, name, 'agent.db');
 }
 
 export function agentDir(name: string): string {
+  validateAgentName(name);
   return join(AGENT_HOME, name);
 }
 
 export function listAgentDirs(): string[] {
   if (!existsSync(AGENT_HOME)) return [];
   return readdirSync(AGENT_HOME).filter(name => {
+    if (!AGENT_NAME_RE.test(name)) return false;
     const dir = join(AGENT_HOME, name);
     return statSync(dir).isDirectory() && existsSync(join(dir, 'agent.db'));
   });
@@ -125,7 +169,16 @@ export function resolveAgentRef(input: string): ProteusAgentConfig | null {
   return config.agents?.[canonical] ?? null;
 }
 
+export function listConfiguredAgentRefs(): ProteusAgentConfig[] {
+  return Object.values(loadConfigFile().agents ?? {})
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function upsertAgentConfig(agent: Omit<ProteusAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<ProteusAgentConfig, 'createdAt' | 'updatedAt'>>): ProteusAgentConfig {
+  validateAgentName(agent.name);
+  if (agent.alias) validateAliasName(agent.alias);
+  if (agent.localName) validateAgentName(agent.localName);
+  if (agent.cloudName) validateAgentName(agent.cloudName);
   const now = new Date().toISOString();
   let saved!: ProteusAgentConfig;
   updateConfigFile((config) => {
@@ -142,6 +195,8 @@ export function upsertAgentConfig(agent: Omit<ProteusAgentConfig, 'createdAt' | 
 }
 
 export function setAliasConfig(agentName: string, alias: string): void {
+  validateAgentName(agentName);
+  validateAliasName(alias);
   updateConfigFile((config) => {
     config.aliases = { ...(config.aliases ?? {}), [alias]: agentName };
     const existing = config.agents?.[agentName];
@@ -165,14 +220,19 @@ export function removeAliasConfig(alias: string): void {
 }
 
 export function aliasPath(alias: string): string {
+  validateAliasName(alias);
   return join(BIN_DIR, alias);
 }
 
 export function writeAliasShim(agentName: string, alias: string): string {
+  validateAgentName(agentName);
+  validateAliasName(alias);
   ensureBinDir();
   const path = aliasPath(alias);
   const script = `#!/usr/bin/env sh
-exec proteus run ${shellQuote(agentName)} "$@"
+set -eu
+bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec "$bin_dir/proteus" run ${shellQuote(agentName)} "$@"
 `;
   writeFileSync(path, script, { mode: 0o755 });
   chmodSync(path, 0o755);
@@ -181,6 +241,7 @@ exec proteus run ${shellQuote(agentName)} "$@"
 }
 
 export function deleteAliasShim(alias: string): void {
+  validateAliasName(alias);
   try { unlinkSync(aliasPath(alias)); } catch { /* already gone */ }
   removeAliasConfig(alias);
 }
@@ -191,6 +252,21 @@ export function pathHint(): string | null {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function validateAgentName(name: string): void {
+  if (!AGENT_NAME_RE.test(name)) {
+    throw new Error('Agent name must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
+  }
+}
+
+export function validateAliasName(alias: string): void {
+  if (!ALIAS_RE.test(alias)) {
+    throw new Error('Alias must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.');
+  }
+  if (RESERVED_ALIASES.has(alias)) {
+    throw new Error(`Alias "${alias}" is reserved. Choose another alias.`);
+  }
 }
 
 export function resolveLLMConfig(opts?: {
@@ -251,9 +327,17 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
     openaiApiKey: process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey,
     openrouterApiKey: process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey,
-    codexAccessToken: process.env.CODEX_ACCESS_TOKEN ?? file.providers?.codex?.accessToken,
+    codexAccessToken: process.env.CODEX_ACCESS_TOKEN,
     openaiCompat: file.providers?.openaiCompat,
   };
+}
+
+export function createCodexAuthStore(fetchFn?: typeof fetch): LocalCodexAuthStore {
+  return createFileCodexAuthStore(CONFIG_PATH, { fetch: fetchFn });
+}
+
+export function saveCodexOAuthCredential(credential: OAuthCredential): void {
+  createCodexAuthStore().save(credential);
 }
 
 /** Stdio MCP servers from ~/.proteus/config.json (`mcpServers`). Empty if none. */
@@ -263,6 +347,16 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
 
 function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: string | undefined): LLMProviderConfig | null {
   const providerModel = model ?? preferredModelFromCredentials(file);
+  const hasCodexCredential = Boolean(process.env.CODEX_ACCESS_TOKEN || file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken);
+  if (hasCodexCredential && (!providerModel || providerModel.startsWith('codex/') || !providerModel.includes('/'))) {
+    return {
+      name: 'codex',
+      baseURL: CODEX_BASE_URL,
+      headers: {},
+      model: stripProvider(providerModel ?? 'gpt-5.5', 'codex'),
+    };
+  }
+
   const openaiKey = process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey;
   if (openaiKey && (!providerModel || providerModel.startsWith('openai/') || !providerModel.includes('/'))) {
     return {
@@ -318,10 +412,12 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
 }
 
 function preferredModelFromCredentials(file: ProteusConfig): string | undefined {
+  if (file.model) return file.model;
+  if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return 'codex/gpt-5.5';
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return 'openai/gpt-4o-mini';
   if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return 'openrouter/openai/gpt-4o-mini';
   if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return 'anthropic/claude-sonnet-4-5';
-  return file.model;
+  return undefined;
 }
 
 function stripProvider(model: string, provider: string): string {

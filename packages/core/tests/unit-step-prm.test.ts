@@ -23,14 +23,26 @@ describe('PRM step scoring', () => {
     expect(r.score).toBe(1);
   });
 
-  test('returns 0.5 on unparseable response', async () => {
+  test('penalizes unparseable response instead of returning neutral success', async () => {
     const judge = createScriptedLLM(['I refuse']);
     const r = await scoreStepWithJudge(judge, {
       task: 't', priorTrajectory: '',
       step: { action: 'a', observation: 'o' },
     });
-    expect(r.score).toBe(0.5);
+    expect(r.score).toBe(0);
     expect(r.rationale).toBe('unparseable');
+  });
+
+  test('penalizes judge transport failure instead of returning neutral success', async () => {
+    const judge = {
+      complete: async () => { throw new Error('provider down'); },
+    };
+    const r = await scoreStepWithJudge(judge, {
+      task: 't', priorTrajectory: '',
+      step: { action: 'a', observation: 'o' },
+    });
+    expect(r.score).toBe(0);
+    expect(r.rationale).toBe('judge-error');
   });
 
   test('blendStepScore discounts new step', () => {

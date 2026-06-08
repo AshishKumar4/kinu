@@ -14,7 +14,16 @@ import { pickDefaultExecutor } from "@/lib/executor-default";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { port: number; url: string; name?: string }
-export interface ExecutorInfo { name: string; kind: string; capabilities: string[]; available: boolean }
+export interface ExecutorInfo {
+  name: string;
+  kind: string;
+  capabilities: string[];
+  available: boolean;
+  configured?: boolean;
+  active?: boolean;
+  status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
+  reason?: string;
+}
 
 export interface OutputSurfaceProps {
   pinnedPorts: PinnedPort[];
@@ -25,6 +34,9 @@ export interface OutputSurfaceProps {
 
 export function OutputSurface({ pinnedPorts, executors, lastActiveExecutor, rpc }: OutputSurfaceProps) {
   const [view, setView] = useState<"preview" | "diff">(pinnedPorts.length > 0 ? "preview" : "diff");
+  useEffect(() => {
+    if (pinnedPorts.length > 0) setView("preview");
+  }, [pinnedPorts.length]);
   return (
     <div className="h-full flex flex-col -m-5">
       <div className="flex items-center gap-1 px-3 py-1.5 border-b p-border shrink-0">
@@ -92,23 +104,44 @@ interface DiffResult {
   error?: string;
 }
 
-const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Local", nimbus: "Nimbus" };
+const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Agent state", nimbus: "Nimbus" };
+const EXECUTOR_ORDER = ["laptop", "nimbus", "sandbox", "workspace"];
+
+function executorSortKey(name: string): number {
+  const idx = EXECUTOR_ORDER.indexOf(name);
+  return idx === -1 ? 99 : idx;
+}
+
+function isVisibleDiffDevice(exec: ExecutorInfo): boolean {
+  if (exec.name === "workspace") return false;
+  if (!exec.available) return false;
+  if (exec.name === "laptop") return true;
+  return exec.active === true || exec.status === "active";
+}
 
 function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorInfo[]; lastActiveExecutor?: string | null; rpc: Rpc }) {
-  const [exec, setExec] = useState(() => pickDefaultExecutor(executors, lastActiveExecutor));
   const [result, setResult] = useState<DiffResult | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
-  // Selector options: every available executor + always the VFS.
-  const options = Array.from(new Set([...executors.filter((e) => e.available).map((e) => e.name), "workspace"]));
+  // Selector options: available execution devices first, internal state VFS last.
+  const availableDevices = executors
+    .filter(isVisibleDiffDevice)
+    .sort((a, b) => executorSortKey(a.name) - executorSortKey(b.name) || a.name.localeCompare(b.name))
+    .map((e) => e.name);
+  const options = Array.from(new Set([...availableDevices, "workspace"]));
+  const pickVisibleDefault = useCallback(() => {
+    const preferred = pickDefaultExecutor(executors, lastActiveExecutor);
+    return options.includes(preferred) ? preferred : options[0] ?? "workspace";
+  }, [executors, lastActiveExecutor, options]);
+  const [exec, setExec] = useState(pickVisibleDefault);
 
   // If the selected executor disappears, fall back to a sensible default.
   useEffect(() => {
-    if (exec !== "workspace" && !executors.some((e) => e.name === exec && e.available)) {
-      setExec(pickDefaultExecutor(executors, lastActiveExecutor));
+    if (!options.includes(exec)) {
+      setExec(pickVisibleDefault());
     }
-  }, [executors, exec, lastActiveExecutor]);
+  }, [exec, options, pickVisibleDefault]);
 
   const load = useCallback(() => {
     setResult(null);
@@ -147,7 +180,13 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
         <div className="flex items-center gap-1 mb-3">
           {options.map((name) => (
             <button key={name} onClick={() => setExec(name)}
-              className={`px-2 py-0.5 text-[11px] rounded-md transition-colors ${exec === name ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+              className={`px-2 py-0.5 text-[11px] rounded-md transition-colors ${
+                exec === name
+                  ? "p-elevated p-text font-medium"
+                  : name === "workspace"
+                    ? "p-text-3 hover:p-text-2 opacity-80"
+                    : "p-text-3 hover:p-text-2"
+              }`}>
               {EXECUTOR_LABELS[name] ?? name}
             </button>
           ))}
@@ -160,7 +199,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
         <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
-          hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Local (VFS).`} />
+          hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Agent state.`} />
       ) : files.length === 0 ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="No changes"
           hint={result.mode === "vfs-baseline"

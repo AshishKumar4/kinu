@@ -5,7 +5,9 @@
 
 import { tool, jsonSchema, type ToolSet } from 'ai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+const MCP_REQUEST_TIMEOUT_MS = 5_000;
 
 /** One stdio MCP server (the standard mcpServers config shape). */
 export interface McpServerConfig {
@@ -17,8 +19,18 @@ export interface McpServerConfig {
 export interface McpConnection {
   /** Discovered tools, keyed `mcp_<server>_<tool>`. */
   readonly tools: ToolSet;
+  /** Per-server connection status for UI/CLI diagnostics. */
+  readonly diagnostics: McpConnectionDiagnostic[];
   /** Disconnect every server (kills the child processes). */
   close(): Promise<void>;
+}
+
+export interface McpConnectionDiagnostic {
+  server: string;
+  status: 'connected' | 'failed';
+  toolCount: number;
+  reason?: string;
+  stderr?: string;
 }
 
 /**
@@ -32,24 +44,34 @@ export async function connectMcpServers(
 ): Promise<McpConnection> {
   const clients: Client[] = [];
   const tools: ToolSet = {};
+  const diagnostics: McpConnectionDiagnostic[] = [];
 
   for (const [serverName, cfg] of Object.entries(servers)) {
+    const client = new Client({ name: 'proteus-cli', version: '0.1.0' });
+    let stderr = '';
     try {
-      const client = new Client({ name: 'proteus-cli', version: '0.1.0' });
       const transport = new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
-        env: cfg.env ? { ...getDefaultEnvironment(), ...cfg.env } : getDefaultEnvironment(),
+        env: cfg.env,
+        stderr: 'pipe',
       });
-      await client.connect(transport);
-      const { tools: mcpTools } = await client.listTools();
+      transport.stderr?.on('data', (chunk) => {
+        stderr = `${stderr}${String(chunk)}`.slice(-4_000);
+      });
+      await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
+      const { tools: mcpTools } = await client.listTools(undefined, { timeout: MCP_REQUEST_TIMEOUT_MS });
       for (const t of mcpTools) {
         tools[`mcp_${serverName}_${t.name}`] = tool({
           description: t.description ?? `${serverName}/${t.name}`,
           inputSchema: jsonSchema((t.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0]),
           execute: async (args: unknown) => {
             try {
-              const res = await client.callTool({ name: t.name, arguments: (args ?? {}) as Record<string, unknown> });
+              const res = await client.callTool(
+                { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
+                undefined,
+                { timeout: MCP_REQUEST_TIMEOUT_MS },
+              );
               return formatMcpResult(res as McpToolResult);
             } catch (err) {
               return `mcp error: ${err instanceof Error ? err.message : String(err)}`;
@@ -58,14 +80,26 @@ export async function connectMcpServers(
         });
       }
       clients.push(client);
+      diagnostics.push({ server: serverName, status: 'connected', toolCount: mcpTools.length });
       onLog?.(`mcp: ${serverName} → ${mcpTools.length} tool(s)`);
     } catch (err) {
-      onLog?.(`mcp: ${serverName} failed: ${err instanceof Error ? err.message : String(err)}`);
+      await client.close().catch(() => undefined);
+      const reason = formatMcpError(err);
+      const stderrText = stderr.trim();
+      diagnostics.push({
+        server: serverName,
+        status: 'failed',
+        toolCount: 0,
+        reason,
+        stderr: stderrText || undefined,
+      });
+      onLog?.(`mcp: ${serverName} failed: ${stderrText ? `${reason}; stderr: ${stderrText}` : reason}`);
     }
   }
 
   return {
     tools,
+    diagnostics,
     async close() {
       for (const c of clients) { try { await c.close(); } catch { /* best effort */ } }
     },
@@ -79,4 +113,8 @@ function formatMcpResult(res: McpToolResult): string {
   const content = Array.isArray(res?.content) ? res.content : [];
   const text = content.map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n');
   return (res?.isError ? 'MCP tool error: ' : '') + (text || '(no output)');
+}
+
+function formatMcpError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

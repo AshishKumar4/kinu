@@ -33,7 +33,7 @@ import type { ExecutorProvider, ExecutorCapability } from './types.js';
  * an explicit `token` to the SDK so both sides agree.
  */
 export interface SandboxHandle {
-  exec(command: string, opts?: { cwd?: string; timeout?: number }):
+  exec(command: string, opts?: { cwd?: string; timeout?: number; signal?: AbortSignal }):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
   readFile(path: string): Promise<{ content?: string; exitCode?: number }>;
   writeFile(path: string, content: string): Promise<unknown>;
@@ -186,11 +186,12 @@ const TRANSIENT_MARKERS = [
   'container suddenly disconnected',
   'container is starting',
   'no container instance',
+  'internal error in durable object storage caused object to be reset',
   // 0.8.11 SDK started classifying this as transient; cover us either way:
   'http error! status: 500',
 ];
 
-function isTransient(err: unknown): boolean {
+export function isSandboxTransientError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return TRANSIENT_MARKERS.some(m => msg.includes(m));
 }
@@ -208,7 +209,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isTransient(err) || i === attempts - 1) throw err;
+      if (!isSandboxTransientError(err) || i === attempts - 1) throw err;
       await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
     }
   }
@@ -248,14 +249,20 @@ export function createSandboxExecutor(
   const connected = handle != null
     && typeof hostname === 'string' && hostname.length > 0
     && typeof sandboxId === 'string' && sandboxId.length > 0;
+  let active = false;
+  const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
+    active = true;
+    return fn();
+  };
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the sandbox container.',
-      execute: async (command: unknown): Promise<string> => {
+      execute: async (command: unknown, context?: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const signal = readAbortSignal(context);
         try {
-          const res = await withRetry(() => handle.exec(String(command), { timeout: 60_000 }));
+          const res = await withRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000, signal })));
           return normalize(res);
         } catch (err) {
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
@@ -267,7 +274,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          const r = await withRetry(() => handle.readFile(String(path)));
+          const r = await withRetry(() => touch(() => handle.readFile(String(path))));
           if (r.exitCode && r.exitCode !== 0) return `read error: exit ${r.exitCode}`;
           return r.content ?? '';
         } catch (err) {
@@ -280,7 +287,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown, content: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          await withRetry(() => handle.writeFile(String(path), String(content)));
+          await withRetry(() => touch(() => handle.writeFile(String(path), String(content))));
           return `wrote ${String(path)}`;
         } catch (err) {
           return `write error: ${err instanceof Error ? err.message : String(err)}`;
@@ -292,7 +299,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          const r = await withRetry(() => handle.listFiles(String(path ?? '/'), { recursive: false }));
+          const r = await withRetry(() => touch(() => handle.listFiles(String(path ?? '/'), { recursive: false })));
           if (!r?.files?.length) return '';
           return r.files
             .map(f => {
@@ -317,7 +324,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          await withRetry(() => Promise.resolve(handle.deleteFile(String(path))));
+          await withRetry(() => touch(() => Promise.resolve(handle.deleteFile(String(path)))));
           return `deleted ${String(path)}`;
         } catch (err) {
           return `delete error: ${err instanceof Error ? err.message : String(err)}`;
@@ -328,7 +335,7 @@ export function createSandboxExecutor(
       description: 'Check if a path exists — uses shell test.',
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
-        const res = await withRetry(() => handle.exec(`test -e ${JSON.stringify(String(path))} && echo true || echo false`));
+        const res = await withRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(String(path))} && echo true || echo false`)));
         const out = (res.stdout ?? res.output ?? '').trim();
         return out.includes('true') ? 'true' : 'false';
       },
@@ -354,10 +361,10 @@ export function createSandboxExecutor(
         // status, even 4xx/5xx) means a server is up. Connection refused
         // means no listener.
         try {
-          const probe = await withRetry(() => handle.exec(
+          const probe = await withRetry(() => touch(() => handle.exec(
             `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
             `--head http://127.0.0.1:${p}/ 2>&1 || true`,
-          ));
+          )));
           const out = (probe.stdout ?? probe.output ?? '').toString().trim();
           // Parse "<code>|<exit>" where exit=7 (CURLE_COULDNT_CONNECT) means
           // nothing is listening. Any non-zero HTTP code means a server
@@ -387,7 +394,7 @@ export function createSandboxExecutor(
           const token = generatePortToken(p);
           const opts: { hostname: string; name?: string; token?: string } = { hostname, token };
           if (name != null) opts.name = String(name);
-          await withRetry(() => handle.exposePort(p, opts));
+          await withRetry(() => touch(() => handle.exposePort(p, opts)));
           return buildPathPreviewUrl(hostname, p, sandboxId, token);
         } catch (err) {
           return `expose error: ${err instanceof Error ? err.message : String(err)}`;
@@ -399,7 +406,7 @@ export function createSandboxExecutor(
       execute: async (port: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          await withRetry(() => Promise.resolve(handle.unexposePort(Number(port))));
+          await withRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
           return `unexposed ${port}`;
         } catch (err) {
           return `unexpose error: ${err instanceof Error ? err.message : String(err)}`;
@@ -413,7 +420,7 @@ export function createSandboxExecutor(
         try {
           // SDK method is getExposedPorts — the tool we expose is still
           // named listPorts for backward compat with the codemode namespace.
-          const ports = await withRetry(() => handle.getExposedPorts(hostname));
+          const ports = await withRetry(() => touch(() => handle.getExposedPorts(hostname)));
           // Rewrite SDK hostname-style URLs into Proteus path-style URLs
           // so the UI iframe (which lives on the main domain) can load
           // them without a wildcard DNS record.
@@ -463,6 +470,13 @@ declare namespace sandbox {
     kind: 'sandbox',
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
+    getStatus: () => ({
+      configured: connected,
+      available: connected,
+      active,
+      status: connected ? (active ? 'active' : 'idle') : 'not_configured',
+      ...(connected ? {} : { reason: NOT_CONFIGURED }),
+    }),
     connect: async () => { /* sandbox starts on first RPC */ },
     disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
       filesystem does NOT — the container sleeps after ~10m idle and /workspace
@@ -488,10 +502,10 @@ declare namespace sandbox {
       // this the caller gets a preview URL that 502s.
       let verified_listening = false;
       try {
-        const probe = await withRetry(() => handle.exec(
+        const probe = await withRetry(() => touch(() => handle.exec(
           `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
           `--head http://127.0.0.1:${port}/ 2>&1 || true`,
-        ));
+        )));
         const out = (probe.stdout ?? probe.output ?? '').toString().trim();
         const [codeStr, exitStr] = out.split('|');
         const httpCode = parseInt(codeStr ?? '0', 10);
@@ -513,7 +527,7 @@ declare namespace sandbox {
         const token = generatePortToken(port);
         const sdkOpts: { hostname: string; name?: string; token?: string } = { hostname, token };
         if (opts?.name) sdkOpts.name = opts.name;
-        await withRetry(() => handle.exposePort(port, sdkOpts));
+        await withRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
         return {
           supported: true,
           url: buildPathPreviewUrl(hostname, port, sandboxId, token),
@@ -528,14 +542,14 @@ declare namespace sandbox {
 
     async unexposePort(port) {
       if (!handle) return;
-      try { await withRetry(() => Promise.resolve(handle.unexposePort(Number(port)))); }
+      try { await withRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port))))); }
       catch { /* idempotent */ }
     },
 
     async listExposedPorts() {
       if (!handle || !hostname || !sandboxId) return [];
       try {
-        const ports = await withRetry(() => handle.getExposedPorts(hostname));
+        const ports = await withRetry(() => touch(() => handle.getExposedPorts(hostname)));
         return (ports ?? []).map(p => {
           const token = extractTokenFromSdkUrl(p.url);
           return {
@@ -550,4 +564,14 @@ declare namespace sandbox {
       }
     },
   };
+}
+
+function readAbortSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
+  const signal = (context as { signal?: unknown }).signal;
+  return isAbortSignal(signal) ? signal : undefined;
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return typeof value === 'object' && value !== null && 'aborted' in value && 'addEventListener' in value;
 }

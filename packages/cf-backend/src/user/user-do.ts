@@ -33,6 +33,12 @@ import {
   type ProductDeploymentRecord,
   type ProductSourceBinding,
   type ProductSourceBindingInput,
+  CODEX_CRED_KEY,
+  createCodexOAuthClient,
+  decodeCodexAccountId,
+  tokensToCredential,
+  CODEX_DEVICE_PORTAL,
+  type DeviceCodeStart,
 } from '@proteus/core';
 import { initUserTables } from './schema.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
@@ -40,16 +46,18 @@ import { validateCredential, validateCredentialKey, validateAgentName } from './
 import { resolveAgentTitle } from '../lib/agent-naming.js';
 import { DEVICE_CONSENT_SCOPE, summarizeDeviceAction, type DeviceConsentScope } from './device-consent.js';
 import {
-  createCodexOAuthClient, tokensToCredential, CODEX_DEVICE_PORTAL,
-  type DeviceCodeStart,
-} from './codex-oauth.js';
-import {
   validateMcpServerInput, mcpToolKey, parseAllowedTools, mapConnectionStatus,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
 } from './mcp.js';
+import {
+  CLOUDFLARE_OAUTH_CRED_KEY,
+  accountIdFromCloudflareCredential,
+  cloudflareWorkersAIBaseURL,
+  isCloudflareCredentialExpiring,
+  refreshCloudflareCredential,
+} from '../lib/cloudflare-oauth.js';
 
-const CODEX_CRED_KEY = 'codex.oauth';
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
@@ -259,7 +267,9 @@ export class UserDO extends Agent<Env> {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent();
     } catch (err) {
-      console.warn('[proteus] removeAgent: agent teardown failed:', err instanceof Error ? err.message : err);
+      if (!(err instanceof Error) || err.message !== 'destroyed') {
+        console.warn('[proteus] removeAgent: agent teardown failed:', err instanceof Error ? err.message : err);
+      }
     }
     this.sqlx(`DELETE FROM user_agents WHERE name = ?`, name);
   }
@@ -733,6 +743,10 @@ export class UserDO extends Agent<Env> {
     validateCredentialKey(key);
     const cred = this.getCredentialRow(key);
     if (cred?.kind === 'openai-compat') return cred.baseURL;
+    if (key === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
+      const accountId = accountIdFromCloudflareCredential(cred);
+      return accountId ? cloudflareWorkersAIBaseURL(accountId) : null;
+    }
     return null;
   }
 
@@ -758,9 +772,30 @@ export class UserDO extends Agent<Env> {
         // signal that re-auth is needed.
       }
     }
+    if (key === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
+      const needRefresh = opts?.forceRefresh || isCloudflareCredentialExpiring(cred);
+      if (needRefresh) {
+        const refreshed = await this.refreshCloudflareInternal(cred);
+        if (refreshed) cred = refreshed;
+      }
+    }
 
     try { return credentialToHeaders(key, cred); }
     catch { return null; }
+  }
+
+  private async refreshCloudflareInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | null> {
+    try {
+      const next = await refreshCloudflareCredential(this.env, current);
+      this.sqlx(
+        `UPDATE user_credentials SET value = ?, updated_at = ? WHERE key = ?`,
+        JSON.stringify(next), Date.now(), CLOUDFLARE_OAUTH_CRED_KEY,
+      );
+      return next as Credential & { kind: 'oauth' };
+    } catch (err) {
+      console.warn('[user-do] cloudflare refresh failed; keeping current credential:', (err as Error).message);
+      return null;
+    }
   }
 
   private async refreshCodexInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | null> {
@@ -812,7 +847,8 @@ export class UserDO extends Agent<Env> {
     try {
       const tokens = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
       if (!tokens) return { connected: false }; // still pending
-      const cred = tokensToCredential(tokens);
+      const accountId = decodeCodexAccountId(tokens.accessToken);
+      const cred = tokensToCredential(tokens, accountId ? { accountId } : undefined);
       const now = Date.now();
       this.sqlx(
         `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
@@ -820,7 +856,6 @@ export class UserDO extends Agent<Env> {
         CODEX_CRED_KEY, cred.kind, JSON.stringify(cred), now, now,
       );
       this.sqlx(`DELETE FROM codex_device_flow`);
-      const accountId = this.decodeCodexAccountId(cred.accessToken);
       return { connected: true, accountId: accountId ?? undefined };
     } catch (err) {
       return { connected: false, error: (err as Error).message };
@@ -842,7 +877,7 @@ export class UserDO extends Agent<Env> {
     if (cred?.kind === 'oauth') {
       return {
         connected: true,
-        accountId: this.decodeCodexAccountId(cred.accessToken),
+        accountId: decodeCodexAccountId(cred.accessToken),
         expiresAt: cred.expiresAt ?? null,
         startedFlow: flow
           ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
@@ -857,18 +892,6 @@ export class UserDO extends Agent<Env> {
         ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
         : null,
     };
-  }
-
-  private decodeCodexAccountId(accessToken: string): string | null {
-    try {
-      const parts = accessToken.split('.');
-      if (parts.length < 2) return null;
-      const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-      const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-      const json = JSON.parse(atob(padded));
-      const id = json?.['https://api.openai.com/auth']?.chatgpt_account_id;
-      return typeof id === 'string' && id ? id : null;
-    } catch { return null; }
   }
 
   // ── User-level config (defaults) ───────────────────────────────────
@@ -1239,6 +1262,7 @@ export class UserDO extends Agent<Env> {
     const out: ConnectedProvider[] = [];
     // Built-in providers without credentials are listed by the server, not
     // here — UserDO only knows about credential-gated ones.
+    if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
     if (byKey.has(CODEX_CRED_KEY)) out.push({ id: 'codex', label: 'ChatGPT Codex', credentialKeys: [CODEX_CRED_KEY] });
     if (byKey.has('openai.bearer')) out.push({ id: 'openai', label: 'OpenAI', credentialKeys: ['openai.bearer'] });
     if (byKey.has('anthropic.bearer')) out.push({ id: 'anthropic', label: 'Anthropic', credentialKeys: ['anthropic.bearer'] });

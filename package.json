@@ -9,8 +9,9 @@
   "scripts": {
     "test": "bun test --cwd packages/core",
     "check": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli",
-    "dev": "cd packages/cf-backend && vite dev",
+    "dev": "bun run --cwd packages/cf-backend start",
     "cli": "bun run packages/cli/bin/cli.ts",
+    "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh"
   },
   "dependencies": {

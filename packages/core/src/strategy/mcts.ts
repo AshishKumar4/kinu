@@ -44,6 +44,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
         pruneThreshold: o.pruneThreshold ?? defaults.pruneThreshold,
         minAcceptableScore: o.minAcceptableScore ?? defaults.minAcceptableScore,
         maxCostUSD: o.maxCostUSD ?? defaults.maxCostUSD,
+        signal: ctx.signal,
       });
       // The winner's trajectory is the agent-readable answer.
       const text = result.trajectory.map(m => `${m.role}: ${m.content}`).join('\n');

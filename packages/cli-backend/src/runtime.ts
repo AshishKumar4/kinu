@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
-  createVercelAILLM, type LLMProviderConfig, buildRuntime,
+  type LLMProviderConfig, buildRuntime,
   DefaultExecutionRouter, createInlineExecutor,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
@@ -23,7 +23,9 @@ import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
-import type { LocalProviderCredentials } from './model-resolver.js';
+import { createLocalProviderLLM, type LocalProviderCredentials } from './model-resolver.js';
+import type { LocalCodexAuthStore } from './codex-auth-store.js';
+import type { OAuthCredential } from '@proteus/core';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
@@ -31,6 +33,9 @@ export interface CLIRuntimeConfig {
   judge?: LLMProviderConfig;
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
+  codexAuthStore?: LocalCodexAuthStore;
+  codexConfigPath?: string;
+  onCodexRefresh?: (credential: OAuthCredential) => void;
 }
 
 export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void } }): SqlExecutor {
@@ -178,8 +183,15 @@ export function createCLIRuntime(
     sql`INSERT INTO agent_identity (id, name) VALUES (${agentId}, ${agentName})`;
   }
 
-  const llm = createVercelAILLM(config.llm);
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : llm;
+  const llm = createLocalProviderLLM({
+    llm: config.llm,
+    credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore,
+    onCodexRefresh: config.onCodexRefresh,
+  });
+  const judgeModel = config.judge
+    ? createLocalProviderLLM({ llm: config.judge, credentials: config.providerCredentials, codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh })
+    : llm;
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
@@ -191,6 +203,7 @@ export function createCLIRuntime(
   const { spawn, abort } = createBranchSpawner(basePath, {
     llm: config.llm,
     providerCredentials: config.providerCredentials,
+    codexConfigPath: config.codexConfigPath,
   });
 
   // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
@@ -224,21 +237,50 @@ export function createCLIRuntime(
   });
 }
 
-function createHostShell(cwd: string): Shell {
+export function createHostShell(cwd: string): Shell {
   return {
-    exec(command: string, stdin?: string) {
+    exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       return new Promise((resolve) => {
+        const stdin = typeof stdinOrOptions === 'string' ? stdinOrOptions : stdinOrOptions?.stdin;
+        const signal = typeof stdinOrOptions === 'string' ? undefined : stdinOrOptions?.signal;
+        let settled = false;
         const child = spawn('/bin/sh', ['-lc', command], {
           cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
           env: process.env,
+          detached: true,
         });
         let stdout = '';
         let stderr = '';
+        const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', onAbort);
+          resolve(result);
+        };
+        const onAbort = () => {
+          const pid = child.pid;
+          if (!pid) return;
+          try { process.kill(-pid, 'SIGTERM'); } catch {}
+          setTimeout(() => {
+            if (!settled) {
+              try { process.kill(-pid, 'SIGKILL'); } catch {}
+            }
+          }, 1500).unref();
+        };
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
         child.stdout.on('data', (d) => { stdout += d.toString(); });
         child.stderr.on('data', (d) => { stderr += d.toString(); });
-        child.on('error', (err) => resolve({ stdout, stderr: err.message, exitCode: 1 }));
-        child.on('close', (code) => resolve({ stdout, stderr, exitCode: code ?? 0 }));
+        child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
+        child.on('close', (code, signalName) => {
+          const aborted = signal?.aborted || signalName === 'SIGTERM' || signalName === 'SIGKILL';
+          finish({
+            stdout,
+            stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
+            exitCode: code ?? (aborted ? 130 : 0),
+          });
+        });
         if (stdin) child.stdin.end(stdin);
         else child.stdin.end();
       });
@@ -259,8 +301,9 @@ function createLocalLaptopExecutor(cwd: string, shell: Shell): ExecutorProvider 
     tools: {
       exec: {
         description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
-        execute: async (command: unknown) => {
-          const result = await shell.exec(String(command));
+        execute: async (command: unknown, context?: unknown) => {
+          const signal = readAbortSignal(context);
+          const result = await shell.exec(String(command), signal ? { signal } : undefined);
           if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
           return result.stdout || '(no output)';
         },
@@ -293,4 +336,12 @@ function createLocalLaptopExecutor(cwd: string, shell: Shell): ExecutorProvider 
   listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;
 };`,
   };
+}
+
+function readAbortSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
+  const signal = (context as { signal?: unknown }).signal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

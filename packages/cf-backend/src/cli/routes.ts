@@ -1,5 +1,6 @@
 import type { AuthIdentity } from '../auth/session.js';
 import { AuthError, authenticateRequest } from '../auth/session.js';
+import { publicHtmlHeaders } from '../lib/security-headers.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from '../user/user-do.js';
 import { approveCliAuth, inspectCliAuth, pollCliAuth, startCliAuth } from './auth-store.js';
@@ -14,7 +15,7 @@ interface CliIdentity {
   userDO: DurableObjectStub<UserDO>;
 }
 
-const GITHUB_REPO_TARBALL = 'https://github.com/AshishKumar4/Proteus/archive/refs/heads/main.tar.gz';
+const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 
 export async function handleCliRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
@@ -23,11 +24,14 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
   if (url.pathname === '/install' && (method === 'GET' || method === 'HEAD')) {
     return method === 'HEAD' ? new Response(null, installPageInit()) : installPageResponse(url.origin);
   }
-  if (url.pathname === '/install.sh' && method === 'GET') {
-    return installScriptResponse(url.origin);
+  if (url.pathname === '/install.sh' && (method === 'GET' || method === 'HEAD')) {
+    return installScriptResponse(url.origin, method === 'HEAD');
   }
-  if (url.pathname === '/downloads/proteus' && method === 'GET') {
-    return cliShimResponse();
+  if (url.pathname === '/downloads/proteus' && (method === 'GET' || method === 'HEAD')) {
+    return cliShimResponse(url.origin, method === 'HEAD');
+  }
+  if (url.pathname === CLI_SOURCE_TARBALL_PATH && (method === 'GET' || method === 'HEAD')) {
+    return cliSourceArchiveResponse(request, env, method === 'HEAD');
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {
@@ -95,6 +99,8 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
       const entry = await cli.userDO.registerAgent(body.name, body.displayName, body.purpose);
       const orchestrator = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(body.name)) as DurableObjectStub<OrchestratorAgent>;
       await orchestrator.claimOwner(cli.userId);
+      const trimmedPurpose = body.purpose?.trim();
+      if (trimmedPurpose) await orchestrator.setSoul(trimmedPurpose);
       return json(entry, { status: 201 });
     } catch (e) {
       return err(400, (e as Error).message);
@@ -119,6 +125,202 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
     }
   }
 
+  const statusMatch = path.match(/^\/agents\/([^/]+)\/status$/);
+  if (statusMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(statusMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getAgentStatus());
+  }
+
+  const toolsMatch = path.match(/^\/agents\/([^/]+)\/tools$/);
+  if (toolsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(toolsMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getToolDescriptions());
+  }
+
+  const modelMatch = path.match(/^\/agents\/([^/]+)\/model$/);
+  if (modelMatch && (method === 'GET' || method === 'PUT')) {
+    const agent = await cliAgent(env, cli, decodeURIComponent(modelMatch[1]));
+    if (agent instanceof Response) return agent;
+    if (method === 'GET') return json(await agent.getStoredModelSpec());
+    const body = await safeJson<{ spec?: string }>(request);
+    if (!body?.spec?.trim()) return err(400, 'spec required');
+    return json(await agent.setModel(body.spec));
+  }
+
+  const triggersMatch = path.match(/^\/agents\/([^/]+)\/triggers$/);
+  if (triggersMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(triggersMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.listTriggers());
+  }
+
+  const timerTriggerMatch = path.match(/^\/agents\/([^/]+)\/triggers\/timer$/);
+  if (timerTriggerMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(timerTriggerMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{ cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown> }>(request);
+    try {
+      return json(await agent.createTimerTrigger({
+        cron: body?.cron,
+        atMs: body?.atMs,
+        label: body?.label,
+        payload: body?.payload,
+        trust: 'owner',
+      }), { status: 201 });
+    } catch (e) {
+      return err(400, (e as Error).message);
+    }
+  }
+
+  const webhookTriggerMatch = path.match(/^\/agents\/([^/]+)\/triggers\/webhook$/);
+  if (webhookTriggerMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(webhookTriggerMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{
+      label?: string;
+      auth_mode?: 'hmac' | 'bearer' | 'mtls';
+      secret?: string;
+      accepted_content_type?: string;
+      rate_limit_per_min?: number;
+    }>(request);
+    if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+    try {
+      return json(await agent.createDurableWebhook({
+        label: body.label,
+        auth_mode: body.auth_mode,
+        secret: body.secret,
+        accepted_content_type: body.accepted_content_type,
+        rate_limit_per_min: body.rate_limit_per_min,
+        trust: 'owner',
+      }), { status: 201 });
+    } catch (e) {
+      return err(400, (e as Error).message);
+    }
+  }
+
+  const triggerDeleteMatch = path.match(/^\/agents\/([^/]+)\/triggers\/([^/]+)$/);
+  if (triggerDeleteMatch && method === 'DELETE') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(triggerDeleteMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.cancelTrigger(decodeURIComponent(triggerDeleteMatch[2])));
+  }
+
+  const jobsMatch = path.match(/^\/agents\/([^/]+)\/jobs$/);
+  if (jobsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(jobsMatch[1]));
+    if (agent instanceof Response) return agent;
+    const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get('limit') ?? '20', 10) || 20));
+    return json(await agent.listBackgroundJobs(limit));
+  }
+
+  const jobDeleteMatch = path.match(/^\/agents\/([^/]+)\/jobs\/([^/]+)$/);
+  if (jobDeleteMatch && method === 'DELETE') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(jobDeleteMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.cancelBackgroundJob(decodeURIComponent(jobDeleteMatch[2])));
+  }
+
+  const stateMatch = path.match(/^\/agents\/([^/]+)\/state$/);
+  if (stateMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(stateMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getWorkspaceSnapshot());
+  }
+
+  const stopMatch = path.match(/^\/agents\/([^/]+)\/stop$/);
+  if (stopMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(stopMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.cancelCurrentWork());
+  }
+
+  const memoryMatch = path.match(/^\/agents\/([^/]+)\/memory$/);
+  if (memoryMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(memoryMatch[1]));
+    if (agent instanceof Response) return agent;
+    const query = url.searchParams.get('q')?.trim();
+    if (query) return json(await agent.searchMemoryHybrid(query, boundedLimit(url, 10)));
+    return json({ content: await agent.getMemoryContent() });
+  }
+
+  const eventsMatch = path.match(/^\/agents\/([^/]+)\/events$/);
+  if (eventsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(eventsMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.listRecentEvents({
+      variant: url.searchParams.get('variant') ?? undefined,
+      since: readIntParam(url, 'since'),
+      limit: boundedLimit(url, 50),
+    }));
+  }
+
+  const timelineMatch = path.match(/^\/agents\/([^/]+)\/timeline$/);
+  if (timelineMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(timelineMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getRunTimeline({ runId: url.searchParams.get('runId') ?? undefined, limit: boundedLimit(url, 250) }));
+  }
+
+  const mctsDetailMatch = path.match(/^\/agents\/([^/]+)\/mcts\/([^/]+)$/);
+  if (mctsDetailMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(mctsDetailMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getMctsNodeDetail(decodeURIComponent(mctsDetailMatch[2])));
+  }
+
+  const mctsMatch = path.match(/^\/agents\/([^/]+)\/mcts$/);
+  if (mctsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(mctsMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getMctsTree());
+  }
+
+  const headsMatch = path.match(/^\/agents\/([^/]+)\/heads$/);
+  if (headsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(headsMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getHeadRuns(boundedLimit(url, 20)));
+  }
+
+  const gepaDetailMatch = path.match(/^\/agents\/([^/]+)\/gepa\/([^/]+)$/);
+  if (gepaDetailMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(gepaDetailMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getGepaRun(decodeURIComponent(gepaDetailMatch[2])));
+  }
+
+  const gepaMatch = path.match(/^\/agents\/([^/]+)\/gepa$/);
+  if (gepaMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(gepaMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getGepaRuns(boundedLimit(url, 20)));
+  }
+
+  const executorExecMatch = path.match(/^\/agents\/([^/]+)\/executors\/([^/]+)\/exec$/);
+  if (executorExecMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(executorExecMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{ command?: string }>(request);
+    if (!body?.command?.trim()) return err(400, 'command required');
+    return json(await agent.executeInExecutor(decodeURIComponent(executorExecMatch[2]), body.command));
+  }
+
+  const executorsMatch = path.match(/^\/agents\/([^/]+)\/executors$/);
+  if (executorsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(executorsMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getExecutors());
+  }
+
+  const productMatch = path.match(/^\/agents\/([^/]+)\/product$/);
+  if (productMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(productMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getProductChangeBoard(boundedLimit(url, 20)));
+  }
+
   if (path === '/devices' && method === 'GET') {
     return json(await cli.userDO.listDevices());
   }
@@ -129,6 +331,70 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
   }
 
   return err(404, `No such CLI route: ${method} ${path}`);
+}
+
+async function cliAgent(env: Env, cli: CliIdentity, name: string): Promise<CliAgentRpc | Response> {
+  if (!(await cli.userDO.hasAgent(name))) return err(404, `Agent ${name} not found.`);
+  const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(name)) as unknown as CliAgentRpc;
+  try {
+    await agent.claimOwner(cli.userId);
+    return agent;
+  } catch (e) {
+    return err(403, (e as Error).message);
+  }
+}
+
+interface CliAgentRpc {
+  claimOwner(userId: string): Promise<unknown>;
+  getAgentStatus(): Promise<unknown>;
+  getToolDescriptions(): Promise<unknown>;
+  getStoredModelSpec(): Promise<unknown>;
+  setModel(spec: string): Promise<unknown>;
+  listTriggers(): Promise<unknown>;
+  createDurableWebhook(opts: {
+    label: string;
+    auth_mode: 'hmac' | 'bearer' | 'mtls';
+    secret?: string;
+    accepted_content_type?: string;
+    rate_limit_per_min?: number;
+    trust?: 'authenticated' | 'owner';
+  }): Promise<unknown>;
+  createTimerTrigger(opts: {
+    cron?: string;
+    atMs?: number;
+    label?: string;
+    payload?: Record<string, unknown>;
+    trust?: 'authenticated' | 'owner';
+  }): Promise<unknown>;
+  cancelTrigger(triggerId: string): Promise<unknown>;
+  listBackgroundJobs(limit?: number): Promise<unknown>;
+  cancelBackgroundJob(jobId: string): Promise<unknown>;
+  cancelCurrentWork(): Promise<unknown>;
+  getWorkspaceSnapshot(): Promise<unknown>;
+  getMemoryContent(): Promise<unknown>;
+  searchMemoryHybrid(query: string, limit?: number): Promise<unknown>;
+  listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }): Promise<unknown>;
+  getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<unknown>;
+  getMctsTree(): Promise<unknown>;
+  getMctsNodeDetail(nodeId: string): Promise<unknown>;
+  getHeadRuns(limit?: number): Promise<unknown>;
+  getGepaRuns(limit?: number): Promise<unknown>;
+  getGepaRun(runId: string): Promise<unknown>;
+  getExecutors(): Promise<unknown>;
+  executeInExecutor(executorId: string, command: string): Promise<unknown>;
+  getProductChangeBoard(limit?: number): Promise<unknown>;
+}
+
+function readIntParam(url: URL, key: string): number | undefined {
+  const raw = url.searchParams.get(key);
+  if (!raw) return undefined;
+  const value = parseInt(raw, 10);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function boundedLimit(url: URL, fallback: number, max = 250): number {
+  const value = readIntParam(url, 'limit') ?? fallback;
+  return Math.max(1, Math.min(max, value));
 }
 
 function approvalOrigin(env: Env, url: URL): string {
@@ -489,18 +755,11 @@ function installPageResponse(origin: string): Response {
 
 function installPageInit(): ResponseInit {
   return {
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'private, no-store',
-      'referrer-policy': 'strict-origin-when-cross-origin',
-      'x-frame-options': 'DENY',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
-    },
+    headers: publicHtmlHeaders(),
   };
 }
 
-function installScriptResponse(origin: string): Response {
+function installScriptResponse(origin: string, head = false): Response {
   const script = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -681,7 +940,7 @@ else
   say "Proteus CLI is ready."
 fi
 `;
-  return new Response(script, {
+  return new Response(head ? null : script, {
     headers: {
       'content-type': 'text/x-shellscript; charset=utf-8',
       'x-content-type-options': 'nosniff',
@@ -690,14 +949,24 @@ fi
   });
 }
 
-function cliShimResponse(): Response {
+async function cliSourceArchiveResponse(request: Request, env: Env, head = false): Promise<Response> {
+  const assetUrl = new URL(CLI_SOURCE_TARBALL_PATH, request.url);
+  const assetRes = await env.ASSETS.fetch(new Request(assetUrl, { method: 'GET' }));
+  const headers = new Headers(assetRes.headers);
+  headers.set('content-type', 'application/gzip');
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('cache-control', 'no-store');
+  return new Response(head ? null : assetRes.body, { status: assetRes.status, headers });
+}
+
+function cliShimResponse(origin: string, head = false): Response {
   const script = `#!/usr/bin/env bash
 set -euo pipefail
 
 PROTEUS_HOME="\${PROTEUS_HOME:-$HOME/.proteus}"
 SOURCE_ROOT="$PROTEUS_HOME/source"
 SRC_DIR="$SOURCE_ROOT/current"
-TARBALL_URL="\${PROTEUS_SOURCE_TARBALL:-${GITHUB_REPO_TARBALL}}"
+TARBALL_URL="\${PROTEUS_SOURCE_TARBALL:-${origin}${CLI_SOURCE_TARBALL_PATH}}"
 TARBALL_SHA256="\${PROTEUS_SOURCE_SHA256:-}"
 
 need_bun() {
@@ -755,8 +1024,12 @@ if [ ! -d node_modules ]; then
 fi
 exec bun run packages/cli/bin/cli.ts "$@"
 `;
-  return new Response(script, {
-    headers: { 'content-type': 'text/x-shellscript; charset=utf-8' },
+  return new Response(head ? null : script, {
+    headers: {
+      'content-type': 'text/x-shellscript; charset=utf-8',
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store',
+    },
   });
 }
 

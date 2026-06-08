@@ -79,7 +79,9 @@ export {
   ACTIVE_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
+  type BuiltinToolSpec,
 } from './tools/registry.js';
 export { buildBuiltinTools, type BuiltinToolDeps, type ProductChangeToolDeps } from './tools/builtins.js';
 export {
@@ -89,7 +91,43 @@ export {
   type CraftedToolExecuteFn,
   type CraftedToolSource,
 } from './tools/crafted-executor.js';
-export { buildSystemPrompt, buildSystemPromptSync, FALLBACK_PURPOSE, type SystemPromptOptions } from './prompt.js';
+export {
+  buildSystemPrompt,
+  buildSystemPromptPartsSync,
+  buildSystemPromptSync,
+  FALLBACK_PURPOSE,
+  type SystemPromptOptions,
+  type SystemPromptParts,
+} from './prompt.js';
+export {
+  compilePromptSurface,
+  executorIsSelectable,
+  selectableRuntimeNames,
+  uniqueBuiltinTools,
+  uniqueExternalTools,
+  uniquePromptExecutors,
+  type PromptBackend,
+  type PromptExecutorInfo,
+  type PromptExternalToolInfo,
+  type PromptMode,
+  type PromptSurface,
+  type PromptSurfaceOptions,
+} from './prompting/surface.js';
+export {
+  assertToolsSupportedByModel,
+  modelSupportsTools,
+  resolvePromptModelProfile,
+  type PromptModelCapability,
+  type PromptModelContext,
+  type PromptModelFamily,
+  type PromptModelProfile,
+} from './prompting/model-profile.js';
+export {
+  extractJsonArray,
+  extractJsonObject,
+  jsonArrayOnlyInstruction,
+  jsonObjectOnlyInstruction,
+} from './prompts/structured.js';
 
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder.js';
@@ -186,10 +224,12 @@ export {
   createSandboxExecutor, type SandboxHandle,
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
+  isSandboxTransientError,
   createSSHTunnelExecutor, type DeviceTransport,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED,
-  createNimbusExecutor, type NimbusExecutorOpts,
+  createNimbusExecutor, type NimbusExecutorOpts, type NimbusSandboxHandle,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
+  type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 

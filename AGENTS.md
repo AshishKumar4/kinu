@@ -21,6 +21,10 @@ bun run dev                              # Vite dev server (cf-backend)
 
 No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
 
+## Working Style
+
+- Avoid loading skills unless they are concretely needed for the task. Keep context focused and prefer direct source inspection for routine repo work.
+
 ## Package Structure
 
 ```

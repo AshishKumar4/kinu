@@ -9,19 +9,52 @@
  */
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Loader, InputArea } from "@cloudflare/kumo";
-import { PlusIcon } from "@phosphor-icons/react";
-import { registerAgent } from "@/lib/user-api";
-import { slugifyName } from "@/lib/agent-naming";
+import { Button, Loader } from "@cloudflare/kumo";
+import {
+  BugBeetleIcon,
+  CodeBlockIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  SparkleIcon,
+} from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
+import { createAgentFromMission } from "@/lib/create-agent";
+
+export const AGENT_STARTERS = [
+  {
+    title: "Investigate",
+    description: "Trace a messy issue, find the cause, and propose the fix.",
+    prompt: "Investigate the most likely cause of the current failing user flow, validate it with evidence, and implement the clean fix.",
+    Icon: MagnifyingGlassIcon,
+  },
+  {
+    title: "Ship a change",
+    description: "Plan, edit, test, and summarize a product improvement.",
+    prompt: "Implement a polished product improvement end to end, keeping the change small, tested, and consistent with the existing codebase.",
+    Icon: CodeBlockIcon,
+  },
+  {
+    title: "Harden",
+    description: "Audit for correctness, security, stale code, and regressions.",
+    prompt: "Audit this project for real bugs, security issues, incomplete paths, redundant code, and missing verification, then fix the validated issues cleanly.",
+    Icon: BugBeetleIcon,
+  },
+  {
+    title: "Evolve",
+    description: "Improve its own operating scaffold as it works.",
+    prompt: "Review your own agent workflow, identify one high-impact scaffold improvement, implement it safely, and verify it without regressing the app.",
+    Icon: SparkleIcon,
+  },
+] as const;
 
 export interface CreateAgentModalProps {
   onClose: () => void;
+  initialMission?: string;
 }
 
-export function CreateAgentModal({ onClose }: CreateAgentModalProps) {
+export function CreateAgentModal({ onClose, initialMission = "" }: CreateAgentModalProps) {
   const navigate = useNavigate();
-  const [mission, setMission] = useState("");
+  const [mission, setMission] = useState(initialMission);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -30,16 +63,13 @@ export function CreateAgentModal({ onClose }: CreateAgentModalProps) {
     if (!m || busy) return;
     setBusy(true);
     setErr(null);
-    // The slug is the stable DO id (a short random suffix keeps it unique); the
-    // display title is derived server-side from the mission, then AI-titled.
-    const fullName = `${slugifyName(m) || "agent"}-${crypto.randomUUID().slice(0, 6)}`;
     try {
-      await registerAgent(fullName, m);
+      const created = await createAgentFromMission(m);
       // Dismiss the modal BEFORE navigating: it's rendered by the persistent
       // Sidebar, so without this the "creating…" scrim stays up over the
       // freshly-opened agent page. Leave `busy` set — the modal unmounts.
       onClose();
-      navigate(`/agent/${fullName}`, { state: { initialPrompt: m } });
+      navigate(`/agent/${created.name}`, { state: { initialPrompt: created.mission } });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -51,7 +81,7 @@ export function CreateAgentModal({ onClose }: CreateAgentModalProps) {
       title="New agent"
       icon={<PlusIcon size={18} className="p-accent" />}
       onClose={onClose}
-      maxWidthClass="max-w-lg"
+      maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
         <Button size="sm" variant="primary" onClick={submit} disabled={busy || !mission.trim()}>
@@ -59,18 +89,40 @@ export function CreateAgentModal({ onClose }: CreateAgentModalProps) {
         </Button>
       </>}
     >
-      <div className="space-y-1.5">
-        <label className="text-[11px] p-text-3 block">What should it do?</label>
-        <InputArea
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label htmlFor="agent-mission" className="text-xs font-medium p-text-2 block">Mission</label>
+          <textarea
+          id="agent-mission"
           value={mission}
-          onValueChange={setMission}
+          onChange={(e) => setMission(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); } }}
-          placeholder="e.g. Research the top 3 Rust web frameworks and build a benchmark comparing them."
-          rows={5}
+          placeholder="Ask the agent to investigate, build, automate, audit, or improve something."
+          rows={7}
           autoFocus
           disabled={busy}
+          className="w-full min-h-40 resize-y rounded-lg border p-border p-bg px-3 py-2.5 text-sm leading-relaxed p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)] disabled:opacity-60"
         />
-        <p className="text-[10px] p-text-3">Becomes the agent's purpose and its first message. It names itself from this. ⌘/Ctrl+Enter to create.</p>
+          <p className="text-[11px] p-text-3">This becomes the agent's purpose and opening message.</p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {AGENT_STARTERS.map(({ title, description, prompt, Icon }) => (
+            <button
+              key={title}
+              type="button"
+              onClick={() => setMission(prompt)}
+              disabled={busy}
+              className="group min-h-20 rounded-lg border p-border p-card px-3 py-2.5 text-left transition-colors hover:p-card-hover disabled:opacity-60"
+            >
+              <div className="flex items-center gap-2">
+                <Icon size={14} className="p-accent shrink-0" />
+                <span className="text-sm font-medium p-text">{title}</span>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed p-text-2">{description}</p>
+            </button>
+          ))}
+        </div>
       </div>
 
       {err && (

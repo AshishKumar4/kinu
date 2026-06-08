@@ -28,6 +28,7 @@ import type {
 } from './types.js';
 import { DEFAULT_EVOLUTION_CONFIG } from './types.js';
 import { isoDate } from '../utils/date.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
 import { updateCraftScores } from '../craft/ema.js';
@@ -379,23 +380,13 @@ export class EvolutionEngine {
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
       `The user asked: "${turn.userMessage.slice(0, 200)}"\n\n` +
       `Extract a reusable pattern as a JavaScript async arrow function.\n` +
-      `Return ONLY valid JSON with these fields:\n` +
       `{"name":"snake_case_name","description":"one line description","params":{"type":"object","properties":{...},"required":[...]},"code":"async (args) => { ... }"}\n` +
-      `The code must be a self-contained async arrow function that takes an args object.`,
+      `The code must be a self-contained async arrow function that takes an args object.\n` +
+      jsonObjectOnlyInstruction(),
     );
 
     try {
-      // Find valid JSON by trying from each { position (handles nested braces in code field)
-      let parsed: { name?: string; description?: string; code?: string; params?: unknown } = {};
-      const startIdx = generalized.indexOf('{');
-      if (startIdx >= 0) {
-        for (let end = generalized.length; end > startIdx; end--) {
-          if (generalized[end - 1] === '}') {
-            try { parsed = JSON.parse(generalized.slice(startIdx, end)); break; }
-            catch { continue; }
-          }
-        }
-      }
+      const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string; params?: unknown };
       if (!parsed.name || !parsed.code || parsed.code.startsWith('//')) return;
 
       await upsertCraftedTool(this.rt, {

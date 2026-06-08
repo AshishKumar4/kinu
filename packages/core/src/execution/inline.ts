@@ -19,7 +19,7 @@ import { appendMemoryNote } from '../memory/note.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
 
 interface ShellExec {
-  exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 export interface InlineExecutorDeps {
@@ -78,8 +78,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
     exec: {
       description: 'Execute a POSIX shell command. Supports cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq, xargs. Pipes (|) and redirects (>, >>) work.',
-      execute: async (command: unknown) => {
-        const result = await shell.exec(String(command));
+      execute: async (command: unknown, context?: unknown) => {
+        const signal = readSignal(context);
+        const result = await shell.exec(String(command), signal ? { signal } : undefined);
         if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
         return result.stdout || '(no output)';
       },
@@ -225,4 +226,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     async unexposePort() { /* nothing to do */ },
     async listExposedPorts() { return []; },
   };
+}
+
+function readSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
+  const signal = (context as { signal?: unknown }).signal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

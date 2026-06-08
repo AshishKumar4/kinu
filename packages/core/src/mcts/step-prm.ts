@@ -13,6 +13,7 @@
 // The judge model receives (task, accumulated trajectory so far, current
 // step's action+observation) and emits a [0..1] score with a short rationale.
 import type { LLM } from '../types/primitives.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 
 export interface StepScoreInput {
   task: string;
@@ -45,21 +46,27 @@ Rate THIS STEP from 0.0 to 1.0:
 - 0.5 — step is plausible but not clearly progress
 - 1.0 — step is correct / clearly progresses toward task completion
 
-Respond ONLY with this JSON. Do not explain.
-{"score": <float 0..1>, "rationale": "<≤20 words>"}`;
+JSON shape:
+{"score": <float 0..1>, "rationale": "<≤20 words>"}
+${jsonObjectOnlyInstruction()}`;
 
 /** Score a single MCTS step or scaffold action. Calls the judge LLM. */
 export async function scoreStepWithJudge(judge: LLM, input: StepScoreInput): Promise<StepScore> {
+  let text: string;
   try {
-    const text = await judge.complete(STEP_PROMPT(input));
-    const m = text.match(/\{[\s\S]*?\}/);
-    if (!m) return { score: 0.5, rationale: 'unparseable' };
-    const parsed = JSON.parse(m[0]) as { score?: number; rationale?: string };
-    const score = Math.min(1, Math.max(0, Number(parsed.score ?? 0.5) || 0.5));
-    const rationale = typeof parsed.rationale === 'string' ? parsed.rationale : '';
-    return { score, rationale };
+    text = await judge.complete(STEP_PROMPT(input));
   } catch {
-    return { score: 0.5, rationale: 'judge-error' };
+    return { score: 0, rationale: 'judge-error' };
+  }
+
+  try {
+    const parsed = extractJsonObject(text) as { score?: number; rationale?: string };
+    const score = Number(parsed.score);
+    if (!Number.isFinite(score)) return { score: 0, rationale: 'invalid-score' };
+    const rationale = typeof parsed.rationale === 'string' ? parsed.rationale : '';
+    return { score: Math.min(1, Math.max(0, score)), rationale };
+  } catch {
+    return { score: 0, rationale: 'unparseable' };
   }
 }
 

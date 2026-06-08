@@ -45,6 +45,7 @@ export interface MCTSConfig {
   pruneThreshold?: number;
   minAcceptableScore?: number;
   maxCostUSD?: number;
+  signal?: AbortSignal;
   /** Called after each MCTS iteration completes — use for real-time UI updates. */
   onIterationComplete?: (iteration: number, remainingBudget: number) => void;
 }

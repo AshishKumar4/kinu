@@ -19,6 +19,7 @@ const activeBranches = new Map<string, ChildProcess>();
 export interface BranchSpawnerConfig {
   llm: LLMProviderConfig;
   providerCredentials?: LocalProviderCredentials;
+  codexConfigPath?: string;
 }
 
 export function createBranchSpawner(basePath: string, config: BranchSpawnerConfig): { spawn: SpawnBranch; abort: AbortBranch } {
@@ -40,12 +41,16 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
         PROTEUS_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
         PROTEUS_MODEL: config.llm.model,
         PROTEUS_LLM_HEADERS: JSON.stringify(config.llm.headers),
-        PROTEUS_PROVIDER_CREDENTIALS: JSON.stringify(config.providerCredentials ?? {}),
+        PROTEUS_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
+        ...(config.codexConfigPath ? { PROTEUS_CONFIG_PATH: config.codexConfigPath } : {}),
         PROTEUS_PARENT_DB: `${basePath}.db`, // Parent DB path for loading crafted tools
       },
       // No execArgv needed — when running under bun, fork() inherits bun's runtime
     });
     activeBranches.set(branchId, child);
+    child.once('exit', () => {
+      activeBranches.delete(branchId);
+    });
 
     const rpc = <T>(method: string, args: unknown): Promise<T> =>
       new Promise((resolve, reject) => {
@@ -101,4 +106,10 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
   };
 
   return { spawn, abort };
+}
+
+function branchSafeCredentials(credentials: LocalProviderCredentials | undefined): LocalProviderCredentials {
+  if (!credentials) return {};
+  const { codexOAuth: _codexOAuth, ...safe } = credentials;
+  return safe;
 }

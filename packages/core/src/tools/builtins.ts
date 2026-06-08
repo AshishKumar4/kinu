@@ -8,9 +8,9 @@
  *                       CLI: Node in-process sandbox from cli-backend).
  *                       Absent → returns a 'NOT CONFIGURED' error. Core
  *                       itself does NO codegen.
- *   2. run            — shell via executionRouter; `runtime` param chooses
- *                       workspace / nimbus / sandbox / laptop, with workspace
- *                       (rt.shell) as default.
+ *   2. run            — shell via executionRouter; `runtime` param explicitly
+ *                       chooses workspace / nimbus / sandbox / laptop, with
+ *                       workspace (rt.shell) as the conservative default.
  *   3. skills         — Claude-Code / Hermes SKILL.md store; one tool, six
  *                       actions. Gated on deps.skills.
  *   4. think          — unified exploration dispatcher (single-shot / mcts /
@@ -326,15 +326,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: ['workspace', 'nimbus', 'sandbox', 'laptop'],
           description:
-            'Execution runtime. workspace = agent\'s own VFS shell (default); ' +
-            'nimbus = lightweight DO sandbox; sandbox = full Cloudflare Sandbox; ' +
-            'laptop = user\'s PC via daemon. Asking for an un-provisioned runtime ' +
-            'surfaces the install card to the user.',
+            'Execution runtime. Use one of the environments listed in the system prompt. ' +
+            'workspace is the internal Proteus VFS shell and the default only when runtime is omitted. ' +
+            'Choose nimbus, sandbox, or laptop explicitly when that environment is the right execution target.',
         },
       },
       required: ['command'],
     }),
-    execute: async (args: { command: string; runtime?: string }) => {
+    execute: async (args: { command: string; runtime?: string }, options?: unknown) => {
+      const signal = readAbortSignal(options);
       // Approval-gate pre-flight — same ruleset across every runtime.
       // 'gate' behavior depends on shellApprovalMode (strict / allow_all /
       // deny_all). See safety/approval-gate.ts.
@@ -358,11 +358,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
       }
 
-      const defaultRuntime = router?.getProvider('laptop')?.isAvailable() ? 'laptop' : 'workspace';
+      const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
         if (!shell) return 'Error: no workspace shell available in this runtime.';
-        const result = await shell.exec(args.command);
+        const result = await shell.exec(args.command, signal ? { signal } : undefined);
         if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
         return result.stdout || '(no output)';
       }
@@ -381,7 +381,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               : runtimeKey === 'sandbox'
                 ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
                 : runtimeKey === 'nimbus'
-                  ? 'Nimbus sandbox is not reachable. Check NIMBUS_ENDPOINT / NIMBUS_TOKEN env.'
+                  ? 'Nimbus sandbox is not reachable. Check the NIMBUS_SESSION Durable Object binding.'
                   : `Runtime "${runtimeKey}" is not registered.`,
         });
       }
@@ -393,7 +393,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
         });
       }
-      return (await execTool.execute(args.command)) as string;
+      return (await execTool.execute(args.command, signal ? { signal } : undefined)) as string;
     },
   });
 
@@ -696,4 +696,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   }
 
   return tools;
+}
+
+function readAbortSignal(options: unknown): AbortSignal | undefined {
+  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
+  const signal = (options as { abortSignal?: unknown }).abortSignal;
+  return isAbortSignal(signal) ? signal : undefined;
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return typeof value === 'object' && value !== null && 'aborted' in value && 'addEventListener' in value;
 }

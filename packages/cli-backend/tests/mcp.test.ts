@@ -12,12 +12,12 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-const fixtureServer = new URL('./fixtures/echo-mcp-server.ts', import.meta.url).pathname;
+const fixtureServer = new URL('./fixtures/echo-mcp-server.mjs', import.meta.url).pathname;
 
 function mcpServers() {
   return {
     echo: {
-      command: process.execPath,
+      command: 'node',
       args: [fixtureServer],
     },
   };
@@ -75,6 +75,7 @@ describe('connectMcpServers', () => {
     const conn = await connectMcpServers(mcpServers(), (msg) => logs.push(msg));
     try {
       expect(Object.keys(conn.tools)).toEqual(['mcp_echo_echo']);
+      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 1 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
       const tool = conn.tools.mcp_echo_echo as { execute(input: unknown): Promise<string> };
       await expect(tool.execute({ text: 'hello' })).resolves.toBe('echo: hello');

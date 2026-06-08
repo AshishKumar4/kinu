@@ -96,6 +96,7 @@ export function initUserTables(sql: SqlExec): void {
   // on THIS UserDO (the user-level hub) so every one of the user's agents can
   // request the device. `token_hash` is the device's long-lived connect secret;
   // raw tokens are returned only once to the authenticated CLI and never stored.
+  resetRawTokenTable(sql, 'user_devices');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_devices (
       id            TEXT PRIMARY KEY,
@@ -114,6 +115,7 @@ export function initUserTables(sql: SqlExec): void {
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
   // stored. The CLI presents the raw token as Authorization: Bearer <token>.
+  resetRawTokenTable(sql, 'user_cli_tokens');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_cli_tokens (
       token_hash  TEXT PRIMARY KEY,
@@ -168,4 +170,15 @@ function ensureColumn(sql: SqlExec, table: string, column: string, ddl: string):
   const rows = sql.exec(`PRAGMA table_info(${table})`).toArray();
   if (rows.some((r) => r.name === column)) return;
   sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+function resetRawTokenTable(sql: SqlExec, table: 'user_devices' | 'user_cli_tokens'): void {
+  const rows = sql.exec(`PRAGMA table_info(${table})`).toArray();
+  if (rows.length === 0) return;
+  const names = new Set(rows.map((r) => String(r.name)));
+  if (names.has('token_hash') && !names.has('token')) return;
+  // Pre-release builds stored raw tokens or lacked the hash column. Those rows
+  // cannot be safely migrated in a Worker SQLite boot hook, and retaining them
+  // would preserve the old security flaw. Reset only these token tables.
+  sql.exec(`DROP TABLE ${table}`);
 }

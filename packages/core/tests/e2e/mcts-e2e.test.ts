@@ -57,10 +57,11 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
         );
         try {
           const m = score.match(/\{[^}]+\}/);
-          const parsed = JSON.parse(m?.[0] ?? '{"score": 0.5}');
-          return Math.min(1, Math.max(0, Number(parsed.score) || 0.5));
+          const parsed = JSON.parse(m?.[0] ?? '{"score": 0}');
+          const parsedScore = Number(parsed.score);
+          return Number.isFinite(parsedScore) ? Math.min(1, Math.max(0, parsedScore)) : 0;
         } catch {
-          return 0.5;
+          return 0;
         }
       },
       async generateReflection(task) {

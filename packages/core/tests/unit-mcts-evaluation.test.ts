@@ -95,13 +95,13 @@ describe('evaluateWithMultiModelJudging — Layer 2: judge scoring', () => {
     expect((explorer as ReturnType<typeof createScriptedLLM>).callCount).toBe(0);
   });
 
-  test('falls back to 0.5 on unparseable judge response', async () => {
+  test('penalizes unparseable judge response instead of returning neutral success', async () => {
     const { sql } = createTestSql();
     const score = await evaluateWithMultiModelJudging(
       'analyze', 'analysis', exec(), undefined as never,
       createScriptedLLM(['I refuse to score']), sql,
     );
-    expect(score).toBe(0.5);
+    expect(score).toBe(0);
   });
 });
 

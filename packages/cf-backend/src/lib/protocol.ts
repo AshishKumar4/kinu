@@ -48,7 +48,31 @@ export interface MCTSNode {
 	children: MCTSNode[];
 	task?: string;
 	observation?: string;
+	codeUsed?: string | null;
+	branchAgentKey?: string | null;
+	msgId?: string | null;
 	createdAt?: number;
+}
+
+export interface MCTSNodeSummary {
+	id: string;
+	parentId: string | null;
+	depth: number;
+	value: number;
+	visits: number;
+	status: MCTSNode["status"];
+	action: string;
+	createdAt?: number;
+}
+
+export interface MCTSNodeDetail extends MCTSNodeSummary {
+	task: string;
+	observation: string;
+	codeUsed: string | null;
+	branchAgentKey: string | null;
+	msgId: string | null;
+	path: MCTSNodeSummary[];
+	children: MCTSNodeSummary[];
 }
 
 export interface ToolInfo {

@@ -11,6 +11,7 @@
  */
 
 import type { LLM, SqlExecutor, Executor } from '../types/primitives.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 
 export async function evaluateWithMultiModelJudging(
   task: string,
@@ -79,18 +80,20 @@ Score this trajectory on a scale from 0.0 to 1.0 based on:
 - Correctness (is the output accurate?)
 - Efficiency (was it reasonably concise, or wasteful?)
 
-Respond with ONLY a JSON object. Do not explain.
-{"score": <float 0.0-1.0>, "rationale": "<10 words max>"}`;
+JSON shape:
+{"score": <float 0.0-1.0>, "rationale": "<10 words max>"}
+${jsonObjectOnlyInstruction()}`;
 }
 
 async function scoreWithJudge(judge: LLM, prompt: string): Promise<number> {
   const text = await judge.complete(prompt);
   try {
-    const m = text.match(/\{[^}]+\}/);
-    const parsed = JSON.parse(m?.[0] ?? '{"score":0.5}');
-    return Math.min(1, Math.max(0, Number(parsed.score) || 0.5));
+    const parsed = extractJsonObject(text) as { score?: unknown };
+    const score = Number(parsed.score);
+    if (!Number.isFinite(score)) return 0;
+    return Math.min(1, Math.max(0, score));
   } catch {
-    return 0.5;
+    return 0;
   }
 }
 

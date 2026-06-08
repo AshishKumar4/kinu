@@ -27,6 +27,14 @@ export const ACTIVE_TOOLS = [...BUILTIN_TOOLS] as const;
 /** Set form for O(1) membership checks in hot paths (e.g. craft score filter). */
 export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
 
+export interface BuiltinToolSpec {
+  name: BuiltinToolName;
+  summary: string;
+  whenToUse: string;
+  whenNotToUse: string;
+  result: string;
+}
+
 /**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
  * what the UI shows in the Tools tab.
@@ -40,58 +48,58 @@ export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
  *     preamble. Crafted-tool bodies may call `workspace.*`, `codemode.*`,
  *     and `tools.<other>` interchangeably.
  */
-export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> = {
-  execute_tools:
-    'Write JS to accomplish tasks. workspace.* for local VFS/shell. sandbox.* for a real Linux ' +
-    'container — use this for npm/pip/dev servers and ANY process that listens on a port. ' +
-    'codemode.* exposes learned patterns. After starting a dev server in the sandbox, call ' +
-    'sandbox.exposePort(port) so the user can SEE the running app — the returned URL renders ' +
-    'as a live iframe in the chat and on the Executors tab. agent.* steers YOURSELF: ' +
-    'agent.proposeCurriculum/acceptCurriculumTask (self-improvement tasks) and ' +
-    'agent.schedule({cron|atMs}) to wake yourself for a future autonomous turn. Agent-crafted ' +
-    'tools are reachable as tools.<name>(args) and their bodies may call workspace.*, sandbox.*, ' +
-    'codemode.*, tools.* freely. Runs in sandboxed Worker.',
-  run:
-    'Run a shell command. Pipes, redirects, env vars all work. The `runtime` ' +
-    'parameter chooses where it runs: "workspace" (default — the agent\'s own ' +
-    'VFS-backed virtual shell, no external resources), "nimbus" (lightweight DO ' +
-    'sandbox, good for most one-shot tasks), "sandbox" (full Cloudflare Sandbox ' +
-    'with a real Linux userland, needed for long-running servers and heavy ' +
-    'installs), or "laptop" (the user\'s own machine via the PC daemon, only ' +
-    'available once the user has installed it). If you need a runtime that ' +
-    'isn\'t provisioned yet, just call execute with the runtime you want — the ' +
-    'UI will surface the install card to the user.',
-  skills:
-    'Workflow skills — Claude-Code / Hermes-compatible SKILL.md files that ' +
-    'restrict your tool surface and inject task-specific instructions. One ' +
-    'tool, six actions: list (catalogue), read (one skill\'s body), invoke ' +
-    '(activate for this turn), create / edit / delete (CRUD on VFS-stored ' +
-    'skills). Skills live at /workspace/skills/<name>.md. Invoke when the ' +
-    'user asks for a workflow you\'ve previously codified or one of the ' +
-    'built-in skills (e.g. /audit-implementation) applies.',
-  think:
-    'Spawn deeper reasoning / parallel sub-agents. Pick a strategy by id: ' +
-    '"single-shot" (one LLM call, baseline); "mcts" (parallel tree-search rollouts ' +
-    'over candidate approaches — multi-step planning where the right path is not ' +
-    'obvious); "heads" (spawn 2–6 INDEPENDENT sub-agents that run concurrently — each ' +
-    'runs its own multi-step agentic loop with shell + sandbox + tool access, ' +
-    'optionally a different model per head, recursing to depth 3 — findings merged ' +
-    'via structured synthesis). Use heads to delegate 3+ independent subtasks at once; use mcts to ' +
-    'search a hard decision. Pick the cheapest strategy that fits.',
-  memory:
-    'Long-term prose memory (memory/MEMORY.md, FTS-indexed). One tool, two actions: ' +
-    '"save" (append a note for future turns to retrieve) and "search" (full-text ' +
-    'lookup, returns matching passages with scores). For keyed/typed state that ' +
-    'you\'ll reference by name, prefer `fact` instead.',
-  fact:
-    "The agent's typed, keyed world model — idempotent facts you reference across " +
-    'turns (user preferences, project state, dates, names, URLs, configuration). ' +
-    'One tool, three actions: "remember" (upsert key→value, value is any JSON, ' +
-    'optional confidence), "recall" (read by key; top-recent facts are also ' +
-    'auto-surfaced in your system prompt), "forget" (delete a stale/wrong fact).',
-  product_change:
-    'Governed lane for changing the Proteus product/UI itself. Use this when the user asks you ' +
-    'to customize or modify your own app experience. It records source bindings, change plans, ' +
-    'redacted diffs, validation checks, previews, explicit owner approvals, deployments, and rollback metadata. ' +
-    'Do not treat scaffold evolution as product UI changes, and do not deploy production without an approval record.',
+export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
+  execute_tools: {
+    name: 'execute_tools',
+    summary:
+      'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, agent helpers, and llm.query.',
+    whenToUse: 'Use for multi-step logic, file operations, crafted tool calls, scheduling, and operations that need shared state.',
+    whenNotToUse: 'Do not use for a single shell command when `run` is enough.',
+    result: 'Returns a structured execution result or error object from the codemode runtime.',
+  },
+  run: {
+    name: 'run',
+    summary: 'Run one shell command in one explicitly selected available runtime.',
+    whenToUse: 'Use for a direct command in the same runtime where its files and dependencies live.',
+    whenNotToUse: 'Do not use for multi-step logic, cross-runtime file access, or a runtime that is not explicitly listed as available.',
+    result: 'Returns stdout, an exit-code error, or a structured runtime_not_provisioned error.',
+  },
+  skills: {
+    name: 'skills',
+    summary: 'List, read, invoke, create, edit, or delete SKILL.md workflow instructions stored for this agent.',
+    whenToUse: 'Use only when a reusable workflow is needed or the user explicitly invokes a skill.',
+    whenNotToUse: 'Do not load broad skills speculatively; they consume context and can over-constrain unrelated work.',
+    result: 'Returns skill metadata, skill content, or mutation status.',
+  },
+  think: {
+    name: 'think',
+    summary: 'Run a deeper reasoning strategy: single-shot, mcts, or heads.',
+    whenToUse: 'Use heads for independent subtasks and mcts for hard approach search where competing branches are useful.',
+    whenNotToUse: 'Do not use for simple linear tasks or when branches would race on the same mutable files.',
+    result: 'Returns a strategy result with branch/head outputs, scores, and selected work.',
+  },
+  memory: {
+    name: 'memory',
+    summary: 'Save or search durable prose memory.',
+    whenToUse: 'Use for compact, durable lessons or notes that should survive future turns.',
+    whenNotToUse: 'Do not store keyed state, temporary task progress, stale logs, or facts that should be updated by name.',
+    result: 'Returns save status or search hits.',
+  },
+  fact: {
+    name: 'fact',
+    summary: 'Remember, recall, or forget typed keyed facts such as preferences, project state, URLs, dates, and configuration.',
+    whenToUse: 'Use for named durable state that should be recalled or updated precisely.',
+    whenNotToUse: 'Do not use for long prose notes; use memory for those.',
+    result: 'Returns fact mutation status or recalled fact values.',
+  },
+  product_change: {
+    name: 'product_change',
+    summary: 'Governed lane for changing the Proteus product/UI itself.',
+    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior.',
+    whenNotToUse: 'Do not use for ordinary user project work outside the Proteus product.',
+    result: 'Returns source binding, plan/check/preview/approval/deployment, or rollback metadata.',
+  },
 };
+
+export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> =
+  Object.fromEntries(BUILTIN_TOOLS.map((name) => [name, BUILTIN_TOOL_SPECS[name].summary])) as Record<BuiltinToolName, string>;

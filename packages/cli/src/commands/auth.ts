@@ -60,7 +60,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
   console.log(`${OK('✓')} Logged out`);
 }
 
-function openBrowser(url: string): void {
+export function openBrowser(url: string): void {
   const command = platform() === 'darwin'
     ? 'open'
     : platform() === 'win32'

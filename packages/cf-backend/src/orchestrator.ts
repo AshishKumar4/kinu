@@ -56,6 +56,7 @@ import {
   FALLBACK_PURPOSE,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
+  type BuiltinToolName,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   ACTIVE_TOOLS,
@@ -153,6 +154,12 @@ function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
     return '';
   }
   return '';
+}
+
+function executorOutputIsError(output: string): boolean {
+  const text = output.trim();
+  if (!text) return false;
+  return /^(error\b|exit\b|exec error:|read error:|write error:|list error:|delete error:|expose error:|unexpose error:|listports error:|runtime error:)/i.test(text);
 }
 
 // ── Fork payload types ────────────────────────────────────────────
@@ -327,9 +334,9 @@ export class OrchestratorAgent extends Think<Env> {
   /** Executors whose tools ran this turn — debounces the last-active-executor
    *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
   private _executorsUsedThisTurn = new Set<string>();
-  /** /workspace persistence: restored at most once per DO activation; backups
-   *  debounced via the persisted last-backup time + this optimistic gate. */
-  private _workspaceRestored = false;
+  /** /workspace backups are debounced via the persisted last-backup time +
+   *  this optimistic gate. Restore happens lazily in the sandbox handle on
+   *  first actual sandbox use, not at turn startup. */
   private _lastWorkspaceBackupAt = 0;
   /** Turns of new execution traces since the last auto-GEPA pass (in-memory
    *  cadence; resets on eviction, which just delays the next pass slightly). */
@@ -499,6 +506,9 @@ export class OrchestratorAgent extends Think<Env> {
     }
     return this._jobRunner;
   }
+  /** Foreground long-tool controllers before they cross the background
+   *  threshold. Once detached, BackgroundJobRunner owns cancellation. */
+  private readonly _activeToolControllers = new Set<AbortController>();
 
   // Typed accessors over the `agent_config` key/value table — replaces
   // scattered raw SQL with a single deep module.
@@ -821,7 +831,6 @@ export class OrchestratorAgent extends Think<Env> {
     await this.claimOwner(input.userId);
     this.ensureSchema();
 
-    await this.restoreWorkspaceIfNeeded();
     this.acc.reset(Date.now());
     this._executorsUsedThisTurn.clear();
     this._turnInvokedSkills.clear();
@@ -862,8 +871,10 @@ export class OrchestratorAgent extends Think<Env> {
     let text = '';
     let steps = 0;
     try {
+      const modelSpec = this.providerRegistry().normalizeSpecSync(this.getStoredModelId());
       for await (const ev of runChat({
         model: this.getModel(),
+        modelContext: { id: modelSpec },
         system: this.getSystemPrompt(),
         history,
         tools: this.getTools(),
@@ -969,8 +980,12 @@ export class OrchestratorAgent extends Think<Env> {
 
   getSystemPrompt(): string {
     this.logActivity("getsystemprompt_start");
-    const execs = (this.rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const key = `${this.getSoulPurpose()}\u0000${execs.join(",")}`;
+    const execs = this.rt.executionRouter?.listExecutors() ?? [];
+    const execKey = execs.map(e =>
+      `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
+    ).join(",");
+    const modelId = this.getStoredModelId();
+    const key = `${this.getSoulPurpose()}\u0000${execKey}\u0000${modelId}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -982,7 +997,12 @@ export class OrchestratorAgent extends Think<Env> {
       // the cache (Think calls getSystemPrompt() BEFORE beforeTurn(); a
       // stale `_turnActiveSkills` from the prior turn would otherwise leak
       // into _cachedSystemPrompt and be re-served on every later turn).
-      base = buildSystemPromptSync(this.rt, { registeredExecutors: execs });
+      base = buildSystemPromptSync(this.rt, {
+        executors: execs,
+        availableTools: ACTIVE_TOOLS,
+        backend: 'cf',
+        model: { id: modelId ?? undefined },
+      });
       this._cachedSystemPrompt = base;
       this._cachedSystemPromptKey = key;
       this.logActivity("getsystemprompt_end", `${base.length} chars`);
@@ -1280,20 +1300,6 @@ export class OrchestratorAgent extends Think<Env> {
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
-  /** Restore the agent's /workspace from its last R2 backup — once per DO
-   *  activation, before the turn runs (the container may have slept and lost
-   *  its filesystem). No-op when there's no backup or no sandbox. Never throws. */
-  private async restoreWorkspaceIfNeeded(): Promise<void> {
-    if (this._workspaceRestored) return;
-    this._workspaceRestored = true;            // at-most-once per activation
-    const handle = this.rt.sandboxHandle;
-    if (!handle) return;
-    const backup = this.config.getWorkspaceBackup();
-    if (!backup) return;                        // first-ever run: nothing to restore
-    try { await handle.restoreBackup(backup); }
-    catch (err) { console.warn('[proteus] workspace restore failed:', (err as Error).message); }
-  }
-
   /** Snapshot /workspace to R2 if the agent used the sandbox this turn and the
    *  debounce window elapsed. Fire-and-forget (never blocks the turn loop); the
    *  handle is persisted only on success, so a failed backup keeps the last good
@@ -1318,7 +1324,6 @@ export class OrchestratorAgent extends Think<Env> {
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this.acc.reset(Date.now());
     this._executorsUsedThisTurn.clear();
-    await this.restoreWorkspaceIfNeeded();
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // Start a new run for the event log, with provenance so cross-run history
@@ -1345,7 +1350,8 @@ export class OrchestratorAgent extends Think<Env> {
     // skills tool hold a stable reference).
     this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
-    const activeTools: string[] = [...ACTIVE_TOOLS];
+    const activeTools: BuiltinToolName[] = [...ACTIVE_TOOLS];
+    let activeSetForPrompt: ActiveSkillSet | undefined;
     let systemOverride: string | undefined;
     try {
       const lastUserText = extractLastUserText(ctx.messages);
@@ -1366,22 +1372,10 @@ export class OrchestratorAgent extends Think<Env> {
         });
         if (activeSet.active.length > 0) {
           this._turnActiveSkills = activeSet;
+          activeSetForPrompt = activeSet;
           // Mirror the resolved explicit set onto the turn-invoked tracker so
           // skills.list reflects what's active right now.
           for (const r of activeSet.reasons) this._turnInvokedSkills.add(r.name);
-
-          // Override the assembled system prompt with one that includes the
-          // active-skills section. Reuse the SAME execs list Think already
-          // assembled into ctx.system isn't safe (it's the assembled string,
-          // not raw inputs), so we re-render the prompt with the same
-          // registered-executors source we use in getSystemPrompt.
-          const execs = (this.rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-          systemOverride = buildSystemPromptSync(this.rt, {
-            registeredExecutors: execs,
-            activeSkills: activeSet,
-          });
-          // Same recent-facts tail getSystemPrompt appends (single source).
-          systemOverride = systemOverride + this.factsTail();
 
           // Intersect activeTools with the union of allowed_tools across the
           // active skills. Empty union (skills don't restrict) = leave the
@@ -1395,8 +1389,9 @@ export class OrchestratorAgent extends Think<Env> {
             // would lock the agent into the first activation.
             if (!filtered.includes('skills')) filtered.push('skills');
             activeTools.length = 0;
-            activeTools.push(...filtered);
+            activeTools.push(...(filtered as BuiltinToolName[]));
           }
+
           this.logActivity('skills_active',
             activeSet.active.map(s => s.name).join(',') || '(none)');
         }
@@ -1421,6 +1416,20 @@ export class OrchestratorAgent extends Think<Env> {
       ? [...activeTools, ...mcpToolNames]
       : activeTools;
     const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
+    if (activeSetForPrompt || mcpToolNames.length > 0) {
+      const execs = this.rt.executionRouter?.listExecutors() ?? [];
+      const modelId = this.getStoredModelId();
+      systemOverride = buildSystemPromptSync(this.rt, {
+        executors: execs,
+        availableTools: activeTools,
+        ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
+        externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
+        backend: 'cf',
+        model: { id: modelId ?? undefined },
+      });
+      // Same recent-facts tail getSystemPrompt appends (single source).
+      systemOverride = systemOverride + this.factsTail();
+    }
 
     const cfg: TurnConfig = { activeTools: effectiveActiveTools };
     if (systemOverride) cfg.system = systemOverride;
@@ -1785,6 +1794,31 @@ export class OrchestratorAgent extends Think<Env> {
     try { this.jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
   }
 
+  /** Stop visible work: abort foreground tool calls and cancel detached jobs. */
+  @callable()
+  async cancelCurrentWork(): Promise<{ ok: boolean; cancelledJobs: string[]; abortedTools: number }> {
+    const cancelledJobs = this.jobRunner.cancelRunning();
+    let abortedTools = 0;
+    for (const controller of [...this._activeToolControllers]) {
+      if (!controller.signal.aborted) {
+        try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
+        abortedTools++;
+      }
+      this._activeToolControllers.delete(controller);
+    }
+    this._inFlight = false;
+    this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
+    try {
+      this.broadcast(JSON.stringify({
+        type: 'work_cancelled',
+        cancelledJobs,
+        abortedTools,
+        timestamp: Date.now(),
+      }));
+    } catch { /* nop */ }
+    return { ok: true, cancelledJobs, abortedTools };
+  }
+
   // ── Device consent (P2) — ask-once-then-remember ─────────────────────
   // The UserDO (device hub) calls awaitDeviceConsent when this agent touches a
   // device with no remembered policy. We raise a card in the chat (broadcast +
@@ -1880,9 +1914,11 @@ export class OrchestratorAgent extends Think<Env> {
           // Merge it with the turn's own signal so a turn abort still propagates.
           const controller = new AbortController();
           const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
+          const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
           const deps = this.jobRunner.thresholdDeps(key, input, controller);
-          return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps);
+          this._activeToolControllers.add(controller);
+          return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps)
+            .finally(() => this._activeToolControllers.delete(controller));
         },
       };
     }
@@ -2242,8 +2278,66 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async doSearchMemory(query: string) { return this.rt.memory.search(query, 10); }
 
   @callable() async getMctsTree() {
-    return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, created_at
+    return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
       FROM search_nodes ORDER BY depth, created_at`;
+  }
+
+  @callable() async getMctsNodeDetail(nodeId: string) {
+    type Row = {
+      id: string; parent_id: string | null; depth: number; visits: number; value: number; status: string;
+      action: string; task: string; observation: string; code_used: string | null;
+      branch_agent_key: string | null; msg_id: string | null; created_at: number;
+    };
+    const readNode = (id: string): Row | null => this.sql<Row>`
+      SELECT id, parent_id, depth, visits, value, status, action, task, observation,
+             code_used, branch_agent_key, msg_id, created_at
+      FROM search_nodes WHERE id = ${id} LIMIT 1`[0] ?? null;
+    const row = readNode(nodeId);
+    if (!row) return null;
+
+    const summarize = (r: Row) => ({
+      id: r.id,
+      parentId: r.parent_id,
+      depth: r.depth,
+      visits: r.visits,
+      value: r.value,
+      status: r.status,
+      action: r.action,
+      createdAt: r.created_at,
+    });
+
+    const path = [];
+    const seen = new Set<string>();
+    let cursor: Row | null = row;
+    while (cursor && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      path.unshift(summarize(cursor));
+      cursor = cursor.parent_id ? readNode(cursor.parent_id) : null;
+    }
+
+    const children = this.sql<Row>`
+      SELECT id, parent_id, depth, visits, value, status, action, task, observation,
+             code_used, branch_agent_key, msg_id, created_at
+      FROM search_nodes WHERE parent_id = ${nodeId}
+      ORDER BY value DESC, visits DESC, created_at`;
+
+    return {
+      id: row.id,
+      parentId: row.parent_id,
+      depth: row.depth,
+      visits: row.visits,
+      value: row.value,
+      status: row.status,
+      action: row.action,
+      task: row.task,
+      observation: row.observation,
+      codeUsed: row.code_used,
+      branchAgentKey: row.branch_agent_key,
+      msgId: row.msg_id,
+      createdAt: row.created_at,
+      path,
+      children: children.map(summarize),
+    };
   }
 
   @callable() async getEvolutionEvents(limit: number = 50) {
@@ -2727,7 +2821,7 @@ export class OrchestratorAgent extends Think<Env> {
             `helpfulness, clarity) and give one sentence of specific, actionable ` +
             `feedback on how the agent's behaviour could improve.\n\n` +
             `Task:\n${instance.input}\n\nResponse:\n${output.slice(0, 4000)}\n\n` +
-            `Respond with ONLY {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
+            `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
           providerOptions: effortFor('judge').providerOptions,
         });
         return { score: obj.score, feedback: obj.feedback };
@@ -3327,7 +3421,7 @@ export class OrchestratorAgent extends Think<Env> {
     try {
       const result = await execTool.execute(command);
       const stdout = typeof result === 'string' ? result : JSON.stringify(result);
-      const isError = stdout.startsWith('Error') || stdout.startsWith('exit');
+      const isError = executorOutputIsError(stdout);
 
       this.sql`INSERT INTO executor_output (executor, command, stdout, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${stdout}, ${isError ? stdout : ''}, ${isError ? 1 : 0})`;
@@ -3442,6 +3536,8 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async getExposedPorts(executorId: string) {
     const provider = this.rt.executionRouter?.getProvider(executorId);
     if (!provider) return { ports: [] as Array<{ port: number; name?: string; url?: string }> };
+    const status = provider.getStatus?.();
+    if (status && !status.active) return { ports: [] as Array<{ port: number; name?: string; url?: string }> };
     const listPorts = provider.tools.listPorts;
     if (!listPorts) return { ports: [] };
     try {
@@ -3666,7 +3762,7 @@ export class OrchestratorAgent extends Think<Env> {
 
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
     try {
-      const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, created_at
+      const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
         FROM search_nodes ORDER BY depth, created_at`;
       this.broadcast(JSON.stringify({
         type: "mcts-progress",
@@ -4312,6 +4408,23 @@ export class OrchestratorAgent extends Think<Env> {
 }
 
 // ── Module-scope helpers (referenced by OrchestratorAgent) ────────
+
+function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (live.length === 1) return live[0];
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+  };
+  for (const signal of live) {
+    if (signal.aborted) {
+      abort(signal);
+      break;
+    }
+    signal.addEventListener("abort", () => abort(signal), { once: true });
+  }
+  return controller.signal;
+}
 
 /** Constant-time string compare. Same as core utilities; inlined here to
  *  keep the orchestrator self-contained for the webhook-auth path. */

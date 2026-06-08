@@ -1,11 +1,11 @@
 /**
- * Executors panel — per-executor view with previews-as-tabs + right-aligned
+ * Executors panel — connected execution devices with previews-as-tabs + right-aligned
  * Files + Terminal tabs.
  *
  * Layout:
  *
  *   ┌─────────────────────────────────────────────────────────────────────┐
- *   │ ● Sandbox  ○ Your PC  ○ Local                                       │ <- executor sub-tabs
+ *   │ ● Your PC  ○ Nimbus                                Agent state      │ <- device sub-tabs
  *   ├─────────────────────────────────────────────────────────────────────┤
  *   │ :8080 hello-world  :3000 api               │  Files    Terminal     │ <- preview tabs LEFT, utility RIGHT
  *   ├─────────────────────────────────────────────────────────────────────┤
@@ -18,9 +18,9 @@
  * Auto-focus on new previews: when a fresh port appears in `pinnedPorts`
  * (length increases), the panel auto-switches to that preview tab.
  *
- * The "not connected" states (your PC, etc.) are shown when the executor
- * is unavailable, with inline action buttons (e.g. "Generate install
- * command" for the PC daemon).
+ * Disconnected or merely configured-on-demand executors stay out of the main
+ * tab row. The agent's internal workspace is available from a subdued control
+ * because it is state storage, not a user-facing execution device.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -36,14 +36,50 @@ import { listDevices, registerDevice, revokeDevice, type UserDevice } from "@/li
 const EXECUTOR_LABELS: Record<string, string> = {
   sandbox:   "Sandbox",
   laptop:    "Your PC",
-  workspace: "Local",
+  workspace: "Agent state",
   nimbus:    "Nimbus",
 };
 
-const EXECUTOR_ORDER = ["sandbox", "laptop", "workspace", "nimbus"];
+const EXECUTOR_ORDER = ["laptop", "nimbus", "sandbox", "workspace"];
+
+type ExecutorLifecycleStatus = "not_configured" | "idle" | "active" | "disconnected" | "error";
+
+interface ExecutorPanelInfo {
+  name: string;
+  kind: string;
+  capabilities: string[];
+  available: boolean;
+  configured?: boolean;
+  active?: boolean;
+  status?: ExecutorLifecycleStatus;
+  reason?: string;
+}
+
+function executorDotClass(exec: ExecutorPanelInfo): string {
+  if (exec.status === "error") return "bg-red-500";
+  if (exec.status === "active" || exec.active) return "bg-green-500";
+  if (exec.status === "idle" || exec.configured) return "bg-sky-500";
+  return "bg-zinc-500";
+}
+
+function executorStatusLabel(exec: ExecutorPanelInfo): string {
+  if (exec.status === "active" || exec.active) return "active";
+  if (exec.status === "idle" || exec.configured) return "ready on demand";
+  if (exec.status === "error") return exec.reason ? `error: ${exec.reason}` : "error";
+  if (exec.status === "disconnected") return "disconnected";
+  return "not configured";
+}
+
+function isVisibleExecutionDevice(exec: ExecutorPanelInfo, pinnedPortCount: number): boolean {
+  if (exec.name === "workspace") return false;
+  if (!exec.available) return false;
+  if (exec.name === "laptop") return true;
+  if (exec.name === "sandbox" && pinnedPortCount > 0) return true;
+  return exec.active === true || exec.status === "active";
+}
 
 export interface ExecutorsPanelProps {
-  executors: Array<{ name: string; kind: string; capabilities: string[]; available: boolean }>;
+  executors: ExecutorPanelInfo[];
   outputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<unknown>;
   agentName?: string;
@@ -61,42 +97,70 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
     });
     return arr;
   }, [props.executors]);
+  const visibleDevices = useMemo(
+    () => sorted.filter((exec) => isVisibleExecutionDevice(exec, props.pinnedPorts.length)),
+    [sorted, props.pinnedPorts.length],
+  );
+  const workspaceInfo = sorted.find((exec) => exec.name === "workspace");
 
   const [activeExec, setActiveExec] = useState<string>(
-    () => sorted.find(e => e.available)?.name ?? sorted[0]?.name ?? "sandbox",
+    () => visibleDevices[0]?.name ?? "",
   );
 
   // Keep activeExec valid if executors list changes.
   useEffect(() => {
-    if (!sorted.find(e => e.name === activeExec)) {
-      setActiveExec(sorted.find(e => e.available)?.name ?? sorted[0]?.name ?? "sandbox");
+    const valid = new Set([
+      ...visibleDevices.map((exec) => exec.name),
+      ...(workspaceInfo ? [workspaceInfo.name] : []),
+    ]);
+    if (!activeExec || !valid.has(activeExec)) {
+      setActiveExec(visibleDevices[0]?.name ?? "");
     }
-  }, [sorted, activeExec]);
+  }, [visibleDevices, workspaceInfo, activeExec]);
 
-  const activeInfo = sorted.find(e => e.name === activeExec);
+  const activeInfo =
+    visibleDevices.find(e => e.name === activeExec) ??
+    (activeExec === "workspace" ? workspaceInfo : undefined);
 
   return (
     <div className="h-full flex flex-col">
-      {/* Executor sub-tabs (Sandbox / Your PC / Local) */}
+      {/* Connected execution devices; workspace is tucked away as agent state. */}
       <div className="flex items-center gap-1 px-3 pt-2 pb-2 border-b p-border">
-        {sorted.map(exec => (
+        {visibleDevices.length === 0 && (
+          <span className="text-[11px] p-text-3">No execution device active yet</span>
+        )}
+        {visibleDevices.map(exec => (
           <button
             key={exec.name}
             onClick={() => setActiveExec(exec.name)}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
               activeExec === exec.name ? "p-card p-text" : "p-text-2 hover:p-card-hover"
             }`}
-            title={exec.available ? `${exec.name} — connected` : `${exec.name} — not connected`}
+            title={`${EXECUTOR_LABELS[exec.name] ?? exec.name} — ${executorStatusLabel(exec)}`}
           >
-            <span className={`size-1.5 rounded-full ${exec.available ? "bg-green-500" : "bg-zinc-500"}`} />
+            <span className={`size-1.5 rounded-full ${executorDotClass(exec)}`} />
             {EXECUTOR_LABELS[exec.name] ?? exec.name}
           </button>
         ))}
+        {workspaceInfo && (
+          <button
+            onClick={() => setActiveExec("workspace")}
+            className={`ml-auto flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors border ${
+              activeExec === "workspace"
+                ? "p-card p-text p-border"
+                : "p-text-3 border-transparent hover:p-card-hover hover:p-text-2"
+            }`}
+            title="Internal Proteus workspace and state VFS"
+          >
+            <span className="size-1.5 rounded-full bg-zinc-500" />
+            Agent state
+          </button>
+        )}
       </div>
 
       {/* Per-executor view */}
       <div className="flex-1 min-h-0">
-        {activeInfo && (
+        {activeInfo ? (
           <PerExecutorView
             exec={activeInfo}
             outputs={props.outputs.get(activeInfo.name) ?? []}
@@ -105,7 +169,23 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
             agentName={props.agentName}
             pinnedPorts={activeInfo.name === "sandbox" ? props.pinnedPorts : []}
           />
+        ) : (
+          <NoDeviceActive />
         )}
+      </div>
+    </div>
+  );
+}
+
+function NoDeviceActive() {
+  return (
+    <div className="h-full flex items-center justify-center p-6">
+      <div className="max-w-sm text-center space-y-2">
+        <PlugIcon size={26} className="p-text-3 mx-auto" />
+        <div className="text-sm font-medium p-text">No device active</div>
+        <p className="text-xs p-text-3 leading-relaxed">
+          A device will appear here when the agent starts or connects one.
+        </p>
       </div>
     </div>
   );
@@ -114,7 +194,7 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
 // ── Per-executor view ────────────────────────────────────────────
 
 interface PerExecutorViewProps {
-  exec: { name: string; kind: string; capabilities: string[]; available: boolean };
+  exec: ExecutorPanelInfo;
   outputs: ExecutorOutput[];
   onExecute: (cmd: string) => Promise<unknown>;
   rpc: (method: string, args?: unknown[]) => Promise<unknown>;
@@ -164,7 +244,11 @@ function PerExecutorView(props: PerExecutorViewProps) {
       {/* Tabs row: previews on left, Files + Terminal right-aligned */}
       <div className="flex items-center gap-1 px-3 py-1.5 border-b p-border overflow-x-auto">
         {pinnedPorts.length === 0 && (
-          <div className="text-[11px] p-text-3 italic">No exposed ports yet — when the agent calls <code className="font-mono p-elevated px-1 rounded">sandbox.exposePort(N)</code>, the preview will open here.</div>
+          <div className="text-[11px] p-text-3 italic">
+            {exec.name === "sandbox"
+              ? <>No exposed ports yet — when the agent calls <code className="font-mono p-elevated px-1 rounded">sandbox.exposePort(N)</code>, the preview will open here.</>
+              : <>No exposed ports yet.</>}
+          </div>
         )}
         {pinnedPorts.map(p => (
           <PreviewTabButton
@@ -465,12 +549,11 @@ function ConnectionHelp({ exec, rpc, agentName }: {
           <PlugIcon size={28} className="p-text-3 mx-auto" />
           <div className="text-sm font-medium p-text">Nimbus not configured</div>
           <p className="text-xs p-text-2 leading-relaxed">
-            Nimbus is a lightweight DO-backed Linux env. To enable it, set{" "}
-            <code className="font-mono p-elevated px-1 rounded">NIMBUS_ENDPOINT</code>
-            {" "}in <code className="font-mono p-elevated px-1 rounded">wrangler.jsonc</code>{" "}
-            (and optionally{" "}
-            <code className="font-mono p-elevated px-1 rounded">NIMBUS_TOKEN</code>
-            {" "}as a wrangler secret). The agent can still use{" "}
+            Nimbus is a lightweight DO-backed Linux env. To enable it, add the{" "}
+            <code className="font-mono p-elevated px-1 rounded">NIMBUS_SESSION</code>
+            {" "}Durable Object binding in{" "}
+            <code className="font-mono p-elevated px-1 rounded">wrangler.jsonc</code>.
+            It does not need endpoint or token secrets. The agent can still use{" "}
             <code className="font-mono p-elevated px-1 rounded">sandbox</code> or{" "}
             <code className="font-mono p-elevated px-1 rounded">workspace</code> in the meantime.
           </p>
@@ -483,13 +566,12 @@ function ConnectionHelp({ exec, rpc, agentName }: {
       <div className="h-full flex items-center justify-center p-6">
         <div className="max-w-md text-center space-y-3">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
-          <div className="text-sm font-medium p-text">Sandbox not provisioned</div>
+          <div className="text-sm font-medium p-text">Sandbox not configured</div>
           <p className="text-xs p-text-2 leading-relaxed">
             The full Cloudflare Sandbox needs a{" "}
-            <code className="font-mono p-elevated px-1 rounded">Sandbox</code> DO binding plus a{" "}
-            <code className="font-mono p-elevated px-1 rounded">PREVIEW_HOSTNAME</code>{" "}
-            with wildcard DNS so preview URLs round-trip. Without it the agent can
-            still use Nimbus (if configured) or the in-VFS workspace shell.
+            <code className="font-mono p-elevated px-1 rounded">Sandbox</code> Durable Object binding.
+            Proteus exposes previews through its own authenticated path, so no per-agent subdomain is required.
+            Without it the agent can still use Nimbus (if configured) or the in-VFS workspace shell.
           </p>
         </div>
       </div>

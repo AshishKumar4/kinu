@@ -9,6 +9,10 @@
 
 import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import { resolveMaxSteps } from './config.js';
+import {
+  assertToolsSupportedByModel,
+  type PromptModelContext,
+} from './prompting/model-profile.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -22,6 +26,7 @@ export interface ChatOptions {
   system: string;
   history: ModelMessage[];
   tools: ToolSet;
+  modelContext?: PromptModelContext;
   maxSteps?: number;
   signal?: AbortSignal;
 }
@@ -36,6 +41,7 @@ export interface ChatOptions {
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const maxSteps = opts.maxSteps ?? resolveMaxSteps();
+  assertToolsSupportedByModel(opts.modelContext, Object.keys(opts.tools));
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
@@ -44,8 +50,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   const result = streamText({
     model: opts.model,
-    system: opts.system +
-      '\n\nAfter using any tools, always provide a brief text summary of what you did and the results.',
+    system: opts.system,
     messages: opts.history,
     tools: opts.tools,
     stopWhen: stepCountIs(maxSteps),
