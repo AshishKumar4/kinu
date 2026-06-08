@@ -172,6 +172,26 @@ describe('Codex provider contract', () => {
     expect(req.headers['chatgpt-account-id']).toBe('acct-test-123');
   });
 
+  test('sends system instructions in the shape required by the Codex backend', async () => {
+    const mock = createMockFetch([
+      { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: { id: 'r', output: [] } } },
+    ]);
+    const deps = makeDeps({
+      [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
+    }, mock.fetch);
+    const provider = createCodexProvider();
+    const model = provider.createModel('gpt-5.5', deps);
+    try {
+      await generateText({ model, system: 'You are concise.', prompt: 'hello', maxOutputTokens: 16 });
+    } catch { /* minimal mock response may not satisfy the SDK parser */ }
+
+    expect(mock.requests.length).toBeGreaterThan(0);
+    const body = JSON.parse(String(mock.requests[0].body)) as { instructions?: string; store?: boolean; input?: Array<{ role?: string }> };
+    expect(body.instructions).toBe('You are concise.');
+    expect(body.store).toBe(false);
+    expect(body.input?.some((item) => item.role === 'developer' || item.role === 'system')).toBe(false);
+  });
+
   test('refreshes on 401 by calling getAuth with forceRefresh', async () => {
     let calls = 0;
     let forceRefreshSeen = false;

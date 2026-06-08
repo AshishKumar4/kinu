@@ -59,10 +59,11 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             { status: 401, headers: { 'Content-Type': 'application/json' } },
           );
         }
+        const requestInit = normalizeCodexResponsesRequest(init);
         const send = async (headers: Record<string, string>) => {
           const merged = new Headers(init?.headers);
           for (const [k, v] of Object.entries(headers)) merged.set(k, v);
-          return baseFetch(input, { ...init, headers: merged });
+          return baseFetch(input, { ...requestInit, headers: merged });
         };
         let res = await send(auth.headers);
         const dt = Date.now() - t0;
@@ -111,4 +112,62 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       return provider.responses(modelId);
     },
   };
+}
+
+function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
+  if (!init || typeof init.body !== 'string') return init;
+
+  let body: unknown;
+  try {
+    body = JSON.parse(init.body);
+  } catch {
+    return init;
+  }
+  if (!isRecord(body)) return init;
+  if (typeof body.instructions === 'string' && body.instructions.trim().length > 0) return init;
+  const input = Array.isArray(body.input) ? body.input : [];
+  const instructionParts: string[] = [];
+  const remainingInput: unknown[] = [];
+
+  for (const item of input) {
+    if (isInstructionInputItem(item)) {
+      const text = contentToText(item.content);
+      if (text) instructionParts.push(text);
+    } else {
+      remainingInput.push(item);
+    }
+  }
+
+  const instructions = instructionParts.join('\n\n').trim() || 'You are Proteus, a helpful coding agent.';
+  return {
+    ...init,
+    body: JSON.stringify({
+      ...body,
+      instructions,
+      store: false,
+      input: remainingInput,
+    }),
+  };
+}
+
+function isInstructionInputItem(value: unknown): value is { role: 'developer' | 'system'; content: unknown } {
+  return isRecord(value) && (value.role === 'developer' || value.role === 'system');
+}
+
+function contentToText(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => {
+      if (!isRecord(part)) return '';
+      const text = part.text;
+      return typeof text === 'string' ? text : '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
