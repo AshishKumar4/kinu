@@ -129,6 +129,57 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
     }
   }
 
+  const localTurnPrepareMatch = path.match(/^\/agents\/([^/]+)\/local-turn\/prepare$/);
+  if (localTurnPrepareMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(localTurnPrepareMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{ prompt?: string; cwd?: string }>(request);
+    if (!body?.prompt) return err(400, 'prompt required');
+    try {
+      return json(await agent.cliPrepareLocalTurn({ prompt: body.prompt, cwd: body.cwd, userId: cli.userId }));
+    } catch (e) {
+      return err(500, (e as Error).message);
+    }
+  }
+
+  const localTurnToolMatch = path.match(/^\/agents\/([^/]+)\/local-turn\/tool$/);
+  if (localTurnToolMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(localTurnToolMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{ turnId?: string; toolName?: string; args?: unknown }>(request);
+    if (!body?.turnId || !body.toolName) return err(400, 'turnId and toolName required');
+    return json(await agent.cliInvokeLocalTool({ turnId: body.turnId, toolName: body.toolName, args: body.args }));
+  }
+
+  const localTurnCommitMatch = path.match(/^\/agents\/([^/]+)\/local-turn\/commit$/);
+  if (localTurnCommitMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(localTurnCommitMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{
+      turnId?: string;
+      prompt?: string;
+      text?: string;
+      toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
+      steps?: number;
+      hadError?: boolean;
+      error?: string;
+    }>(request);
+    if (!body?.turnId || !body.prompt) return err(400, 'turnId and prompt required');
+    try {
+      return json(await agent.cliCommitLocalTurn({
+        turnId: body.turnId,
+        prompt: body.prompt,
+        text: body.text,
+        toolCalls: body.toolCalls,
+        steps: body.steps,
+        hadError: body.hadError,
+        error: body.error,
+      }));
+    } catch (e) {
+      return err(500, (e as Error).message);
+    }
+  }
+
   const statusMatch = path.match(/^\/agents\/([^/]+)\/status$/);
   if (statusMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(statusMatch[1]));
@@ -354,6 +405,17 @@ interface CliAgentRpc {
   getToolDescriptions(): Promise<unknown>;
   getStoredModelSpec(): Promise<unknown>;
   setModel(spec: string): Promise<unknown>;
+  cliPrepareLocalTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<unknown>;
+  cliInvokeLocalTool(input: { turnId: string; toolName: string; args?: unknown }): Promise<unknown>;
+  cliCommitLocalTurn(input: {
+    turnId: string;
+    prompt: string;
+    text?: string;
+    toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
+    steps?: number;
+    hadError?: boolean;
+    error?: string;
+  }): Promise<unknown>;
   listTriggers(): Promise<unknown>;
   createDurableWebhook(opts: {
     label: string;

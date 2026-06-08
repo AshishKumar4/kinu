@@ -162,7 +162,11 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     if (provider.id === 'cloudflare') {
       stage = 'cloudflare_credential';
       const userDO = env.UserDO.get(env.UserDO.idFromName(session.identity.userId));
-      await userDO.setCredential(CLOUDFLARE_OAUTH_CRED_KEY, await cloudflareTokenToCredential(tokens));
+      try {
+        await userDO.setCredential(CLOUDFLARE_OAUTH_CRED_KEY, await cloudflareTokenToCredential(tokens));
+      } catch (err) {
+        console.warn(`[auth] Cloudflare credential attachment skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));
     const destination = new URL(savedState.returnTo, url.origin).toString();

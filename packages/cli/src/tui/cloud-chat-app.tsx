@@ -8,10 +8,10 @@ import {
   getCloudMctsTree,
   getCloudMemoryContent,
   listCloudJobs,
-  runCloudTurn,
   setCloudAgentModel,
   stopCloudAgent,
 } from '../cloud-api.js';
+import { runCloudTurnWithLocalModel } from '../cloud-local-turn.js';
 import {
   createCliSession,
   listCliSessions,
@@ -212,7 +212,18 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
     setStreamingText('');
     setIsProcessing(true);
     try {
-      const result = await runCloudTurn(origin, token, cloudName, prompt, process.cwd());
+      const result = await runCloudTurnWithLocalModel({
+        origin,
+        token,
+        name: cloudName,
+        prompt,
+        cwd: process.cwd(),
+        onEvent: (event) => {
+          if (event.type === 'text-delta') {
+            setStreamingText((prev) => `${prev ?? ''}${event.delta}`);
+          }
+        },
+      });
       for (const call of result.toolCalls ?? []) {
         addMessage({ role: 'tool_call', content: '', toolName: call.name, args: JSON.stringify(call.args) });
         if (call.result !== undefined) addMessage({ role: 'tool_result', content: call.result });

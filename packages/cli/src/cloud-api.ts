@@ -38,6 +38,27 @@ export interface CloudTurnResult {
   steps?: number;
 }
 
+export interface CloudLocalToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface CloudLocalTurnPrepare {
+  turnId: string;
+  modelSpec: string | null;
+  system: string;
+  history: unknown[];
+  tools: CloudLocalToolDescriptor[];
+  maxSteps: number;
+}
+
+export interface CloudLocalToolResult {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}
+
 export interface CloudAgentStatus {
   id: string;
   name: string;
@@ -125,6 +146,54 @@ export async function runCloudTurn(origin: string, token: string, name: string, 
     method: 'POST',
     token,
     body: { prompt, cwd },
+  });
+}
+
+export async function prepareCloudLocalTurn(
+  origin: string,
+  token: string,
+  name: string,
+  prompt: string,
+  cwd: string,
+): Promise<CloudLocalTurnPrepare> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/local-turn/prepare`, {
+    method: 'POST',
+    token,
+    body: { prompt, cwd },
+  });
+}
+
+export async function invokeCloudLocalTool(
+  origin: string,
+  token: string,
+  name: string,
+  input: { turnId: string; toolName: string; args?: unknown },
+): Promise<CloudLocalToolResult> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/local-turn/tool`, {
+    method: 'POST',
+    token,
+    body: input,
+  });
+}
+
+export async function commitCloudLocalTurn(
+  origin: string,
+  token: string,
+  name: string,
+  input: {
+    turnId: string;
+    prompt: string;
+    text?: string;
+    toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
+    steps?: number;
+    hadError?: boolean;
+    error?: string;
+  },
+): Promise<CloudTurnResult> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/local-turn/commit`, {
+    method: 'POST',
+    token,
+    body: input,
   });
 }
 

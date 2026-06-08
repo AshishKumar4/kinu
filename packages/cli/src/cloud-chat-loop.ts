@@ -1,5 +1,6 @@
 import * as readline from 'node:readline';
-import { runCloudTurn, type CloudTurnResult } from './cloud-api.js';
+import type { CloudTurnResult } from './cloud-api.js';
+import { runCloudTurnWithLocalModel } from './cloud-local-turn.js';
 import { ACCENT, DIM, ERR, createTypingIndicator, printToolCall, printToolResult } from './display.js';
 import type { CliSession } from './session.js';
 
@@ -40,7 +41,13 @@ export async function runCloudChatLoop(opts: CloudChatLoopOptions): Promise<void
       const typing = createTypingIndicator(opts.agentName);
       typing.start();
       try {
-        const result = await runCloudTurn(opts.origin, opts.token, opts.cloudName, message, process.cwd());
+        const result = await runCloudTurnWithLocalModel({
+          origin: opts.origin,
+          token: opts.token,
+          name: opts.cloudName,
+          prompt: message,
+          cwd: process.cwd(),
+        });
         typing.stop();
         opts.session.append('assistant', {
           text: result.text,

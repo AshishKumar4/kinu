@@ -26,12 +26,12 @@ import {
   listCloudJobs,
   listCloudTimeline,
   listCloudTriggers,
-  runCloudTurn,
   searchCloudMemory,
   setCloudAgentModel,
   stopCloudAgent,
   type CloudTurnResult,
 } from '../cloud-api.js';
+import { runCloudTurnWithLocalModel } from '../cloud-local-turn.js';
 import { renderCloudTurn } from '../cloud-chat-loop.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
@@ -95,7 +95,13 @@ export async function runCommand(name: string, promptParts: string[], opts: {
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const result = await runCloudTurn(auth.origin, auth.token, target.cloudName, prompt, process.cwd());
+    const result = await runCloudTurnWithLocalModel({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      prompt,
+      cwd: process.cwd(),
+    });
     session.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
     if (outputMode === 'json') writeCloudJsonEvents(session, canonicalName, result);
     else renderCloudTurn(result);
@@ -191,7 +197,13 @@ async function runRpc(
       }
       cliSession.append('user', { text: message, backend: 'cloud' });
       output({ type: 'turn_start', id: cmd.value.id });
-      const result = await runCloudTurn(auth.origin, auth.token, target.cloudName, message, process.cwd());
+      const result = await runCloudTurnWithLocalModel({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        prompt: message,
+        cwd: process.cwd(),
+      });
       cliSession.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
       output({ type: 'message_end', role: 'assistant', text: result.text });
       output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });

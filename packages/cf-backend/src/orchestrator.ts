@@ -136,6 +136,47 @@ import {
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
+interface CliLocalToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+interface CliLocalTurnPrepareResult {
+  turnId: string;
+  modelSpec: string | null;
+  system: string;
+  history: ModelMessage[];
+  tools: CliLocalToolDescriptor[];
+  maxSteps: number;
+}
+
+interface CliLocalTurnToolResult {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+function serializeCliLocalTools(tools: ToolSet): CliLocalToolDescriptor[] {
+  return Object.entries(tools)
+    .filter(([, descriptor]) => typeof descriptor?.execute === 'function')
+    .map(([name, descriptor]) => ({
+      name,
+      description: typeof descriptor.description === 'string' ? descriptor.description : name,
+      inputSchema: readToolJsonSchema(descriptor),
+    }));
+}
+
+function readToolJsonSchema(descriptor: ToolSet[string]): Record<string, unknown> {
+  const inputSchema = (descriptor as { inputSchema?: { jsonSchema?: unknown } }).inputSchema;
+  const json = inputSchema?.jsonSchema;
+  return isRecord(json) ? json : { type: 'object', properties: {} };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 /** Extract plain text from the last user message in a ModelMessage[]. Used
  *  by skills resolution to look for `/skill-name` invocations and keyword
  *  matches without needing to know the AI SDK content-part union shape. */
@@ -814,6 +855,180 @@ export class OrchestratorAgent extends Think<Env> {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
     return { owner: current };
+  }
+
+  @callable()
+  async cliPrepareLocalTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<CliLocalTurnPrepareResult> {
+    const prompt = (input.prompt ?? '').trim();
+    if (!prompt) throw new Error('prompt required');
+    await this.claimOwner(input.userId);
+    this.ensureSchema();
+
+    this.acc.reset(Date.now());
+    this._executorsUsedThisTurn.clear();
+    this._turnInvokedSkills.clear();
+    this._turnActiveSkills = null;
+    this._turnT0 = performance.now();
+    this._inFlight = true;
+    this._cliCwd = input.cwd || null;
+    this._currentRunId = `run-${nanoid()}`;
+
+    const userText = input.cwd
+      ? `Current terminal working directory: ${input.cwd}\n\n${prompt}`
+      : prompt;
+
+    try {
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'run_start',
+        agentId: this.name,
+        caused_by: 'cli_local_model',
+        userMessage: prompt.slice(0, 500),
+      });
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'turn_start',
+        turnIndex: this.orch.sessionTurnIndex,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at cliPrepareLocalTurn:', err);
+    }
+
+    const historyRows = this.sql<{ role: string; content: string; created_at: number }>`
+      SELECT role, content, created_at FROM messages
+      WHERE session_id = ${'default'} AND role IN ('user', 'assistant')
+      ORDER BY created_at DESC LIMIT 40`;
+    const history: ModelMessage[] = historyRows
+      .reverse()
+      .map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content }));
+    history.push({ role: 'user', content: userText });
+
+    return {
+      turnId: this._currentRunId,
+      modelSpec: this.getStoredModelId(),
+      system: this.getSystemPrompt(),
+      history,
+      tools: serializeCliLocalTools(this.getTools()),
+      maxSteps: resolveMaxSteps(),
+    };
+  }
+
+  @callable()
+  async cliInvokeLocalTool(input: { turnId: string; toolName: string; args?: unknown }): Promise<CliLocalTurnToolResult> {
+    if (!input.turnId || input.turnId !== this._currentRunId) {
+      return { ok: false, error: 'local turn is no longer active' };
+    }
+    const toolName = (input.toolName ?? '').trim();
+    const toolDef = this.getTools()[toolName];
+    if (!toolDef || typeof toolDef.execute !== 'function') {
+      return { ok: false, error: `tool not found: ${toolName}` };
+    }
+
+    const args = input.args && typeof input.args === 'object' && !Array.isArray(input.args)
+      ? input.args as Record<string, unknown>
+      : {};
+    const startedAt = Date.now();
+    try {
+      const result = await toolDef.execute(args as never, {
+        messages: [],
+        toolCallId: `cli-local-${nanoid()}`,
+      });
+      this.acc.recordToolCall({
+        toolName,
+        input: args,
+        success: true,
+        output: result,
+        durationMs: Date.now() - startedAt,
+      });
+      return { ok: true, result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.acc.recordToolCall({
+        toolName,
+        input: args,
+        success: false,
+        error: message,
+        durationMs: Date.now() - startedAt,
+      });
+      return { ok: false, error: message };
+    }
+  }
+
+  @callable()
+  async cliCommitLocalTurn(input: {
+    turnId: string;
+    prompt: string;
+    text?: string;
+    toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
+    steps?: number;
+    hadError?: boolean;
+    error?: string;
+  }): Promise<{
+    text: string;
+    toolCalls: Array<{ name: string; args: unknown; result?: string }>;
+    steps: number;
+  }> {
+    if (!input.turnId || input.turnId !== this._currentRunId) {
+      throw new Error('local turn is no longer active');
+    }
+
+    const prompt = (input.prompt ?? '').trim();
+    const text = input.text ?? '';
+    const steps = Math.max(0, Math.floor(input.steps ?? this.acc.stepCount));
+    if (input.hadError) this.acc.hadError = true;
+
+    const normalizedToolCalls = (input.toolCalls ?? []).map((tc) => ({
+      name: tc.name,
+      args: isRecord(tc.args) ? tc.args : { value: tc.args },
+      result: tc.result === undefined ? undefined : String(tc.result),
+    }));
+
+    try {
+      const userId = `cli-user-${nanoid()}`;
+      const assistantId = `cli-assistant-${nanoid()}`;
+      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+               VALUES (${userId}, ${'default'}, ${null}, ${'user'}, ${prompt}, ${Date.now()})`;
+      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+               VALUES (${assistantId}, ${'default'}, ${userId}, ${'assistant'}, ${text || input.error || ''}, ${Date.now()})`;
+
+      const completed: CompletedTurn = {
+        userMessage: prompt,
+        assistantResponse: text,
+        toolCalls: normalizedToolCalls.map((tc) => ({
+          name: tc.name,
+          args: tc.args,
+          result: tc.result ?? '',
+        })),
+        steps,
+        durationMs: Date.now() - this.acc.startedAt,
+        feedback: null,
+        hadError: this.acc.hadError,
+      };
+      this.orch.recordTurn(completed);
+      if (!this.acc.hadError) {
+        void this.runShadowEvalSampled(prompt, text);
+        void this.runSleepTimeCompute(prompt, text, completed.toolCalls);
+        void this.maybeGenerateTitle(prompt);
+        this.backupWorkspaceIfDue();
+        this.maybeRunAutoGepa();
+        void this.orch.drainPendingEvents();
+      }
+
+      try {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'turn_end',
+          turnIndex: this.orch.sessionTurnIndex,
+          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
+        });
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'run_end',
+          reason: this.acc.hadError ? 'error' : 'completed',
+        });
+      } catch { /* nop */ }
+
+      return { text, toolCalls: normalizedToolCalls, steps };
+    } finally {
+      this._inFlight = false;
+      this._cliCwd = null;
+    }
   }
 
   /** One-shot cloud CLI turn. The browser chat still uses Think's queued
