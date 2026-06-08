@@ -81,6 +81,7 @@ export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
+export { COMPACT_AT_UTILIZATION, compactionThreshold, contextWindowForModel } from './context-window.js';
 
 // Canonical tool registry + factories (shared across CF and CLI)
 export {

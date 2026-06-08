@@ -65,6 +65,9 @@ export async function chatCommand(name: string | undefined, opts: {
       sessionOptions: opts,
       hydrateTranscript: Boolean(opts.session || opts.continue || opts.resume || opts.fork),
       initialPrompt: opts.initialPrompt,
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      auth: opts.auth,
     };
     if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) await runCloudChatLoop(cloudOpts);
     else await runCloudTuiChat(cloudOpts);

@@ -3,6 +3,7 @@ export interface TuiModelEntry {
   label: string;
   provider: string;
   capabilities?: string[];
+  source?: 'cloud' | 'local' | 'both';
 }
 
 export function normalizeModelEntries(rows: unknown[]): TuiModelEntry[] {

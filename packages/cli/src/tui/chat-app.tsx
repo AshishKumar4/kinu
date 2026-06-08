@@ -20,6 +20,7 @@ import { StatusView } from './help-view.js';
 import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js';
 import { normalizeModelEntries, type TuiModelEntry } from './model-types.js';
 import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
+import { estimateContextTokens } from './context-status.js';
 import {
   createCliSession,
   defaultConversationIdForCliOptions,
@@ -56,14 +57,14 @@ let globalExit: (() => void) | null = null;
 let globalSessionCleanup: (() => Promise<void>) | null = null;
 
 export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers, initialPrompt, cliSession, localSessionId, sessionOptions, hydrateTranscript, onExit }: ChatAppOpts) {
-  const { height } = useTerminalDimensions();
+  const { width, height } = useTerminalDimensions();
   const [messages, setMessages] = useState<DisplayMessage[]>(() => initialMessages(initialInfo.name, cliSession, sessionOptions, hydrateTranscript));
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [mcpReady, setMcpReady] = useState(!mcpServers || Object.keys(mcpServers).length === 0);
   const [info, setInfo] = useState(initialInfo);
-  const [modelSpec, setModelSpec] = useState(llmConfig.model);
+  const [modelSpec, setModelSpec] = useState(() => modelResolver?.normalizeSpecSync(null) ?? llmConfig.model);
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ models: TuiModelEntry[]; loading: boolean; error: string | null } | null>(null);
   const [draft, setDraft] = useState('');
@@ -412,15 +413,17 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
 
   const scrollHeight = Math.max(1, height - 7);
   const commandHints = !modelPicker && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands('local', draft) : [];
+  const contextTokens = estimateContextTokens(messages, streamingText);
 
   return (
-    <box flexDirection="column" style={{ height: '100%' }}>
+    <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <StatusBar
         info={info}
         model={modelSpec}
         toolCount={session.toolNames().length}
         autoEvolve={!noAutoEvolve}
         connected={true}
+        contextTokens={contextTokens}
       />
 
       <scrollbox
@@ -447,18 +450,6 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
         <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
 
-      {modelPicker ? (
-        <ModelPickerOverlay
-          models={modelPicker.models}
-          currentSpec={modelSpec}
-          loading={modelPicker.loading}
-          error={modelPicker.error}
-          onSelect={selectModel}
-        />
-      ) : (
-        <CommandHintOverlay commands={commandHints} />
-      )}
-
       <box
         style={{
           height: 3,
@@ -468,17 +459,30 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           backgroundColor: '#1a1a2e',
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing…' : modelPicker ? 'Model picker open' : sessionPicker ? 'Resume ›' : `${info.name} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing…' : modelPicker ? 'Model picker' : sessionPicker ? 'Resume ›' : `${info.name} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <input
           ref={(value) => { inputRef.current = value; }}
           focused={mcpReady && !isProcessing && !modelPicker}
           value={draft}
-          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : modelPicker ? 'Select a model above or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
+          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : modelPicker ? 'Select a model or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
           onInput={setDraft}
           onSubmit={onInputSubmit}
         />
       </box>
+
+      {modelPicker ? (
+        <ModelPickerOverlay
+          models={modelPicker.models}
+          currentSpec={modelSpec}
+          terminal={{ width, height }}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={selectModel}
+        />
+      ) : (
+        <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
+      )}
     </box>
   );
 }

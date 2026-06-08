@@ -1,15 +1,15 @@
 import { statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { createLocalModelResolver, openAgentCLI } from '@proteus/cli-backend';
+import { openAgentCLI } from '@proteus/cli-backend';
 import {
   CONFIG_PATH,
   agentDbPath,
   createCodexAuthStore,
-  resolveLLMConfig,
   resolveMcpServers,
   resolveProviderCredentials,
 } from '../config.js';
 import type { ChatAppOpts } from './chat-app.js';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
 
 export interface OpenLocalTuiAgentOptions {
   model?: string;
@@ -21,14 +21,9 @@ export interface OpenLocalTuiAgentOptions {
 
 export function openLocalTuiAgent(name: string, opts: OpenLocalTuiAgentOptions): ChatAppOpts & { close: () => void } {
   const dbPath = agentDbPath(name);
-  const llmConfig = resolveLLMConfig(opts);
+  const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver(opts);
   const providerCredentials = resolveProviderCredentials();
   const codexAuthStore = createCodexAuthStore();
-  const modelResolver = createLocalModelResolver({
-    llm: llmConfig,
-    credentials: providerCredentials,
-    codexAuthStore,
-  });
   const mcpServers = resolveMcpServers();
   const db = new Database(dbPath);
   const openConfig = { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH };

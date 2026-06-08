@@ -2,11 +2,11 @@ import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  createAgentNameFromMission,
   createCliAgent,
   defaultCreateMode,
   isCloudAuthConfigured,
   isLocalModelConfigured,
+  suggestAgentIdentityFromMission,
 } from '../agent-create.js';
 import { listKnownAgents, type ListedAgent } from '../agent-list.js';
 import type { AgentMode } from '../config.js';
@@ -23,6 +23,7 @@ export interface HomeTuiOptions {
 }
 
 let finishHome: ((action: HomeTuiAction) => void) | null = null;
+type HomeFocus = 'agents' | 'mission' | 'mode';
 
 function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const { width, height } = useTerminalDimensions();
@@ -31,6 +32,8 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [focusArea, setFocusArea] = useState<HomeFocus>('mission');
+  const [selectedAgentIndex, setSelectedAgentIndex] = useState(0);
   const [agentPage, setAgentPage] = useState(0);
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const cloudReady = isCloudAuthConfigured();
@@ -40,12 +43,24 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const promptHeight = Math.min(Math.max(7, Math.floor(height * 0.24)), 10);
   const agentPageSize = 9;
   const agentPageCount = Math.max(1, Math.ceil(agents.length / agentPageSize));
-  const visibleAgents = agents.slice(agentPage * agentPageSize, agentPage * agentPageSize + agentPageSize);
+  const agentPageStart = agentPage * agentPageSize;
+  const visibleAgents = agents.slice(agentPageStart, agentPageStart + agentPageSize);
 
   const modeLabel = useMemo(() => {
     if (mode === 'cloud') return cloudReady ? 'Cloud agent' : 'Cloud agent - sign in required';
     return localReady ? 'Local agent' : 'Local agent - provider required';
   }, [cloudReady, localReady, mode]);
+
+  const selectAgentIndex = useCallback((index: number) => {
+    const next = clamp(index, 0, Math.max(0, agents.length - 1));
+    setSelectedAgentIndex(next);
+    setAgentPage(Math.floor(next / agentPageSize));
+  }, [agents.length]);
+
+  const openSelectedAgent = useCallback(() => {
+    const selected = agents[selectedAgentIndex];
+    if (selected) finishHome?.({ type: 'open-agent', name: selected.name });
+  }, [agents, selectedAgentIndex]);
 
   const submit = useCallback(async () => {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
@@ -56,10 +71,12 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       if (setupRequired) throw new Error('Run proteus setup to connect your account or a local model provider.');
       if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud agent.');
       if (mode === 'local' && !localReady) throw new Error('Connect a local provider with proteus provider connect, or switch to cloud after sign-in.');
-      const name = createAgentNameFromMission(mission);
+      const identity = await suggestAgentIdentityFromMission(mission, opts);
       const created = await createCliAgent({
         ...opts,
-        name,
+        name: identity.name,
+        displayName: identity.displayName,
+        nameOrigin: identity.nameOrigin,
         purpose: mission,
         mode,
         allowInteractiveAuth: false,
@@ -78,27 +95,35 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       return;
     }
     if (key.name === 'tab') {
-      setMode((current) => current === 'cloud' ? 'local' : 'cloud');
+      setFocusArea((current) => nextFocus(current, agents.length > 0));
       return;
     }
-    if ((key.name === 'right' || key.name === 'pagedown') && agents.length > agentPageSize) {
-      setAgentPage((page) => Math.min(agentPageCount - 1, page + 1));
-      return;
-    }
-    if ((key.name === 'left' || key.name === 'pageup') && agents.length > agentPageSize) {
-      setAgentPage((page) => Math.max(0, page - 1));
-      return;
-    }
-    if (key.name === 'n' && agents.length > 0) {
-      textareaRef.current?.focus();
-      return;
-    }
-    const numeric = Number(key.name);
-    if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 9) {
-      if (visibleAgents[numeric - 1]) {
-        finishHome?.({ type: 'open-agent', name: visibleAgents[numeric - 1]!.name });
-        return;
+    if (focusArea === 'mission') return;
+    if (focusArea === 'mode') {
+      if (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down' || key.name === 'return') {
+        setMode((current) => current === 'cloud' ? 'local' : 'cloud');
       }
+      return;
+    }
+    if (agents.length === 0) return;
+    if (key.name === 'return') {
+      openSelectedAgent();
+      return;
+    }
+    if (key.name === 'up') {
+      selectAgentIndex(selectedAgentIndex - 1);
+      return;
+    }
+    if (key.name === 'down') {
+      selectAgentIndex(selectedAgentIndex + 1);
+      return;
+    }
+    if (key.name === 'right' || key.name === 'pagedown') {
+      selectAgentIndex(Math.min(agents.length - 1, (agentPage + 1) * agentPageSize));
+      return;
+    }
+    if (key.name === 'left' || key.name === 'pageup') {
+      selectAgentIndex(Math.max(0, (agentPage - 1) * agentPageSize));
     }
   });
 
@@ -137,7 +162,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
               ? 'Connect Proteus once, then this screen can create and open agents directly.'
               : agents.length === 0
               ? 'Describe the work. Proteus will create an agent and send this as its first turn.'
-              : 'Open an existing agent with 1-9, or write a mission to create a new one.'}
+              : 'Select an agent, or write a mission to create a new one.'}
           </span>
         </text>
 
@@ -152,13 +177,36 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
 
         {agents.length > 0 && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1 }}>
-            <text><span fg="#8b5cf6">Agents</span></text>
-            {visibleAgents.map((agent, index) => (
-              <text key={agent.name}>
-                <span fg="#6b7280">  {index + 1}. </span>
-                <span fg="#d1d5db">{agent.label}</span>
-              </text>
-            ))}
+            <text>
+              <span fg={focusArea === 'agents' ? '#c4b5fd' : '#8b5cf6'}>Agents</span>
+              <span fg="#6b7280">  {focusArea === 'agents' ? '↑/↓ select · Enter open' : 'Tab to focus'}</span>
+            </text>
+            {visibleAgents.map((agent, index) => {
+              const absoluteIndex = agentPageStart + index;
+              const selected = absoluteIndex === selectedAgentIndex;
+              return (
+                <box
+                  key={agent.name}
+                  style={{
+                    height: 1,
+                    backgroundColor: selected ? '#2d2259' : '#171725',
+                    paddingLeft: 1,
+                    paddingRight: 1,
+                  }}
+                  onMouseDown={(event) => {
+                    event.stopPropagation();
+                    selectAgentIndex(absoluteIndex);
+                    finishHome?.({ type: 'open-agent', name: agent.name });
+                  }}
+                >
+                  <text>
+                    <span fg={selected ? '#c4b5fd' : '#6b7280'}>{selected ? '› ' : '  '}</span>
+                    <span fg={selected ? '#e5e7eb' : '#d1d5db'}>{agent.label}</span>
+                    <span fg="#6b7280">  {agent.mode}</span>
+                  </text>
+                </box>
+              );
+            })}
             {agentPageCount > 1 && (
               <text>
                 <span fg="#6b7280">  Page {agentPage + 1}/{agentPageCount} · Left/Right or PgUp/PgDn</span>
@@ -174,16 +222,20 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
               marginTop: 1,
               border: true,
               borderStyle: 'single',
-              borderColor: busy ? '#4a4a6a' : '#7c3aed',
+              borderColor: busy ? '#4a4a6a' : focusArea === 'mission' ? '#7c3aed' : '#3b3b5c',
               backgroundColor: '#10101c',
               paddingLeft: 1,
               paddingRight: 1,
             }}
             title={busy ? 'Creating...' : 'Mission'}
+            onMouseDown={() => {
+              setFocusArea('mission');
+              textareaRef.current?.focus();
+            }}
           >
             <textarea
               ref={(value) => { textareaRef.current = value; }}
-              focused={!busy}
+              focused={!busy && focusArea === 'mission'}
               placeholder="Ask Proteus to investigate, build, audit, automate, or improve something..."
               wrapMode="word"
               keyBindings={[
@@ -205,13 +257,36 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <span fg={mode === 'cloud' ? (cloudReady ? '#d1d5db' : '#f59e0b') : (localReady ? '#d1d5db' : '#f59e0b')}>
               {modeLabel}
             </span>
-            <span fg="#6b7280">  Tab switches mode</span>
+            <span fg="#6b7280">  {focusArea === 'mode' ? '←/→ or Enter switches' : 'Tab to focus'}</span>
           </text>
+          <box flexDirection="row" style={{ height: 3, marginTop: 1 }}>
+            <ModeSegment
+              label="Cloud"
+              selected={mode === 'cloud'}
+              focused={focusArea === 'mode'}
+              ready={cloudReady}
+              onSelect={() => {
+                setFocusArea('mode');
+                setMode('cloud');
+              }}
+            />
+            <box style={{ width: 2 }} />
+            <ModeSegment
+              label="Local"
+              selected={mode === 'local'}
+              focused={focusArea === 'mode'}
+              ready={localReady}
+              onSelect={() => {
+                setFocusArea('mode');
+                setMode('local');
+              }}
+            />
+          </box>
           <text>
             <span fg="#6b7280">
               {setupRequired
                 ? 'Run one setup command above, then return here · Esc exit'
-                : `${agents.length > 0 ? '1-9 open agents · ' : ''}Ctrl/Alt+Enter create · Esc exit`}
+                : `${agents.length > 0 ? 'Tab focus · ↑/↓ select · Enter open · ' : 'Tab focus mode · '}Ctrl/Alt+Enter create · Esc exit`}
             </span>
           </text>
           <text>
@@ -227,6 +302,46 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           </box>
         )}
       </box>
+    </box>
+  );
+}
+
+function ModeSegment(props: {
+  label: string;
+  selected: boolean;
+  focused: boolean;
+  ready: boolean;
+  onSelect: () => void;
+}) {
+  const borderColor = props.selected
+    ? props.focused ? '#a78bfa' : '#7c3aed'
+    : '#3b3b5c';
+  const textColor = props.ready
+    ? props.selected ? '#e5e7eb' : '#d1d5db'
+    : '#f59e0b';
+  return (
+    <box
+      style={{
+        width: 18,
+        height: 3,
+        border: true,
+        borderStyle: 'single',
+        borderColor,
+        backgroundColor: props.selected ? '#241b45' : '#10101c',
+        paddingLeft: 1,
+        paddingRight: 1,
+        alignItems: 'center',
+      }}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        props.onSelect();
+      }}
+    >
+      <text>
+        <span fg={props.selected ? '#4ade80' : '#6b7280'}>{props.selected ? '●' : '○'}</span>
+        {' '}
+        <strong fg={textColor}>{props.label}</strong>
+      </text>
     </box>
   );
 }
@@ -248,4 +363,14 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   }).finally(() => {
     finishHome = null;
   });
+}
+
+function nextFocus(current: HomeFocus, hasAgents: boolean): HomeFocus {
+  const order: HomeFocus[] = hasAgents ? ['mission', 'agents', 'mode'] : ['mission', 'mode'];
+  const index = order.indexOf(current);
+  return order[(index + 1) % order.length] ?? order[0]!;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }

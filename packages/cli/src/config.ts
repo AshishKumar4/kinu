@@ -61,9 +61,11 @@ export type AgentMode = 'local' | 'cloud';
 export interface ProteusAgentConfig {
   name: string;
   mode: AgentMode;
+  displayName?: string;
   alias?: string;
   localName?: string;
   cloudName?: string;
+  cliModel?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -3,6 +3,7 @@
  */
 
 import type { AgentInfo } from '@proteus/core';
+import { formatContextUsage, modelDisplayName } from './context-status.js';
 import { clipText } from './format.js';
 
 interface Props {
@@ -11,9 +12,10 @@ interface Props {
   toolCount: number;
   autoEvolve: boolean;
   connected: boolean;
+  contextTokens?: number;
 }
 
-export function StatusBar({ info, model, toolCount, autoEvolve, connected }: Props) {
+export function StatusBar({ info, model, toolCount, autoEvolve, connected, contextTokens = 0 }: Props) {
   const statusDot = connected ? '●' : '○';
   const statusColor = connected ? '#4ade80' : '#f87171';
 
@@ -38,7 +40,9 @@ export function StatusBar({ info, model, toolCount, autoEvolve, connected }: Pro
         <span fg="#6b7280">v{info.scaffoldVersion}</span>
       </text>
       <text>
-        <span fg="#6b7280">{clipText(model.split('/').pop() ?? model, 24)}</span>
+        <span fg="#d1d5db">{clipText(modelDisplayName(model), 24)}</span>
+        {'  '}
+        <span fg="#6b7280">{formatContextUsage(model, contextTokens)}</span>
         {'  '}
         <span fg="#6b7280">⚡ {toolCount} tools</span>
         {'  '}

@@ -1,17 +1,12 @@
 import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
 import { runChat } from '@proteus/core';
-import { createLocalModelResolver } from '@proteus/cli-backend';
 import {
   commitCloudLocalTurn,
   invokeCloudLocalTool,
   prepareCloudLocalTurn,
   type CloudTurnResult,
 } from './cloud-api.js';
-import {
-  createCodexAuthStore,
-  resolveLLMConfig,
-  resolveProviderCredentials,
-} from './config.js';
+import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 export type CloudLocalTurnEvent =
   | { type: 'text-delta'; delta: string }
@@ -25,17 +20,14 @@ export async function runCloudTurnWithLocalModel(opts: {
   name: string;
   prompt: string;
   cwd: string;
+  modelSpec?: string | null;
   onEvent?: (event: CloudLocalTurnEvent) => void;
 }): Promise<CloudTurnResult> {
   const prepared = await prepareCloudLocalTurn(opts.origin, opts.token, opts.name, opts.prompt, opts.cwd);
-  const llmConfig = resolveLLMConfig({ model: prepared.modelSpec ?? undefined });
-  const resolver = createLocalModelResolver({
-    llm: llmConfig,
-    credentials: resolveProviderCredentials(),
-    codexAuthStore: createCodexAuthStore(),
-  });
-  const modelSpec = resolver.normalizeSpecSync(prepared.modelSpec ?? null);
-  const model = resolver.resolveModel(prepared.modelSpec ?? null);
+  const requestedModelSpec = opts.modelSpec ?? prepared.modelSpec ?? null;
+  const { resolver } = createConfiguredLocalModelResolver({ model: requestedModelSpec ?? undefined });
+  const modelSpec = resolver.normalizeSpecSync(requestedModelSpec);
+  const model = resolver.resolveModel(requestedModelSpec);
   const tools = buildRemoteToolSet({
     origin: opts.origin,
     token: opts.token,

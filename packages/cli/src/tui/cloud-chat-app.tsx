@@ -14,6 +14,12 @@ import {
 } from '../cloud-api.js';
 import { runCloudTurnWithLocalModel } from '../cloud-local-turn.js';
 import {
+  getConfiguredLocalModelSpec,
+  createConfiguredLocalModelResolver,
+  type LocalModelResolverOptions,
+} from '../local-model-resolver.js';
+import { loadConfigFile, upsertAgentConfig } from '../config.js';
+import {
   createCliSession,
   listCliSessions,
   readCliSessionTranscript,
@@ -27,6 +33,7 @@ import { clipText } from './format.js';
 import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js';
 import { normalizeModelEntries, type TuiModelEntry } from './model-types.js';
 import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
+import { estimateContextTokens, formatContextUsage, modelDisplayName } from './context-status.js';
 
 export interface CloudChatAppOpts {
   origin: string;
@@ -37,17 +44,21 @@ export interface CloudChatAppOpts {
   sessionOptions?: Pick<CliSessionOptions, 'sessionDir'>;
   hydrateTranscript?: boolean;
   initialPrompt?: string;
+  model?: string;
+  baseUrl?: string;
+  auth?: string;
 }
 
 let cloudExit: (() => void) | null = null;
 
-function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOptions, hydrateTranscript, initialPrompt }: CloudChatAppOpts) {
-  const { height } = useTerminalDimensions();
+function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOptions, hydrateTranscript, initialPrompt, model: requestedModel, baseUrl, auth }: CloudChatAppOpts) {
+  const { width, height } = useTerminalDimensions();
   const [messages, setMessages] = useState<DisplayMessage[]>(() => initialMessages(agentName, session, sessionOptions, hydrateTranscript));
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
-  const [model, setModel] = useState('cloud');
+  const localResolverOpts: LocalModelResolverOptions = { model: requestedModel, baseUrl, auth };
+  const [model, setModel] = useState(() => initialCloudCliModel(agentName, localResolverOpts));
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ models: TuiModelEntry[]; loading: boolean; error: string | null } | null>(null);
   const [draft, setDraft] = useState('');
@@ -65,10 +76,14 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
   useEffect(() => {
     let cancelled = false;
     void getCloudAgentModel(origin, token, cloudName)
-      .then((result) => { if (!cancelled) setModel(result.spec ?? 'cloud/default'); })
+      .then((result) => {
+        if (cancelled) return;
+        const localDefault = getConfiguredLocalModelSpec(localResolverOpts);
+        setModel(storedCloudCliModel(agentName) ?? requestedModel ?? localDefault ?? result.spec ?? 'cloud/default');
+      })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [cloudName, origin, token]);
+  }, [agentName, auth, baseUrl, cloudName, origin, requestedModel, token]);
 
   const resumeSession = useCallback((input: string, available?: CliSessionInfo[]) => {
     const sessions = available ?? listCliSessions(agentName, sessionOptions);
@@ -96,7 +111,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
   const openModelPicker = useCallback(async () => {
     setModelPicker({ models: [], loading: true, error: null });
     try {
-      const models = normalizeModelEntries(await listCloudAvailableModels(origin, token));
+      const models = await listCloudAndLocalModels(origin, token, localResolverOpts);
       setModelPicker({ models, loading: false, error: null });
     } catch (err) {
       setModelPicker({
@@ -105,18 +120,21 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }, [origin, token]);
+  }, [auth, baseUrl, origin, requestedModel, token]);
 
   const selectModel = useCallback(async (entry: TuiModelEntry) => {
     try {
-      const result = await setCloudAgentModel(origin, token, cloudName, entry.spec);
-      setModel(result.spec);
+      saveCloudCliModel(agentName, entry.spec);
+      if (entry.source === 'cloud' || entry.source === 'both') {
+        await setCloudAgentModel(origin, token, cloudName, entry.spec);
+      }
+      setModel(entry.spec);
       setModelPicker(null);
-      addMessage({ role: 'system', content: `Model: ${result.spec}` });
+      addMessage({ role: 'system', content: `Model: ${entry.spec}` });
     } catch (err) {
       addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
     }
-  }, [addMessage, cloudName, origin, token]);
+  }, [addMessage, agentName, cloudName, origin, token]);
 
   const handleSlash = useCallback(async (input: string) => {
     const [cmd, ...rest] = input.split(/\s+/);
@@ -164,9 +182,10 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
           await openModelPicker();
           return;
         }
-        const result = await setCloudAgentModel(origin, token, cloudName, arg);
-        setModel(result.spec);
-        addMessage({ role: 'system', content: `Model: ${result.spec}` });
+        const normalized = normalizeLocalModelSpec(arg, localResolverOpts) ?? arg;
+        saveCloudCliModel(agentName, normalized);
+        setModel(normalized);
+        addMessage({ role: 'system', content: `Model: ${normalized}` });
         return;
       }
       case '/memory': {
@@ -208,7 +227,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       default:
         addMessage({ role: 'system', content: `Unknown command: ${cmd}. Type /help` });
     }
-  }, [addMessage, agentName, cloudName, modelPicker, openModelPicker, origin, resumeSession, sessionOptions, sessionPicker, token]);
+  }, [addMessage, agentName, auth, baseUrl, cloudName, modelPicker, openModelPicker, origin, requestedModel, resumeSession, sessionOptions, sessionPicker, token]);
 
   const send = useCallback(async (text: string) => {
     const prompt = text.trim();
@@ -243,6 +262,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         name: cloudName,
         prompt: submitted,
         cwd: process.cwd(),
+        modelSpec: model,
         onEvent: (event) => {
           if (event.type === 'text-delta') {
             setStreamingText((prev) => `${prev ?? ''}${event.delta}`);
@@ -275,7 +295,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
       setIsProcessing(false);
       setTurnPhase(null);
     }
-  }, [addMessage, cloudName, handleSlash, isProcessing, origin, resumeSession, sessionPicker, token]);
+  }, [addMessage, cloudName, handleSlash, isProcessing, model, origin, resumeSession, sessionPicker, token]);
 
   useEffect(() => {
     const prompt = initialPrompt?.trim();
@@ -301,9 +321,10 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
   }, [send]);
   const scrollHeight = Math.max(1, height - 7);
   const commandHints = !modelPicker && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands('cloud', draft) : [];
+  const contextTokens = estimateContextTokens(messages, streamingText);
 
   return (
-    <box flexDirection="column" style={{ height: '100%' }}>
+    <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <box
         style={{
           height: 3,
@@ -319,7 +340,13 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         }}
       >
         <text><strong fg="#c4b5fd">{clipText(agentName, 32)}</strong> <span fg="#6b7280">cloud</span></text>
-        <text><span fg="#6b7280">{clipText(model.split('/').pop() ?? model, 24)}</span>  <span fg="#4ade80">● connected</span></text>
+        <text>
+          <span fg="#d1d5db">{clipText(modelDisplayName(model), 24)}</span>
+          {'  '}
+          <span fg="#6b7280">{formatContextUsage(model, contextTokens)}</span>
+          {'  '}
+          <span fg="#4ade80">● connected</span>
+        </text>
       </box>
 
       <scrollbox
@@ -336,18 +363,6 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
 
-      {modelPicker ? (
-        <ModelPickerOverlay
-          models={modelPicker.models}
-          currentSpec={model}
-          loading={modelPicker.loading}
-          error={modelPicker.error}
-          onSelect={(entry) => { void selectModel(entry); }}
-        />
-      ) : (
-        <CommandHintOverlay commands={commandHints} />
-      )}
-
       <box
         style={{
           height: 3,
@@ -357,19 +372,109 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
           backgroundColor: '#1a1a2e',
           paddingLeft: 1,
         }}
-        title={isProcessing ? 'processing...' : modelPicker ? 'Model picker open' : sessionPicker ? 'Resume >' : `${agentName} · ${activeSessionId.slice(0, 18)} >`}
+        title={isProcessing ? 'processing...' : modelPicker ? 'Model picker' : sessionPicker ? 'Resume >' : `${agentName} · ${activeSessionId.slice(0, 18)} >`}
       >
         <input
           ref={(value) => { inputRef.current = value; }}
           focused={!isProcessing && !modelPicker}
           value={draft}
-          placeholder={isProcessing ? 'Waiting for response...' : modelPicker ? 'Select a model above or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
+          placeholder={isProcessing ? 'Waiting for response...' : modelPicker ? 'Select a model or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
           onInput={setDraft}
           onSubmit={onSubmit}
         />
       </box>
+
+      {modelPicker ? (
+        <ModelPickerOverlay
+          models={modelPicker.models}
+          currentSpec={model}
+          terminal={{ width, height }}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={(entry) => { void selectModel(entry); }}
+        />
+      ) : (
+        <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
+      )}
     </box>
   );
+}
+
+async function listCloudAndLocalModels(
+  origin: string,
+  token: string,
+  localOpts: LocalModelResolverOptions,
+): Promise<TuiModelEntry[]> {
+  const [cloud, local] = await Promise.allSettled([
+    listCloudAvailableModels(origin, token),
+    listLocalModels(localOpts),
+  ]);
+  const rows: TuiModelEntry[] = [];
+  if (cloud.status === 'fulfilled') {
+    rows.push(...normalizeModelEntries(cloud.value).map((entry) => ({ ...entry, source: 'cloud' as const })));
+  }
+  if (local.status === 'fulfilled') {
+    rows.push(...normalizeModelEntries(local.value).map((entry) => ({ ...entry, source: 'local' as const })));
+  }
+  if (rows.length === 0) {
+    const reason = [
+      cloud.status === 'rejected' ? cloud.reason : null,
+      local.status === 'rejected' ? local.reason : null,
+    ].filter(Boolean).map(String).join('; ');
+    throw new Error(reason || 'No connected model providers.');
+  }
+  return dedupeModels(rows);
+}
+
+async function listLocalModels(localOpts: LocalModelResolverOptions) {
+  return await createConfiguredLocalModelResolver(localOpts).resolver.listModels();
+}
+
+function dedupeModels(rows: TuiModelEntry[]): TuiModelEntry[] {
+  const bySpec = new Map<string, TuiModelEntry>();
+  for (const row of rows) {
+    const existing = bySpec.get(row.spec);
+    if (!existing) {
+      bySpec.set(row.spec, row);
+      continue;
+    }
+    bySpec.set(row.spec, {
+      ...existing,
+      capabilities: [...new Set([...(existing.capabilities ?? []), ...(row.capabilities ?? [])])],
+      source: existing.source === row.source ? existing.source : 'both',
+    });
+  }
+  return [...bySpec.values()].sort((a, b) => modelRank(a) - modelRank(b) || a.label.localeCompare(b.label));
+}
+
+function modelRank(model: TuiModelEntry): number {
+  if (model.spec.includes('kimi-k2.6')) return 0;
+  if (model.provider === 'codex') return 1;
+  if (model.provider === 'openai') return 2;
+  if (model.source === 'cloud') return 3;
+  return 4;
+}
+
+function initialCloudCliModel(agentName: string, opts: LocalModelResolverOptions): string {
+  return storedCloudCliModel(agentName) ?? opts.model ?? getConfiguredLocalModelSpec(opts) ?? 'cloud/default';
+}
+
+function storedCloudCliModel(agentName: string): string | null {
+  return loadConfigFile().agents?.[agentName]?.cliModel ?? null;
+}
+
+function saveCloudCliModel(agentName: string, spec: string): void {
+  const existing = loadConfigFile().agents?.[agentName];
+  if (!existing) return;
+  upsertAgentConfig({ ...existing, cliModel: spec });
+}
+
+function normalizeLocalModelSpec(spec: string, opts: LocalModelResolverOptions): string | null {
+  try {
+    return createConfiguredLocalModelResolver({ ...opts, model: spec }).resolver.normalizeSpecSync(spec);
+  } catch {
+    return null;
+  }
 }
 
 function initialMessages(
