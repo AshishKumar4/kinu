@@ -120,7 +120,7 @@ function CloudChatApp({ origin, token, agentName, cloudName, session, sessionOpt
         const status = await getCloudAgentStatus(origin, token, cloudName);
         addMessage({ role: 'system', content: [
           `Name: ${status.displayName ?? status.name}`,
-          `Purpose: ${status.purpose.slice(0, 120)}`,
+          `Mission: ${status.purpose.slice(0, 120)}`,
           `Messages: ${status.messageCount}`,
           `MCTS nodes: ${status.searchNodeCount}`,
           `Crafted tools: ${status.craftedToolCount}`,

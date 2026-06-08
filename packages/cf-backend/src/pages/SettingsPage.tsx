@@ -41,7 +41,7 @@ export default function SettingsPage() {
   const state = useProteus(agentId);
 
   const [displayName, setDisplayName] = useState("");
-  const [purpose, setPurpose] = useState("");
+  const [soul, setSoul] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (state.agentStatus) {
       setDisplayName(state.agentStatus.displayName || state.agentStatus.name || "");
-      setPurpose(state.agentStatus.purpose || "");
+      setSoul(state.agentStatus.soul || "");
     }
   }, [state.agentStatus]);
 
@@ -85,7 +85,7 @@ export default function SettingsPage() {
     try {
       await Promise.all([
         state.rpc("setDisplayName", [displayName]),
-        state.rpc("setSoul", [purpose]),
+        state.rpc("setSoul", [soul]),
         currentSpec ? state.setModel(currentSpec) : Promise.resolve(),
         state.rpc("setShellApprovalMode", [approvalMode]),
         state.rpc("setMctsConfig", [mcts]),
@@ -97,7 +97,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [state, displayName, purpose, currentSpec, approvalMode, mcts]);
+  }, [state, displayName, soul, currentSpec, approvalMode, mcts]);
 
   if (state.connectionStatus !== "connected") {
     return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
@@ -143,9 +143,9 @@ export default function SettingsPage() {
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs p-text-2 font-medium">Mission / purpose</label>
-            <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={3}
-              className={`${inputCls} font-mono`} placeholder="What is this agent for?" />
+            <label className="text-xs p-text-2 font-medium">SOUL.md</label>
+            <textarea value={soul} onChange={(e) => setSoul(e.target.value)} rows={8}
+              className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
           </div>
         </Card>
 

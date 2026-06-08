@@ -64,7 +64,6 @@ export interface ProteusAgentConfig {
   alias?: string;
   localName?: string;
   cloudName?: string;
-  purpose?: string;
   createdAt: string;
   updatedAt: string;
 }

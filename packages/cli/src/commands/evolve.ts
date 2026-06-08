@@ -41,7 +41,7 @@ export async function evolveCommand(name: string, opts: {
   console.log(`${BRAND} ${DIM('— Evolution')}`);
   console.log(`  ${DIM('Agent:')}    ${ACCENT(name)}`);
   console.log(`  ${DIM('Budget:')}   ${budget} iterations, ${branches} branches`);
-  console.log(`  ${DIM('Purpose:')}  ${info.purpose.slice(0, 60)}`);
+  console.log(`  ${DIM('Mission:')}  ${info.purpose.slice(0, 60)}`);
   console.log('');
 
   const session = createEvolveSession(rt);

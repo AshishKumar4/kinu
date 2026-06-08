@@ -430,7 +430,7 @@ function ForkModal({
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
         <p>Create a new agent that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
-          <li>Copies: soul, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
+          <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
           <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
           <li>Source agent is unaffected</li>
         </ul>

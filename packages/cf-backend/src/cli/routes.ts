@@ -3,6 +3,7 @@ import { AuthError, authenticateRequest } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from '../user/user-do.js';
+import { renderSoulMarkdown } from '@proteus/core';
 import { approveCliAuth, inspectCliAuth, pollCliAuth, startCliAuth } from './auth-store.js';
 import { buildCliInstallCommand } from './install-command.js';
 
@@ -99,8 +100,7 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
       const entry = await cli.userDO.registerAgent(body.name, body.displayName, body.purpose);
       const orchestrator = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(body.name)) as DurableObjectStub<OrchestratorAgent>;
       await orchestrator.claimOwner(cli.userId);
-      const trimmedPurpose = body.purpose?.trim();
-      if (trimmedPurpose) await orchestrator.setSoul(trimmedPurpose);
+      await orchestrator.setSoul(renderSoulMarkdown({ name: body.displayName || body.name, mission: body.purpose }));
       return json(entry, { status: 201 });
     } catch (e) {
       return err(400, (e as Error).message);

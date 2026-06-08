@@ -103,7 +103,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - Think wraps AIChatAgent and provides tool lifecycle, sessions, fibers
 - `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.5`
 - `getTools()` builds 5-tool ToolSet; results are cached per CraftStore version
-- `getSystemPrompt()` reads from `agent_soul` table
+- `getSystemPrompt()` reads `SOUL.md` from VFS
 - `onChatResponse()` fires evolution async (never blocks TurnQueue)
 - `beforeTurn()` resets per-turn state counters
 - `configureSession()` adds memory context + cached prompt
@@ -112,7 +112,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 ## Architecture Invariants
 
-- The agent_soul table holds a single-row purpose; user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
+- `SOUL.md` in VFS is the canonical agent identity/purpose file; user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
 - agent_identity holds a single row with stable UUID
 - Scaffold is versioned in VFS (`scaffold/agent.js`) + `scaffold_versions` table
 - Memory lives in VFS under `memory/` prefix

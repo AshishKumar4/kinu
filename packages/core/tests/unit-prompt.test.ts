@@ -13,7 +13,7 @@ import {
 import { createTestRuntime } from '@proteus/test-utils';
 
 describe('buildSystemPromptSync', () => {
-  test('uses FALLBACK_PURPOSE when agent_soul is missing', () => {
+  test('uses fallback SOUL.md when SOUL.md is missing', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/Proteus/);                 // identity self-id
@@ -32,9 +32,9 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
-  test('honors purposeOverride', () => {
+  test('honors soulOverride', () => {
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, { purposeOverride: 'CUSTOM ROLE TEXT' });
+    const prompt = buildSystemPromptSync(rt, { soulOverride: 'CUSTOM ROLE TEXT' });
     expect(prompt).toContain('CUSTOM ROLE TEXT');
     expect(prompt).not.toMatch(/^You are Proteus/);   // fallback NOT used
   });

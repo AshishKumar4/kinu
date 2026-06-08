@@ -110,7 +110,7 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   console.log(`${BRAND} ${DIM('— Agent Created')}`);
   console.log(boxTop(w));
   console.log(boxRow(L('Name:'), ACCENT(name), w));
-  console.log(boxRow(L('Purpose:'), purpose.slice(0, w - 18), w));
+  console.log(boxRow(L('Mission:'), purpose.slice(0, w - 18), w));
   console.log(boxRow(L('Model:'), MUTED(model), w));
   console.log(boxRow(L('Database:'), MUTED(dbPath), w));
   console.log(boxBot(w));
@@ -131,7 +131,7 @@ export function printAgentStatus(info: AgentInfo, dbSize: number, extra?: {
 
   // Identity section
   console.log(boxRow(L('Name:'), `${ACCENT(info.name)} ${DIM(`(${info.id.slice(0, 12)}...)`)}`, w));
-  console.log(boxRow(L('Purpose:'), info.purpose.slice(0, w - 22), w));
+  console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 22), w));
   console.log(boxRow(L('Created:'), DIM(new Date(info.createdAt).toLocaleDateString()), w));
   console.log(boxRow(L('Database:'), DIM(formatBytes(dbSize)), w));
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
@@ -277,7 +277,7 @@ export function printChatBanner(info: AgentInfo, tools: string[], autoEvolve: bo
   console.log(`${BRAND} ${DIM('— Chat')}`);
   console.log(boxTop(w));
   console.log(boxRow(L('Agent:'), ACCENT(info.name), w));
-  console.log(boxRow(L('Purpose:'), info.purpose.slice(0, w - 18), w));
+  console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 18), w));
   console.log(boxRow(L('Tools:'), DIM(tools.join(', ')), w));
   console.log(boxBot(w));
   console.log(`${DIM(`  Evolution: ${autoEvolve ? 'auto' : 'off'}  ·  Type /help for commands`)}\n`);

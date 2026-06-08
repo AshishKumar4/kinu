@@ -2,7 +2,15 @@
 
 // Identity system
 export { initAllTables } from './identity/schema.js';
-export { readSoul, writeSoul } from './identity/soul.js';
+export {
+  DEFAULT_SOUL_MD,
+  SOUL_PATH,
+  readSoul,
+  renderSoulMarkdown,
+  seedSoul,
+  summarizeSoul,
+  writeSoul,
+} from './identity/soul.js';
 export { createAgent, wrapDatabase, type AgentBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/open.js';
 export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';

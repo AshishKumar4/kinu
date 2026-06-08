@@ -3,7 +3,7 @@
  *
  * Resume protocol:
  * 1. Read agent_identity → get stable UUID + name
- * 2. Read agent_soul → get immutable purpose
+ * 2. Read SOUL.md → get agent identity text
  * 3. Read scaffold_versions → get current version
  * 4. Read scaffold/agent.js from VFS → current agentic loop
  * 5. Read craft_scores → quality metrics
@@ -14,7 +14,7 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLMProviderConfig } from '../llm.js';
 import { createAgent, wrapDatabase, type AgentDatabase } from './create.js';
 import { initAllTables } from './schema.js';
-import { readSoul } from './soul.js';
+import { readSoul, summarizeSoul } from './soul.js';
 import { createVercelAILLM } from '../llm.js';
 import { buildRuntime } from '../runtime-builder.js';
 
@@ -27,6 +27,7 @@ export interface AgentInfo {
   id: string;
   name: string;
   purpose: string;
+  soul: string;
   scaffoldVersion: number;
   craftedToolCount: number;
   searchNodeCount: number;
@@ -51,9 +52,9 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
   `[0];
   if (!identity) throw new Error('No agent identity found. Use createAgent() to create one.');
 
-  // Step 2: Read soul
-  const purpose = readSoul(sql);
-  if (!purpose) throw new Error('No agent soul found. Database may be corrupted.');
+  // Step 2: Read SOUL.md
+  const soul = readSoul(sql);
+  if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Step 3: Scaffold version
   const scaffoldVersion = sql<{ v: number }>`
@@ -113,7 +114,8 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
     info: {
       id: identity.id,
       name: identity.name,
-      purpose,
+      purpose: summarizeSoul(soul),
+      soul,
       scaffoldVersion,
       craftedToolCount,
       searchNodeCount,

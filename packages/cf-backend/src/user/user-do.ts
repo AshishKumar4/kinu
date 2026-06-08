@@ -80,7 +80,6 @@ export interface UserProfile {
 export interface AgentEntry {
   name: string;
   displayName: string;
-  purpose: string;
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
@@ -213,13 +212,12 @@ export class UserDO extends Agent<Env> {
 
   @callable()
   async listAgents(): Promise<AgentEntry[]> {
-    return this.sqlx<{ name: string; display_name: string; purpose: string | null; created_at: number; last_visited: number; archived_at: number | null }>(
-      `SELECT name, display_name, purpose, created_at, last_visited, archived_at
+    return this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
+      `SELECT name, display_name, created_at, last_visited, archived_at
        FROM user_agents WHERE archived_at IS NULL ORDER BY last_visited DESC`,
     ).map((r) => ({
       name: r.name,
       displayName: r.display_name,
-      purpose: r.purpose ?? '',
       createdAt: r.created_at,
       lastVisited: r.last_visited,
       archivedAt: r.archived_at,
@@ -237,16 +235,15 @@ export class UserDO extends Agent<Env> {
       explicit: displayName, existing: existing?.display_name, purpose, slug: name,
     });
     this.sqlx(
-      `INSERT INTO user_agents (name, display_name, purpose, created_at, last_visited)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO user_agents (name, display_name, created_at, last_visited)
+       VALUES (?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          display_name = excluded.display_name,
-         purpose      = COALESCE(excluded.purpose, user_agents.purpose),
          last_visited = excluded.last_visited,
          archived_at  = NULL`,
-      name, title, purpose ?? null, now, now,
+      name, title, now, now,
     );
-    return { name, displayName: title, purpose: purpose ?? '', createdAt: now, lastVisited: now, archivedAt: null };
+    return { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null };
   }
 
   @callable()

@@ -53,7 +53,6 @@ import {
   buildSystemPromptSync,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
-  FALLBACK_PURPOSE,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   type BuiltinToolName,
@@ -117,6 +116,7 @@ import {
   type EvalInstance, type MetricOutcome, type GepaRunSummary,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
+  readSoul, SOUL_PATH, summarizeSoul, writeSoul,
 } from "@proteus/core";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
@@ -176,7 +176,6 @@ interface ForkPayload {
     forkOriginCreatedAt: number;
     forkedAt: number;
   };
-  soul: { purpose: string; created_at: number };
   messages: Array<{
     id: string; session_id: string; parent_id: string | null;
     role: string; content: string; created_at: number;
@@ -222,9 +221,6 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
         const wantedId = values[0] as string;
         const hit = payload.messages.find(m => m.id === wantedId);
         return hit ? [{ created_at: hit.created_at }] : [];
-      }
-      if (query.startsWith("SELECT purpose, created_at FROM agent_soul")) {
-        return [payload.soul];
       }
       if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM messages")) {
         const cutoff = values[0] as number;
@@ -747,10 +743,10 @@ export class OrchestratorAgent extends Think<Env> {
     return this._providerRegistry;
   }
 
-  /** Read the owner userId from agent_soul; '' (empty) means unclaimed. */
+  /** Read the owner userId from agent_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
     try {
-      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_soul LIMIT 1`;
+      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_identity LIMIT 1`;
       const v = rows[0]?.owner_user_id;
       return v && v !== '' ? v : null;
     } catch { return null; }
@@ -801,12 +797,15 @@ export class OrchestratorAgent extends Think<Env> {
     }
     const current = this.getOwnerUserId();
     if (current === null) {
-      // Unclaimed — first touch. Ensure agent_soul has at least one row.
-      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_soul LIMIT 1`;
+      // Unclaimed — first touch. Ensure identity has the owner marker.
+      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_identity LIMIT 1`;
       if (exists.length === 0) {
-        this.sql`INSERT INTO agent_soul (purpose, owner_user_id) VALUES (${FALLBACK_PURPOSE}, ${userId})`;
+        this.sql`
+          INSERT INTO agent_identity (id, name, owner_user_id, created_at)
+          VALUES (${this.ctx.id.toString()}, ${this.name}, ${userId}, ${Date.now()})
+        `;
       } else {
-        this.sql`UPDATE agent_soul SET owner_user_id = ${userId}`;
+        this.sql`UPDATE agent_identity SET owner_user_id = ${userId}`;
       }
       this.invalidateModelCaches();
       return { owner: userId };
@@ -965,17 +964,14 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private _cachedSystemPrompt: string | null = null;
   private _cachedSystemPromptKey: string = "";
-  /** Cached soul.purpose. Loaded lazily on first read, invalidated by
+  /** Cached SOUL.md text. Loaded lazily on first read, invalidated by
    *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
-  private _cachedSoulPurpose: string | null = null;
-  private getSoulPurpose(): string {
-    if (this._cachedSoulPurpose === null) {
-      try {
-        const rows = this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
-        this._cachedSoulPurpose = rows[0]?.purpose ?? '';
-      } catch { this._cachedSoulPurpose = ''; }
+  private _cachedSoulText: string | null = null;
+  private getSoulText(): string {
+    if (this._cachedSoulText === null) {
+      this._cachedSoulText = readSoul(this.boundSql) ?? '';
     }
-    return this._cachedSoulPurpose;
+    return this._cachedSoulText;
   }
 
   getSystemPrompt(): string {
@@ -985,7 +981,7 @@ export class OrchestratorAgent extends Think<Env> {
       `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
     ).join(",");
     const modelId = this.getStoredModelId();
-    const key = `${this.getSoulPurpose()}\u0000${execKey}\u0000${modelId}`;
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${modelId}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -2059,10 +2055,6 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     try {
-      const soul = this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
-      if (soul.length === 0) {
-        this.sql`INSERT INTO agent_soul (purpose) VALUES (${FALLBACK_PURPOSE})`;
-      }
       const identity = this.sql<{ id: string }>`SELECT id FROM agent_identity LIMIT 1`;
       if (identity.length === 0) {
         this.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
@@ -2218,8 +2210,8 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async getAgentStatus() {
     try {
-      const rows = this.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
-      const purpose = rows[0]?.purpose ?? "";
+      const soul = readSoul(this.boundSql) ?? "";
+      const purpose = summarizeSoul(soul);
       const identity = this.sql<{ id: string; name: string; created_at: number }>`
         SELECT id, name, created_at FROM agent_identity LIMIT 1`;
       const scaffoldVersion = this.sql<{ v: number }>`
@@ -2243,6 +2235,7 @@ export class OrchestratorAgent extends Think<Env> {
         name: identity[0]?.name ?? this.name,
         displayName: this.getDisplayName(),
         purpose,
+        soul,
         createdAt: identity[0]?.created_at ?? 0,
         scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
         searchNodeCount: searchNodes[0]?.c ?? 0,
@@ -2252,9 +2245,9 @@ export class OrchestratorAgent extends Think<Env> {
         forkLineage,
       };
     } catch {
-      return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", createdAt: 0,
+      return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", soul: "", createdAt: 0,
         scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
-        model: this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
+        model: this.getStoredModelId(),
         forkLineage: null };
     }
   }
@@ -3635,14 +3628,16 @@ export class OrchestratorAgent extends Think<Env> {
     return { ok: true };
   }
 
-  @callable() async setSoul(purpose: string) {
-    this.sql`UPDATE agent_soul SET purpose = ${purpose}`;
-    // Invalidate the cached purpose + system prompt so the next turn
+  @callable() async setSoul(soul: string) {
+    const text = soul.trim();
+    if (!text) throw new Error('SOUL.md cannot be empty.');
+    writeSoul(this.boundSql, text);
+    // Invalidate the cached SOUL.md + system prompt so the next turn
     // picks up the new identity.
-    this._cachedSoulPurpose = null;
+    this._cachedSoulText = null;
     this._cachedSystemPrompt = null;
     this._cachedSystemPromptKey = '';
-    return { purpose };
+    return { soul: text, purpose: summarizeSoul(text) };
   }
 
   @callable() async clearMemory() {
@@ -3790,7 +3785,7 @@ export class OrchestratorAgent extends Think<Env> {
 
   /**
    * Fork this agent at a specific message, producing a new agent DO with:
-   *   - soul copied, messages 0..N copied, crafted tools snapshotted,
+   *   - SOUL.md copied, messages 0..N copied, crafted tools snapshotted,
    *     memory copied, agent_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, craft_scores RESET
    *
@@ -3835,13 +3830,11 @@ export class OrchestratorAgent extends Think<Env> {
     const forkStubForPrecheck = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
     let existingIdentity: { id: string; name: string } | null = null;
     try {
-      // A bare getAgentStatus call on a fresh DO returns an empty agent_soul
-      // (purpose: "") and an agent_identity row with the default-bootstrap
-      // name matching the DO's runtime name. We detect "already used" by
-      // asking for messageCount — a fresh DO has 0 messages AND a fresh
-      // agent_soul (purpose == ""). Any agent with prior state has either.
-      const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; purpose: string; name: string }> }).getAgentStatus();
-      if (status.messageCount > 0 || status.purpose.length > 0) {
+      // A bare getAgentStatus call on a fresh DO may create agent_identity,
+      // but it does not seed SOUL.md. Existing agents have either chat history
+      // or a SOUL.md file written by the creation path.
+      const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; soul: string; name: string }> }).getAgentStatus();
+      if (status.messageCount > 0 || status.soul.length > 0) {
         existingIdentity = { id: "", name: status.name };
       }
     } catch {
@@ -3913,7 +3906,6 @@ export class OrchestratorAgent extends Think<Env> {
    */
   private buildForkPayload(untilMessageId: string, forkName: string): ForkPayload {
     const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM agent_identity LIMIT 1`;
-    const soul = this.sql<{ purpose: string; created_at: number }>`SELECT purpose, created_at FROM agent_soul LIMIT 1`;
     const hit = this.sql<{ created_at: number }>`
       SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
     `;
@@ -3932,7 +3924,7 @@ export class OrchestratorAgent extends Think<Env> {
     `;
     const vfs = this.sql<ForkPayload["vfsFiles"][number]>`
       SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
-      FROM vfs_files WHERE path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
+      FROM vfs_files WHERE path = ${SOUL_PATH} OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
     `;
     let memChunks: ForkPayload["memoryChunks"] = [];
     try {
@@ -3972,7 +3964,6 @@ export class OrchestratorAgent extends Think<Env> {
         forkOriginCreatedAt: forkPointMs,
         forkedAt: Date.now(),
       },
-      soul: soul[0] ?? { purpose: "", created_at: Date.now() },
       messages,
       conversationHistory: conv,
       vfsFiles: vfs,

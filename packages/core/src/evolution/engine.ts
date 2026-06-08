@@ -32,6 +32,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
 import { updateCraftScores } from '../craft/ema.js';
+import { readSoul, summarizeSoul } from '../identity/soul.js';
 
 /**
  * Built-in tool names — crafted-tool scoring ignores these.
@@ -261,9 +262,7 @@ export class EvolutionEngine {
    * Also callable manually via `proteus evolve`.
    */
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
-    const purpose = this.rt.storage.sql<{ purpose: string }>`
-      SELECT purpose FROM agent_soul LIMIT 1
-    `[0]?.purpose ?? 'be a helpful assistant';
+    const purpose = summarizeSoul(readSoul(this.rt.storage.sql)) || 'be a helpful assistant';
 
     this.emit({
       type: 'mcts_started',

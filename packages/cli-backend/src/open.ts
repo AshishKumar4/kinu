@@ -10,7 +10,7 @@
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initAllTables, readSoul } from '@proteus/core';
+import { initAllTables, readSoul, summarizeSoul } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
@@ -19,6 +19,7 @@ export interface AgentInfo {
   id: string;
   name: string;
   purpose: string;
+  soul: string;
   scaffoldVersion: number;
   craftedToolCount: number;
   searchNodeCount: number;
@@ -71,9 +72,9 @@ export function openAgentCLI(
   `[0];
   if (!identity) throw new Error('No agent identity found. Use createAgent() to create one.');
 
-  // Read soul
-  const purpose = readSoul(sql);
-  if (!purpose) throw new Error('No agent soul found. Database may be corrupted.');
+  // Read SOUL.md
+  const soul = readSoul(sql);
+  if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Gather stats for AgentInfo display
   const scaffoldVersion = sql<{ v: number }>`
@@ -115,7 +116,8 @@ export function openAgentCLI(
     info: {
       id: identity.id,
       name: identity.name,
-      purpose,
+      purpose: summarizeSoul(soul),
+      soul,
       scaffoldVersion,
       craftedToolCount,
       searchNodeCount,

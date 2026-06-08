@@ -31,7 +31,6 @@ function createLocalAgent(home: string, name: string): void {
   const db = new Database(join(dir, "agent.db"));
   db.exec(`
     CREATE TABLE agent_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL);
-    CREATE TABLE agent_soul (purpose TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE vfs_files (
       path TEXT NOT NULL,
       chunk_index INTEGER NOT NULL DEFAULT 0,
@@ -76,7 +75,12 @@ function createLocalAgent(home: string, name: string): void {
     );
   `);
   db.run("INSERT INTO agent_identity (id, name, created_at) VALUES (?, ?, ?)", ["agent-1", name, 1]);
-  db.run("INSERT INTO agent_soul (purpose, created_at) VALUES (?, ?)", ["Test purpose", 1]);
+  db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
+    "SOUL.md",
+    Buffer.from("# Test\n\n## Mission\n\nTest purpose\n"),
+    33,
+    1,
+  ]);
   db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
     "memory/MEMORY.md",
     Buffer.from("# Memory\n\nhello local memory\n"),

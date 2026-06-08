@@ -2,7 +2,6 @@ import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  CLI_AGENT_STARTERS,
   createAgentNameFromMission,
   createCliAgent,
   defaultCreateMode,
@@ -24,7 +23,6 @@ export interface HomeTuiOptions {
 }
 
 let finishHome: ((action: HomeTuiAction) => void) | null = null;
-const STARTER_KEYS = ['i', 's', 'h', 'e'] as const;
 
 function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const { width, height } = useTerminalDimensions();
@@ -39,8 +37,6 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const localReady = isLocalModelConfigured();
   const setupRequired = !cloudReady && !localReady;
   const panelWidth = Math.min(Math.max(28, width - 4), Math.max(52, Math.floor(width * 0.72)), 104);
-  const compactStarters = panelWidth < 72;
-  const starterCardWidth = compactStarters ? Math.max(24, panelWidth - 4) : Math.floor((panelWidth - 8) / 4);
   const promptHeight = Math.min(Math.max(7, Math.floor(height * 0.24)), 10);
   const agentPageSize = 9;
   const agentPageCount = Math.max(1, Math.ceil(agents.length / agentPageSize));
@@ -50,14 +46,6 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     if (mode === 'cloud') return cloudReady ? 'Cloud agent' : 'Cloud agent - sign in required';
     return localReady ? 'Local agent' : 'Local agent - provider required';
   }, [cloudReady, localReady, mode]);
-
-  const setStarter = useCallback((index: number) => {
-    if (setupRequired) return;
-    const starter = CLI_AGENT_STARTERS[index];
-    if (!starter) return;
-    textareaRef.current?.setText(starter.prompt);
-    setDraft(starter.prompt);
-  }, [setupRequired]);
 
   const submit = useCallback(async () => {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
@@ -111,12 +99,6 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         finishHome?.({ type: 'open-agent', name: visibleAgents[numeric - 1]!.name });
         return;
       }
-      if (agents.length === 0) setStarter(numeric - 1);
-      return;
-    }
-    const starterIndex = STARTER_KEYS.findIndex((shortcut) => shortcut === key.name?.toLowerCase());
-    if (starterIndex >= 0) {
-      setStarter(starterIndex);
     }
   });
 
@@ -229,7 +211,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <span fg="#6b7280">
               {setupRequired
                 ? 'Run one setup command above, then return here · Esc exit'
-                : `${agents.length > 0 ? '1-9 open agents · I/S/H/E starters' : '1-4 or I/S/H/E starters'} · Ctrl/Alt+Enter create · Esc exit`}
+                : `${agents.length > 0 ? '1-9 open agents · ' : ''}Ctrl/Alt+Enter create · Esc exit`}
             </span>
           </text>
           <text>
@@ -238,32 +220,6 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <span fg={localReady ? '#4ade80' : '#6b7280'}>{localReady ? '●' : '○'} Local provider</span>
           </text>
         </box>
-
-        {!setupRequired && (
-          <box flexDirection={compactStarters ? 'column' : 'row'} style={{ marginTop: 1 }}>
-            {CLI_AGENT_STARTERS.map((starter, index) => (
-              <box
-                key={starter.title}
-                style={{
-                  width: starterCardWidth,
-                  marginRight: compactStarters || index === CLI_AGENT_STARTERS.length - 1 ? 0 : 1,
-                  marginBottom: compactStarters && index !== CLI_AGENT_STARTERS.length - 1 ? 1 : 0,
-                  border: true,
-                  borderStyle: 'single',
-                  borderColor: '#2f2f46',
-                  paddingLeft: 1,
-                  paddingRight: 1,
-                }}
-              >
-                <text>
-                  <span fg="#8b5cf6">{agents.length === 0 ? index + 1 : STARTER_KEYS[index]!.toUpperCase()}</span>{' '}
-                  <strong fg="#d1d5db">{starter.title}</strong>{'\n'}
-                  <span fg="#6b7280">{starter.description.slice(0, 42)}</span>
-                </text>
-              </box>
-            ))}
-          </box>
-        )}
 
         {error && (
           <box style={{ marginTop: 1 }}>

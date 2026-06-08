@@ -26,7 +26,6 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_agents (
       name          TEXT PRIMARY KEY,
       display_name  TEXT NOT NULL,
-      purpose       TEXT,
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       archived_at   INTEGER

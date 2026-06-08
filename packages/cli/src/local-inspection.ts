@@ -19,6 +19,8 @@ import {
   type EventVariant,
   type ProductChangeBoard,
   type SearchNode,
+  readSoul,
+  summarizeSoul,
 } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
 import { agentDbPath } from './config.js';
@@ -66,6 +68,7 @@ export interface LocalAgentInfoSnapshot {
   id: string;
   name: string;
   purpose: string;
+  soul: string;
   scaffoldVersion: number;
   craftedToolCount: number;
   searchNodeCount: number;
@@ -93,6 +96,7 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       id: string | null;
       name: string | null;
       purpose: string;
+      soul: string;
       createdAt: number | null;
       scaffoldVersion: number;
       searchNodeCount: number;
@@ -102,6 +106,7 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       id: status.id ?? name,
       name: status.name ?? name,
       purpose: status.purpose,
+      soul: status.soul,
       scaffoldVersion: status.scaffoldVersion,
       craftedToolCount: status.craftedToolCount,
       searchNodeCount: status.searchNodeCount,
@@ -550,14 +555,13 @@ function getLocalStatus(db: SqliteDb): unknown {
   const identity = tableExists(db, 'agent_identity')
     ? get<{ id: string; name: string; created_at: number }>(db, `SELECT id, name, created_at FROM agent_identity LIMIT 1`)
     : null;
-  const soul = tableExists(db, 'agent_soul')
-    ? get<{ purpose: string; created_at: number }>(db, `SELECT purpose, created_at FROM agent_soul LIMIT 1`)
-    : null;
+  const soul = readSoul(makeSql(db));
   return {
     id: identity?.id ?? null,
     name: identity?.name ?? null,
-    purpose: soul?.purpose ?? '',
-    createdAt: identity?.created_at ?? soul?.created_at ?? null,
+    purpose: summarizeSoul(soul),
+    soul: soul ?? '',
+    createdAt: identity?.created_at ?? null,
     scaffoldVersion: tableExists(db, 'scaffold_versions')
       ? get<{ v: number }>(db, `SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions`)?.v ?? 0
       : 0,

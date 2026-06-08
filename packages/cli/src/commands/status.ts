@@ -52,7 +52,7 @@ function printCloudStatus(
   console.log('');
   console.log(`${ACCENT(name)} ${DIM('cloud agent')}`);
   console.log(`${DIM('State')}      ${OK('connected')}`);
-  console.log(`${DIM('Purpose')}    ${status.purpose || DIM('(none)')}`);
+  console.log(`${DIM('Mission')}    ${status.purpose || DIM('(none)')}`);
   console.log(`${DIM('Model')}      ${status.model ?? DIM('(default)')}`);
   console.log(`${DIM('Messages')}   ${status.messageCount}`);
   console.log(`${DIM('Scaffold')}   v${status.scaffoldVersion}`);

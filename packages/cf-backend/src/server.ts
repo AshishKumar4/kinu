@@ -102,7 +102,7 @@ async function ensureAgentOwnership(
       });
     }
   }
-  // Claim ownership on the orchestrator's own agent_soul. Idempotent;
+  // Claim ownership on the orchestrator's own agent_identity. Idempotent;
   // throws if the agent is already owned by a different user — translate
   // to 403 for the caller, surfacing the real error so we can diagnose
   // boot/schema issues rather than masking them as "name taken".

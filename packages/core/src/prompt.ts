@@ -18,6 +18,7 @@ import {
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface.js';
+import { DEFAULT_SOUL_MD, readSoul } from './identity/soul.js';
 
 export type {
   PromptBackend,
@@ -35,8 +36,8 @@ export type {
 export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Extra knowledge to append — CLI pastes a bounded memory/MEMORY.md tail. */
   extraKnowledge?: string;
-  /** Override the soul/purpose lookup. If omitted, reads from agent_soul. */
-  purposeOverride?: string;
+  /** Override the SOUL.md lookup. Tests and head runtimes use this for isolated prompt construction. */
+  soulOverride?: string;
   /** Active skills for this turn, resolved by the backend at turn start. */
   activeSkills?: ActiveSkillSet;
   /** Optional working directory hint for local/cloud execution surfaces. */
@@ -51,9 +52,7 @@ export interface SystemPromptParts {
   volatile: string;
 }
 
-export const FALLBACK_PURPOSE = 'You are Proteus, a self-evolving agent runtime. ' +
-  'You help the user by reading real context, using available tools, coordinating parallel heads when useful, ' +
-  'saving durable facts and memory, and improving your reusable capabilities over time.';
+export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
 
 function renderRuntimeContext(opts: SystemPromptOptions): string {
   const lines: string[] = [];
@@ -262,14 +261,9 @@ function renderKnowledgeSection(extraKnowledge?: string): string {
   return text ? `## Knowledge\n${text}` : '';
 }
 
-function readPurpose(rt: AgentRuntime, override?: string): string {
+function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
   if (override) return override;
-  try {
-    const rows = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
-    return rows[0]?.purpose ?? FALLBACK_PURPOSE;
-  } catch {
-    return FALLBACK_PURPOSE;
-  }
+  return readSoul(rt.storage.sql) ?? FALLBACK_PURPOSE;
 }
 
 export function buildSystemPromptPartsSync(
@@ -278,7 +272,7 @@ export function buildSystemPromptPartsSync(
 ): SystemPromptParts {
   const surface = compilePromptSurface(opts);
   const stable = [
-    readPurpose(rt, opts.purposeOverride),
+    readSoulForPrompt(rt, opts.soulOverride),
     renderRuntimeContext(opts),
     renderOperatingGuidance(surface),
     renderToolsSection(surface),

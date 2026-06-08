@@ -31,6 +31,7 @@
 import type { AuthIdentity } from '../auth/session.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from './user-do.js';
+import { renderSoulMarkdown } from '@proteus/core';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels } from './available-models.js';
 
@@ -250,12 +251,11 @@ async function initializeOrchestrator(
   env: Env,
   userId: string,
   agentName: string,
-  purpose?: string,
+  mission?: string,
 ): Promise<void> {
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   ) as DurableObjectStub<OrchestratorAgent>;
   await orchestrator.claimOwner(userId);
-  const trimmedPurpose = purpose?.trim();
-  if (trimmedPurpose) await orchestrator.setSoul(trimmedPurpose);
+  await orchestrator.setSoul(renderSoulMarkdown({ name: agentName, mission }));
 }

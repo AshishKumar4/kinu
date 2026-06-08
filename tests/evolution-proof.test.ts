@@ -27,6 +27,7 @@ import {
   initSearchTables,
   initScaffoldTables,
   initCraftScoreTables,
+  readSoul,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -65,7 +66,7 @@ async function chatTurn(
   sessionId: string,
 ): Promise<TurnResult> {
   const start = Date.now();
-  const soul = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`[0]?.purpose ?? '';
+  const soul = readSoul(rt.storage.sql) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 3000) ?? '';
 
   const tcRecords: ToolCallRecord[] = [];

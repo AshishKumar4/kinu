@@ -20,7 +20,6 @@ export interface CliAuthPoll {
 export interface CloudAgent {
   name: string;
   displayName: string;
-  purpose: string;
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
@@ -44,6 +43,7 @@ export interface CloudAgentStatus {
   name: string;
   displayName?: string;
   purpose: string;
+  soul: string;
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;

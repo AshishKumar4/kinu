@@ -25,29 +25,6 @@ import { createCloudAgent } from './cloud-api.js';
 import { authCommand } from './commands/auth.js';
 import { ensureLocalDaemonRunning } from './commands/daemon.js';
 
-export const CLI_AGENT_STARTERS = [
-  {
-    title: 'Investigate',
-    description: 'Trace an issue, validate the cause, and implement the clean fix.',
-    prompt: 'Investigate the most likely cause of the current failing user flow, validate it with evidence, and implement the clean fix.',
-  },
-  {
-    title: 'Ship',
-    description: 'Build a product change end to end with verification.',
-    prompt: 'Implement a polished product improvement end to end, keeping the change small, tested, and consistent with the existing codebase.',
-  },
-  {
-    title: 'Harden',
-    description: 'Audit correctness, security, stale code, and regressions.',
-    prompt: 'Audit this project for real bugs, security issues, incomplete paths, redundant code, and missing verification, then fix the validated issues cleanly.',
-  },
-  {
-    title: 'Evolve',
-    description: 'Improve the agent workflow or scaffold safely.',
-    prompt: 'Review your own agent workflow, identify one high-impact scaffold improvement, implement it safely, and verify it without regressing the app.',
-  },
-] as const;
-
 export interface CreateCliAgentInput {
   name: string;
   purpose: string;
@@ -109,7 +86,6 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       mode: 'cloud',
       cloudName: agent.name,
       alias: input.alias || undefined,
-      purpose,
     });
     const aliasPath = input.alias ? writeAliasShim(input.name, input.alias) : undefined;
     return { name: input.name, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
@@ -142,7 +118,6 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     mode: 'local',
     localName: input.name,
     alias: input.alias || undefined,
-    purpose,
   });
   const aliasPath = input.alias ? writeAliasShim(input.name, input.alias) : undefined;
   ensureLocalDaemonRunning();

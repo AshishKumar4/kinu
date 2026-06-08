@@ -10,11 +10,8 @@ import {
   WrenchIcon,
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
-import { AGENT_STARTERS } from "@/components/CreateAgentModal";
 import { createAgentFromMission } from "@/lib/create-agent";
 import { listAgents, type AgentEntry } from "@/lib/user-api";
-
-const STARTER_TITLES = ["Investigate", "Ship a change", "Harden", "Evolve"] as const;
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -70,19 +67,7 @@ export default function HomePage() {
             />
 
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {AGENT_STARTERS.filter((starter) => STARTER_TITLES.includes(starter.title as typeof STARTER_TITLES[number])).map(({ title, prompt, Icon }) => (
-                  <button
-                    key={title}
-                    type="button"
-                    onClick={() => setMission(prompt)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border p-border px-2.5 text-xs font-medium p-text-2 transition-colors hover:p-card-hover hover:p-text"
-                  >
-                    <Icon size={13} className="p-accent" />
-                    {title}
-                  </button>
-                ))}
-              </div>
+              <p className="text-xs p-text-3">Proteus will create the agent, seed SOUL.md, and send this as the first turn.</p>
 
               <button
                 type="submit"

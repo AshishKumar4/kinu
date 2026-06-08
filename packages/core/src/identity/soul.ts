@@ -1,36 +1,110 @@
-/**
- * Agent soul — the agent's declared purpose.
- *
- * The agent itself cannot modify this (no `setSoul` tool is exposed to the LLM).
- * This is the constitutional safety boundary that prevents an agent from
- * rewriting its own purpose.
- *
- * The user/operator CAN update the soul out-of-band via:
- *   - cf-backend: the `setSoul` @callable RPC, used by the Settings page UI
- *   - direct SQL: `UPDATE agent_soul SET purpose = ...`
- *
- * This module's `writeSoul` is the creation-time helper used during agent
- * genesis; it refuses to overwrite an existing soul. Operator edits should
- * go through the backend-specific RPC, not this helper.
- */
-
 import type { SqlExecutor } from '../types/primitives.js';
 
-/** Read the agent's declared purpose. */
-export function readSoul(sql: SqlExecutor): string | null {
-  const rows = sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`;
-  return rows[0]?.purpose ?? null;
+export const SOUL_PATH = 'SOUL.md';
+
+export const DEFAULT_SOUL_MD = [
+  '# Proteus',
+  '',
+  'Proteus is a self-evolving agent runtime.',
+  '',
+  '## Mission',
+  '',
+  'Help the user by reading real context, using available tools, coordinating parallel heads when useful, saving durable facts and memory, and improving reusable capabilities over time.',
+].join('\n');
+
+function normalizeName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ') || 'Proteus';
 }
 
-/**
- * Write the soul at creation time. Refuses to overwrite an existing soul —
- * operator edits of an existing agent should use a backend-specific RPC
- * (e.g. `setSoul` on the cf-backend), not this helper.
- */
-export function writeSoul(sql: SqlExecutor, purpose: string): void {
-  const existing = readSoul(sql);
-  if (existing) {
-    throw new Error('Agent soul already exists. writeSoul is creation-only; use the backend setSoul RPC to update an existing agent.');
+function normalizeMission(mission?: string): string {
+  return mission?.trim() || 'Help the user with the work they assign.';
+}
+
+export function renderSoulMarkdown(input: { name: string; mission?: string }): string {
+  return [
+    `# ${normalizeName(input.name)}`,
+    '',
+    '## Mission',
+    '',
+    normalizeMission(input.mission),
+  ].join('\n');
+}
+
+function textFromData(data: unknown): string {
+  if (typeof data === 'string') return data;
+  if (data instanceof Uint8Array) return new TextDecoder().decode(data);
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(data));
+  if (data === null || data === undefined) return '';
+  return String(data);
+}
+
+function soulSummaryFromMarkdown(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const missionIndex = lines.findIndex((line) => /^##\s+mission\s*$/i.test(line.trim()));
+  if (missionIndex >= 0) {
+    const missionLines: string[] = [];
+    for (const line of lines.slice(missionIndex + 1)) {
+      if (/^##\s+/.test(line.trim())) break;
+      const trimmed = line.trim();
+      if (trimmed) missionLines.push(trimmed);
+    }
+    const mission = missionLines.join(' ').trim();
+    if (mission) return mission;
   }
-  sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${purpose}, ${Date.now()})`;
+
+  const firstContent = lines
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('#'));
+  return firstContent ?? '';
+}
+
+export function summarizeSoul(markdown: string | null | undefined, maxLength = 220): string {
+  const summary = soulSummaryFromMarkdown(markdown ?? '').replace(/\s+/g, ' ').trim();
+  if (summary.length <= maxLength) return summary;
+  return `${summary.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+export function readSoul(sql: SqlExecutor): string | null {
+  try {
+    const rows = sql<{ data: unknown }>`
+      SELECT data FROM vfs_files
+      WHERE path = ${SOUL_PATH}
+      ORDER BY chunk_index ASC
+    `;
+    const text = rows.map((row) => textFromData(row.data)).join('');
+    return text.trim() ? text : null;
+  } catch {
+    try {
+      const rows = sql<{ data: unknown }>`
+        SELECT data FROM vfs_files WHERE path = ${SOUL_PATH} LIMIT 1
+      `;
+      const text = textFromData(rows[0]?.data);
+      return text.trim() ? text : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+export function writeSoul(sql: SqlExecutor, markdown: string): void {
+  const now = Date.now();
+  const size = new TextEncoder().encode(markdown).byteLength;
+  sql`DELETE FROM vfs_files WHERE path = ${SOUL_PATH}`;
+  try {
+    sql`
+      INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
+      VALUES (${SOUL_PATH}, ${0}, ${''}, ${markdown}, ${0}, ${size}, ${now})
+    `;
+  } catch {
+    sql`
+      INSERT OR REPLACE INTO vfs_files (path, data, is_dir, size, mtime)
+      VALUES (${SOUL_PATH}, ${markdown}, ${0}, ${size}, ${now})
+    `;
+  }
+}
+
+export function seedSoul(sql: SqlExecutor, input: { name: string; mission?: string }): string {
+  const soul = renderSoulMarkdown(input);
+  writeSoul(sql, soul);
+  return soul;
 }

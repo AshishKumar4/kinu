@@ -3,7 +3,7 @@
  *
  * This is the "birth" of an agent. It creates:
  * - All tables (idempotent)
- * - The immutable soul (purpose)
+ * - SOUL.md
  * - The initial scaffold
  * - The agent identity (stable UUID)
  */
@@ -16,7 +16,7 @@ import type {
 import type { LLMProviderConfig } from '../llm.js';
 import type { CraftedTool } from '../types/craft.js';
 import { initAllTables } from './schema.js';
-import { writeSoul, readSoul } from './soul.js';
+import { seedSoul } from './soul.js';
 import { INITIAL_SCAFFOLD_SOURCE } from '../scaffold/bootstrap.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
@@ -95,12 +95,12 @@ export function createAgent(db: AgentDatabase, config: AgentBirthConfig): AgentR
   // Initialize all tables
   initAllTables(execRaw);
 
-  // Write the immutable soul
-  writeSoul(sql, config.purpose);
-
   // Write the agent identity
   const agentId = nanoid();
   sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${agentId}, ${config.name}, ${nowMs()})`;
+
+  // Seed SOUL.md from the initial mission. It is the canonical agent identity.
+  seedSoul(sql, { name: config.name, mission: config.purpose });
 
   // Bootstrap scaffold into VFS
   const scaffoldCode = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
@@ -112,7 +112,7 @@ export function createAgent(db: AgentDatabase, config: AgentBirthConfig): AgentR
   sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${now}, ${'initial bootstrap'})`;
 
   // Initialize MEMORY.md
-  const memoryContent = `# ${config.name}\n\nPurpose: ${config.purpose}\n\nCreated: ${new Date().toISOString()}\n`;
+  const memoryContent = `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`;
   db.run(
     'INSERT OR REPLACE INTO vfs_files (path, data, size, mtime) VALUES (?, ?, ?, ?)',
     ['memory/MEMORY.md', memoryContent, memoryContent.length, now],

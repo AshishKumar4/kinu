@@ -264,11 +264,8 @@ export function createTestRuntime(opts?: {
     parent_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`);
-  db.exec(`CREATE TABLE IF NOT EXISTS agent_soul (
-    purpose TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`);
   db.exec(`CREATE TABLE IF NOT EXISTS agent_identity (
-    id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    id TEXT NOT NULL, name TEXT NOT NULL, owner_user_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`);
 
   // Initialize scaffold in VFS

@@ -13,21 +13,10 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS agent_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
-
-  // Immutable purpose — the agent cannot rewrite this. owner_user_id is set
-  // once by the Worker when the agent is first claimed by a logged-in user
-  // (sha256(email) form). Subsequent requests verify the caller's userId
-  // matches before any RPC runs.
-  `CREATE TABLE IF NOT EXISTS agent_soul (
-    purpose       TEXT NOT NULL,
-    created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    owner_user_id TEXT NOT NULL DEFAULT ''
-  )`,
-  // Idempotent ALTER for agents that exist from before owner_user_id was
-  // introduced — DO SQL ignores the error if the column already exists.
-  `ALTER TABLE agent_soul ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE agent_identity ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
 
   // ── MCTS search tree ───────────────────────────────────────────
   // BUG-1 FIX: value defaults to 0, NOT 0.5

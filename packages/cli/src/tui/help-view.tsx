@@ -36,7 +36,7 @@ export function StatusView({ info, dbSize, toolCount }: { info: AgentInfo; dbSiz
         <strong fg="#c4b5fd">Agent Status</strong>{'\n'}
         <span fg="#6b7280">  Name:      </span><span fg="#e2e8f0">{info.name}</span>{'\n'}
         <span fg="#6b7280">  ID:        </span><span fg="#6b7280">{info.id.slice(0, 12)}…</span>{'\n'}
-        <span fg="#6b7280">  Purpose:   </span><span fg="#d1d5db">{info.purpose.slice(0, 60)}</span>{'\n'}
+        <span fg="#6b7280">  Mission:   </span><span fg="#d1d5db">{info.purpose.slice(0, 60)}</span>{'\n'}
         <span fg="#6b7280">  Scaffold:  </span><span fg="#e2e8f0">v{info.scaffoldVersion}</span>{'\n'}
         <span fg="#6b7280">  MCTS:      </span><span fg="#e2e8f0">{info.searchNodeCount} nodes</span>{'\n'}
         <span fg="#6b7280">  Tasks:     </span><span fg="#e2e8f0">{info.taskCount}</span>{'\n'}

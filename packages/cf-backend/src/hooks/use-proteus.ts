@@ -39,6 +39,7 @@ export interface AgentStatus {
   name: string;
   displayName: string;
   purpose: string;
+  soul: string;
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
@@ -306,7 +307,7 @@ export function useProteus(agentId?: string) {
           // status falls back to the slug (=name) when untitled, and sending that
           // would clobber the roster's provisional title.
           const title = snap.status.displayName !== snap.status.name ? snap.status.displayName : undefined;
-          registerAgent(agentId, snap.status.purpose, title).catch(() => {
+          registerAgent(agentId, undefined, title).catch(() => {
             touchAgent(agentId).catch(() => {});
           });
         }
