@@ -59,9 +59,10 @@ import {
 } from '../local-inspection.js';
 import {
   createCliSession,
-  defaultAgentSessionId,
+  defaultConversationIdForCliOptions,
   type CliSession,
 } from '../session.js';
+import { recordCliSessionEvent } from '../session-recorder.js';
 
 export async function runCommand(name: string, promptParts: string[], opts: {
   model?: string; baseUrl?: string; auth?: string; classic?: boolean;
@@ -84,7 +85,12 @@ export async function runCommand(name: string, promptParts: string[], opts: {
     return;
   }
 
-  const session = createCliSession(canonicalName, opts);
+  const session = createCliSession(canonicalName, {
+    ...opts,
+    conversationId: target.mode === 'local'
+      ? defaultConversationIdForCliOptions(opts)
+      : undefined,
+  });
   session.append('user', { text: prompt, cwd: process.cwd(), backend: target.mode });
 
   if (target.mode === 'cloud') {
@@ -129,7 +135,7 @@ async function runLocalTurn(
     sessionId: durableLocalSessionId(opts, cliSession),
     persistMessages: !opts.noSession,
     onEvent: (event) => {
-      recordLocalSessionEvent(cliSession, event);
+      recordCliSessionEvent(cliSession, event, 'local');
       if (writer) writer.write(event);
       else renderEvent(event);
     },
@@ -152,7 +158,12 @@ async function runRpc(
   },
 ): Promise<void> {
   const name = target.name;
-  const cliSession = createCliSession(name, opts);
+  const cliSession = createCliSession(name, {
+    ...opts,
+    conversationId: target.mode === 'local'
+      ? defaultConversationIdForCliOptions(opts)
+      : undefined,
+  });
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
   output({ type: 'session', id: cliSession.id, agent: name, backend: target.mode, cwd: process.cwd() });
 
@@ -213,7 +224,7 @@ async function runRpc(
       sessionId: durableLocalSessionId(opts, cliSession),
       persistMessages: !opts.noSession,
       onEvent: (event) => {
-        recordLocalSessionEvent(cliSession, event);
+        recordCliSessionEvent(cliSession, event, 'local');
         output({ type: 'event', event });
       },
     });
@@ -421,8 +432,7 @@ function durableLocalSessionId(opts: {
   fork?: string;
 }, cliSession: CliSession): string {
   if (opts.noSession) return cliSession.id;
-  if (opts.session || opts.continue || opts.resume || opts.fork) return cliSession.id;
-  return defaultAgentSessionId();
+  return cliSession.conversationId;
 }
 
 function renderEvent(event: SessionEvent): void {
@@ -485,29 +495,33 @@ class JsonEventWriter {
       process.stdout.write(`${JSON.stringify({ type: 'session', id: this.session.id, agent: this.agent, backend: 'local', cwd: process.cwd() })}\n`);
       this.wroteHeader = true;
     }
-    process.stdout.write(`${JSON.stringify(event)}\n`);
+    for (const value of localJsonEvents(event)) {
+      process.stdout.write(`${JSON.stringify(value)}\n`);
+    }
   }
 }
 
-function recordLocalSessionEvent(session: CliSession, event: SessionEvent): void {
+function localJsonEvents(event: SessionEvent): unknown[] {
   switch (event.type) {
+    case 'turn-start':
+      return [{ type: 'turn_start', kind: event.kind, text: event.text, ...(event.event ? { event: event.event } : {}) }];
+    case 'text-delta':
+      return [{ type: 'message_delta', role: 'assistant', delta: event.delta }];
     case 'tool-call':
-      session.append('tool_call', { toolName: event.toolName, args: event.args });
-      break;
+      return [{ type: 'tool_call', toolName: event.toolName, args: event.args }];
     case 'tool-result':
-      session.append('tool_result', { toolName: event.toolName, result: event.result });
-      break;
+      return [{ type: 'tool_result', toolName: event.toolName, result: event.result }];
     case 'turn-end':
-      session.append('assistant', {
-        text: event.turn.assistantResponse,
-        steps: event.turn.steps,
-        durationMs: event.turn.durationMs,
-        hadError: event.turn.hadError,
-      });
-      break;
+      return [
+        { type: 'message_end', role: 'assistant', text: event.turn.assistantResponse },
+        { type: 'turn_end', steps: event.turn.steps, durationMs: event.turn.durationMs, hadError: event.turn.hadError },
+      ];
     case 'error':
-      session.append('error', { message: event.message });
-      break;
+      return [{ type: 'error', message: event.message }];
+    case 'evolution':
+      return [{ type: 'evolution', event: event.event, message: event.message }];
+    case 'broadcast':
+      return [{ type: 'broadcast', event: event.event }];
   }
 }
 

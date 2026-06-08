@@ -28,7 +28,7 @@ export function HelpView() {
   );
 }
 
-export function StatusView({ info, dbSize }: { info: AgentInfo; dbSize: number }) {
+export function StatusView({ info, dbSize, toolCount }: { info: AgentInfo; dbSize: number; toolCount: number }) {
   const kb = (dbSize / 1024).toFixed(1);
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
@@ -40,7 +40,7 @@ export function StatusView({ info, dbSize }: { info: AgentInfo; dbSize: number }
         <span fg="#6b7280">  Scaffold:  </span><span fg="#e2e8f0">v{info.scaffoldVersion}</span>{'\n'}
         <span fg="#6b7280">  MCTS:      </span><span fg="#e2e8f0">{info.searchNodeCount} nodes</span>{'\n'}
         <span fg="#6b7280">  Tasks:     </span><span fg="#e2e8f0">{info.taskCount}</span>{'\n'}
-        <span fg="#6b7280">  Tools:     </span><span fg="#e2e8f0">6 built-in + {info.craftedToolCount} crafted</span>{'\n'}
+        <span fg="#6b7280">  Tools:     </span><span fg="#e2e8f0">{toolCount} available</span>{'\n'}
         <span fg="#6b7280">  Memory:    </span><span fg="#e2e8f0">{info.memorySize} B</span>{'\n'}
         <span fg="#6b7280">  Database:  </span><span fg="#e2e8f0">{kb} KB</span>
       </text>

@@ -62,6 +62,8 @@ export async function chatCommand(name: string | undefined, opts: {
       agentName: configured.name,
       cloudName: configured.cloudName ?? configured.name,
       session,
+      sessionOptions: opts,
+      hydrateTranscript: Boolean(opts.session || opts.continue || opts.resume || opts.fork),
       initialPrompt: opts.initialPrompt,
     };
     if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) await runCloudChatLoop(cloudOpts);
@@ -81,11 +83,17 @@ export async function chatCommand(name: string | undefined, opts: {
 
   // Use TUI by default, fall back to classic readline with --classic flag
   // or when stdin is not a TTY (piped input)
+  const session = createDefaultTuiSession(name, opts);
   if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop(local);
+    await runChatLoop({ ...local, ...session });
   } else {
-    const session = createDefaultTuiSession(name, opts);
-    await runTuiChat({ ...local, ...session, initialPrompt: opts.initialPrompt });
+    await runTuiChat({
+      ...local,
+      ...session,
+      sessionOptions: opts,
+      hydrateTranscript: Boolean(opts.session || opts.continue || opts.resume || opts.fork),
+      initialPrompt: opts.initialPrompt,
+    });
   }
   local.close();
 }

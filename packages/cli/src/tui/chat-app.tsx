@@ -17,7 +17,18 @@ import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type Loca
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { HelpView, StatusView } from './help-view.js';
-import { createCliSession, defaultAgentSessionId, listCliSessions, type CliSession, type CliSessionOptions } from '../session.js';
+import {
+  createCliSession,
+  defaultConversationIdForCliOptions,
+  defaultAgentSessionId,
+  listCliSessions,
+  readCliSessionTranscript,
+  type CliSession,
+  type CliSessionInfo,
+  type CliSessionOptions,
+} from '../session.js';
+import { recordCliSessionEvent } from '../session-recorder.js';
+import { renderSessionBrowser, selectSession, transcriptToMessages } from './session-browser.js';
 
 export interface ChatAppOpts {
   rt: AgentRuntime;
@@ -32,6 +43,8 @@ export interface ChatAppOpts {
   initialPrompt?: string;
   cliSession?: CliSession;
   localSessionId?: string;
+  sessionOptions?: Pick<CliSessionOptions, 'sessionDir'>;
+  hydrateTranscript?: boolean;
   onExit?: () => void;
   close?: () => void;
 }
@@ -39,85 +52,124 @@ export interface ChatAppOpts {
 let globalExit: (() => void) | null = null;
 let globalSessionCleanup: (() => Promise<void>) | null = null;
 
-export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers, initialPrompt, cliSession, localSessionId, onExit }: ChatAppOpts) {
+export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers, initialPrompt, cliSession, localSessionId, sessionOptions, hydrateTranscript, onExit }: ChatAppOpts) {
   const { height } = useTerminalDimensions();
-  const [messages, setMessages] = useState<DisplayMessage[]>([
-    { id: 'welcome', role: 'system', content: `Connected to ${initialInfo.name}. Type a message or /help for commands.` },
-  ]);
+  const [messages, setMessages] = useState<DisplayMessage[]>(() => initialMessages(initialInfo.name, cliSession, sessionOptions, hydrateTranscript));
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [mcpReady, setMcpReady] = useState(!mcpServers || Object.keys(mcpServers).length === 0);
   const [info, setInfo] = useState(initialInfo);
   const [modelSpec, setModelSpec] = useState(llmConfig.model);
+  const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState(cliSession?.id ?? localSessionId ?? defaultAgentSessionId());
 
   const msgIdRef = useRef(0);
   const streamRef = useRef('');
   const initialPromptSentRef = useRef(false);
+  const activeCliSessionRef = useRef<CliSession | undefined>(cliSession);
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
     setMessages((prev) => [...prev, { ...msg, id }]);
   }, []);
 
-  // The agent loop — built once. Its SessionEvent stream drives React state.
+  const createAgentSession = useCallback((sessionId: string) => new LocalAgentSession({
+    rt,
+    db,
+    model: resolveChatModel(llmConfig),
+    modelResolver,
+    noAutoEvolve,
+    sessionId,
+    persistMessages: true,
+    onEvent: (event: SessionEvent) => {
+      recordCliSessionEvent(activeCliSessionRef.current, event, 'local');
+      switch (event.type) {
+        case 'turn-start':
+          streamRef.current = '';
+          setStreamingText('');
+          setIsProcessing(true);
+          if (event.kind === 'programmatic') {
+            addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
+          }
+          break;
+        case 'text-delta':
+          streamRef.current += event.delta;
+          setStreamingText(streamRef.current);
+          break;
+        case 'tool-call':
+          addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+          break;
+        case 'tool-result':
+          addMessage({ role: 'tool_result', content: event.result });
+          break;
+        case 'evolution':
+          addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
+          break;
+        case 'error':
+          addMessage({ role: 'system', content: `Error: ${event.message}` });
+          break;
+        case 'turn-end':
+          setStreamingText(null);
+          setIsProcessing(false);
+          if (event.turn.assistantResponse.trim()) {
+            addMessage({ role: 'assistant', content: event.turn.assistantResponse.trim() });
+          }
+          break;
+        case 'broadcast':
+          break;
+      }
+    },
+  }), [addMessage, db, llmConfig, modelResolver, noAutoEvolve, rt]);
+
   const sessionRef = useRef<LocalAgentSession | null>(null);
   if (!sessionRef.current) {
-    sessionRef.current = new LocalAgentSession({
-      rt,
-      db,
-      model: resolveChatModel(llmConfig),
-      modelResolver,
-      noAutoEvolve,
-      sessionId: localSessionId ?? defaultAgentSessionId(),
-      persistMessages: true,
-      onEvent: (event: SessionEvent) => {
-        recordSessionEvent(cliSession, event);
-        switch (event.type) {
-          case 'turn-start':
-            streamRef.current = '';
-            setStreamingText('');
-            setIsProcessing(true);
-            if (event.kind === 'programmatic') {
-              addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
-            }
-            break;
-          case 'text-delta':
-            streamRef.current += event.delta;
-            setStreamingText(streamRef.current);
-            break;
-          case 'tool-call':
-            addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
-            break;
-          case 'tool-result':
-            addMessage({ role: 'tool_result', content: event.result });
-            break;
-          case 'evolution':
-            addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
-            break;
-          case 'error':
-            addMessage({ role: 'system', content: `Error: ${event.message}` });
-            break;
-          case 'turn-end':
-            setStreamingText(null);
-            setIsProcessing(false);
-            if (event.turn.assistantResponse.trim()) {
-              addMessage({ role: 'assistant', content: event.turn.assistantResponse.trim() });
-            }
-            break;
-          case 'broadcast':
-            break;
-        }
-      },
-    });
+    sessionRef.current = createAgentSession(localSessionId ?? cliSession?.conversationId ?? defaultAgentSessionId());
   }
   const session = sessionRef.current;
 
+  const resumeSession = useCallback(async (input: string, available?: CliSessionInfo[]) => {
+    const sessions = available ?? listCliSessions(initialInfo.name, sessionOptions);
+    const selected = selectSession(sessions, input);
+    if (!selected) {
+      addMessage({ role: 'system', content: `No matching session for "${input}". Type /resume to choose again.` });
+      return;
+    }
+
+    const transcript = readCliSessionTranscript(initialInfo.name, selected.info.id, sessionOptions);
+    const nextCliSession = createCliSession(initialInfo.name, { ...sessionOptions, session: selected.info.id });
+    await sessionRef.current?.end().catch(() => {});
+    const nextAgentSession = createAgentSession(nextCliSession.conversationId);
+    sessionRef.current = nextAgentSession;
+    activeCliSessionRef.current = nextCliSession;
+    setActiveSessionId(nextCliSession.id);
+    setSessionPicker(null);
+    setStreamingText(null);
+    setIsProcessing(false);
+    setMessages(transcriptToMessages(transcript));
+    if (mcpServers && Object.keys(mcpServers).length > 0) {
+      setMcpReady(false);
+      await nextAgentSession.connectMcp(mcpServers);
+      setMcpReady(true);
+    }
+    await nextAgentSession.recoverBackgroundJobs();
+  }, [addMessage, createAgentSession, initialInfo.name, mcpServers, sessionOptions]);
+
   const handleSlash = useCallback(async (input: string) => {
-    const cmd = input.split(/\s+/)[0]!.toLowerCase();
+    const [rawCmd, ...rest] = input.split(/\s+/);
+    const cmd = rawCmd!.toLowerCase();
+    const arg = rest.join(' ').trim();
     switch (cmd) {
       case '/exit':
       case '/quit':
         onExit ? onExit() : globalExit?.();
+        return;
+      case '/cancel':
+        if (sessionPicker) {
+          setSessionPicker(null);
+          addMessage({ role: 'system', content: 'Resume cancelled.' });
+        } else {
+          addMessage({ role: 'system', content: 'Nothing to cancel.' });
+        }
         return;
       case '/help':
         addMessage({ role: 'system', content: 'HELP_VIEW' });
@@ -200,19 +252,17 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       }
       case '/sessions':
       case '/resume': {
-        const sessions = listCliSessions(initialInfo.name);
+        const sessions = listCliSessions(initialInfo.name, sessionOptions);
         if (sessions.length === 0) {
           addMessage({ role: 'system', content: 'No recorded CLI sessions yet.' });
           return;
         }
-        const lines = sessions.slice(0, 12).map((s, index) => {
-          const title = s.name ?? s.firstUserText ?? '(untitled)';
-          return `${index + 1}. ${s.id}  ${title}`;
-        });
-        addMessage({
-          role: 'system',
-          content: `${cmd === '/resume' ? 'Resume' : 'Sessions'}\n${lines.join('\n')}\n\nUse: proteus chat ${initialInfo.name} --session <id>`,
-        });
+        if (cmd === '/resume' && arg) {
+          await resumeSession(arg, sessions);
+          return;
+        }
+        if (cmd === '/resume') setSessionPicker({ sessions });
+        addMessage({ role: 'system', content: renderSessionBrowser(cmd === '/resume' ? 'resume' : 'list', sessions) });
         return;
       }
       case '/stop': {
@@ -246,7 +296,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       default:
         addMessage({ role: 'system', content: `Unknown command: ${cmd}. Type /help` });
     }
-  }, [addMessage, refreshInfo, rt, session]);
+  }, [addMessage, initialInfo.name, refreshInfo, resumeSession, rt, session, sessionOptions, sessionPicker]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
@@ -255,11 +305,26 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       addMessage({ role: 'system', content: 'MCP tools are still connecting.' });
       return;
     }
-    if (text.startsWith('/')) { await handleSlash(text); return; }
+    if (sessionPicker && !text.startsWith('/')) {
+      try {
+        await resumeSession(text, sessionPicker.sessions);
+      } catch (err) {
+        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      }
+      return;
+    }
+    if (text.startsWith('/')) {
+      try {
+        await handleSlash(text);
+      } catch (err) {
+        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      }
+      return;
+    }
     addMessage({ role: 'user', content: text });
-    cliSession?.append('user', { text, cwd: process.cwd(), backend: 'local' });
-    try { await session.send(text); } catch { /* errors surface as SessionEvents */ }
-  }, [addMessage, cliSession, handleSlash, mcpReady, session]);
+    activeCliSessionRef.current?.append('user', { text, cwd: process.cwd(), backend: 'local' });
+    try { await sessionRef.current?.send(text); } catch { /* errors surface as SessionEvents */ }
+  }, [addMessage, handleSlash, mcpReady, resumeSession, sessionPicker]);
 
   // opentui's `input` intrinsic merges with React DOM's, so onSubmit's type is
   // the intersection of (value: string) and (event: SubmitEvent). opentui passes
@@ -271,7 +336,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
   // Fire a partial-session evolution flush on exit; connect MCP + recover once.
   useEffect(() => {
     let cancelled = false;
-    globalSessionCleanup = async () => { await session.end(); };
+    globalSessionCleanup = async () => { await sessionRef.current?.end(); };
     void (async () => {
       if (mcpServers && Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
       if (!cancelled) setMcpReady(true);
@@ -319,7 +384,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       >
         {messages.map((msg) => {
           if (msg.role === 'system' && msg.content === 'HELP_VIEW') return <HelpView key={msg.id} />;
-          if (msg.role === 'system' && msg.content === 'STATUS_VIEW') return <StatusView key={msg.id} info={info} dbSize={dbSize} />;
+          if (msg.role === 'system' && msg.content === 'STATUS_VIEW') return <StatusView key={msg.id} info={info} dbSize={dbSize} toolCount={session.toolNames().length} />;
           return null;
         })}
         <MessageList
@@ -342,16 +407,36 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           backgroundColor: '#1a1a2e',
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing…' : `${info.name} ›`}
+        title={isProcessing ? '⟳ processing…' : sessionPicker ? 'Resume ›' : `${info.name} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <input
           focused={mcpReady && !isProcessing}
-          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : 'Type a message or /help'}
+          placeholder={!mcpReady ? 'Connecting MCP…' : isProcessing ? 'Waiting for response…' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help'}
           onSubmit={onInputSubmit}
         />
       </box>
     </box>
   );
+}
+
+function initialMessages(
+  agentName: string,
+  cliSession: CliSession | undefined,
+  sessionOptions: Pick<CliSessionOptions, 'sessionDir'> | undefined,
+  hydrateTranscript: boolean | undefined,
+): DisplayMessage[] {
+  if (hydrateTranscript && cliSession?.id) {
+    try {
+      return transcriptToMessages(readCliSessionTranscript(agentName, cliSession.id, sessionOptions));
+    } catch (err) {
+      return [{
+        id: 'welcome',
+        role: 'system',
+        content: `Connected to ${agentName}. Could not load the requested transcript: ${err instanceof Error ? err.message : String(err)}`,
+      }];
+    }
+  }
+  return [{ id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` }];
 }
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
@@ -380,34 +465,12 @@ export function createDefaultTuiSession(agentName: string, opts: CliSessionOptio
   cliSession: CliSession;
   localSessionId: string;
 } {
-  const cliSession = createCliSession(agentName, opts);
+  const cliSession = createCliSession(agentName, {
+    ...opts,
+    conversationId: opts.conversationId ?? defaultConversationIdForCliOptions(opts),
+  });
   return {
     cliSession,
-    localSessionId: opts.noSession || opts.session || opts.continue || opts.resume || opts.fork
-      ? cliSession.id
-      : defaultAgentSessionId(),
+    localSessionId: cliSession.conversationId,
   };
-}
-
-function recordSessionEvent(session: CliSession | undefined, event: SessionEvent): void {
-  if (!session) return;
-  switch (event.type) {
-    case 'tool-call':
-      session.append('tool_call', { toolName: event.toolName, args: event.args });
-      break;
-    case 'tool-result':
-      session.append('tool_result', { toolName: event.toolName, result: event.result });
-      break;
-    case 'turn-end':
-      session.append('assistant', {
-        text: event.turn.assistantResponse,
-        steps: event.turn.steps,
-        durationMs: event.turn.durationMs,
-        hadError: event.turn.hadError,
-      });
-      break;
-    case 'error':
-      session.append('error', { message: event.message, backend: 'local' });
-      break;
-  }
 }

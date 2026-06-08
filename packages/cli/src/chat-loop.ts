@@ -9,6 +9,8 @@
 import * as readline from 'node:readline';
 import type { AgentRuntime, AgentInfo, SearchNode, LLMProviderConfig } from '@proteus/core';
 import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
+import { defaultAgentSessionId, type CliSession } from './session.js';
+import { recordCliSessionEvent } from './session-recorder.js';
 import {
   printChatBanner, printSlashHelp, printAgentStatus,
   printSearchTree, printToolCall, printToolResult,
@@ -26,6 +28,8 @@ export interface ChatLoopOpts {
   refreshInfo: () => AgentInfo;
   noAutoEvolve?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
+  cliSession?: CliSession;
+  localSessionId?: string;
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
@@ -39,7 +43,12 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
   const session = new LocalAgentSession({
     rt, db, model: resolveChatModel(llmConfig), modelResolver, noAutoEvolve,
-    onEvent: (event) => renderEvent(event, info.name, typing, () => headerPrinted, (v) => { headerPrinted = v; }),
+    sessionId: opts.localSessionId ?? defaultAgentSessionId(),
+    persistMessages: opts.cliSession?.mode !== 'none',
+    onEvent: (event) => {
+      recordCliSessionEvent(opts.cliSession, event, 'local');
+      renderEvent(event, info.name, typing, () => headerPrinted, (v) => { headerPrinted = v; });
+    },
   });
 
   if (mcpServers && Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
@@ -78,6 +87,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
     headerPrinted = false;
     typing.start();
+    opts.cliSession?.append('user', { text: input, cwd: process.cwd(), backend: 'local' });
     try {
       await session.send(input);
     } catch (err) {

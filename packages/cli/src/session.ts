@@ -22,6 +22,7 @@ export interface CliSessionOptions {
   noSession?: boolean;
   name?: string;
   fork?: string;
+  conversationId?: string;
 }
 
 export interface CliSessionHeader {
@@ -33,6 +34,7 @@ export interface CliSessionHeader {
   startedAt: string;
   name?: string;
   parentSession?: string;
+  conversationId?: string;
 }
 
 export interface CliSessionEntry {
@@ -47,6 +49,7 @@ export interface CliSession {
   mode: CliSessionMode;
   id: string;
   agent: string;
+  conversationId: string;
   path?: string;
   parentId: string | null;
   append(type: string, data?: Record<string, unknown>): CliSessionEntry | null;
@@ -58,15 +61,26 @@ export interface CliSessionInfo {
   agent: string;
   cwd: string;
   name?: string;
+  conversationId?: string;
   startedAt: string;
   modifiedAt: number;
   entries: number;
   firstUserText?: string;
 }
 
+export interface CliSessionTranscript {
+  info: CliSessionInfo;
+  entries: CliSessionEntry[];
+}
+
 const DEFAULT_SESSION_ID = 'default';
 
 export function defaultAgentSessionId(): string {
+  return DEFAULT_SESSION_ID;
+}
+
+export function defaultConversationIdForCliOptions(opts: Pick<CliSessionOptions, 'continue' | 'resume' | 'session' | 'fork' | 'noSession'> = {}): string | undefined {
+  if (opts.noSession || opts.continue || opts.resume || opts.session || opts.fork) return undefined;
   return DEFAULT_SESSION_ID;
 }
 
@@ -89,11 +103,12 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
 
   const existing = resolveRequestedSession(agent, opts);
   if (existing && !opts.fork) {
-    return fileSession(agent, existing.path, existing.id, existing.lastEntryId);
+    return fileSession(agent, existing.path, existing.id, existing.lastEntryId, existing.conversationId);
   }
 
   const parent = opts.fork ? resolveRequestedSession(agent, { ...opts, session: opts.fork, fork: undefined }) : null;
   const id = createSessionId();
+  const conversationId = opts.conversationId ?? id;
   const path = join(agentDir, `${id}.jsonl`);
   const header: CliSessionHeader = {
     type: 'session',
@@ -102,6 +117,7 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
     agent,
     cwd: process.cwd(),
     startedAt: new Date().toISOString(),
+    conversationId,
     ...(opts.name ? { name: opts.name } : {}),
     ...(parent?.id ? { parentSession: parent.id } : {}),
   };
@@ -118,7 +134,7 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
     })}\n`);
   }
 
-  return fileSession(agent, path, id, null);
+  return fileSession(agent, path, id, null, conversationId);
 }
 
 export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'sessionDir'> = {}): CliSessionInfo[] {
@@ -134,7 +150,7 @@ export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'se
 export function resolveRequestedSession(
   agent: string,
   opts: CliSessionOptions = {},
-): { id: string; path: string; lastEntryId: string | null } | null {
+): { id: string; path: string; lastEntryId: string | null; conversationId: string } | null {
   const explicit = opts.session;
   if (explicit) {
     const byPath = explicit.includes('/') || explicit.endsWith('.jsonl')
@@ -142,8 +158,10 @@ export function resolveRequestedSession(
       : null;
     if (byPath && existsSync(byPath)) return sessionPointer(byPath);
 
-    const match = listCliSessions(agent, opts).find((s) => s.id === explicit || s.id.startsWith(explicit));
-    if (!match) throw new Error(`Session not found: ${explicit}`);
+    const matches = listCliSessions(agent, opts).filter((s) => s.id === explicit || s.id.startsWith(explicit));
+    if (matches.length === 0) throw new Error(`Session not found: ${explicit}`);
+    if (matches.length > 1) throw new Error(`Session reference is ambiguous: ${explicit}`);
+    const match = matches[0]!;
     return sessionPointer(match.path);
   }
 
@@ -162,22 +180,40 @@ export function exportSessionPath(agent: string, ref: string | undefined, opts: 
   return listCliSessions(agent, opts)[0]?.path ?? null;
 }
 
+export function readCliSessionTranscript(
+  agent: string,
+  ref: string,
+  opts: Pick<CliSessionOptions, 'sessionDir'> = {},
+): CliSessionTranscript {
+  const pointer = resolveRequestedSession(agent, { ...opts, session: ref });
+  if (!pointer) throw new Error(`Session not found: ${ref}`);
+  const parsed = readSessionRaw(pointer.path);
+  if (!parsed.header) throw new Error(`Invalid session file: ${pointer.path}`);
+  return {
+    info: sessionInfoFromParsed(pointer.path, parsed.header, parsed.entryCount, parsed.firstUserText),
+    entries: parsed.entries,
+  };
+}
+
 function inMemorySession(agent: string): CliSession {
+  const id = `ephemeral-${Date.now()}`;
   return {
     mode: 'none',
-    id: `ephemeral-${Date.now()}`,
+    id,
     agent,
+    conversationId: id,
     parentId: null,
     append() { return null; },
   };
 }
 
-function fileSession(agent: string, path: string, id: string, parentId: string | null): CliSession {
+function fileSession(agent: string, path: string, id: string, parentId: string | null, conversationId: string): CliSession {
   let lastId = parentId;
   return {
     mode: 'record',
     id,
     agent,
+    conversationId,
     path,
     get parentId() { return lastId; },
     append(type, data = {}) {
@@ -195,36 +231,32 @@ function fileSession(agent: string, path: string, id: string, parentId: string |
   };
 }
 
-function sessionPointer(path: string): { id: string; path: string; lastEntryId: string | null } {
+function sessionPointer(path: string): { id: string; path: string; lastEntryId: string | null; conversationId: string } {
   const parsed = readSessionRaw(path);
   if (!parsed.header) throw new Error(`Invalid session file: ${path}`);
-  return { id: parsed.header.id, path, lastEntryId: parsed.lastEntryId };
+  return {
+    id: parsed.header.id,
+    path,
+    lastEntryId: parsed.lastEntryId,
+    conversationId: parsed.header.conversationId ?? parsed.header.id,
+  };
 }
 
 function readSessionInfo(path: string): CliSessionInfo | null {
   const parsed = readSessionRaw(path);
   if (!parsed.header) return null;
-  const st = statSync(path);
-  return {
-    id: parsed.header.id,
-    path,
-    agent: parsed.header.agent,
-    cwd: parsed.header.cwd,
-    name: parsed.header.name,
-    startedAt: parsed.header.startedAt,
-    modifiedAt: st.mtimeMs,
-    entries: parsed.entryCount,
-    firstUserText: parsed.firstUserText,
-  };
+  return sessionInfoFromParsed(path, parsed.header, parsed.entryCount, parsed.firstUserText);
 }
 
 function readSessionRaw(path: string): {
   header: CliSessionHeader | null;
+  entries: CliSessionEntry[];
   lastEntryId: string | null;
   entryCount: number;
   firstUserText?: string;
 } {
   let header: CliSessionHeader | null = null;
+  const entries: CliSessionEntry[] = [];
   let lastEntryId: string | null = null;
   let entryCount = 0;
   let firstUserText: string | undefined;
@@ -233,18 +265,19 @@ function readSessionRaw(path: string): {
     if (!line.trim()) continue;
     let entry: unknown;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (isRecord(entry) && entry.type === 'session') {
-      header = entry as unknown as CliSessionHeader;
+    if (isSessionHeader(entry)) {
+      header = entry;
       continue;
     }
-    if (!isRecord(entry)) continue;
+    if (!isSessionEntry(entry)) continue;
+    entries.push(entry);
     entryCount += 1;
-    if (typeof entry.id === 'string') lastEntryId = entry.id;
+    lastEntryId = entry.id;
     if (!firstUserText && entry.type === 'user' && typeof entry.text === 'string') {
       firstUserText = entry.text.slice(0, 160);
     }
   }
-  return { header, lastEntryId, entryCount, firstUserText };
+  return { header, entries, lastEntryId, entryCount, firstUserText };
 }
 
 export function rotateSessionFile(path: string, suffix = 'bak'): string {
@@ -268,4 +301,44 @@ function cleanPathSegment(input: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isSessionHeader(value: unknown): value is CliSessionHeader {
+  return isRecord(value)
+    && value.type === 'session'
+    && value.version === 1
+    && typeof value.id === 'string'
+    && typeof value.agent === 'string'
+    && typeof value.cwd === 'string'
+    && typeof value.startedAt === 'string'
+    && (value.conversationId === undefined || typeof value.conversationId === 'string');
+}
+
+function isSessionEntry(value: unknown): value is CliSessionEntry {
+  return isRecord(value)
+    && typeof value.type === 'string'
+    && typeof value.id === 'string'
+    && (typeof value.parentId === 'string' || value.parentId === null)
+    && typeof value.timestamp === 'string';
+}
+
+function sessionInfoFromParsed(
+  path: string,
+  header: CliSessionHeader,
+  entryCount: number,
+  firstUserText: string | undefined,
+): CliSessionInfo {
+  const st = statSync(path);
+  return {
+    id: header.id,
+    path,
+    agent: header.agent,
+    cwd: header.cwd,
+    name: header.name,
+    conversationId: header.conversationId,
+    startedAt: header.startedAt,
+    modifiedAt: st.mtimeMs,
+    entries: entryCount,
+    firstUserText,
+  };
 }

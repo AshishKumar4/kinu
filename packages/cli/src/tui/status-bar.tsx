@@ -3,6 +3,7 @@
  */
 
 import type { AgentInfo } from '@proteus/core';
+import { clipText } from './format.js';
 
 interface Props {
   info: AgentInfo;
@@ -33,11 +34,11 @@ export function StatusBar({ info, model, toolCount, autoEvolve, connected }: Pro
     >
       <text>
         <span fg="#7c3aed">🔱</span>{' '}
-        <strong fg="#c4b5fd">{info.name}</strong>{' '}
+        <strong fg="#c4b5fd">{clipText(info.name, 32)}</strong>{' '}
         <span fg="#6b7280">v{info.scaffoldVersion}</span>
       </text>
       <text>
-        <span fg="#6b7280">{model.split('/').pop()}</span>
+        <span fg="#6b7280">{clipText(model.split('/').pop() ?? model, 24)}</span>
         {'  '}
         <span fg="#6b7280">⚡ {toolCount} tools</span>
         {'  '}
