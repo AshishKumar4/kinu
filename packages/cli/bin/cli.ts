@@ -118,7 +118,13 @@ llmOpts(
   program
     .command('chat [name]')
     .description('Interactive conversation with an agent')
-    .option('--classic', 'Use classic readline interface instead of TUI'),
+    .option('--classic', 'Use classic readline interface instead of TUI')
+    .option('-c, --continue', 'Continue the latest recorded CLI session')
+    .option('-r, --resume', 'Resume the latest recorded CLI session')
+    .option('--session <idOrPath>', 'Use a recorded CLI session')
+    .option('--fork <idOrPath>', 'Fork a recorded CLI session into a new session')
+    .option('--session-dir <dir>', 'Override CLI session storage directory')
+    .option('--no-session', 'Do not record this CLI chat'),
 ).action(wrapAction(chatCommand));
 
 llmOpts(

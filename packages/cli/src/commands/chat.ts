@@ -1,43 +1,37 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import * as readline from 'node:readline';
-import { Database } from 'bun:sqlite';
-import { createLocalModelResolver, openAgentCLI } from '@proteus/cli-backend';
 import {
   agentDbPath,
-  CONFIG_PATH,
-  createCodexAuthStore,
-  listAgentDirs,
-  listConfiguredAgentRefs,
   requireAuthConfig,
   resolveAgentRef,
-  resolveLLMConfig,
-  resolveMcpServers,
-  resolveProviderCredentials,
 } from '../config.js';
-import { runTuiChat } from '../tui/chat-app.js';
+import { createDefaultTuiSession, runTuiChat } from '../tui/chat-app.js';
 import { runChatLoop } from '../chat-loop.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
 import { printError, ACCENT, DIM } from '../display.js';
 import { runCloudChatLoop } from '../cloud-chat-loop.js';
+import { runCloudTuiChat } from '../tui/cloud-chat-app.js';
 import { createCliSession } from '../session.js';
+import { listKnownAgents } from '../agent-list.js';
+import { runHomeTui } from '../tui/home-app.js';
+import { openLocalTuiAgent } from '../tui/local-agent.js';
 
 export async function chatCommand(name: string | undefined, opts: {
-  model?: string; baseUrl?: string; auth?: string; classic?: boolean;
+  model?: string; baseUrl?: string; auth?: string; classic?: boolean; initialPrompt?: string;
+  continue?: boolean; resume?: boolean; session?: string; sessionDir?: string; noSession?: boolean; fork?: string;
 }): Promise<void> {
   // No name: let user pick from existing agents
   if (!name) {
-    const localAgents = new Set(listAgentDirs());
-    const agents = [
-      ...[...localAgents].map((agentName) => ({ name: agentName, label: agentName })),
-      ...listConfiguredAgentRefs()
-        .filter((agent) => agent.mode === 'cloud' || !localAgents.has(agent.localName ?? agent.name))
-        .map((agent) => ({
-          name: agent.name,
-          label: agent.mode === 'cloud' ? `${agent.name} (cloud)` : agent.name,
-        })),
-    ];
+    if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
+      const action = await runHomeTui(opts);
+      if (action.type === 'open-agent') {
+        await chatCommand(action.name, { ...opts, initialPrompt: action.initialPrompt });
+      }
+      return;
+    }
+    const agents = listKnownAgents();
     if (agents.length === 0) {
-      printError('No agents found.', 'Create one with: proteus create <name>');
+      printError('No agents found.', 'Run proteus in a terminal to create one from a mission.');
       process.exit(1);
     }
     if (agents.length === 1) {
@@ -61,14 +55,17 @@ export async function chatCommand(name: string | undefined, opts: {
   const configured = name ? resolveAgentRef(name) : null;
   if (configured?.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const session = createCliSession(configured.name);
-    await runCloudChatLoop({
+    const session = createCliSession(configured.name, opts);
+    const cloudOpts = {
       origin: auth.origin,
       token: auth.token,
       agentName: configured.name,
       cloudName: configured.cloudName ?? configured.name,
       session,
-    });
+      initialPrompt: opts.initialPrompt,
+    };
+    if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) await runCloudChatLoop(cloudOpts);
+    else await runCloudTuiChat(cloudOpts);
     return;
   }
   if (configured?.mode === 'local') name = configured.localName ?? configured.name;
@@ -79,28 +76,16 @@ export async function chatCommand(name: string | undefined, opts: {
     process.exit(1);
   }
 
-  const llmConfig = resolveLLMConfig(opts);
-  const providerCredentials = resolveProviderCredentials();
-  const codexAuthStore = createCodexAuthStore();
-  const modelResolver = createLocalModelResolver({
-    llm: llmConfig,
-    credentials: providerCredentials,
-    codexAuthStore,
-  });
   ensureLocalDaemonRunning();
-  const mcpServers = resolveMcpServers();
-  const db = new Database(dbPath);
-  const openConfig = { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH };
-  const { rt, info } = openAgentCLI(db, dbPath, openConfig);
-  const dbSize = statSync(dbPath).size;
-  const refreshInfo = () => openAgentCLI(db, dbPath, openConfig).info;
+  const local = openLocalTuiAgent(name, opts);
 
   // Use TUI by default, fall back to classic readline with --classic flag
   // or when stdin is not a TTY (piped input)
   if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop({ rt, db, info, dbSize, llmConfig, modelResolver, refreshInfo, mcpServers });
+    await runChatLoop(local);
   } else {
-    await runTuiChat({ rt, db, info, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve: false, mcpServers });
+    const session = createDefaultTuiSession(name, opts);
+    await runTuiChat({ ...local, ...session, initialPrompt: opts.initialPrompt });
   }
-  db.close();
+  local.close();
 }

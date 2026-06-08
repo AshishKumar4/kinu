@@ -32,7 +32,7 @@ import {
   stopCloudAgent,
   type CloudTurnResult,
 } from '../cloud-api.js';
-import { renderCloudTurn, runCloudChatLoop } from '../cloud-chat-loop.js';
+import { renderCloudTurn } from '../cloud-chat-loop.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
 import { ACCENT, DIM, ERR, printToolCall, printToolResult } from '../display.js';
@@ -80,19 +80,7 @@ export async function runCommand(name: string, promptParts: string[], opts: {
   const prompt = await buildPrompt(promptParts);
 
   if (!prompt) {
-    if (target.mode === 'cloud') {
-      const auth = requireAuthConfig();
-      const session = createCliSession(canonicalName, opts);
-      await runCloudChatLoop({
-        origin: auth.origin,
-        token: auth.token,
-        agentName: canonicalName,
-        cloudName: target.cloudName,
-        session,
-      });
-      return;
-    }
-    await chatCommand(target.localName, opts);
+    await chatCommand(target.requestedName, opts);
     return;
   }
 

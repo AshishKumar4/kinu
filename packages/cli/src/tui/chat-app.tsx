@@ -17,6 +17,7 @@ import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type Loca
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { HelpView, StatusView } from './help-view.js';
+import { createCliSession, defaultAgentSessionId, listCliSessions, type CliSession, type CliSessionOptions } from '../session.js';
 
 export interface ChatAppOpts {
   rt: AgentRuntime;
@@ -28,12 +29,17 @@ export interface ChatAppOpts {
   refreshInfo: () => AgentInfo;
   noAutoEvolve?: boolean;
   mcpServers?: Record<string, McpServerConfig>;
+  initialPrompt?: string;
+  cliSession?: CliSession;
+  localSessionId?: string;
+  onExit?: () => void;
+  close?: () => void;
 }
 
 let globalExit: (() => void) | null = null;
 let globalSessionCleanup: (() => Promise<void>) | null = null;
 
-function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers }: ChatAppOpts) {
+export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers, initialPrompt, cliSession, localSessionId, onExit }: ChatAppOpts) {
   const { height } = useTerminalDimensions();
   const [messages, setMessages] = useState<DisplayMessage[]>([
     { id: 'welcome', role: 'system', content: `Connected to ${initialInfo.name}. Type a message or /help for commands.` },
@@ -46,6 +52,7 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, 
 
   const msgIdRef = useRef(0);
   const streamRef = useRef('');
+  const initialPromptSentRef = useRef(false);
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
@@ -56,8 +63,15 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, 
   const sessionRef = useRef<LocalAgentSession | null>(null);
   if (!sessionRef.current) {
     sessionRef.current = new LocalAgentSession({
-      rt, db, model: resolveChatModel(llmConfig), modelResolver, noAutoEvolve,
+      rt,
+      db,
+      model: resolveChatModel(llmConfig),
+      modelResolver,
+      noAutoEvolve,
+      sessionId: localSessionId ?? defaultAgentSessionId(),
+      persistMessages: true,
       onEvent: (event: SessionEvent) => {
+        recordSessionEvent(cliSession, event);
         switch (event.type) {
           case 'turn-start':
             streamRef.current = '';
@@ -103,7 +117,7 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, 
     switch (cmd) {
       case '/exit':
       case '/quit':
-        globalExit?.();
+        onExit ? onExit() : globalExit?.();
         return;
       case '/help':
         addMessage({ role: 'system', content: 'HELP_VIEW' });
@@ -184,6 +198,38 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, 
         addMessage({ role: 'system', content: lines.join('\n') });
         return;
       }
+      case '/sessions':
+      case '/resume': {
+        const sessions = listCliSessions(initialInfo.name);
+        if (sessions.length === 0) {
+          addMessage({ role: 'system', content: 'No recorded CLI sessions yet.' });
+          return;
+        }
+        const lines = sessions.slice(0, 12).map((s, index) => {
+          const title = s.name ?? s.firstUserText ?? '(untitled)';
+          return `${index + 1}. ${s.id}  ${title}`;
+        });
+        addMessage({
+          role: 'system',
+          content: `${cmd === '/resume' ? 'Resume' : 'Sessions'}\n${lines.join('\n')}\n\nUse: proteus chat ${initialInfo.name} --session <id>`,
+        });
+        return;
+      }
+      case '/stop': {
+        session.interrupt();
+        addMessage({ role: 'system', content: 'Stop requested for the active local turn.' });
+        return;
+      }
+      case '/jobs': {
+        const jobs = await session.listBackgroundJobs(20);
+        addMessage({
+          role: 'system',
+          content: jobs.length
+            ? jobs.map((job) => `${job.id}  ${job.kind}  ${job.status}`).join('\n')
+            : 'No background jobs.',
+        });
+        return;
+      }
       case '/tree': {
         const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
         if (nodes.length === 0) {
@@ -211,8 +257,9 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, 
     }
     if (text.startsWith('/')) { await handleSlash(text); return; }
     addMessage({ role: 'user', content: text });
+    cliSession?.append('user', { text, cwd: process.cwd(), backend: 'local' });
     try { await session.send(text); } catch { /* errors surface as SessionEvents */ }
-  }, [addMessage, handleSlash, mcpReady, session]);
+  }, [addMessage, cliSession, handleSlash, mcpReady, session]);
 
   // opentui's `input` intrinsic merges with React DOM's, so onSubmit's type is
   // the intersection of (value: string) and (event: SubmitEvent). opentui passes
@@ -232,6 +279,14 @@ function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelResolver, 
     })();
     return () => { cancelled = true; globalSessionCleanup = null; };
   }, [session, mcpServers]);
+
+  useEffect(() => {
+    if (!mcpReady || initialPromptSentRef.current) return;
+    const prompt = initialPrompt?.trim();
+    if (!prompt) return;
+    initialPromptSentRef.current = true;
+    void handleSubmit(prompt);
+  }, [handleSubmit, initialPrompt, mcpReady]);
 
   useKeyboard((key) => {
     if (key.name === 'escape') globalExit?.();
@@ -305,6 +360,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
 
   const cleanup = async () => {
     try { await globalSessionCleanup?.(); } catch { /* best effort */ }
+    try { opts.close?.(); } catch { /* best effort */ }
     root.render(<box />);
     renderer.destroy();
     console.log('\n  Goodbye.\n');
@@ -318,4 +374,40 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
 
   // Keep the process alive
   await new Promise<void>(() => {});
+}
+
+export function createDefaultTuiSession(agentName: string, opts: CliSessionOptions = {}): {
+  cliSession: CliSession;
+  localSessionId: string;
+} {
+  const cliSession = createCliSession(agentName, opts);
+  return {
+    cliSession,
+    localSessionId: opts.noSession || opts.session || opts.continue || opts.resume || opts.fork
+      ? cliSession.id
+      : defaultAgentSessionId(),
+  };
+}
+
+function recordSessionEvent(session: CliSession | undefined, event: SessionEvent): void {
+  if (!session) return;
+  switch (event.type) {
+    case 'tool-call':
+      session.append('tool_call', { toolName: event.toolName, args: event.args });
+      break;
+    case 'tool-result':
+      session.append('tool_result', { toolName: event.toolName, result: event.result });
+      break;
+    case 'turn-end':
+      session.append('assistant', {
+        text: event.turn.assistantResponse,
+        steps: event.turn.steps,
+        durationMs: event.turn.durationMs,
+        hadError: event.turn.hadError,
+      });
+      break;
+    case 'error':
+      session.append('error', { message: event.message, backend: 'local' });
+      break;
+  }
 }

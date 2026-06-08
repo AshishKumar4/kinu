@@ -151,6 +151,17 @@ describe("CLI behavior", () => {
     expect(out).not.toContain("Self-evolving AI agent with MCTS exploration");
   });
 
+  test("chat exposes first-class session controls", () => {
+    const proc = runCli(["chat", "--help"]);
+    const out = proc.stdout.toString();
+
+    expect(proc.exitCode).toBe(0);
+    expect(out).toContain("Usage: proteus chat");
+    expect(out).toContain("--resume");
+    expect(out).toContain("--session <idOrPath>");
+    expect(out).toContain("--fork <idOrPath>");
+  });
+
   test("no-name chat can select a configured cloud agent", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-chat-"));
     tempDirs.push(home);

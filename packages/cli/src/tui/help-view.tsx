@@ -16,6 +16,10 @@ export function HelpView() {
         <span fg="#6b7280">  /models   </span><span fg="#d1d5db">List configured providers</span>{'\n'}
         <span fg="#6b7280">  /memory   </span><span fg="#d1d5db">Show memory contents</span>{'\n'}
         <span fg="#6b7280">  /tree     </span><span fg="#d1d5db">Show MCTS search tree</span>{'\n'}
+        <span fg="#6b7280">  /sessions </span><span fg="#d1d5db">List recorded CLI sessions</span>{'\n'}
+        <span fg="#6b7280">  /resume   </span><span fg="#d1d5db">Show resumable sessions</span>{'\n'}
+        <span fg="#6b7280">  /jobs     </span><span fg="#d1d5db">List background jobs</span>{'\n'}
+        <span fg="#6b7280">  /stop     </span><span fg="#d1d5db">Stop the active turn</span>{'\n'}
         <span fg="#6b7280">  /always   </span><span fg="#d1d5db">Pin always-active skills</span>{'\n'}
         <span fg="#6b7280">  /approval </span><span fg="#d1d5db">Shell approval mode</span>{'\n'}
         <span fg="#6b7280">  /exit     </span><span fg="#d1d5db">Exit chat</span>
