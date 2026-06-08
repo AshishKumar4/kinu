@@ -292,6 +292,7 @@ export function printHelp(): void {
   console.log(`${chalk.bold('Usage:')}  proteus <command> [options]\n`);
   console.log(`${chalk.bold('Commands:')}`);
   console.log(`  ${ACCENT('setup')}              Connect your account; optionally configure local models`);
+  console.log(`  ${ACCENT('provider')}           List or connect model/account providers`);
   console.log(`  ${ACCENT('auth')}               Sign into your Proteus account`);
   console.log(`  ${ACCENT('whoami')}             Show the signed-in account`);
   console.log(`  ${ACCENT('create')} [name]      Create a cloud or local agent`);
@@ -321,7 +322,8 @@ export function printHelp(): void {
   console.log(`  ${DIM('--purpose <text>')}    Agent purpose (for create)`);
   console.log(`\n${chalk.bold('Examples:')}`);
   console.log(`  ${DIM('$')} proteus setup`);
-  console.log(`  ${DIM('$')} proteus setup --local-model`);
+  console.log(`  ${DIM('$')} proteus provider connect codex`);
+  console.log(`  ${DIM('$')} proteus provider list`);
   console.log(`  ${DIM('$')} proteus create jarvis --mode cloud --alias jarvis`);
   console.log(`  ${DIM('$')} jarvis "review this repo"`);
   console.log(`  ${DIM('$')} jarvis`);

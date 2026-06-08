@@ -15,15 +15,20 @@ export async function setupCommand(opts: {
   yes?: boolean;
   skipCloud?: boolean;
   localModel?: boolean;
+  accountOnly?: boolean;
 }): Promise<void> {
   console.log('');
   console.log(ACCENT('Proteus setup'));
-  console.log(DIM('Connect your Proteus account. Local-only model credentials are optional.'));
+  console.log(DIM('Connect your account and configure providers for cloud or local agents.'));
   console.log('');
 
   const config = loadConfigFile();
   let cloudReady = Boolean(config.accessToken);
   let cloudSkipped = Boolean(opts.skipCloud);
+  if (cloudReady) {
+    console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
+  }
+
   if (!opts.skipCloud && !config.accessToken) {
     const shouldLogin = opts.yes || await confirm('Sign in to your Proteus account now?', true);
     if (shouldLogin) {
@@ -34,10 +39,20 @@ export async function setupCommand(opts: {
     }
   }
 
-  const shouldConfigureLocalModel = opts.localModel || Boolean(opts.provider) || cloudSkipped || !cloudReady;
-  if (!shouldConfigureLocalModel) {
+  if (opts.accountOnly) {
+    if (cloudReady) {
+      console.log(`${OK('✓')} Proteus account ready.`);
+      console.log(DIM('Run proteus provider connect codex for local agents that should use your ChatGPT Codex subscription.'));
+    } else {
+      console.log(`${WARN('!')} Proteus account was not connected.`);
+      console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
+    }
+    return;
+  }
+
+  if (!process.stdin.isTTY && !opts.yes && !opts.provider && !opts.localModel && !cloudSkipped && cloudReady) {
     console.log(`${OK('✓')} Proteus account ready.`);
-    console.log(DIM('Cloud agents will use your signed-in Proteus account. For local-only agents, run proteus setup --local-model.'));
+    console.log(DIM('Run proteus provider connect <provider> to configure local agent model access.'));
     return;
   }
 
@@ -45,7 +60,7 @@ export async function setupCommand(opts: {
   if (provider === 'skip') {
     console.log(`${WARN('!')} Skipped local model setup.`);
     console.log(DIM(cloudReady
-      ? 'Cloud agents remain ready. Run proteus setup --local-model later for local-only agents.'
+      ? 'Cloud agents remain ready. Run proteus provider connect <provider> later for local agents.'
       : 'Run proteus setup later before creating agents.'));
     return;
   }

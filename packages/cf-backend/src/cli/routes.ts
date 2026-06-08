@@ -850,9 +850,9 @@ run_setup_if_requested() {
   fi
   say "Starting Proteus setup..."
   if [ "$YES" = "1" ]; then
-    PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --yes < /dev/tty
+    PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only --yes < /dev/tty
   else
-    PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" < /dev/tty
+    PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only < /dev/tty
   fi
 }
 

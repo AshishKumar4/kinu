@@ -25,13 +25,35 @@ function runCli(args: string[], opts: { home?: string; stdin?: string } = {}) {
   });
 }
 
+function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
+  const command = [
+    `PROTEUS_HOME=${shellQuote(opts.home)}`,
+    shellQuote(process.execPath),
+    shellQuote(cliBin),
+    ...args.map(shellQuote),
+  ].join(" ");
+
+  return Bun.spawnSync({
+    cmd: ["script", "-qefc", command, "/dev/null"],
+    cwd: repoRoot,
+    stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  });
+}
+
 function writeConfig(home: string, body: unknown) {
   writeFileSync(join(home, "config.json"), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 describe("CLI behavior", () => {
-  test("setup with an existing account does not enter the local model wizard by default", () => {
-    const home = mkdtempSync(join(tmpdir(), "proteus-cli-setup-"));
+  test("setup --account-only with an existing account does not enter the local model wizard", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-setup-account-"));
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://proteus.example.com",
@@ -39,7 +61,7 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCli(["setup"], { home });
+    const proc = runCli(["setup", "--account-only"], { home });
     const stdout = proc.stdout.toString();
     const stderr = proc.stderr.toString();
 
@@ -48,6 +70,23 @@ describe("CLI behavior", () => {
     expect(stdout).toContain("Proteus account ready");
     expect(stdout).not.toContain("Local model provider");
     expect(stdout).not.toContain("OpenAI API key");
+  });
+
+  test("interactive setup can be rerun and reaches provider choices", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-setup-rerun-"));
+    tempDirs.push(home);
+    writeConfig(home, {
+      origin: "https://proteus.example.com",
+      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      user: { id: "user_123", email: "ashish@example.com" },
+    });
+
+    const proc = runCliInPty(["setup"], { home, stdin: "6\n" });
+    const stdout = proc.stdout.toString();
+
+    expect(proc.exitCode).toBe(0);
+    expect(stdout).toContain("Local model provider");
+    expect(stdout).toContain("Skipped local model setup");
   });
 
   test("setup --local-model keeps local provider setup explicit", () => {
@@ -65,6 +104,41 @@ describe("CLI behavior", () => {
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Skipped local model setup");
     expect(stdout).toContain("Cloud agents remain ready");
+  });
+
+  test("provider list summarizes connected providers without leaking credentials", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-providers-"));
+    tempDirs.push(home);
+    writeConfig(home, {
+      origin: "https://proteus.example.com",
+      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      user: { id: "user_123", email: "ashish@example.com" },
+      model: "codex/gpt-5.5",
+      providers: {
+        codex: { accessToken: "codex-access-token", refreshToken: "codex-refresh-token" },
+        openai: { apiKey: "sk-secret" },
+      },
+    });
+
+    const proc = runCli(["provider", "list"], { home });
+    const stdout = proc.stdout.toString();
+
+    expect(proc.exitCode).toBe(0);
+    expect(stdout).toContain("Proteus providers");
+    expect(stdout).toContain("Proteus account");
+    expect(stdout).toContain("Codex");
+    expect(stdout).toContain("OpenAI");
+    expect(stdout).not.toContain("sk-secret");
+    expect(stdout).not.toContain("codex-refresh-token");
+  });
+
+  test("no-arg CLI keeps a non-interactive help fallback", () => {
+    const proc = runCli([]);
+    const stdout = proc.stdout.toString();
+
+    expect(proc.exitCode).toBe(0);
+    expect(stdout).toContain("Usage:");
+    expect(stdout).toContain("proteus <command>");
   });
 
   test("subcommand help reaches the selected command instead of root help", () => {

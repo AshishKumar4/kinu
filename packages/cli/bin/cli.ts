@@ -3,7 +3,7 @@
  * proteus CLI — create, chat with, and evolve persistent AI agents.
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { createCommand } from '../src/commands/create.js';
 import { chatCommand } from '../src/commands/chat.js';
 import { runCommand } from '../src/commands/run.js';
@@ -12,6 +12,7 @@ import { aliasCommand, aliasesCommand, unaliasCommand } from '../src/commands/al
 import { desktopCommand } from '../src/commands/desktop.js';
 import { daemonCommand } from '../src/commands/daemon.js';
 import { setupCommand } from '../src/commands/setup.js';
+import { providersCommand } from '../src/commands/providers.js';
 import { sessionsCommand } from '../src/commands/sessions.js';
 import { doctorCommand, uninstallCommand, updateCommand } from '../src/commands/self.js';
 import { evolveCommand } from '../src/commands/evolve.js';
@@ -87,7 +88,16 @@ program
   .option('--local-model', 'Configure credentials for local-only agents')
   .option('-y, --yes', 'Accept recommended setup choices where possible')
   .option('--skip-cloud', 'Skip account sign-in')
+  .addOption(new Option('--account-only', 'Only complete Proteus account sign-in').hideHelp())
   .action(wrapAction(setupCommand));
+
+program
+  .command('provider [action] [name]')
+  .alias('providers')
+  .description('List or connect model and account providers')
+  .option('--origin <url>', 'Proteus app origin')
+  .option('--model <id>', 'Default model for the selected provider')
+  .action(wrapAction(providersCommand));
 
 llmOpts(
   program
@@ -312,13 +322,24 @@ program
   .description('Inspect local Proteus CLI installation state')
   .action(wrapAction(doctorCommand));
 
-// No args or root --help: show branded help. Subcommand help is left to
-// Commander so `proteus run --help` and friends show the selected command.
+// No args in a real terminal opens the interactive agent flow. Root --help
+// remains branded help, and subcommand help is left to Commander.
 const topLevelArgs = process.argv.slice(2);
-if (
-  topLevelArgs.length === 0 ||
-  (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0] === '-h'))
-) {
+if (topLevelArgs.length === 0) {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    try {
+      await chatCommand(undefined, {});
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  } else {
+    printHelp();
+  }
+  process.exit(0);
+}
+
+if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0] === '-h')) {
   printHelp();
   process.exit(0);
 }

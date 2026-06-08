@@ -197,6 +197,7 @@ describe('auth and desktop security invariants', () => {
     const script = await installScript!.text();
     expect(script).toContain('#!/usr/bin/env bash');
     expect(script).toContain('PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help');
+    expect(script).toContain('setup --origin "$PROTEUS_ORIGIN" --account-only');
     expect(script).toContain("grep -Eq '^[[:space:]]+setup[[:space:]]'");
     expect(script).toContain("grep -F '$HOME/.proteus/bin'");
 

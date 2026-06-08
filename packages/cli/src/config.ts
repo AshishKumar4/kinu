@@ -30,6 +30,8 @@ const RESERVED_ALIASES = new Set([
   'whoami',
   'logout',
   'setup',
+  'provider',
+  'providers',
   'run',
   'chat',
   'evolve',
