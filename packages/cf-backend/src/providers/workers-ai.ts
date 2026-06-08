@@ -6,18 +6,7 @@ import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
 import { asFetchFunction } from '@proteus/core';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
-
-const MODELS: ModelInfo[] = [
-  { id: '@cf/moonshotai/kimi-k2.6',                       label: 'Kimi K2.6',            capabilities: ['tools', 'streaming'] },
-  // Partner model via the binding's gateway route — needs BYOK/balance (not free).
-  { id: 'minimax/m3',                                     label: 'MiniMax M3 (1M ctx)',  capabilities: ['tools', 'streaming', 'reasoning'] },
-  { id: '@cf/meta/llama-4-scout-17b-16e-instruct',        label: 'Llama 4 Scout',        capabilities: ['tools', 'streaming', 'vision'] },
-  { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',       label: 'Llama 3.3 70B (fast)', capabilities: ['tools', 'streaming'] },
-  { id: '@cf/openai/gpt-oss-120b',                        label: 'GPT-OSS 120B',         capabilities: ['tools', 'streaming'] },
-  { id: '@cf/openai/gpt-oss-20b',                         label: 'GPT-OSS 20B',          capabilities: ['tools', 'streaming'] },
-  { id: '@cf/qwen/qwen2.5-coder-32b-instruct',            label: 'Qwen 2.5 Coder 32B',   capabilities: ['tools', 'streaming'] },
-  { id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',   label: 'DeepSeek R1 Distill',  capabilities: ['streaming', 'reasoning'] },
-];
+import { DEFAULT_WORKERS_AI_MODEL_ID, WORKERS_AI_MODEL_CATALOG } from './workers-ai-catalog.js';
 
 export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */
@@ -36,13 +25,13 @@ export function createWorkersAIProvider(_opts: WorkersAIOptions = {}): ModelProv
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
-    defaultModel: '@cf/moonshotai/kimi-k2.6',
+    defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
     async isAvailable(deps) {
       const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
       return !!auth?.baseURL;
     },
     unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
-    listModels: () => MODELS,
+    listModels: (): ModelInfo[] => WORKERS_AI_MODEL_CATALOG.map((model) => ({ ...model })),
     createModel(modelId, deps): LanguageModel {
       const baseFetch = deps.fetch ?? fetch;
       const placeholder = 'https://proteus-workers-ai.invalid';

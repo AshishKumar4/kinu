@@ -33,7 +33,7 @@ import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from './user-do.js';
 import { renderSoulMarkdown } from '@proteus/core';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
-import { listAvailableModels } from './available-models.js';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, listAvailableModels, type ModelMenuEntry } from './available-models.js';
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -86,11 +86,16 @@ export async function handleUserRequest(
     const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
     if (!body) return err(400, 'Body must be JSON');
     if (typeof body.name !== 'string' || !body.name) return err(400, 'name required');
+    const models = await listAvailableModels(env, identity.userId);
+    const model = pickInitialModel(await stub.getConfig('default_model'), models);
+    if (!model) {
+      return err(409, 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the agent again.');
+    }
     // displayName is optional — the agent derives a provisional title from its
     // mission (purpose) and AI-titles itself on the first turn.
     try {
       const entry = await stub.registerAgent(body.name, body.displayName, body.purpose);
-      await initializeOrchestrator(env, identity.userId, body.name, body.purpose);
+      await initializeOrchestrator(env, identity.userId, body.name, body.purpose, model);
       return json(entry, { status: 201 });
     } catch (e) { return err(400, (e as Error).message); }
   }
@@ -252,10 +257,19 @@ async function initializeOrchestrator(
   userId: string,
   agentName: string,
   mission?: string,
+  model?: string,
 ): Promise<void> {
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   ) as DurableObjectStub<OrchestratorAgent>;
   await orchestrator.claimOwner(userId);
   await orchestrator.setSoul(renderSoulMarkdown({ name: agentName, mission }));
+  if (model) await orchestrator.setModel(model);
+}
+
+function pickInitialModel(defaultModel: string | null, models: ModelMenuEntry[]): string | null {
+  if (defaultModel && models.some((model) => model.spec === defaultModel)) return defaultModel;
+  return models.find((model) => model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC)?.spec
+    ?? models[0]?.spec
+    ?? null;
 }

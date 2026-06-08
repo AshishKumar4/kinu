@@ -146,6 +146,14 @@ export function invalidateModelsCache(): void { _modelsCache = null; }
 export const listConnectedProviders = () =>
   api<Array<{ id: string; label: string; credentialKeys: string[] }>>('GET', '/providers');
 
+export function cloudflareReconnectPath(returnTo: string): string {
+  const params = new URLSearchParams({
+    return_to: returnTo || '/',
+    prompt: 'login',
+  });
+  return `/auth/cloudflare/start?${params.toString()}`;
+}
+
 // ── MCP servers ────────────────────────────────────────────────────
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';

@@ -10,18 +10,21 @@ import {
   WrenchIcon,
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
+import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { createAgentFromMission } from "@/lib/create-agent";
-import { listAgents, type AgentEntry } from "@/lib/user-api";
+import { listAgents, listAvailableModels, type AgentEntry } from "@/lib/user-api";
 
 export default function HomePage() {
   const navigate = useNavigate();
   const [mission, setMission] = useState("");
   const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [hasModels, setHasModels] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     listAgents().then(setAgents).catch(() => setAgents([]));
+    listAvailableModels().then((models) => setHasModels(models.length > 0)).catch(() => setHasModels(false));
   }, []);
 
   const submit = async (event?: FormEvent) => {
@@ -71,7 +74,7 @@ export default function HomePage() {
 
               <button
                 type="submit"
-                disabled={busy || !mission.trim()}
+                disabled={busy || !mission.trim() || hasModels === false}
                 className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
                 style={{ background: "var(--c-accent)" }}
               >
@@ -80,6 +83,15 @@ export default function HomePage() {
               </button>
             </div>
           </form>
+
+          {hasModels === false && (
+            <div className="mt-3">
+              <CloudflareAIConnectNotice
+                returnTo="/"
+                message="Connect Cloudflare Workers AI before creating an agent."
+              />
+            </div>
+          )}
 
           {err && (
             <div className="mt-3 rounded-md border border-red-400/40 px-3 py-2 text-xs text-red-400" style={{ background: "rgba(248,113,113,0.08)" }}>

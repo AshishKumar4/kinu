@@ -6,6 +6,7 @@ import { getConfiguredOAuthProviders, listConfiguredOAuthProviders } from '../sr
 import {
   CLOUDFLARE_WORKERS_AI_SCOPES,
   cloudflareAIGatewayId,
+  cloudflareTokenToCredential,
 } from '../src/lib/cloudflare-oauth.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
@@ -71,7 +72,35 @@ describe('auth and desktop security invariants', () => {
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
     expect(routes).toContain('cloudflare_credential');
+    expect(routes).toContain('DEFAULT_WORKERS_AI_MODEL_SPEC');
+    expect(routes).not.toContain('Cloudflare credential attachment skipped');
     expect(userDO).toContain("'cf-aig-gateway-id'");
+  });
+
+  test('Cloudflare OAuth token attachment stores an account-backed Workers AI credential', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+      return new Response(JSON.stringify({
+        success: true,
+        result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const credential = await cloudflareTokenToCredential({
+        access_token: 'cf-access',
+        refresh_token: 'cf-refresh',
+        token_type: 'bearer',
+        expires_in: 3600,
+        scope: CLOUDFLARE_WORKERS_AI_SCOPES,
+      });
+      expect(credential.kind).toBe('oauth');
+      expect(credential.accessToken).toBe('cf-access');
+      expect(credential.metadata?.accountId).toBe('abc123abc123abc123abc123abc123ab');
+      expect(credential.metadata?.scopes).toEqual(CLOUDFLARE_WORKERS_AI_SCOPES.split(' '));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test('Cloudflare AI Gateway defaults to the account default gateway unless configured', () => {
@@ -261,5 +290,26 @@ describe('auth and desktop security invariants', () => {
     const cliRoutes = source('src/cli/routes.ts');
     expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
     expect(cliRoutes).toContain('listAvailableModels(env, cli.userId)');
+  });
+
+  test('web agent creation requires an available model and stores the selected initial model', () => {
+    const routes = source('src/user/routes.ts');
+    expect(routes).toContain('listAvailableModels(env, identity.userId)');
+    expect(routes).toContain('Cloudflare Workers AI is not connected');
+    expect(routes).toContain('pickInitialModel');
+    expect(routes).toContain('await orchestrator.setModel(model)');
+  });
+
+  test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
+    const workspace = source('src/pages/WorkspacePage.tsx');
+    const home = source('src/pages/HomePage.tsx');
+    const modal = source('src/components/CreateAgentModal.tsx');
+    const settings = source('src/pages/UserSettingsPage.tsx');
+    expect(workspace).not.toContain('(no providers connected)');
+    expect(workspace).toContain('Connect Workers AI');
+    expect(workspace).toContain('cloudflareReconnectPath');
+    expect(home).toContain('CloudflareAIConnectNotice');
+    expect(modal).toContain('CloudflareAIConnectNotice');
+    expect(settings).toContain('Cloudflare Workers AI');
   });
 });

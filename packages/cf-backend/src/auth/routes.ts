@@ -13,6 +13,7 @@ import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareTokenToCredential,
 } from '../lib/cloudflare-oauth.js';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai-catalog.js';
 
 const SESSION_COOKIE_NAME = '__Host-proteus_session';
 
@@ -157,15 +158,19 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     const tokens = await processOAuthTokenResponse(provider, as, client, tokenResponse, savedState.nonce ?? null);
     stage = 'profile';
     const profile = await fetchOAuthProfile(provider, as, client, tokens);
-    stage = 'session';
-    const session = await createSession(env, profile);
+    let cloudflareCredential: Awaited<ReturnType<typeof cloudflareTokenToCredential>> | null = null;
     if (provider.id === 'cloudflare') {
       stage = 'cloudflare_credential';
+      cloudflareCredential = await cloudflareTokenToCredential(tokens);
+    }
+    stage = 'session';
+    const session = await createSession(env, profile);
+    if (cloudflareCredential) {
+      stage = 'cloudflare_credential';
       const userDO = env.UserDO.get(env.UserDO.idFromName(session.identity.userId));
-      try {
-        await userDO.setCredential(CLOUDFLARE_OAUTH_CRED_KEY, await cloudflareTokenToCredential(tokens));
-      } catch (err) {
-        console.warn(`[auth] Cloudflare credential attachment skipped: ${err instanceof Error ? err.message : String(err)}`);
+      await userDO.setCredential(CLOUDFLARE_OAUTH_CRED_KEY, cloudflareCredential);
+      if (!await userDO.getConfig('default_model')) {
+        await userDO.setConfig('default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
       }
     }
     ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));

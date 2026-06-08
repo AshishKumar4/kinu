@@ -4,6 +4,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai-catalog.js';
 
 const MODELS: ModelInfo[] = [
   { id: 'workers-ai/@cf/moonshotai/kimi-k2.6',                label: 'Kimi K2.6 (gateway)',    capabilities: ['tools', 'streaming'] },
@@ -14,7 +15,7 @@ export function createAIGatewayProvider(): ModelProvider {
   return {
     id: 'ai-gateway',
     label: 'Cloudflare AI Gateway',
-    defaultModel: 'workers-ai/@cf/moonshotai/kimi-k2.6',
+    defaultModel: DEFAULT_WORKERS_AI_MODEL_SPEC,
     isAvailable: deps => {
       const url = deps.env.AI_GATEWAY_URL;
       const auth = deps.env.AI_GATEWAY_AUTH;

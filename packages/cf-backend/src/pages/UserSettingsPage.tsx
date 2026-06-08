@@ -17,6 +17,7 @@ import {
   PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
 } from "@phosphor-icons/react";
+import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   getProfile, listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
@@ -85,6 +86,7 @@ export default function UserSettingsPage() {
   if (loading) {
     return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
   }
+  const workersAIConnected = models.some((model) => model.provider === 'workers-ai');
 
   return (
     <div className="h-full overflow-y-auto">
@@ -122,6 +124,19 @@ export default function UserSettingsPage() {
             </p>
             <CommandCopy label="Setup" command={cliSetup?.installCommand ?? "curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash"} />
           </div>
+        </Card>
+
+        <Card title="Cloudflare Workers AI" icon={PlugIcon}>
+          {workersAIConnected ? (
+            <div className="flex items-center gap-2 text-xs text-emerald-300">
+              <CheckIcon size={13} /> Connected
+            </div>
+          ) : (
+            <CloudflareAIConnectNotice
+              returnTo="/user/settings"
+              message="Connect Cloudflare Workers AI so agents can use your Cloudflare account quota."
+            />
+          )}
         </Card>
 
         {/* Codex */}

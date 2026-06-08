@@ -11,7 +11,7 @@ import {
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
 import { useProteus } from "@/hooks/use-proteus";
-import { touchAgent, listAvailableModels } from "@/lib/user-api";
+import { cloudflareReconnectPath, touchAgent, listAvailableModels } from "@/lib/user-api";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { Modal } from "@/components/ui/Modal";
@@ -465,10 +465,21 @@ function ModelSelector({ current, onChange }: { current: string; onChange: (id: 
       .then((m) => setModels(m.map((x) => ({ spec: x.spec, label: x.label }))))
       .catch(() => setModels([]));
   }, []);
+  if (models.length === 0) {
+    return (
+      <a
+        href={cloudflareReconnectPath(window.location.pathname)}
+        className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10"
+        title="Reconnect Cloudflare with Workers AI permissions"
+      >
+        <WarningCircleIcon size={12} />
+        Connect Workers AI
+      </a>
+    );
+  }
   return (
     <select value={current} onChange={e => onChange(e.target.value)}
       className="text-[11px] p-elevated border p-border rounded-md px-1.5 py-1 p-text focus:outline-none">
-      {models.length === 0 && <option value="">(no providers connected)</option>}
       {models.map(m => <option key={m.spec} value={m.spec}>{m.label}</option>)}
     </select>
   );

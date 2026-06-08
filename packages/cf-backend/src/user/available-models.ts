@@ -8,6 +8,7 @@
  */
 import type { UserDO } from './user-do.js';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
+import { WORKERS_AI_MODEL_CATALOG } from '../providers/workers-ai-catalog.js';
 
 export interface ModelMenuEntry {
   /** Full spec — `<provider>/<modelId>`, used as the agent_config.model value. */
@@ -20,15 +21,14 @@ export interface ModelMenuEntry {
   capabilities?: string[];
 }
 
-const WORKERS_AI_MODELS: ModelMenuEntry[] = [
-  { spec: 'workers-ai/@cf/moonshotai/kimi-k2.6',           label: 'Kimi K2.6',         provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  // MiniMax M3 — 1M-context partner model. Availability and billing still flow
-  // through the user's Cloudflare OAuth account.
-  { spec: 'workers-ai/minimax/m3',                         label: 'MiniMax M3 (1M ctx · BYOK/balance)', provider: 'workers-ai', capabilities: ['tools', 'streaming', 'reasoning'] },
-  { spec: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',     label: 'Llama 4 Scout',     provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  { spec: 'workers-ai/@cf/meta/llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick',  provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  { spec: 'workers-ai/@cf/qwen/qwen2.5-coder-32b-instruct',         label: 'Qwen 2.5 Coder',    provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-];
+export { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai-catalog.js';
+
+const WORKERS_AI_MODELS: ModelMenuEntry[] = WORKERS_AI_MODEL_CATALOG.map((model) => ({
+  spec: `workers-ai/${model.id}`,
+  label: model.label ?? model.id,
+  provider: 'workers-ai',
+  capabilities: model.capabilities,
+}));
 
 const CODEX_MODELS: ModelMenuEntry[] = [
   { spec: 'codex/gpt-5.5',      label: 'GPT-5.5 (Codex)',      provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },

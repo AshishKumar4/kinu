@@ -7,12 +7,14 @@
  * deterministic provisional from the mission, replaced by an AI-generated title
  * on the first turn — so there is no name field to fill in.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlusIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
+import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { createAgentFromMission } from "@/lib/create-agent";
+import { listAvailableModels } from "@/lib/user-api";
 
 export interface CreateAgentModalProps {
   onClose: () => void;
@@ -24,6 +26,13 @@ export function CreateAgentModal({ onClose, initialMission = "" }: CreateAgentMo
   const [mission, setMission] = useState(initialMission);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [hasModels, setHasModels] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    listAvailableModels()
+      .then((models) => setHasModels(models.length > 0))
+      .catch(() => setHasModels(false));
+  }, []);
 
   const submit = useCallback(async () => {
     const m = mission.trim();
@@ -51,11 +60,18 @@ export function CreateAgentModal({ onClose, initialMission = "" }: CreateAgentMo
       maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={submit} disabled={busy || !mission.trim()}>
+        <Button size="sm" variant="primary" onClick={submit} disabled={busy || !mission.trim() || hasModels === false}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create agent"}
         </Button>
       </>}
     >
+      {hasModels === false && (
+        <CloudflareAIConnectNotice
+          returnTo={window.location.pathname}
+          message="Connect Cloudflare Workers AI before creating an agent."
+        />
+      )}
+
       <div className="space-y-1">
         <label htmlFor="agent-mission" className="text-xs font-medium p-text-2 block">Mission</label>
         <textarea
