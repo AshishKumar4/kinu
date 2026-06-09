@@ -33,7 +33,7 @@ import type { ExecutorProvider, ExecutorCapability } from './types.js';
  * an explicit `token` to the SDK so both sides agree.
  */
 export interface SandboxHandle {
-  exec(command: string, opts?: { cwd?: string; timeout?: number; signal?: AbortSignal }):
+  exec(command: string, opts?: { cwd?: string; timeout?: number }):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
   readFile(path: string): Promise<{ content?: string; exitCode?: number }>;
   writeFile(path: string, content: string): Promise<unknown>;
@@ -258,11 +258,10 @@ export function createSandboxExecutor(
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the sandbox container.',
-      execute: async (command: unknown, context?: unknown): Promise<string> => {
+      execute: async (command: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
-        const signal = readAbortSignal(context);
         try {
-          const res = await withRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000, signal })));
+          const res = await withRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000 })));
           return normalize(res);
         } catch (err) {
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
@@ -564,14 +563,4 @@ declare namespace sandbox {
       }
     },
   };
-}
-
-function readAbortSignal(context: unknown): AbortSignal | undefined {
-  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
-  const signal = (context as { signal?: unknown }).signal;
-  return isAbortSignal(signal) ? signal : undefined;
-}
-
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return typeof value === 'object' && value !== null && 'aborted' in value && 'addEventListener' in value;
 }

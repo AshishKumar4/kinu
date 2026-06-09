@@ -34,6 +34,7 @@ import {
   type AuthIdentity,
 } from "./auth/session.js";
 import { d1BookmarkCookie } from "./auth/d1-store.js";
+import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
 
 /** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
  *  the only `/api/agents/<name>/...` route that bypasses browser OAuth (it has
@@ -78,29 +79,18 @@ function authError(request: Request, e: AuthError): Response {
 }
 
 /** Verify the caller owns the agent named in the URL. Returns 404 if the
- *  agent isn't in this user's registry. We auto-register on first POST so
- *  agent creation works, but other routes require it to already exist. */
+ *  agent isn't in this user's registry; creation must go through the explicit
+ *  user/CLI create APIs so websocket probes cannot register agents. */
 async function ensureAgentOwnership(
   env: Env,
   identity: AuthIdentity,
   agentName: string,
-  request: Request,
 ): Promise<Response | null> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
   if (!(await userDO.hasAgent(agentName))) {
-    // Auto-register on the FIRST chat-or-RPC call against an agent. Browsers
-    // that hit /agents/.../<name> for the first time get their agent recorded
-    // in UserDO without a separate registration step.
-    const ua = request.headers.get('user-agent') ?? '';
-    const looksInteractive = ua.toLowerCase().includes('mozilla')
-      || request.headers.get('upgrade')?.toLowerCase() === 'websocket';
-    if (looksInteractive) {
-      await userDO.registerAgent(agentName, agentName);
-    } else {
-      return new Response(JSON.stringify({ error: `Agent ${agentName} not in your registry. Create it via POST /api/user/agents first.` }), {
-        status: 404, headers: { 'content-type': 'application/json' },
-      });
-    }
+    return new Response(JSON.stringify({ error: `Agent ${agentName} not in your registry. Create it via POST /api/user/agents first.` }), {
+      status: 404, headers: { 'content-type': 'application/json' },
+    });
   }
   // Claim ownership on the orchestrator's own agent_identity. Idempotent;
   // throws if the agent is already owned by a different user — translate
@@ -131,6 +121,66 @@ function extractAgentName(pathname: string): string | null {
   m = pathname.match(/^\/mcp\/v1\/([^/]+)/);
   if (m) return decodeURIComponent(m[1]);
   return null;
+}
+
+async function authenticateCliAgentTicketRequest(
+  request: Request,
+  env: Env,
+): Promise<{ identity: AuthIdentity; request: Request } | Response | null> {
+  const url = new URL(request.url);
+  const agentName = extractOrchestratorAgentName(url.pathname);
+  const ticket = url.searchParams.get('ticket');
+  if (!agentName || !ticket) return null;
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+    return new Response(JSON.stringify({ error: 'CLI agent tickets are only valid for WebSocket connections.' }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  const userId = parseCliAgentConnectTicketUserId(ticket);
+  if (!userId) {
+    return new Response(JSON.stringify({ error: 'Invalid CLI agent connect ticket.' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  try {
+    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+    const verified = await userDO.verifyCliAgentConnectTicket(ticket, {
+      userId,
+      agentClass: 'orchestrator-agent',
+      agentName,
+      capability: 'agent.websocket',
+    });
+    if (!verified.ok || !verified.user) {
+      return new Response(JSON.stringify({ error: verified.error ?? 'Invalid CLI agent connect ticket.' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    url.searchParams.delete('ticket');
+    return {
+      identity: {
+        userId: verified.user.id,
+        email: verified.user.email,
+        displayName: verified.user.displayName,
+        sub: 'cli',
+        provider: 'cli',
+        authTime: Date.now(),
+      },
+      request: new Request(url.toString(), request),
+    };
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+}
+
+function extractOrchestratorAgentName(pathname: string): string | null {
+  const match = pathname.match(/^\/agents\/orchestrator-agent\/([^/]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 export default {
@@ -179,30 +229,38 @@ export default {
 
     // 8. Auth gate. Everything below requires an authenticated identity.
     let identity: AuthIdentity;
-    try { identity = await authenticateRequest(request, env); }
-    catch (e) {
-      if (e instanceof AuthError) return authError(request, e);
-      return new Response(JSON.stringify({ error: (e as Error).message }), {
-        status: 500, headers: { 'content-type': 'application/json' },
-      });
+    let authenticatedRequest = request;
+    const cliAgentTicket = await authenticateCliAgentTicketRequest(request, env);
+    if (cliAgentTicket instanceof Response) return cliAgentTicket;
+    if (cliAgentTicket) {
+      identity = cliAgentTicket.identity;
+      authenticatedRequest = cliAgentTicket.request;
+    } else {
+      try { identity = await authenticateRequest(request, env); }
+      catch (e) {
+        if (e instanceof AuthError) return authError(request, e);
+        return new Response(JSON.stringify({ error: (e as Error).message }), {
+          status: 500, headers: { 'content-type': 'application/json' },
+        });
+      }
     }
 
-    const nimbusResp = await handleNimbusPreviewRequest(request, env, identity.userId);
+    const nimbusResp = await handleNimbusPreviewRequest(authenticatedRequest, env, identity.userId);
     if (nimbusResp) return withD1Bookmark(nimbusResp, identity);
 
     // 9. /api/user/* — user-scoped routes.
-    const userResp = await handleUserRequest(request, env, identity);
+    const userResp = await handleUserRequest(authenticatedRequest, env, identity);
     if (userResp) return withD1Bookmark(userResp, identity);
 
     // 10. Per-agent routes — verify ownership.
     const agentName = extractAgentName(url.pathname);
     if (agentName) {
-      const denial = await ensureAgentOwnership(env, identity, agentName, request);
+      const denial = await ensureAgentOwnership(env, identity, agentName);
       if (denial) return withD1Bookmark(denial, identity);
       // Inject the userId so downstream handlers can resolve UserDO without
       // re-running auth. Worker → DO requests preserve headers.
-      const reqWithId = new Request(request, {
-        headers: appendIdentityHeaders(request.headers, identity),
+      const reqWithId = new Request(authenticatedRequest, {
+        headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
       });
 
       const runEventsResp = await handleRunEventsRequest(reqWithId, env);

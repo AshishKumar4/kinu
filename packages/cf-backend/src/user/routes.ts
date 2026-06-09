@@ -29,11 +29,10 @@
  *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
 import type { AuthIdentity } from '../auth/session.js';
-import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from './user-do.js';
-import { renderSoulMarkdown } from '@proteus/core';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, listAvailableModels, type ModelMenuEntry } from './available-models.js';
+import { listAvailableModels } from './available-models.js';
+import { createCloudAgentForUser } from './agent-create.js';
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -85,19 +84,14 @@ export async function handleUserRequest(
   if (path === '/agents' && method === 'POST') {
     const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
     if (!body) return err(400, 'Body must be JSON');
-    if (typeof body.name !== 'string' || !body.name) return err(400, 'name required');
-    const models = await listAvailableModels(env, identity.userId);
-    const model = pickInitialModel(await stub.getConfig('default_model'), models);
-    if (!model) {
-      return err(409, 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the agent again.');
-    }
-    // displayName is optional — the agent derives a provisional title from its
-    // mission (purpose) and AI-titles itself on the first turn.
+    if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
     try {
-      const entry = await stub.registerAgent(body.name, body.displayName, body.purpose);
-      await initializeOrchestrator(env, identity.userId, body.name, body.purpose, model);
+      const entry = await createCloudAgentForUser(env, identity.userId, stub, body);
       return json(entry, { status: 201 });
-    } catch (e) { return err(400, (e as Error).message); }
+    } catch (e) {
+      const message = (e as Error).message;
+      return err(message.startsWith('Cloudflare Workers AI is not connected') ? 409 : 400, message);
+    }
   }
   const agentTouchMatch = path.match(/^\/agents\/([^/]+)\/touch$/);
   if (agentTouchMatch && method === 'POST') {
@@ -106,7 +100,7 @@ export async function handleUserRequest(
   }
   const agentMatch = path.match(/^\/agents\/([^/]+)$/);
   if (agentMatch && method === 'DELETE') {
-    try { await stub.removeAgent(decodeURIComponent(agentMatch[1])); return json({ ok: true }); }
+    try { await stub.removeAgent(decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
 
@@ -250,26 +244,4 @@ function publicOrigin(request: Request): string {
 
 async function safeJson<T = unknown>(request: Request): Promise<T | null> {
   try { return (await request.json()) as T; } catch { return null; }
-}
-
-async function initializeOrchestrator(
-  env: Env,
-  userId: string,
-  agentName: string,
-  mission?: string,
-  model?: string,
-): Promise<void> {
-  const orchestrator = env.OrchestratorAgent.get(
-    env.OrchestratorAgent.idFromName(agentName),
-  ) as DurableObjectStub<OrchestratorAgent>;
-  await orchestrator.claimOwner(userId);
-  await orchestrator.setSoul(renderSoulMarkdown({ name: agentName, mission }));
-  if (model) await orchestrator.setModel(model);
-}
-
-function pickInitialModel(defaultModel: string | null, models: ModelMenuEntry[]): string | null {
-  if (defaultModel && models.some((model) => model.spec === defaultModel)) return defaultModel;
-  return models.find((model) => model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC)?.spec
-    ?? models[0]?.spec
-    ?? null;
 }

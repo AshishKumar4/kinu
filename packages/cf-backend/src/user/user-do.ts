@@ -62,6 +62,8 @@ import {
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
+const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
+const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
 /** Stable per-user OAuth callback path. The full URL is built from the
  *  request origin at add-time so it works in any environment without
@@ -116,6 +118,15 @@ export interface CliTokenVerification {
   error?: string;
 }
 
+export interface CliAgentConnectTicketVerification {
+  ok: boolean;
+  user?: { id: string; email: string; displayName: string | null };
+  tokenHash?: string;
+  expiresAt?: number;
+  capabilities?: string[];
+  error?: string;
+}
+
 async function sha256Hex(input: string): Promise<string> {
   const bytes = new TextEncoder().encode(input);
   const hash = await crypto.subtle.digest('SHA-256', bytes);
@@ -124,6 +135,11 @@ async function sha256Hex(input: string): Promise<string> {
 
 function parseCliTokenUserId(token: string): string | null {
   const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
+  return match?.[1] ?? null;
+}
+
+export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
+  const match = /^pat_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(ticket);
   return match?.[1] ?? null;
 }
 
@@ -137,6 +153,15 @@ function randomToken(bytes: number): string {
   let bin = '';
   for (const b of data) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function parseCapabilityList(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export class UserDO extends Agent<Env> {
@@ -255,8 +280,9 @@ export class UserDO extends Agent<Env> {
   }
 
   @callable()
-  async removeAgent(name: string): Promise<void> {
+  async removeAgent(name: string, ownerUserId: string): Promise<void> {
     validateAgentName(name);
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
     // Tear down the agent's Durable Object (storage, alarm, sandbox) BEFORE
     // dropping it from the registry — otherwise the DO's SQLite (conversation,
     // model, scaffold, triggers) survives and a same-name recreate inherits
@@ -264,7 +290,7 @@ export class UserDO extends Agent<Env> {
     // removed even if teardown fails.
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
-      await stub.destroyAgent();
+      await stub.destroyAgent(ownerUserId);
     } catch (err) {
       if (!(err instanceof Error) || err.message !== 'destroyed') {
         console.warn('[proteus] removeAgent: agent teardown failed:', err instanceof Error ? err.message : err);
@@ -353,6 +379,105 @@ export class UserDO extends Agent<Env> {
     this.ensureInit();
     this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
     return { ok: true };
+  }
+
+  async issueCliAgentConnectTicket(input: {
+    userId: string;
+    agentClass: 'orchestrator-agent';
+    agentName: string;
+    cliTokenHash: string;
+    capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
+  }): Promise<{ ok: boolean; ticket?: string; expiresAt?: number; error?: string }> {
+    this.ensureInit();
+    if (!/^[a-f0-9]{32}$/.test(input.userId)) return { ok: false, error: 'invalid user id' };
+    if (input.agentClass !== 'orchestrator-agent') return { ok: false, error: 'invalid agent class' };
+    if (!/^[a-f0-9]{64}$/.test(input.cliTokenHash)) return { ok: false, error: 'invalid token hash' };
+    validateAgentName(input.agentName);
+    if (!(await this.hasAgent(input.agentName))) return { ok: false, error: 'agent not found' };
+
+    const now = Date.now();
+    this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
+    const activeToken = this.sqlx<{ expires_at: number }>(
+      `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
+      input.cliTokenHash,
+    )[0];
+    if (!activeToken || activeToken.expires_at <= now) return { ok: false, error: 'invalid CLI token' };
+
+    const capabilities = input.capabilities?.length ? input.capabilities : [CLI_AGENT_WEBSOCKET_CAPABILITY];
+    if (!capabilities.includes(CLI_AGENT_WEBSOCKET_CAPABILITY)) return { ok: false, error: 'missing websocket capability' };
+    const ticket = `pat_${input.userId}_${randomToken(32)}`;
+    const expiresAt = now + CLI_AGENT_CONNECT_TICKET_TTL_MS;
+    this.sqlx(
+      `INSERT INTO cli_agent_connect_tickets
+         (ticket_hash, user_id, agent_class, agent_name, cli_token_hash, capabilities, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      await sha256Hex(ticket),
+      input.userId,
+      input.agentClass,
+      input.agentName,
+      input.cliTokenHash,
+      JSON.stringify(capabilities),
+      now,
+      expiresAt,
+    );
+    return { ok: true, ticket, expiresAt };
+  }
+
+  async verifyCliAgentConnectTicket(
+    ticket: string,
+    expected: {
+      userId: string;
+      agentClass: 'orchestrator-agent';
+      agentName: string;
+      capability: typeof CLI_AGENT_WEBSOCKET_CAPABILITY;
+    },
+  ): Promise<CliAgentConnectTicketVerification> {
+    this.ensureInit();
+    const hintedUserId = parseCliAgentConnectTicketUserId(ticket);
+    if (!hintedUserId) return { ok: false, error: 'malformed ticket' };
+    if (hintedUserId !== expected.userId) return { ok: false, error: 'wrong user' };
+    validateAgentName(expected.agentName);
+
+    const now = Date.now();
+    this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
+    const ticketHash = await sha256Hex(ticket);
+    const row = this.sqlx<{
+      user_id: string;
+      agent_class: string;
+      agent_name: string;
+      cli_token_hash: string;
+      capabilities: string;
+      expires_at: number;
+      used_at: number | null;
+    }>(
+      `SELECT user_id, agent_class, agent_name, cli_token_hash, capabilities, expires_at, used_at
+         FROM cli_agent_connect_tickets
+        WHERE ticket_hash = ? LIMIT 1`,
+      ticketHash,
+    )[0];
+    if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false, error: 'invalid ticket' };
+    if (row.user_id !== expected.userId) return { ok: false, error: 'wrong user' };
+    if (row.agent_class !== expected.agentClass) return { ok: false, error: 'wrong agent class' };
+    if (row.agent_name !== expected.agentName) return { ok: false, error: 'wrong agent' };
+    const capabilities = parseCapabilityList(row.capabilities);
+    if (!capabilities.includes(expected.capability)) return { ok: false, error: 'missing capability' };
+
+    this.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
+    if (!(await this.hasAgent(expected.agentName))) return { ok: false, error: 'agent not found' };
+    const activeToken = this.sqlx<{ expires_at: number }>(
+      `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
+      row.cli_token_hash,
+    )[0];
+    if (!activeToken || activeToken.expires_at <= now) return { ok: false, error: 'invalid CLI token' };
+    const profile = await this.getProfile();
+    if (!profile) return { ok: false, error: 'profile missing' };
+    return {
+      ok: true,
+      user: { id: expected.userId, email: profile.email, displayName: profile.displayName },
+      tokenHash: row.cli_token_hash,
+      expiresAt: row.expires_at,
+      capabilities,
+    };
   }
 
   @callable()

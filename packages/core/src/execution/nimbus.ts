@@ -14,7 +14,6 @@ export interface NimbusExecOptions {
   env?: Record<string, string>;
   timeoutMs?: number;
   stdin?: string;
-  signal?: AbortSignal;
 }
 
 type NimbusRunCodeOptions = NimbusExecOptions & {
@@ -120,11 +119,10 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the Nimbus development environment.',
-      execute: async (command: unknown, context?: unknown): Promise<string> => {
+      execute: async (command: unknown): Promise<string> => {
         if (!box) return NOT_CONFIGURED;
-        const signal = readAbortSignal(context);
         try {
-          return normalizeExec(await touch(() => box.exec(String(command), signal ? { signal } : undefined)));
+          return normalizeExec(await touch(() => box.exec(String(command))));
         } catch (err) {
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -403,12 +401,4 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       })).filter((p) => p.url);
     },
   };
-}
-
-function readAbortSignal(context: unknown): AbortSignal | undefined {
-  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
-  const signal = (context as { signal?: unknown }).signal;
-  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
-    ? signal as AbortSignal
-    : undefined;
 }

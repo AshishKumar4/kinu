@@ -162,6 +162,23 @@ export function initUserTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
 
+  // Short-lived, single-use WebSocket tickets for CLI clients connecting to
+  // the real agent DO chat route. Stores only the hash of the raw ticket.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS cli_agent_connect_tickets (
+      ticket_hash    TEXT PRIMARY KEY,
+      user_id        TEXT NOT NULL,
+      agent_class    TEXT NOT NULL,
+      agent_name     TEXT NOT NULL,
+      cli_token_hash TEXT NOT NULL,
+      capabilities   TEXT NOT NULL,
+      created_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      expires_at     INTEGER NOT NULL,
+      used_at        INTEGER
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at, used_at)`);
+
   initProductChangeTables(sql);
 }
 

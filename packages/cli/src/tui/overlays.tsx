@@ -17,7 +17,7 @@ interface CommandHintProps {
 
 export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   if (commands.length === 0) return null;
-  const paletteWidth = clamp(Math.floor(terminal.width * 0.46), 44, 74);
+  const paletteWidth = boundedPaletteWidth(terminal, 0.46, 44, 74);
   const paletteHeight = Math.min(commands.length + 3, 11);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'lower');
   const maxCommandRows = Math.max(1, paletteHeight - 5);
@@ -25,6 +25,7 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   const visibleCommands = hiddenCount > 0
     ? commands.slice(0, Math.max(1, maxCommandRows - 1))
     : commands;
+  const innerWidth = Math.max(1, paletteWidth - 4);
   const nameWidth = Math.min(
     18,
     Math.max(8, ...visibleCommands.map((command) => command.name.length)),
@@ -38,23 +39,18 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
       top={position.top}
       dim={false}
     >
-      <PaletteLine>
-        <span fg={tuiColors.muted}>Type to filter · Enter runs a completed command</span>
-      </PaletteLine>
+      <PaletteLine text="Type to filter · Enter runs a completed command" width={innerWidth} color={tuiColors.muted} />
       {visibleCommands.map((command) => (
-        <box key={command.name} style={{ height: 1, flexShrink: 0, flexDirection: 'row' }}>
-          <text style={{ width: nameWidth + 2 }}>
-            <span fg={tuiColors.accent}>{command.name.padEnd(nameWidth)}</span>
-          </text>
-          <text style={{ flexGrow: 1 }}>
-            <span fg={tuiColors.muted}>{clipText(command.description, Math.max(12, paletteWidth - nameWidth - 6))}</span>
-          </text>
-        </box>
+        <PaletteLine
+          key={command.name}
+          text={`${command.name.padEnd(nameWidth)}  ${command.description}`}
+          width={innerWidth}
+          color={tuiColors.text}
+          accentPrefix={nameWidth}
+        />
       ))}
       {hiddenCount > 0 && (
-        <PaletteLine>
-          <span fg={tuiColors.muted}>… {hiddenCount + 1} more commands. Keep typing to filter.</span>
-        </PaletteLine>
+        <PaletteLine text={`… ${hiddenCount + 1} more commands. Keep typing to filter.`} width={innerWidth} color={tuiColors.muted} />
       )}
     </PaletteFrame>
   );
@@ -70,13 +66,17 @@ interface ModelPickerProps {
 }
 
 export function ModelPickerOverlay({ models, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
-  const paletteWidth = clamp(Math.floor(terminal.width * 0.52), 56, 84);
+  const paletteWidth = boundedPaletteWidth(terminal, 0.52, 56, 84);
+  const innerWidth = Math.max(1, paletteWidth - 4);
   const options: SelectOption[] = models.map((model) => ({
-    name: clipText(`${model.spec === currentSpec ? '✓ ' : '  '}${model.label}`, Math.max(20, paletteWidth - 6)),
-    description: clipText([
+    name: clipText([
+      model.spec === currentSpec ? '✓' : ' ',
+      model.label,
+      model.provider,
       model.spec,
       model.capabilities?.length ? model.capabilities.join(', ') : '',
-    ].filter(Boolean).join(' · '), Math.max(20, paletteWidth - 6)),
+    ].filter(Boolean).join(' · '), innerWidth),
+    description: '',
     value: model,
   }));
   const paletteHeight = Math.min(Math.max(options.length + 6, 11), Math.max(11, terminal.height - 6), 22);
@@ -92,21 +92,19 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
       top={position.top}
       dim={true}
     >
-      <PaletteLine>
-        <span fg={tuiColors.muted}>↑/↓ move · Enter select · Esc close</span>
-      </PaletteLine>
+      <PaletteLine text="↑/↓ move · Enter select · Esc close" width={innerWidth} color={tuiColors.muted} />
       {loading ? (
-        <PaletteLine><span fg={tuiColors.accent}>Loading models…</span></PaletteLine>
+        <PaletteLine text="Loading models…" width={innerWidth} color={tuiColors.accent} />
       ) : error ? (
-        <PaletteLine><span fg={tuiColors.red}>{error}</span></PaletteLine>
+        <PaletteLine text={error} width={innerWidth} color={tuiColors.red} />
       ) : options.length === 0 ? (
-        <PaletteLine><span fg={tuiColors.muted}>No connected model providers. Run proteus provider connect.</span></PaletteLine>
+        <PaletteLine text="No connected model providers. Run proteus provider connect." width={innerWidth} color={tuiColors.muted} />
       ) : (
         <select
           focused={true}
           options={options}
           selectedIndex={selectedIndex}
-          showDescription={true}
+          showDescription={false}
           showScrollIndicator={true}
           wrapSelection={true}
           onSelect={(_index, option) => {
@@ -131,10 +129,47 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
   );
 }
 
-function PaletteLine({ children }: { children: ReactNode }) {
+interface DeviceConsentOverlayProps {
+  consent: {
+    deviceLabel: string;
+    method: string;
+    command: string;
+  };
+  terminal: OverlayGeometry;
+}
+
+export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlayProps) {
+  const paletteWidth = boundedPaletteWidth(terminal, 0.52, 52, 86);
+  const paletteHeight = 9;
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  return (
+    <PaletteFrame
+      title="Use your PC?"
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text={`Agent wants to use ${consent.deviceLabel} for a local action.`} width={innerWidth} color={tuiColors.text} />
+      <PaletteLine text={`Method: ${consent.method}`} width={innerWidth} color={tuiColors.muted} />
+      <PaletteLine text={`Command: ${consent.command || '(command)'}`} width={innerWidth} color={tuiColors.textStrong} />
+      <PaletteLine text="O approve once · A always allow this agent · N deny" width={innerWidth} color={tuiColors.accentStrong} />
+    </PaletteFrame>
+  );
+}
+
+function PaletteLine(props: { text: string; width: number; color: string; accentPrefix?: number }) {
+  const text = clipText(props.text, props.width);
+  const prefix = props.accentPrefix ? text.slice(0, props.accentPrefix) : '';
+  const suffix = props.accentPrefix ? text.slice(props.accentPrefix) : text;
   return (
     <box style={{ height: 1, flexShrink: 0 }}>
-      <text>{children}</text>
+      <text>
+        {prefix ? <span fg={tuiColors.accent}>{prefix}</span> : null}
+        <span fg={props.color}>{suffix}</span>
+      </text>
     </box>
   );
 }
@@ -216,6 +251,11 @@ function centeredPosition(terminal: OverlayGeometry, width: number, height: numb
     : terminal.height - height - 5;
   const top = Math.max(1, Math.min(rawTop, Math.max(1, terminal.height - height - 1)));
   return { left, top };
+}
+
+function boundedPaletteWidth(terminal: OverlayGeometry, fraction: number, min: number, max: number): number {
+  const available = Math.max(1, terminal.width - 2);
+  return clamp(Math.floor(terminal.width * fraction), Math.min(min, available), Math.min(max, available));
 }
 
 function clamp(value: number, min: number, max: number) {

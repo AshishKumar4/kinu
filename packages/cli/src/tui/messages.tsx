@@ -16,22 +16,41 @@ export interface DisplayMessage {
 
 function UserMessage({ content }: { content: string }) {
   return (
-    <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text>
-        <strong fg="#60a5fa">You ›</strong>{' '}
-        <span fg="#e2e8f0">{content}</span>
-      </text>
+    <box flexDirection="row" justifyContent="flex-end" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box
+        flexDirection="column"
+        style={{
+          maxWidth: '82%',
+          backgroundColor: '#18213a',
+          border: true,
+          borderStyle: 'single',
+          borderColor: '#273453',
+          paddingLeft: 1,
+          paddingRight: 1,
+          paddingTop: 0,
+          paddingBottom: 0,
+        }}
+      >
+        <text><strong fg="#60a5fa">You</strong></text>
+        <text><span fg="#e2e8f0">{content}</span></text>
+      </box>
     </box>
   );
 }
 
 function AssistantMessage({ content }: { content: string }) {
   return (
-    <box flexDirection="column" style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text>
-        <strong fg="#c4b5fd">Agent ›</strong>{' '}
-      </text>
-      <box style={{ paddingLeft: 2 }}>
+    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box
+        flexDirection="column"
+        style={{
+          width: '92%',
+          backgroundColor: tuiColors.bg,
+          paddingLeft: 1,
+          paddingRight: 1,
+        }}
+      >
+        <text><strong fg="#c4b5fd">Agent</strong></text>
         <markdown
           width="100%"
           syntaxStyle={markdownSyntax}
@@ -49,11 +68,17 @@ function AssistantMessage({ content }: { content: string }) {
 
 function StreamingMessage({ content }: { content: string }) {
   return (
-    <box flexDirection="column" style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text>
-        <strong fg="#c4b5fd">Agent ›</strong>{' '}
-      </text>
-      <box style={{ paddingLeft: 2 }}>
+    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box
+        flexDirection="column"
+        style={{
+          width: '92%',
+          backgroundColor: tuiColors.bg,
+          paddingLeft: 1,
+          paddingRight: 1,
+        }}
+      >
+        <text><strong fg="#c4b5fd">Agent</strong></text>
         <markdown
           width="100%"
           syntaxStyle={markdownSyntax}
@@ -64,8 +89,8 @@ function StreamingMessage({ content }: { content: string }) {
           fg={tuiColors.text}
           bg={tuiColors.bg}
         />
+        <text><span fg="#7c3aed">▌</span></text>
       </box>
-      <text><span fg="#7c3aed">  ▌</span></text>
     </box>
   );
 }
@@ -140,7 +165,7 @@ export function MessageList({ messages, streamingText }: Props) {
             return null;
         }
       })}
-      {streamingText !== null && <StreamingMessage content={streamingText} />}
+      {streamingText?.trim() ? <StreamingMessage content={streamingText} /> : null}
     </>
   );
 }

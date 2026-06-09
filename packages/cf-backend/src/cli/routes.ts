@@ -3,16 +3,15 @@ import { AuthError, authenticateRequest } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from '../user/user-do.js';
-import { renderSoulMarkdown } from '@proteus/core';
 import { approveCliAuth, inspectCliAuth, pollCliAuth, startCliAuth } from './auth-store.js';
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
+import { createCloudAgentForUser } from '../user/agent-create.js';
 
 interface CliIdentity {
   userId: string;
   email: string;
   displayName: string | null;
-  token: string;
   tokenHash: string;
   userDO: DurableObjectStub<UserDO>;
 }
@@ -104,85 +103,31 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
 
   if (path === '/agents' && method === 'POST') {
     const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
-    if (!body?.name) return err(400, 'name required');
+    if (!body?.name?.trim() && !body?.purpose?.trim()) return err(400, 'purpose required');
     try {
-      const entry = await cli.userDO.registerAgent(body.name, body.displayName, body.purpose);
-      const orchestrator = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(body.name)) as DurableObjectStub<OrchestratorAgent>;
-      await orchestrator.claimOwner(cli.userId);
-      await orchestrator.setSoul(renderSoulMarkdown({ name: body.displayName || body.name, mission: body.purpose }));
+      const entry = await createCloudAgentForUser(env, cli.userId, cli.userDO, body);
       return json(entry, { status: 201 });
     } catch (e) {
-      return err(400, (e as Error).message);
+      const message = (e as Error).message;
+      return err(message.startsWith('Cloudflare Workers AI is not connected') ? 409 : 400, message);
     }
   }
 
-  const turnMatch = path.match(/^\/agents\/([^/]+)\/turn$/);
-  if (turnMatch && method === 'POST') {
-    const name = decodeURIComponent(turnMatch[1]);
+  const connectTicketMatch = path.match(/^\/agents\/([^/]+)\/connect-ticket$/);
+  if (connectTicketMatch && method === 'POST') {
+    const name = decodeURIComponent(connectTicketMatch[1]);
     if (!(await cli.userDO.hasAgent(name))) return err(404, `Agent ${name} not found.`);
-    const body = await safeJson<{ prompt?: string; cwd?: string }>(request);
-    if (!body?.prompt) return err(400, 'prompt required');
-    const orchestrator = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(name)) as unknown as {
-      claimOwner(userId: string): Promise<unknown>;
-      cliTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<unknown>;
-    };
-    try {
-      await orchestrator.claimOwner(cli.userId);
-      return json(await orchestrator.cliTurn({ prompt: body.prompt, cwd: body.cwd, userId: cli.userId }));
-    } catch (e) {
-      return err(500, (e as Error).message);
-    }
-  }
-
-  const localTurnPrepareMatch = path.match(/^\/agents\/([^/]+)\/local-turn\/prepare$/);
-  if (localTurnPrepareMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(localTurnPrepareMatch[1]));
-    if (agent instanceof Response) return agent;
-    const body = await safeJson<{ prompt?: string; cwd?: string }>(request);
-    if (!body?.prompt) return err(400, 'prompt required');
-    try {
-      return json(await agent.cliPrepareLocalTurn({ prompt: body.prompt, cwd: body.cwd, userId: cli.userId }));
-    } catch (e) {
-      return err(500, (e as Error).message);
-    }
-  }
-
-  const localTurnToolMatch = path.match(/^\/agents\/([^/]+)\/local-turn\/tool$/);
-  if (localTurnToolMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(localTurnToolMatch[1]));
-    if (agent instanceof Response) return agent;
-    const body = await safeJson<{ turnId?: string; toolName?: string; args?: unknown }>(request);
-    if (!body?.turnId || !body.toolName) return err(400, 'turnId and toolName required');
-    return json(await agent.cliInvokeLocalTool({ turnId: body.turnId, toolName: body.toolName, args: body.args }));
-  }
-
-  const localTurnCommitMatch = path.match(/^\/agents\/([^/]+)\/local-turn\/commit$/);
-  if (localTurnCommitMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(localTurnCommitMatch[1]));
-    if (agent instanceof Response) return agent;
-    const body = await safeJson<{
-      turnId?: string;
-      prompt?: string;
-      text?: string;
-      toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
-      steps?: number;
-      hadError?: boolean;
-      error?: string;
-    }>(request);
-    if (!body?.turnId || !body.prompt) return err(400, 'turnId and prompt required');
-    try {
-      return json(await agent.cliCommitLocalTurn({
-        turnId: body.turnId,
-        prompt: body.prompt,
-        text: body.text,
-        toolCalls: body.toolCalls,
-        steps: body.steps,
-        hadError: body.hadError,
-        error: body.error,
-      }));
-    } catch (e) {
-      return err(500, (e as Error).message);
-    }
+    const issued = await cli.userDO.issueCliAgentConnectTicket({
+      userId: cli.userId,
+      agentClass: 'orchestrator-agent',
+      agentName: name,
+      cliTokenHash: cli.tokenHash,
+      capabilities: ['agent.websocket'],
+    });
+    if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');
+    return json({ ticket: issued.ticket, expiresAt: issued.expiresAt }, {
+      headers: { 'cache-control': 'no-store' },
+    });
   }
 
   const statusMatch = path.match(/^\/agents\/([^/]+)\/status$/);
@@ -197,6 +142,31 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
     const agent = await cliAgent(env, cli, decodeURIComponent(toolsMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getToolDescriptions());
+  }
+
+  const messagesMatch = path.match(/^\/agents\/([^/]+)\/messages$/);
+  if (messagesMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(messagesMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.getChatHistory(boundedLimit(url, 100)));
+  }
+
+  const consentsMatch = path.match(/^\/agents\/([^/]+)\/consents$/);
+  if (consentsMatch && method === 'GET') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(consentsMatch[1]));
+    if (agent instanceof Response) return agent;
+    return json(await agent.listPendingConsents());
+  }
+
+  const consentResolveMatch = path.match(/^\/agents\/([^/]+)\/consents\/([^/]+)$/);
+  if (consentResolveMatch && method === 'POST') {
+    const agent = await cliAgent(env, cli, decodeURIComponent(consentResolveMatch[1]));
+    if (agent instanceof Response) return agent;
+    const body = await safeJson<{ decision?: 'once' | 'always' | 'deny' }>(request);
+    if (body?.decision !== 'once' && body?.decision !== 'always' && body?.decision !== 'deny') {
+      return err(400, 'decision must be once, always, or deny');
+    }
+    return json(await agent.resolveDeviceConsent(decodeURIComponent(consentResolveMatch[2]), body.decision));
   }
 
   const modelMatch = path.match(/^\/agents\/([^/]+)\/model$/);
@@ -408,19 +378,11 @@ interface CliAgentRpc {
   claimOwner(userId: string): Promise<unknown>;
   getAgentStatus(): Promise<unknown>;
   getToolDescriptions(): Promise<unknown>;
+  getChatHistory(limit?: number): Promise<unknown>;
+  listPendingConsents(): Promise<unknown>;
+  resolveDeviceConsent(consentId: string, decision: 'once' | 'always' | 'deny'): Promise<unknown>;
   getStoredModelSpec(): Promise<unknown>;
   setModel(spec: string): Promise<unknown>;
-  cliPrepareLocalTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<unknown>;
-  cliInvokeLocalTool(input: { turnId: string; toolName: string; args?: unknown }): Promise<unknown>;
-  cliCommitLocalTurn(input: {
-    turnId: string;
-    prompt: string;
-    text?: string;
-    toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
-    steps?: number;
-    hadError?: boolean;
-    error?: string;
-  }): Promise<unknown>;
   listTriggers(): Promise<unknown>;
   createDurableWebhook(opts: {
     label: string;
@@ -492,7 +454,6 @@ async function authenticateCli(request: Request, env: Env): Promise<CliIdentity 
     userId: verified.user.id,
     email: verified.user.email,
     displayName: verified.user.displayName,
-    token,
     tokenHash: verified.tokenHash,
     userDO,
   };

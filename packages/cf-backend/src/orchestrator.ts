@@ -44,7 +44,6 @@ import type {
 } from "@cloudflare/think";
 import {
   EvolutionEngine,
-  runChat,
   bootstrapScaffold,
   initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
   resolveMaxSteps,
@@ -136,43 +135,6 @@ import {
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
-interface CliLocalToolDescriptor {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface CliLocalTurnPrepareResult {
-  turnId: string;
-  modelSpec: string | null;
-  system: string;
-  history: ModelMessage[];
-  tools: CliLocalToolDescriptor[];
-  maxSteps: number;
-}
-
-interface CliLocalTurnToolResult {
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-}
-
-function serializeCliLocalTools(tools: ToolSet): CliLocalToolDescriptor[] {
-  return Object.entries(tools)
-    .filter(([, descriptor]) => typeof descriptor?.execute === 'function')
-    .map(([name, descriptor]) => ({
-      name,
-      description: typeof descriptor.description === 'string' ? descriptor.description : name,
-      inputSchema: readToolJsonSchema(descriptor),
-    }));
-}
-
-function readToolJsonSchema(descriptor: ToolSet[string]): Record<string, unknown> {
-  const inputSchema = (descriptor as { inputSchema?: { jsonSchema?: unknown } }).inputSchema;
-  const json = inputSchema?.jsonSchema;
-  return isRecord(json) ? json : { type: 'object', properties: {} };
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -195,6 +157,32 @@ function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
     return '';
   }
   return '';
+}
+
+function readCliCwd(body?: Record<string, unknown>): string | null {
+  const cwd = body?.cwd;
+  return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null;
+}
+
+function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
+  const prefix = `Current terminal working directory: ${cwd}\n\n`;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'user') continue;
+    const next = [...messages];
+    next[i] = {
+      ...message,
+      content: prefixCliCwdContent(message.content, prefix) as ModelMessage['content'],
+    } as ModelMessage;
+    return next;
+  }
+  return [...messages];
+}
+
+function prefixCliCwdContent(content: unknown, prefix: string): unknown {
+  if (typeof content === 'string') return `${prefix}${content}`;
+  if (Array.isArray(content)) return [{ type: 'text', text: prefix }, ...content];
+  return prefix;
 }
 
 function executorOutputIsError(output: string): boolean {
@@ -857,299 +845,6 @@ export class OrchestratorAgent extends Think<Env> {
     return { owner: current };
   }
 
-  @callable()
-  async cliPrepareLocalTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<CliLocalTurnPrepareResult> {
-    const prompt = (input.prompt ?? '').trim();
-    if (!prompt) throw new Error('prompt required');
-    await this.claimOwner(input.userId);
-    this.ensureSchema();
-
-    this.acc.reset(Date.now());
-    this._executorsUsedThisTurn.clear();
-    this._turnInvokedSkills.clear();
-    this._turnActiveSkills = null;
-    this._turnT0 = performance.now();
-    this._inFlight = true;
-    this._cliCwd = input.cwd || null;
-    this._currentRunId = `run-${nanoid()}`;
-
-    const userText = input.cwd
-      ? `Current terminal working directory: ${input.cwd}\n\n${prompt}`
-      : prompt;
-
-    try {
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'run_start',
-        agentId: this.name,
-        caused_by: 'cli_local_model',
-        userMessage: prompt.slice(0, 500),
-      });
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'turn_start',
-        turnIndex: this.orch.sessionTurnIndex,
-      });
-    } catch (err) {
-      console.warn('[proteus] event emit failed at cliPrepareLocalTurn:', err);
-    }
-
-    const historyRows = this.sql<{ role: string; content: string; created_at: number }>`
-      SELECT role, content, created_at FROM messages
-      WHERE session_id = ${'default'} AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC LIMIT 40`;
-    const history: ModelMessage[] = historyRows
-      .reverse()
-      .map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content }));
-    history.push({ role: 'user', content: userText });
-
-    return {
-      turnId: this._currentRunId,
-      modelSpec: this.getStoredModelId(),
-      system: this.getSystemPrompt(),
-      history,
-      tools: serializeCliLocalTools(this.getTools()),
-      maxSteps: resolveMaxSteps(),
-    };
-  }
-
-  @callable()
-  async cliInvokeLocalTool(input: { turnId: string; toolName: string; args?: unknown }): Promise<CliLocalTurnToolResult> {
-    if (!input.turnId || input.turnId !== this._currentRunId) {
-      return { ok: false, error: 'local turn is no longer active' };
-    }
-    const toolName = (input.toolName ?? '').trim();
-    const toolDef = this.getTools()[toolName];
-    if (!toolDef || typeof toolDef.execute !== 'function') {
-      return { ok: false, error: `tool not found: ${toolName}` };
-    }
-
-    const args = input.args && typeof input.args === 'object' && !Array.isArray(input.args)
-      ? input.args as Record<string, unknown>
-      : {};
-    const startedAt = Date.now();
-    try {
-      const result = await toolDef.execute(args as never, {
-        messages: [],
-        toolCallId: `cli-local-${nanoid()}`,
-      });
-      this.acc.recordToolCall({
-        toolName,
-        input: args,
-        success: true,
-        output: result,
-        durationMs: Date.now() - startedAt,
-      });
-      return { ok: true, result };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.acc.recordToolCall({
-        toolName,
-        input: args,
-        success: false,
-        error: message,
-        durationMs: Date.now() - startedAt,
-      });
-      return { ok: false, error: message };
-    }
-  }
-
-  @callable()
-  async cliCommitLocalTurn(input: {
-    turnId: string;
-    prompt: string;
-    text?: string;
-    toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
-    steps?: number;
-    hadError?: boolean;
-    error?: string;
-  }): Promise<{
-    text: string;
-    toolCalls: Array<{ name: string; args: unknown; result?: string }>;
-    steps: number;
-  }> {
-    if (!input.turnId || input.turnId !== this._currentRunId) {
-      throw new Error('local turn is no longer active');
-    }
-
-    const prompt = (input.prompt ?? '').trim();
-    const text = input.text ?? '';
-    const steps = Math.max(0, Math.floor(input.steps ?? this.acc.stepCount));
-    if (input.hadError) this.acc.hadError = true;
-
-    const normalizedToolCalls = (input.toolCalls ?? []).map((tc) => ({
-      name: tc.name,
-      args: isRecord(tc.args) ? tc.args : { value: tc.args },
-      result: tc.result === undefined ? undefined : String(tc.result),
-    }));
-
-    try {
-      const userId = `cli-user-${nanoid()}`;
-      const assistantId = `cli-assistant-${nanoid()}`;
-      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-               VALUES (${userId}, ${'default'}, ${null}, ${'user'}, ${prompt}, ${Date.now()})`;
-      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-               VALUES (${assistantId}, ${'default'}, ${userId}, ${'assistant'}, ${text || input.error || ''}, ${Date.now()})`;
-
-      const completed: CompletedTurn = {
-        userMessage: prompt,
-        assistantResponse: text,
-        toolCalls: normalizedToolCalls.map((tc) => ({
-          name: tc.name,
-          args: tc.args,
-          result: tc.result ?? '',
-        })),
-        steps,
-        durationMs: Date.now() - this.acc.startedAt,
-        feedback: null,
-        hadError: this.acc.hadError,
-      };
-      this.orch.recordTurn(completed);
-      if (!this.acc.hadError) {
-        void this.runShadowEvalSampled(prompt, text);
-        void this.runSleepTimeCompute(prompt, text, completed.toolCalls);
-        void this.maybeGenerateTitle(prompt);
-        this.backupWorkspaceIfDue();
-        this.maybeRunAutoGepa();
-        void this.orch.drainPendingEvents();
-      }
-
-      try {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'turn_end',
-          turnIndex: this.orch.sessionTurnIndex,
-          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
-        });
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'run_end',
-          reason: this.acc.hadError ? 'error' : 'completed',
-        });
-      } catch { /* nop */ }
-
-      return { text, toolCalls: normalizedToolCalls, steps };
-    } finally {
-      this._inFlight = false;
-      this._cliCwd = null;
-    }
-  }
-
-  /** One-shot cloud CLI turn. The browser chat still uses Think's queued
-   *  WebSocket loop; this RPC gives `proteus run <agent> "task"` a blocking
-   *  HTTP path against the same Durable Object and durable state. */
-  @callable()
-  async cliTurn(input: { prompt: string; cwd?: string; userId: string }): Promise<{
-    text: string;
-    toolCalls: Array<{ name: string; args: unknown; result?: string }>;
-    steps: number;
-  }> {
-    const prompt = (input.prompt ?? '').trim();
-    if (!prompt) throw new Error('prompt required');
-    await this.claimOwner(input.userId);
-    this.ensureSchema();
-
-    this.acc.reset(Date.now());
-    this._executorsUsedThisTurn.clear();
-    this._turnInvokedSkills.clear();
-    this._turnActiveSkills = null;
-    this._turnT0 = performance.now();
-    this._inFlight = true;
-    this._cliCwd = input.cwd || null;
-    this._currentRunId = `run-${nanoid()}`;
-
-    const userText = input.cwd
-      ? `Current terminal working directory: ${input.cwd}\n\n${prompt}`
-      : prompt;
-    try {
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'run_start',
-        agentId: this.name,
-        caused_by: 'chat',
-        userMessage: prompt.slice(0, 500),
-      });
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'turn_start',
-        turnIndex: this.orch.sessionTurnIndex,
-      });
-    } catch (err) {
-      console.warn('[proteus] event emit failed at cliTurn:', err);
-    }
-
-    const historyRows = this.sql<{ role: string; content: string; created_at: number }>`
-      SELECT role, content, created_at FROM messages
-      WHERE session_id = ${'default'} AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC LIMIT 40`;
-    const history: ModelMessage[] = historyRows
-      .reverse()
-      .map((r) => ({ role: r.role as 'user' | 'assistant', content: r.content }));
-    history.push({ role: 'user', content: userText });
-
-    const toolCalls: Array<{ name: string; args: unknown; result?: string }> = [];
-    let text = '';
-    let steps = 0;
-    try {
-      const modelSpec = this.providerRegistry().normalizeSpecSync(this.getStoredModelId());
-      for await (const ev of runChat({
-        model: this.getModel(),
-        modelContext: { id: modelSpec },
-        system: this.getSystemPrompt(),
-        history,
-        tools: this.getTools(),
-        maxSteps: resolveMaxSteps(),
-      })) {
-        if (ev.type === 'text-delta') text += ev.delta;
-        else if (ev.type === 'step-finish') steps = ev.stepIndex;
-        else if (ev.type === 'tool-call') toolCalls.push({ name: ev.toolName, args: ev.args });
-        else if (ev.type === 'tool-result') {
-          const last = [...toolCalls].reverse().find((t) => t.name === ev.toolName && t.result === undefined);
-          if (last) last.result = ev.result;
-          else toolCalls.push({ name: ev.toolName, args: {}, result: ev.result });
-        } else if (ev.type === 'done') {
-          text = ev.text;
-        }
-      }
-
-      const userId = `cli-user-${nanoid()}`;
-      const assistantId = `cli-assistant-${nanoid()}`;
-      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-               VALUES (${userId}, ${'default'}, ${null}, ${'user'}, ${prompt}, ${Date.now()})`;
-      this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-               VALUES (${assistantId}, ${'default'}, ${userId}, ${'assistant'}, ${text}, ${Date.now()})`;
-
-      const completed: CompletedTurn = {
-        userMessage: prompt,
-        assistantResponse: text,
-        toolCalls: toolCalls.map((tc) => ({
-          name: tc.name,
-          args: typeof tc.args === 'object' && tc.args !== null ? tc.args as Record<string, unknown> : { value: tc.args },
-          result: tc.result ?? '',
-        })) as ToolCallRecord[],
-        steps,
-        durationMs: Date.now() - this.acc.startedAt,
-        feedback: null,
-        hadError: false,
-      };
-      this.orch.recordTurn(completed);
-      void this.runShadowEvalSampled(prompt, text);
-      void this.runSleepTimeCompute(prompt, text, completed.toolCalls);
-      void this.maybeGenerateTitle(prompt);
-      this.backupWorkspaceIfDue();
-      this.maybeRunAutoGepa();
-      void this.orch.drainPendingEvents();
-
-      try {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'turn_end',
-          turnIndex: this.orch.sessionTurnIndex,
-          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
-        });
-        this.eventRecorder.emit(this._currentRunId, { type: 'run_end', reason: 'completed' });
-      } catch { /* nop */ }
-
-      return { text, toolCalls, steps };
-    } finally {
-      this._inFlight = false;
-      this._cliCwd = null;
-    }
-  }
-
   /** Stored model spec, or null when unset (registry will pick the default). */
   private getStoredModelId(): string | null {
     return this.config.getModel();
@@ -1381,7 +1076,7 @@ export class OrchestratorAgent extends Think<Env> {
         role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
           ? r.role
           : 'assistant',
-        content: r.content,
+        content: uiMessageText(r.content),
         createdAt: Date.parse(r.created_at) || 0,
       }));
     } catch {
@@ -1535,6 +1230,7 @@ export class OrchestratorAgent extends Think<Env> {
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this.acc.reset(Date.now());
     this._executorsUsedThisTurn.clear();
+    this._cliCwd = readCliCwd(ctx.body);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // Start a new run for the event log, with provenance so cross-run history
@@ -1644,6 +1340,7 @@ export class OrchestratorAgent extends Think<Env> {
 
     const cfg: TurnConfig = { activeTools: effectiveActiveTools };
     if (systemOverride) cfg.system = systemOverride;
+    if (this._cliCwd) cfg.messages = withCliCwdContext(ctx.messages, this._cliCwd);
     if (effectiveTools) cfg.tools = effectiveTools;
     return cfg;
   }
@@ -1668,6 +1365,7 @@ export class OrchestratorAgent extends Think<Env> {
     // is allowed again from here forward. Evolution (engine.onTurnCompleteAsync)
     // runs fire-and-forget below and does NOT extend the busy window.
     this._inFlight = false;
+    this._cliCwd = null;
     // Emit turn_end + run_end into the durable event log.
     try {
       if (this._currentRunId) {
@@ -2464,6 +2162,42 @@ export class OrchestratorAgent extends Think<Env> {
         scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
         model: this.getStoredModelId(),
         forkLineage: null };
+    }
+  }
+
+  @callable()
+  async getChatHistory(limit = 100): Promise<Array<{ id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string | number }>> {
+    const bounded = Math.max(1, Math.min(200, Math.floor(limit)));
+    try {
+      const rows = this.sql<{ id: string; role: string; content: string; created_at: string }>`
+        SELECT id, role, content, created_at
+        FROM (
+          SELECT id, role, content, created_at
+          FROM assistant_messages
+          WHERE role IN ('user', 'assistant', 'system')
+          ORDER BY created_at DESC
+          LIMIT ${bounded}
+        ) sub
+        ORDER BY created_at ASC
+      `;
+      return rows.flatMap((row) => {
+        const role = normalizeUiRole(row.role);
+        if (!role) return [];
+        return [{ id: row.id, role, content: uiMessageText(row.content), createdAt: row.created_at }];
+      });
+    } catch {
+      const rows = this.sql<{ id: string; role: string; content: string; created_at: number }>`
+        SELECT id, role, content, created_at
+        FROM messages
+        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
+        ORDER BY created_at ASC
+        LIMIT ${bounded}
+      `;
+      return rows.flatMap((row) => {
+        const role = normalizeUiRole(row.role);
+        if (!role) return [];
+        return [{ id: row.id, role, content: row.content, createdAt: row.created_at }];
+      });
     }
   }
 
@@ -3292,7 +3026,10 @@ export class OrchestratorAgent extends Think<Env> {
    *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
    *  the DO wipe (storage + alarm) always runs. */
   @callable()
-  async destroyAgent(): Promise<{ ok: true }> {
+  async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
+    if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
+    const ownerUserId = this.getOwnerUserId();
+    if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
     try {
       const sb = getSandbox(
         this.env.Sandbox as Parameters<typeof getSandbox>[0],
@@ -4614,6 +4351,22 @@ export class OrchestratorAgent extends Think<Env> {
 }
 
 // ── Module-scope helpers (referenced by OrchestratorAgent) ────────
+
+function uiMessageText(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as { parts?: unknown };
+    if (Array.isArray(parsed.parts)) {
+      return parsed.parts
+        .flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])
+        .join('');
+    }
+  } catch { /* plain text fallback */ }
+  return content;
+}
+
+function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
+  return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
+}
 
 function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
   const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));

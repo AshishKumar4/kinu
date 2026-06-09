@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { LOCAL_COMMANDS } from '../src/tui/commands.js';
 import { CommandHintOverlay, ModelPickerOverlay } from '../src/tui/overlays.js';
 import type { TuiModelEntry } from '../src/tui/model-types.js';
+import { MessageList } from '../src/tui/messages.js';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -41,6 +42,63 @@ describe('CLI TUI layout', () => {
       expect(frame).not.toContain('/helptoShow');
       expect(frame).not.toContain('1 /help');
       expect(frame).not.toContain('2 /status');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('command palette clips rows inside the overlay frame', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 58, height: 18, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <CommandHintOverlay
+            commands={[{
+              name: '/very-long-command-name',
+              description: 'This command description is intentionally too long to fit in a narrow overlay without clipping.',
+            }]}
+            terminal={{ width: 58, height: 18 }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      for (const line of frame.split('\n')) {
+        expect([...line].length).toBeLessThanOrEqual(58);
+      }
+      expect(frame).toContain('/very-long');
+      expect(frame).not.toContain('without clipping');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('chat messages render user bubbles and assistant markdown', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: '#0f0f23' }}>
+          <MessageList
+            streamingText={null}
+            messages={[
+              { id: 'u1', role: 'user', content: 'Review this module' },
+              { id: 'a1', role: 'assistant', content: '### Plan\n\n- **Inspect** sources\n- Ship fix' },
+            ]}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('You');
+      expect(frame).toContain('Review this module');
+      expect(frame).toContain('Agent');
+      expect(frame).toContain('Plan');
+      expect(frame).toContain('Inspect');
+      expect(frame).not.toContain('**Inspect**');
     } finally {
       root.render(<box />);
       renderer.destroy();
@@ -92,9 +150,10 @@ async function renderOverlayFrame(showOverlay: boolean) {
 }
 
 async function renderSettled(renderOnce: () => Promise<void>) {
-  await renderOnce();
-  await Bun.sleep(10);
-  await renderOnce();
+  for (let i = 0; i < 10; i++) {
+    await renderOnce();
+    await Bun.sleep(30);
+  }
 }
 
 function lineContaining(frame: string, text: string) {

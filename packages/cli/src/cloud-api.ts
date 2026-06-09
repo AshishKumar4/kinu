@@ -32,31 +32,9 @@ export interface CloudDeviceRegistration {
   origin: string;
 }
 
-export interface CloudTurnResult {
-  text: string;
-  toolCalls?: Array<{ name: string; args: unknown; result?: string }>;
-  steps?: number;
-}
-
-export interface CloudLocalToolDescriptor {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-export interface CloudLocalTurnPrepare {
-  turnId: string;
-  modelSpec: string | null;
-  system: string;
-  history: unknown[];
-  tools: CloudLocalToolDescriptor[];
-  maxSteps: number;
-}
-
-export interface CloudLocalToolResult {
-  ok: boolean;
-  result?: unknown;
-  error?: string;
+export interface CloudAgentConnectTicket {
+  ticket: string;
+  expiresAt: number;
 }
 
 export interface CloudAgentStatus {
@@ -71,6 +49,22 @@ export interface CloudAgentStatus {
   craftedToolCount: number;
   messageCount: number;
   model?: string | null;
+}
+
+export interface CloudChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  createdAt: string | number;
+}
+
+export interface CloudPendingConsent {
+  consentId: string;
+  deviceLabel: string;
+  method: string;
+  command: string;
+  scope: string;
+  createdAt: number;
 }
 
 export interface CloudToolDescriptions {
@@ -148,64 +142,15 @@ export async function listCloudAvailableModels(origin: string, token: string): P
 }
 
 export async function createCloudAgent(origin: string, token: string, input: {
-  name: string; displayName?: string; purpose?: string;
+  name?: string; displayName?: string; purpose?: string;
 }): Promise<CloudAgent> {
   return cloudJson(origin, '/api/cli/agents', { method: 'POST', token, body: input });
 }
 
-export async function runCloudTurn(origin: string, token: string, name: string, prompt: string, cwd: string): Promise<CloudTurnResult> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/turn`, {
+export async function createCloudAgentConnectTicket(origin: string, token: string, name: string): Promise<CloudAgentConnectTicket> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/connect-ticket`, {
     method: 'POST',
     token,
-    body: { prompt, cwd },
-  });
-}
-
-export async function prepareCloudLocalTurn(
-  origin: string,
-  token: string,
-  name: string,
-  prompt: string,
-  cwd: string,
-): Promise<CloudLocalTurnPrepare> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/local-turn/prepare`, {
-    method: 'POST',
-    token,
-    body: { prompt, cwd },
-  });
-}
-
-export async function invokeCloudLocalTool(
-  origin: string,
-  token: string,
-  name: string,
-  input: { turnId: string; toolName: string; args?: unknown },
-): Promise<CloudLocalToolResult> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/local-turn/tool`, {
-    method: 'POST',
-    token,
-    body: input,
-  });
-}
-
-export async function commitCloudLocalTurn(
-  origin: string,
-  token: string,
-  name: string,
-  input: {
-    turnId: string;
-    prompt: string;
-    text?: string;
-    toolCalls?: Array<{ name: string; args: unknown; result?: unknown }>;
-    steps?: number;
-    hadError?: boolean;
-    error?: string;
-  },
-): Promise<CloudTurnResult> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/local-turn/commit`, {
-    method: 'POST',
-    token,
-    body: input,
   });
 }
 
@@ -215,6 +160,28 @@ export async function getCloudAgentStatus(origin: string, token: string, name: s
 
 export async function getCloudAgentTools(origin: string, token: string, name: string): Promise<CloudToolDescriptions> {
   return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/tools`, { token });
+}
+
+export async function getCloudAgentMessages(origin: string, token: string, name: string, limit = 100): Promise<CloudChatMessage[]> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/messages?limit=${encodeURIComponent(String(limit))}`, { token });
+}
+
+export async function listCloudPendingConsents(origin: string, token: string, name: string): Promise<CloudPendingConsent[]> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/consents`, { token });
+}
+
+export async function resolveCloudDeviceConsent(
+  origin: string,
+  token: string,
+  name: string,
+  consentId: string,
+  decision: 'once' | 'always' | 'deny',
+): Promise<{ ok: boolean }> {
+  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/consents/${encodeURIComponent(consentId)}`, {
+    method: 'POST',
+    token,
+    body: { decision },
+  });
 }
 
 export async function getCloudAgentModel(origin: string, token: string, name: string): Promise<{ spec: string | null }> {

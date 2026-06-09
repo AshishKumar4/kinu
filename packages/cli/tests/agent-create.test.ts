@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { createAgentNameFromMission, suggestAgentIdentityFromMission } from '../src/agent-create';
 
 describe('CLI mission agent names', () => {
-  test('uses the shared slug rule and a stable id suffix', () => {
+  test('uses the shared generic fallback and a stable id suffix', () => {
     expect(createAgentNameFromMission('Research Rust web frameworks', 'abcdef123456'))
-      .toBe('research-rust-web-framew-abcdef');
+      .toBe('agent-abcdef');
     expect(createAgentNameFromMission('!!!', '123456abcdef'))
       .toBe('agent-123456');
   });
@@ -28,15 +28,15 @@ describe('CLI mission agent names', () => {
     });
   });
 
-  test('falls back to a safe automatic title when model naming is unavailable', async () => {
+  test('falls back without deriving names from prompt words when model naming is unavailable', async () => {
     const identity = await suggestAgentIdentityFromMission(
       'Review the OAuth callback flow',
       { id: '123456abcdef', generate: async () => { throw new Error('offline'); } },
     );
 
     expect(identity).toEqual({
-      name: 'review-the-oauth-callbac-123456',
-      displayName: 'Review the OAuth callback flow',
+      name: 'agent-123456',
+      displayName: 'Agent',
       nameOrigin: 'auto',
     });
   });

@@ -23,25 +23,25 @@ CURRENT=$(cat \
 if [ -f "$MANIFEST" ]; then
   STORED=$(cat "$MANIFEST")
   if [ "$CURRENT" != "$STORED" ]; then
-    echo -e "${YELLOW}TS interfaces changed since Lean types were generated.${NC}"
+    echo -e "${RED}TS interfaces changed since Lean types were generated.${NC}"
     echo "  Current: $CURRENT"
     echo "  Stored:  $STORED"
-    echo -e "${YELLOW}Regenerate with TSLean and update the manifest:${NC}"
+    echo -e "${RED}Regenerate with TSLean, update generated Lean, and update the manifest:${NC}"
     echo "  echo \"$CURRENT\" > $MANIFEST"
+    exit 1
   else
     echo -e "${GREEN}TS checksums match.${NC}"
   fi
 else
-  echo "No manifest. Creating."
-  mkdir -p lean/generated
-  echo "$CURRENT" > "$MANIFEST"
+  echo -e "${RED}No checksum manifest found at $MANIFEST.${NC}"
+  echo "Regenerate Lean types and commit the manifest."
+  exit 1
 fi
 
 # Check elan/lake availability
 if ! command -v lake &> /dev/null; then
-  echo -e "${YELLOW}lake not found. Install elan: https://leanprover.github.io/lean4/doc/setup.html${NC}"
-  echo "Skipping Lean build."
-  exit 0
+  echo -e "${RED}lake not found. Install elan: https://leanprover.github.io/lean4/doc/setup.html${NC}"
+  exit 1
 fi
 
 # Build
@@ -52,8 +52,9 @@ lake build
 # Sorry check
 SORRIES=$(grep -rn '\bsorry\b' Proteus/ --include='*.lean' | grep -v '^\-\-' | grep -v '0 sorry' | wc -l || true)
 if [ "$SORRIES" -gt 0 ]; then
-  echo -e "\n${YELLOW}Found $SORRIES sorry placeholder(s):${NC}"
+  echo -e "\n${RED}Found $SORRIES sorry placeholder(s):${NC}"
   grep -rn '\bsorry\b' Proteus/ --include='*.lean' | grep -v '^\-\-' | grep -v '0 sorry'
+  exit 1
 else
   echo -e "\n${GREEN}All proofs verified — zero sorry.${NC}"
 fi

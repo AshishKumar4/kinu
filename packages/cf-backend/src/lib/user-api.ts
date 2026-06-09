@@ -82,9 +82,9 @@ export const getCliSetup = () => api<CliSetup>('GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
 export const listAgents     = () => api<AgentEntry[]>('GET', '/agents');
-// `purpose` is the initial mission; `displayName` is optional — when omitted the server
-// derives a provisional title from the mission and the agent AI-titles itself.
-export const registerAgent  = (name: string, purpose?: string, displayName?: string) =>
+// `purpose` is the initial mission. When `name` is omitted the server creates
+// the agent identity using the user's connected model.
+export const registerAgent  = (name?: string, purpose?: string, displayName?: string) =>
   api<AgentEntry>('POST', '/agents', { name, displayName, purpose });
 export const touchAgent     = (name: string) =>
   api<{ ok: boolean }>('POST', `/agents/${encodeURIComponent(name)}/touch`);

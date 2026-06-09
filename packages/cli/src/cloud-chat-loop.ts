@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
-import type { CloudTurnResult } from './cloud-api.js';
-import { runCloudTurnWithLocalModel } from './cloud-local-turn.js';
+import { CloudAgentClient } from './cloud-agent-client.js';
+import type { AgentTurnResult } from './agent-client.js';
 import { ACCENT, DIM, ERR, createTypingIndicator, printToolCall, printToolResult } from './display.js';
 import type { CliSession } from './session.js';
 
@@ -15,6 +15,7 @@ export interface CloudChatLoopOptions {
 export async function runCloudChatLoop(opts: CloudChatLoopOptions): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const tty = process.stdin.isTTY && process.stdout.isTTY;
+  const client = new CloudAgentClient({ origin: opts.origin, token: opts.token, name: opts.cloudName });
 
   if (tty) {
     console.log(`\n${ACCENT(opts.agentName)} ${DIM('cloud chat')}`);
@@ -41,13 +42,7 @@ export async function runCloudChatLoop(opts: CloudChatLoopOptions): Promise<void
       const typing = createTypingIndicator(opts.agentName);
       typing.start();
       try {
-        const result = await runCloudTurnWithLocalModel({
-          origin: opts.origin,
-          token: opts.token,
-          name: opts.cloudName,
-          prompt: message,
-          cwd: process.cwd(),
-        });
+        const result = await client.send(message, { cwd: process.cwd() });
         typing.stop();
         opts.session.append('assistant', {
           text: result.text,
@@ -66,11 +61,12 @@ export async function runCloudChatLoop(opts: CloudChatLoopOptions): Promise<void
       if (tty) rl.prompt();
     }
   } finally {
+    client.close();
     rl.close();
   }
 }
 
-export function renderCloudTurn(result: CloudTurnResult): void {
+export function renderCloudTurn(result: AgentTurnResult): void {
   for (const call of result.toolCalls ?? []) {
     printToolCall(call.name, toRecord(call.args));
     if (call.result !== undefined) printToolResult(call.result);

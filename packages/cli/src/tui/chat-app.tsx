@@ -21,6 +21,7 @@ import { commandHelp, filterCommands, resolveCommandDraft } from './commands.js'
 import { contextWindowForSpec, normalizeModelEntries, type TuiModelEntry } from './model-types.js';
 import { CommandHintOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
 import { estimateContextTokens } from './context-status.js';
+import { useStreamingBuffer } from './streaming-buffer.js';
 import {
   createCliSession,
   defaultConversationIdForCliOptions,
@@ -73,10 +74,10 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
   const [activeSessionId, setActiveSessionId] = useState(cliSession?.id ?? localSessionId ?? defaultAgentSessionId());
 
   const msgIdRef = useRef(0);
-  const streamRef = useRef('');
   const inputRef = useRef<InputRenderable | null>(null);
   const initialPromptSentRef = useRef(false);
   const activeCliSessionRef = useRef<CliSession | undefined>(cliSession);
+  const stream = useStreamingBuffer(setStreamingText);
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
@@ -95,8 +96,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
       recordCliSessionEvent(activeCliSessionRef.current, event, 'local');
       switch (event.type) {
         case 'turn-start':
-          streamRef.current = '';
-          setStreamingText('');
+          stream.start();
           setIsProcessing(true);
           setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
           if (event.kind === 'programmatic') {
@@ -104,9 +104,8 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           }
           break;
         case 'text-delta':
-          streamRef.current += event.delta;
-          setStreamingText(streamRef.current);
-          setTurnPhase('writing');
+          stream.append(event.delta);
+          setTurnPhase((current) => current === 'writing' ? current : 'writing');
           break;
         case 'tool-call':
           setTurnPhase(`calling ${event.toolName}`);
@@ -121,10 +120,11 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           break;
         case 'error':
           addMessage({ role: 'system', content: `Error: ${event.message}` });
+          stream.clear();
           setTurnPhase(null);
           break;
         case 'turn-end':
-          setStreamingText(null);
+          stream.clear();
           setIsProcessing(false);
           setTurnPhase(null);
           if (event.turn.assistantResponse.trim()) {
@@ -135,7 +135,7 @@ export function ChatApp({ rt, db, info: initialInfo, dbSize, llmConfig, modelRes
           break;
       }
     },
-  }), [addMessage, db, llmConfig, modelResolver, noAutoEvolve, rt]);
+  }), [addMessage, db, llmConfig, modelResolver, noAutoEvolve, rt, stream]);
 
   const sessionRef = useRef<LocalAgentSession | null>(null);
   if (!sessionRef.current) {

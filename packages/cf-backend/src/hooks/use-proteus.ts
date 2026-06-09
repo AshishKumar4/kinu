@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
-import { touchAgent, registerAgent } from "../lib/user-api";
+import { touchAgent } from "../lib/user-api";
 
 export interface ExecutorOutput {
   id: string; command: string; stdout: string; stderr: string;
@@ -301,16 +301,7 @@ export function useProteus(agentId?: string) {
     rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
       .then((snap) => {
         setAgentStatus(snap.status);
-        if (agentId) {
-          // Fire-and-forget: record in UserDO (new agent → register; existing → touch).
-          // Pass the agent's own display title only if it has a real one — the
-          // status falls back to the slug (=name) when untitled, and sending that
-          // would clobber the roster's provisional title.
-          const title = snap.status.displayName !== snap.status.name ? snap.status.displayName : undefined;
-          registerAgent(agentId, undefined, title).catch(() => {
-            touchAgent(agentId).catch(() => {});
-          });
-        }
+        if (agentId) touchAgent(agentId).catch(() => {});
         setTools(mapToolDescriptions(snap.tools));
         setMemoryContent(snap.memoryContent);
         if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));

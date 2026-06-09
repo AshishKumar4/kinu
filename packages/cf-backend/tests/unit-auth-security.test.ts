@@ -43,6 +43,26 @@ describe('auth and desktop security invariants', () => {
     expect(pcHandler).not.toContain('?user=U&token=T');
   });
 
+  test('CLI agent websocket uses scoped tickets and has no local-turn HTTP bridge', () => {
+    const server = source('src/server.ts');
+    const cliRoutes = source('src/cli/routes.ts');
+    const userSchema = source('src/user/schema.ts');
+    const orchestrator = source('src/orchestrator.ts');
+    expect(cliRoutes).toContain('/connect-ticket');
+    expect(userSchema).toContain('cli_agent_connect_tickets');
+    expect(server).toContain('verifyCliAgentConnectTicket');
+    expect(server).toContain("url.searchParams.delete('ticket')");
+    expect(server).not.toContain('looksInteractive');
+    expect(server).not.toContain('registerAgent(agentName');
+    expect(cliRoutes).not.toContain('/local-turn/prepare');
+    expect(cliRoutes).not.toContain('/local-turn/tool');
+    expect(cliRoutes).not.toContain('/local-turn/commit');
+    expect(orchestrator).not.toContain('cliPrepareLocalTurn');
+    expect(orchestrator).not.toContain('cliInvokeLocalTool');
+    expect(orchestrator).not.toContain('cliCommitLocalTurn');
+    expect(orchestrator).not.toContain('async cliTurn');
+  });
+
   test('OAuth provider visibility requires both client id and secret', () => {
     expect(listConfiguredOAuthProviders({})).toEqual([]);
     expect(listConfiguredOAuthProviders({ GOOGLE_OAUTH_CLIENT_ID: 'gid' })).toEqual([]);
@@ -331,10 +351,11 @@ describe('auth and desktop security invariants', () => {
 
   test('web agent creation requires an available model and stores the selected initial model', () => {
     const routes = source('src/user/routes.ts');
+    const createAgent = source('src/user/agent-create.ts');
     expect(routes).toContain('listAvailableModels(env, identity.userId)');
-    expect(routes).toContain('Cloudflare Workers AI is not connected');
-    expect(routes).toContain('pickInitialModel');
-    expect(routes).toContain('await orchestrator.setModel(model)');
+    expect(createAgent).toContain('Cloudflare Workers AI is not connected');
+    expect(createAgent).toContain('pickInitialModel');
+    expect(createAgent).toContain('await orchestrator.setModel(model)');
   });
 
   test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {

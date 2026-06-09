@@ -29,9 +29,9 @@ import {
   searchCloudMemory,
   setCloudAgentModel,
   stopCloudAgent,
-  type CloudTurnResult,
 } from '../cloud-api.js';
-import { runCloudTurnWithLocalModel } from '../cloud-local-turn.js';
+import { CloudAgentClient } from '../cloud-agent-client.js';
+import type { AgentTurnResult } from '../agent-client.js';
 import { renderCloudTurn } from '../cloud-chat-loop.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
@@ -95,13 +95,8 @@ export async function runCommand(name: string, promptParts: string[], opts: {
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const result = await runCloudTurnWithLocalModel({
-      origin: auth.origin,
-      token: auth.token,
-      name: target.cloudName,
-      prompt,
-      cwd: process.cwd(),
-    });
+    const client = new CloudAgentClient({ origin: auth.origin, token: auth.token, name: target.cloudName });
+    const result = await client.send(prompt, { cwd: process.cwd() }).finally(() => client.close());
     session.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
     if (outputMode === 'json') writeCloudJsonEvents(session, canonicalName, result);
     else renderCloudTurn(result);
@@ -175,39 +170,38 @@ async function runRpc(
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
+    const client = new CloudAgentClient({ origin: auth.origin, token: auth.token, name: target.cloudName });
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      const cmd = parseRpc(line);
-      if (!cmd.ok) { output({ type: 'response', success: false, error: cmd.error }); continue; }
-      if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
-      if (cmd.value.type !== 'prompt') {
-        try {
-          const data = await runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value);
-          output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data });
-        } catch (err) {
-          output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) });
+    try {
+      for await (const line of rl) {
+        if (!line.trim()) continue;
+        const cmd = parseRpc(line);
+        if (!cmd.ok) { output({ type: 'response', success: false, error: cmd.error }); continue; }
+        if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+        if (cmd.value.type !== 'prompt') {
+          try {
+            const data = await runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value);
+            output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data });
+          } catch (err) {
+            output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) });
+          }
+          continue;
         }
-        continue;
+        const message = String(cmd.value.message ?? '').trim();
+        if (!message) {
+          output({ id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' });
+          continue;
+        }
+        cliSession.append('user', { text: message, backend: 'cloud' });
+        output({ type: 'turn_start', id: cmd.value.id });
+        const result = await client.send(message, { cwd: process.cwd() });
+        cliSession.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
+        output({ type: 'message_end', role: 'assistant', text: result.text });
+        output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });
+        output({ type: 'turn_end', steps: result.steps ?? 0 });
       }
-      const message = String(cmd.value.message ?? '').trim();
-      if (!message) {
-        output({ id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' });
-        continue;
-      }
-      cliSession.append('user', { text: message, backend: 'cloud' });
-      output({ type: 'turn_start', id: cmd.value.id });
-      const result = await runCloudTurnWithLocalModel({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        prompt: message,
-        cwd: process.cwd(),
-      });
-      cliSession.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
-      output({ type: 'message_end', role: 'assistant', text: result.text });
-      output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });
-      output({ type: 'turn_end', steps: result.steps ?? 0 });
+    } finally {
+      client.close();
     }
     return;
   }
@@ -487,7 +481,7 @@ async function buildPrompt(parts: string[]): Promise<string> {
   return chunks.join(' ').trim();
 }
 
-function writeCloudJsonEvents(session: CliSession, agent: string, result: CloudTurnResult): void {
+function writeCloudJsonEvents(session: CliSession, agent: string, result: AgentTurnResult): void {
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
   output({ type: 'session', id: session.id, agent, backend: 'cloud', cwd: process.cwd() });
   output({ type: 'turn_start', kind: 'user' });

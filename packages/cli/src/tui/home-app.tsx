@@ -1,6 +1,6 @@
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createCliAgent,
   defaultCreateMode,
@@ -8,7 +8,7 @@ import {
   isLocalModelConfigured,
   suggestAgentIdentityFromMission,
 } from '../agent-create.js';
-import { listKnownAgents, type ListedAgent } from '../agent-list.js';
+import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list.js';
 import type { AgentMode } from '../config.js';
 
 export type HomeTuiAction =
@@ -27,7 +27,7 @@ type HomeFocus = 'agents' | 'mission' | 'mode';
 
 function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const { width, height } = useTerminalDimensions();
-  const [agents] = useState<ListedAgent[]>(() => listKnownAgents());
+  const [agents, setAgents] = useState<ListedAgent[]>(() => listKnownAgents());
   const [mode, setMode] = useState<AgentMode>(() => defaultCreateMode());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +45,15 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const agentPageCount = Math.max(1, Math.ceil(agents.length / agentPageSize));
   const agentPageStart = agentPage * agentPageSize;
   const visibleAgents = agents.slice(agentPageStart, agentPageStart + agentPageSize);
+
+  useEffect(() => {
+    if (!cloudReady) return;
+    let cancelled = false;
+    void syncCloudAgentRefs()
+      .then((next) => { if (!cancelled) setAgents(next); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [cloudReady]);
 
   const modeLabel = useMemo(() => {
     if (mode === 'cloud') return cloudReady ? 'Cloud agent' : 'Cloud agent - sign in required';

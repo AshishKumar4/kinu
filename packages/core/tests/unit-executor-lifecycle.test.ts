@@ -8,12 +8,15 @@ import {
   type SandboxHandle,
 } from "../src/index.ts";
 
-function sandboxHandle(): SandboxHandle & { calls: string[] } {
+function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
+  const execOptions: unknown[] = [];
   return {
     calls,
-    async exec(command: string) {
+    execOptions,
+    async exec(command: string, opts?: { cwd?: string; timeout?: number }) {
       calls.push(`exec:${command}`);
+      execOptions.push(opts);
       return { stdout: "ok", exitCode: 0 };
     },
     async readFile(path: string) {
@@ -52,15 +55,18 @@ function sandboxHandle(): SandboxHandle & { calls: string[] } {
   };
 }
 
-function nimbusBox(): NimbusSandboxHandle & { calls: string[] } {
+function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
+  const execOptions: unknown[] = [];
   return {
     calls,
+    execOptions,
     async ready() {
       calls.push("ready");
     },
-    async exec(command: string) {
+    async exec(command: string, options) {
       calls.push(`exec:${command}`);
+      execOptions.push(options);
       return {
         command,
         success: true,
@@ -156,6 +162,17 @@ describe("executor lifecycle state", () => {
     expect(handle.calls).toEqual(["exec:echo ok"]);
   });
 
+  test("sandbox exec strips AbortSignal before remote SDK calls", async () => {
+    const handle = sandboxHandle();
+    const executor = createSandboxExecutor(handle, "proteus.example.test", "proteus-agent");
+    const signal = new AbortController().signal;
+
+    const result = await executor.tools.exec.execute("echo ok", { signal });
+
+    expect(result).toBe("ok");
+    expect(handle.execOptions).toEqual([{ timeout: 60_000 }]);
+  });
+
   test("Nimbus adapter uses the SDK sandbox handle shape", async () => {
     const box = nimbusBox();
     const executor = createNimbusExecutor({ box });
@@ -171,6 +188,17 @@ describe("executor lifecycle state", () => {
     expect(output).toBe("4\n");
     expect(executor.getStatus?.().active).toBe(true);
     expect(box.calls).toContain("exec:node -e 'console.log(2+2)'");
+  });
+
+  test("Nimbus exec strips AbortSignal before remote SDK calls", async () => {
+    const box = nimbusBox();
+    const executor = createNimbusExecutor({ box });
+    const signal = new AbortController().signal;
+
+    const output = await executor.tools.exec.execute("node -e 'console.log(2+2)'", { signal });
+
+    expect(output).toBe("4\n");
+    expect(box.execOptions).toEqual([undefined]);
   });
 });
 

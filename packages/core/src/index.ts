@@ -14,7 +14,16 @@ export {
 export { createAgent, wrapDatabase, type AgentBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/open.js';
 export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
-export { deriveAgentTitle, resolveAgentTitle, slugifyName } from './identity/naming.js';
+export {
+  agentIdentityPrompt,
+  createAgentNameFromMission,
+  deriveAgentTitle,
+  fallbackAgentIdentity,
+  parseAgentIdentityOutput,
+  resolveAgentTitle,
+  slugifyName,
+  type SuggestedAgentIdentity,
+} from './identity/naming.js';
 
 // Evolution engine (3-timescale auto-evolution)
 export { EvolutionEngine, feedbackToQuality } from './evolution/engine.js';

@@ -2,17 +2,18 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
+  agentIdentityPrompt,
   createAgent,
   createAgentConfigStore,
-  deriveAgentTitle,
-  extractJsonObject,
+  createAgentNameFromMission as coreCreateAgentNameFromMission,
+  fallbackAgentIdentity,
   initAgentConfigTable,
   initCraftScoreTables,
   initScaffoldTables,
   initSearchTables,
-  jsonObjectOnlyInstruction,
-  slugifyName,
+  parseAgentIdentityOutput,
   type LLMProviderConfig,
+  type SuggestedAgentIdentity,
 } from '@proteus/core';
 import {
   agentDbPath,
@@ -55,12 +56,6 @@ export interface CreatedCliAgent {
   aliasPath?: string;
 }
 
-export interface SuggestedAgentIdentity {
-  name: string;
-  displayName: string;
-  nameOrigin: 'auto' | 'user';
-}
-
 export interface SuggestAgentIdentityOptions {
   id?: string;
   model?: string;
@@ -70,8 +65,7 @@ export interface SuggestAgentIdentityOptions {
 }
 
 export function createAgentNameFromMission(mission: string, id: string = crypto.randomUUID()): string {
-  const slug = slugifyName(mission) || 'agent';
-  return `${slug}-${id.slice(0, 6)}`;
+  return coreCreateAgentNameFromMission(mission, id);
 }
 
 export async function suggestAgentIdentityFromMission(
@@ -79,22 +73,13 @@ export async function suggestAgentIdentityFromMission(
   opts: SuggestAgentIdentityOptions = {},
 ): Promise<SuggestedAgentIdentity> {
   const id = opts.id ?? crypto.randomUUID();
-  const fallback = fallbackIdentity(mission, id);
+  const fallback = fallbackAgentIdentity(mission, id);
   try {
     const raw = opts.generate
       ? await opts.generate(mission)
       : await generateIdentityJson(mission, opts);
-    const parsed = extractJsonObject(raw);
-    if (!isRecord(parsed)) return fallback;
-    const title = cleanTitle(typeof parsed.title === 'string' ? parsed.title : '');
-    const slugSource = typeof parsed.slug === 'string' ? parsed.slug : title;
-    const slug = slugifyName(slugSource) || slugifyName(title);
-    if (!title || !slug) return fallback;
-    return {
-      name: `${slug}-${id.slice(0, 6)}`,
-      displayName: title,
-      nameOrigin: 'auto',
-    };
+    const identity = parseAgentIdentityOutput(raw, id);
+    return identity || fallback;
   } catch {
     return fallback;
   }
@@ -124,21 +109,21 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-    const displayName = input.displayName ?? input.name;
+    const userNamed = input.nameOrigin !== 'auto';
     const agent = await createCloudAgent(auth.origin, auth.token, {
-      name: input.name,
-      displayName,
+      name: userNamed ? input.name : undefined,
+      displayName: userNamed ? input.displayName ?? input.name : undefined,
       purpose,
     });
     upsertAgentConfig({
-      name: input.name,
+      name: agent.name,
       mode: 'cloud',
-      displayName,
+      displayName: agent.displayName,
       cloudName: agent.name,
       alias: input.alias || undefined,
     });
-    const aliasPath = input.alias ? writeAliasShim(input.name, input.alias) : undefined;
-    return { name: input.name, displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
+    const aliasPath = input.alias ? writeAliasShim(agent.name, input.alias) : undefined;
+    return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
   }
 
   const displayName = input.displayName ?? input.name;
@@ -181,17 +166,7 @@ async function generateIdentityJson(mission: string, opts: SuggestAgentIdentityO
   const result = await generateText({
     model: resolver.resolveModel(opts.model ?? null),
     system: 'You create short, useful names for persistent software agents.',
-    prompt: [
-      'Name a Proteus agent from this opening mission.',
-      '',
-      'Return a concise JSON object with:',
-      '- title: 2-5 words, Title Case, specific to the mission, no quotes, no trailing punctuation.',
-      '- slug: 2-5 lowercase words joined with hyphens, no generic words like agent or assistant unless essential.',
-      '',
-      jsonObjectOnlyInstruction(),
-      '',
-      `Mission:\n${mission.slice(0, 1200)}`,
-    ].join('\n'),
+    prompt: agentIdentityPrompt(mission),
     maxOutputTokens: 80,
   });
   return result.text;
@@ -216,24 +191,4 @@ function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | unde
   if (llm.name === 'openrouter') return `openrouter/${llm.model}`;
   if (llm.name === 'anthropic') return `anthropic/${llm.model}`;
   return `openai-compat/${llm.model}`;
-}
-
-function fallbackIdentity(mission: string, id: string): SuggestedAgentIdentity {
-  return {
-    name: createAgentNameFromMission(mission, id),
-    displayName: deriveAgentTitle(mission) || 'Agent',
-    nameOrigin: 'auto',
-  };
-}
-
-function cleanTitle(value: string): string {
-  return value
-    .replace(/^["'#\s]+|["'\s.]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .slice(0, 60)
-    .trim();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }

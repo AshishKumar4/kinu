@@ -17,6 +17,10 @@ function setupEnv() {
     async hasAgent(name: string) {
       return name === 'jarvis';
     },
+    async issueCliAgentConnectTicket(input: { userId: string; agentName: string; cliTokenHash: string }) {
+      calls.push(`connect-ticket:${input.userId}:${input.agentName}:${input.cliTokenHash}`);
+      return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
+    },
   };
   const agent = {
     async claimOwner(userId: string) {
@@ -30,6 +34,21 @@ function setupEnv() {
     async getToolDescriptions() {
       calls.push('tools');
       return { builtIn: [{ name: 'run', description: 'Run command' }], crafted: [], executors: [] };
+    },
+    async getChatHistory(limit: number) {
+      calls.push(`messages:${limit}`);
+      return [
+        { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
+        { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
+      ];
+    },
+    async listPendingConsents() {
+      calls.push('consents:list');
+      return [{ consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', scope: 'all_local_actions', createdAt: 1 }];
+    },
+    async resolveDeviceConsent(id: string, decision: string) {
+      calls.push(`consents:resolve:${id}:${decision}`);
+      return { ok: true };
     },
     async getStoredModelSpec() {
       calls.push('model:get');
@@ -144,6 +163,19 @@ function cliRequest(path: string, init: RequestInit = {}) {
 }
 
 describe('CLI control routes', () => {
+  test('mints scoped agent websocket tickets for owned agents', async () => {
+    const { env, calls } = setupEnv();
+
+    const ticket = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/connect-ticket', { method: 'POST' }), env);
+    expect(ticket?.status).toBe(200);
+    expect(ticket?.headers.get('cache-control')).toBe('no-store');
+    expect(await ticket?.json()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
+    expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
+
+    const missing = await handleCliRequest(cliRequest('/api/cli/agents/unknown/connect-ticket', { method: 'POST' }), env);
+    expect(missing?.status).toBe(404);
+  });
+
   test('forward cloud control commands through the owned OrchestratorAgent', async () => {
     const { env, calls } = setupEnv();
 
@@ -153,6 +185,24 @@ describe('CLI control routes', () => {
 
     const tools = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/tools'), env);
     expect(await tools?.json()).toMatchObject({ builtIn: [{ name: 'run' }] });
+
+    const messages = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/messages?limit=17'), env);
+    expect(await messages?.json()).toEqual([
+      { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
+      { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
+    ]);
+
+    const consents = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/consents'), env);
+    expect(await consents?.json()).toEqual([
+      { consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', scope: 'all_local_actions', createdAt: 1 },
+    ]);
+
+    const consent = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/consents/cons-1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'once' }),
+    }), env);
+    expect(await consent?.json()).toEqual({ ok: true });
 
     const model = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/model', {
       method: 'PUT',
@@ -201,6 +251,9 @@ describe('CLI control routes', () => {
     expect(calls).toContain(`claim:${USER_ID}`);
     expect(calls).toContain('status');
     expect(calls).toContain('tools');
+    expect(calls).toContain('messages:17');
+    expect(calls).toContain('consents:list');
+    expect(calls).toContain('consents:resolve:cons-1:once');
     expect(calls).toContain('model:set:openai/gpt-5.1');
     expect(calls).toContain('triggers:create:{"atMs":123,"label":"wake","trust":"owner"}');
     expect(calls).toContain('jobs:list:7');

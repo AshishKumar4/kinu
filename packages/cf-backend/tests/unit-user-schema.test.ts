@@ -83,4 +83,22 @@ describe('UserDO schema bootstrap', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get<{ n: number }>()!.n).toBe(1);
     db.close();
   });
+
+  test('creates hash-only CLI agent websocket ticket table', () => {
+    const db = new Database(':memory:');
+
+    initUserTables(sqlExec(db));
+
+    const ticketColumns = columns(db, 'cli_agent_connect_tickets');
+    expect(ticketColumns).toContain('ticket_hash');
+    expect(ticketColumns).toContain('agent_class');
+    expect(ticketColumns).toContain('agent_name');
+    expect(ticketColumns).toContain('cli_token_hash');
+    expect(ticketColumns).toContain('capabilities');
+    expect(ticketColumns).not.toContain('ticket');
+    const indexes = db.prepare(`PRAGMA index_list(cli_agent_connect_tickets)`).all()
+      .map((row) => String((row as { name: string }).name));
+    expect(indexes).toContain('idx_cli_agent_connect_tickets_exp');
+    db.close();
+  });
 });
