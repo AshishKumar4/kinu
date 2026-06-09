@@ -64,7 +64,12 @@ export function agentIdentityPrompt(mission: string): string {
 }
 
 export function parseAgentIdentityOutput(raw: string, id: string): SuggestedAgentIdentity | null {
-  const parsed = extractJsonObject(raw);
+  let parsed: unknown;
+  try {
+    parsed = extractJsonObject(raw);
+  } catch {
+    return null;
+  }
   if (!isRecord(parsed)) return null;
   const title = cleanAgentTitle(typeof parsed.title === 'string' ? parsed.title : '');
   const slug = cleanAgentSlug(typeof parsed.slug === 'string' ? parsed.slug : title);

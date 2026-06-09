@@ -12,6 +12,82 @@ function source(path: string): string {
 }
 
 describe('cloud agent ownership safety', () => {
+  test('mission-only create does not block on generated cloud naming', async () => {
+    const calls: string[] = [];
+    const background: Promise<unknown>[] = [];
+    const userDO = {
+      async getConfig(key: string) {
+        calls.push(`config:${key}`);
+        return null;
+      },
+      async getAuthHeaders() {
+        return { authorization: 'Bearer token' };
+      },
+      async getCredentialBaseURL() {
+        return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+      },
+      async listCredentials() {
+        return [];
+      },
+      async hasAgent(name: string) {
+        calls.push(`has:${name}`);
+        return false;
+      },
+      async registerAgent(name: string, displayName?: string) {
+        calls.push(`register:${name}:${displayName ?? ''}`);
+        return { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null };
+      },
+      async removeAgent(name: string, ownerUserId: string) {
+        calls.push(`remove:${name}:${ownerUserId}`);
+      },
+    };
+    const orchestrator = {
+      async claimOwner(userId: string) {
+        calls.push(`claim:${userId}`);
+        return { owner: userId };
+      },
+      async setSoul() {
+        calls.push('soul');
+      },
+      async setModel(model: string) {
+        calls.push(`model:${model}`);
+      },
+      async setAutoDisplayName(displayName: string) {
+        calls.push(`auto-title:${displayName}`);
+      },
+    };
+    const env = {
+      UserDO: {
+        idFromName(name: string) { return name; },
+        get() { return userDO; },
+      },
+      OrchestratorAgent: {
+        idFromName(name: string) { return name; },
+        get() { return orchestrator; },
+      },
+    } as unknown as Env;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    try {
+      const entry = await createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+        purpose: 'Build a hello world app in react',
+      }, {
+        waitUntil: (promise) => background.push(promise),
+        suggestDisplayName: async () => 'React Hello World',
+      });
+
+      expect(entry.name.startsWith('agent-')).toBe(true);
+      expect(entry.displayName).toBe('Build a hello world app in react');
+      expect(calls).toContain(`claim:${USER_ID}`);
+      expect(calls).toContain('soul');
+      expect(background).toHaveLength(1);
+      await Promise.all(background);
+      expect(calls).toContain('auto-title:React Hello World');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('rolls back the local roster row when orchestrator owner claim fails', async () => {
     const calls: string[] = [];
     const userDO = {

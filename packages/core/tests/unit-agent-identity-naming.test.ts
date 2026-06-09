@@ -38,6 +38,10 @@ describe('shared agent identity naming', () => {
     });
   });
 
+  test('invalid model naming output returns null', () => {
+    expect(parseAgentIdentityOutput('hello world', '123456abcdef')).toBe(null);
+  });
+
   test('naming prompt asks for JSON instead of an ad hoc string format', () => {
     const prompt = agentIdentityPrompt('Build a durable benchmark runner');
 

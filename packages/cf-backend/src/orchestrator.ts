@@ -3315,6 +3315,12 @@ export class OrchestratorAgent extends Think<Env> {
     return { displayName };
   }
 
+  @callable() async setAutoDisplayName(displayName: string) {
+    await this.propagateDisplayName(displayName);
+    this.config.setNameOrigin('auto');
+    return { displayName };
+  }
+
   @callable() async getExecutors() {
     return this.rt.executionRouter?.listExecutors() ?? [];
   }

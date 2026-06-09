@@ -1,6 +1,8 @@
 import { generateText } from 'ai';
 import {
   agentIdentityPrompt,
+  createAgentNameFromMission,
+  deriveAgentTitle,
   parseAgentIdentityOutput,
   renderSoulMarkdown,
 } from '@proteus/core';
@@ -15,11 +17,17 @@ export interface CreateCloudAgentInput {
   purpose?: string;
 }
 
+export interface CreateCloudAgentOptions {
+  waitUntil?: (promise: Promise<unknown>) => void;
+  suggestDisplayName?: (mission: string) => Promise<string | null>;
+}
+
 export async function createCloudAgentForUser(
   env: Env,
   userId: string,
   userDO: DurableObjectStub<UserDO>,
   input: CreateCloudAgentInput,
+  options: CreateCloudAgentOptions = {},
 ): Promise<AgentEntry> {
   const purpose = input.purpose?.trim() || undefined;
   const models = await listAvailableModels(env, userId);
@@ -28,14 +36,15 @@ export async function createCloudAgentForUser(
     throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the agent again.');
   }
 
-  const identity = input.name?.trim()
-    ? { name: input.name.trim(), displayName: input.displayName?.trim() || input.name.trim(), nameOrigin: 'user' as const }
-    : await suggestCloudAgentIdentity(env, userId, userDO, purpose ?? '', model);
+  const identity = createInitialCloudAgentIdentity(input, purpose);
 
   const hadAgent = await userDO.hasAgent(identity.name);
   const entry = await userDO.registerAgent(identity.name, identity.displayName, purpose);
   try {
     await initializeOrchestrator(env, userId, entry.name, entry.displayName, purpose, model);
+    if (identity.nameOrigin === 'auto' && purpose) {
+      scheduleCloudAgentDisplayNameGeneration(env, userDO, entry.name, purpose, model, options);
+    }
     return entry;
   } catch (err) {
     if (!hadAgent) {
@@ -49,29 +58,76 @@ export async function createCloudAgentForUser(
   }
 }
 
-async function suggestCloudAgentIdentity(
+function createInitialCloudAgentIdentity(
+  input: CreateCloudAgentInput,
+  purpose: string | undefined,
+): { name: string; displayName: string; nameOrigin: 'auto' | 'user' } {
+  const requestedName = input.name?.trim();
+  if (requestedName) {
+    return {
+      name: requestedName,
+      displayName: input.displayName?.trim() || requestedName,
+      nameOrigin: 'user',
+    };
+  }
+  const id = crypto.randomUUID();
+  const name = createAgentNameFromMission(purpose ?? 'agent', id);
+  return {
+    name,
+    displayName: input.displayName?.trim() || deriveAgentTitle(purpose ?? '') || name,
+    nameOrigin: 'auto',
+  };
+}
+
+function scheduleCloudAgentDisplayNameGeneration(
   env: Env,
-  userId: string,
+  userDO: DurableObjectStub<UserDO>,
+  agentName: string,
+  mission: string,
+  modelSpec: string,
+  options: CreateCloudAgentOptions,
+): void {
+  const task = applyGeneratedDisplayName(env, userDO, agentName, mission, modelSpec, options.suggestDisplayName)
+    .catch((err) => {
+      console.warn('[proteus] cloud agent display-name generation failed:', err instanceof Error ? err.message : err);
+    });
+  if (options.waitUntil) options.waitUntil(task);
+  else void task;
+}
+
+async function applyGeneratedDisplayName(
+  env: Env,
+  userDO: DurableObjectStub<UserDO>,
+  agentName: string,
+  mission: string,
+  modelSpec: string,
+  suggestDisplayName?: (mission: string) => Promise<string | null>,
+): Promise<void> {
+  const displayName = suggestDisplayName
+    ? await suggestDisplayName(mission)
+    : await suggestCloudAgentDisplayName(env, userDO, mission, modelSpec);
+  if (!displayName) return;
+  const orchestrator = env.OrchestratorAgent.get(
+    env.OrchestratorAgent.idFromName(agentName),
+  ) as DurableObjectStub<OrchestratorAgent>;
+  await orchestrator.setAutoDisplayName(displayName);
+}
+
+async function suggestCloudAgentDisplayName(
+  env: Env,
   userDO: DurableObjectStub<UserDO>,
   mission: string,
   modelSpec: string,
-): Promise<{ name: string; displayName: string }> {
+): Promise<string | null> {
   const id = crypto.randomUUID();
-  if (!mission.trim()) throw new Error('Mission required for automatic cloud agent naming.');
-  try {
-    const provider = createAgentProviderRegistry({ env, userDOStub: userDO, fetch });
-    const result = await generateText({
-      model: provider.resolveModel(modelSpec),
-      system: 'You create short, useful names for persistent software agents.',
-      prompt: agentIdentityPrompt(mission),
-      maxOutputTokens: 80,
-    });
-    const identity = parseAgentIdentityOutput(result.text, id);
-    if (!identity) throw new Error('model returned invalid naming JSON');
-    return identity;
-  } catch (err) {
-    throw new Error(`Could not generate a cloud agent name: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  const provider = createAgentProviderRegistry({ env, userDOStub: userDO, fetch });
+  const result = await generateText({
+    model: provider.resolveModel(modelSpec),
+    system: 'You create short, useful names for persistent software agents.',
+    prompt: agentIdentityPrompt(mission),
+    maxOutputTokens: 80,
+  });
+  return parseAgentIdentityOutput(result.text, id)?.displayName ?? null;
 }
 
 async function initializeOrchestrator(

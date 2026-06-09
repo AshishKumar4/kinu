@@ -19,7 +19,7 @@ interface CliIdentity {
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
 
-export async function handleCliRequest(request: Request, env: Env): Promise<Response | null> {
+export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
 
@@ -105,7 +105,9 @@ export async function handleCliRequest(request: Request, env: Env): Promise<Resp
     const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
     if (!body?.name?.trim() && !body?.purpose?.trim()) return err(400, 'purpose required');
     try {
-      const entry = await createCloudAgentForUser(env, cli.userId, cli.userDO, body);
+      const entry = await createCloudAgentForUser(env, cli.userId, cli.userDO, body, {
+        waitUntil: (promise) => ctx?.waitUntil(promise),
+      });
       return json(entry, { status: 201 });
     } catch (e) {
       const message = (e as Error).message;

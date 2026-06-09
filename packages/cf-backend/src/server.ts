@@ -205,7 +205,7 @@ export default {
     if (landingResp) return landingResp;
 
     // 5. CLI install + device-code auth + token-authenticated account API.
-    const cliResp = await handleCliRequest(request, env);
+    const cliResp = await handleCliRequest(request, env, ctx);
     if (cliResp) return cliResp;
 
     // 6. Public — build-info health.
@@ -249,7 +249,7 @@ export default {
     if (nimbusResp) return withD1Bookmark(nimbusResp, identity);
 
     // 9. /api/user/* — user-scoped routes.
-    const userResp = await handleUserRequest(authenticatedRequest, env, identity);
+    const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
     if (userResp) return withD1Bookmark(userResp, identity);
 
     // 10. Per-agent routes — verify ownership.

@@ -53,6 +53,7 @@ export async function handleUserRequest(
   request: Request,
   env: Env,
   identity: AuthIdentity,
+  ctx?: ExecutionContext,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/user')) return null;
@@ -86,7 +87,9 @@ export async function handleUserRequest(
     if (!body) return err(400, 'Body must be JSON');
     if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
     try {
-      const entry = await createCloudAgentForUser(env, identity.userId, stub, body);
+      const entry = await createCloudAgentForUser(env, identity.userId, stub, body, {
+        waitUntil: (promise) => ctx?.waitUntil(promise),
+      });
       return json(entry, { status: 201 });
     } catch (e) {
       const message = (e as Error).message;
