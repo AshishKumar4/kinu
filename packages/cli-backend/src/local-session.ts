@@ -815,7 +815,7 @@ export class LocalAgentSession implements BackendHost {
     return this.history.slice(-CAP).map((m, i) => ({
       id: `ctx-${i}`,
       role: (m.role === 'system' || m.role === 'user' || m.role === 'assistant' || m.role === 'tool') ? m.role : 'assistant',
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      content: serializeContentForHeads(m.content),
       createdAt: i,
     }));
   }
@@ -953,6 +953,20 @@ export class LocalAgentSession implements BackendHost {
     });
     this.tools = this.wrapToolsForBackground(rawTools);
   }
+}
+
+/** Serialize message content for head inheritance. File-part payloads (data
+ *  URLs from attachments) are reduced to their filename/mediaType reference so
+ *  spawned heads never inherit megabytes of base64. */
+export function serializeContentForHeads(content: ModelMessage['content']): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return JSON.stringify(content.map((part) =>
+      part && typeof part === 'object' && 'type' in part && part.type === 'file'
+        ? { type: 'file', mediaType: part.mediaType, filename: part.filename }
+        : part));
+  }
+  return JSON.stringify(content);
 }
 
 /** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */

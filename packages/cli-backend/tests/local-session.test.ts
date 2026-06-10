@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
+import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session.js';
 import type { LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
 import { createLocalAgentSelfProvider } from '../src/agent-self.js';
@@ -163,6 +163,19 @@ describe('LocalAgentSession.send — a user turn', () => {
     // The durable transcript persists the text — never the data-URL payload.
     const rows = db.query(`SELECT role, content FROM messages ORDER BY created_at`).all() as Array<{ role: string; content: string }>;
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
+  });
+
+  test('head-inherited context drops file-part data URLs, keeps the reference', () => {
+    const serialized = serializeContentForHeads([
+      { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'square.png' },
+      { type: 'text', text: 'what is this?' },
+    ]);
+    expect(serialized).not.toContain('base64,AAAA');
+    expect(JSON.parse(serialized)).toEqual([
+      { type: 'file', mediaType: 'image/png', filename: 'square.png' },
+      { type: 'text', text: 'what is this?' },
+    ]);
+    expect(serializeContentForHeads('plain text')).toBe('plain text');
   });
 
   test('restores persisted history for the same durable session id', async () => {
