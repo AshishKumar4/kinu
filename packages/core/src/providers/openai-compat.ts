@@ -12,8 +12,8 @@
 // time via the AuthResolver.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ProviderDeps } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
+import type { ModelProvider } from './types.js';
+import { createAuthedFetch } from './util.js';
 
 export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
@@ -39,29 +39,18 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
     listModels: () => [],   // dynamic — UI prompts user for model id
 
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = deps.fetch ?? fetch;
       // baseURL is sourced from the credential, but @ai-sdk needs it at
       // construction. We pass a placeholder and rewrite the prefix inside
       // customFetch (which re-reads the credential each call, so a UI-side
       // change to baseURL takes effect without rebuilding the model).
       const placeholder = 'https://openai-compat.invalid';
-      const customFetch = asFetchFunction(async (input, init) => {
-        const auth = await deps.getAuth(credKey);
-        if (!auth || !auth.baseURL) {
-          return new Response(
-            JSON.stringify({ error: `openai-compat credential ${credKey} not configured (baseURL required)` }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        const headers = new Headers(init?.headers);
-        for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
-        const originalUrl = typeof input === 'string' ? input
-                          : input instanceof URL ? input.toString()
-                          : input.url;
-        const url = originalUrl.startsWith(placeholder)
-          ? auth.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
-          : originalUrl;
-        return baseFetch(url, { ...init, headers });
+      const customFetch = createAuthedFetch(deps, {
+        credKey,
+        missingCredentialError: `openai-compat credential ${credKey} not configured (baseURL required)`,
+        requireBaseURL: true,
+        mutate: ({ url, auth }) => auth.baseURL && url.startsWith(placeholder)
+          ? auth.baseURL.replace(/\/+$/, '') + url.slice(placeholder.length)
+          : url,
       });
       return createOpenAICompatible({
         name: providerId,

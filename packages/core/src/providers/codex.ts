@@ -14,8 +14,9 @@
 // Workers egress is CF data-center IPs — runtime probe needed.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
+import type { ModelProvider, ModelInfo } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
+import { authCacheKey, cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
@@ -36,7 +37,9 @@ export interface CodexProviderOptions {
 
 export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvider {
   const baseURL = opts.baseURL ?? CODEX_BASE_URL;
-  let modelCache: { at: number; models: ModelInfo[] } | null = null;
+  // Keyed by the resolved credential so swapping the ChatGPT account
+  // invalidates the catalog instead of serving the previous account's models.
+  let modelCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
   return {
     id: 'codex',
     label: 'ChatGPT Codex (subscription)',
@@ -47,9 +50,15 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       return 'No Codex OAuth credential — connect ChatGPT via the device-code flow.';
     },
     async listModels(deps) {
-      if (modelCache && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) return cloneModelInfos(modelCache.models);
       const auth = await deps.getAuth(CODEX_CRED_KEY);
-      if (!auth) return cloneModelInfos(FALLBACK_MODELS);
+      if (!auth) {
+        modelCache = null;
+        return cloneModelInfos(FALLBACK_MODELS);
+      }
+      const authKey = authCacheKey(auth);
+      if (modelCache && modelCache.authKey === authKey && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) {
+        return cloneModelInfos(modelCache.models);
+      }
       try {
         const fetchFn = deps.fetch ?? fetch;
         const res = await fetchFn(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, {
@@ -59,7 +68,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         const body: unknown = await res.json();
         const models = parseCodexModels(body);
         if (models.length === 0) return cloneModelInfos(FALLBACK_MODELS);
-        modelCache = { at: Date.now(), models };
+        modelCache = { at: Date.now(), authKey, models };
         return cloneModelInfos(models);
       } catch {
         return cloneModelInfos(FALLBACK_MODELS);
@@ -176,13 +185,6 @@ function parseCodexModels(body: unknown): ModelInfo[] {
     .map(({ priority: _priority, ...model }) => model);
 }
 
-function cloneModelInfos(models: readonly ModelInfo[]): ModelInfo[] {
-  return models.map((model) => ({
-    ...model,
-    capabilities: model.capabilities ? [...model.capabilities] : undefined,
-  }));
-}
-
 function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
   if (!init || typeof init.body !== 'string') return init;
 
@@ -235,18 +237,6 @@ function contentToText(content: unknown): string {
     .filter(Boolean)
     .join('\n')
     .trim();
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function debugCodex(message: string): void {

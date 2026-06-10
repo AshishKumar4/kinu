@@ -20,7 +20,17 @@ export interface ModelInfo {
   contextWindow?: number;
 }
 
-export type ModelCapability = 'tools' | 'vision' | 'reasoning' | 'json-mode' | 'streaming';
+/** The one capability vocabulary — provider catalogs populate it, prompt
+ *  shaping (prompting/model-profile.ts) consumes it. */
+export type ModelCapability =
+  | 'tools'
+  | 'vision'
+  | 'reasoning'
+  | 'json-mode'
+  | 'streaming'
+  | 'structured-outputs'
+  | 'computer-use'
+  | 'prompt-caching';
 
 export interface ProviderInfo {
   id: string;

@@ -84,6 +84,13 @@ export interface ExecutorProvider {
    *
    * This matches codemode's SimpleToolRecord shape so it can be passed
    * directly as a ToolProvider to createExecuteTool({ providers: [...] }).
+   *
+   * Cancellation contract: in-process callers (the `run` tool) pass a
+   * trailing `{ signal }` options argument to `exec`. Implementations honor
+   * it at the strongest level their transport supports — the workspace shell
+   * stops between commands; remote executors stop waiting and throw an
+   * AbortError that says the remote command may still finish (their
+   * protocols expose no kill for an in-flight exec). See execution/signal.ts.
    */
   readonly tools: Record<string, {
     description: string;

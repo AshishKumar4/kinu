@@ -6,6 +6,7 @@
  * ~20 tables in one SQLite file = one agent.
  */
 
+import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
 import type { RawSqlExec } from '../types/primitives.js';
 
 const DDL = [
@@ -83,17 +84,8 @@ const DDL = [
     created_at INTEGER NOT NULL
   )`,
 
-  // ── Virtual filesystem (SqliteFS-compatible chunked storage) ────
-  `CREATE TABLE IF NOT EXISTS vfs_files (
-    path        TEXT    NOT NULL,
-    chunk_index INTEGER NOT NULL DEFAULT 0,
-    parent_path TEXT    NOT NULL DEFAULT '',
-    data        BLOB,
-    is_dir      INTEGER NOT NULL DEFAULT 0,
-    size        INTEGER NOT NULL DEFAULT 0,
-    mtime       INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (path, chunk_index)
-  )`,
+  // ── Virtual filesystem — canonical DDL owned by SqliteFS (agent-utils) ──
+  ...VFS_SCHEMA_DDL,
 
   // ── Conversation messages (simplified session tree) ────────────
   `CREATE TABLE IF NOT EXISTS messages (

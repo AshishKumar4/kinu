@@ -1,24 +1,5 @@
 import type { VFS } from "../vfs/types";
 
-export function withTimeout<T>(
-	promise: Promise<T>,
-	ms: number,
-	signal?: AbortSignal,
-): Promise<T> {
-	const signals: AbortSignal[] = [AbortSignal.timeout(ms)];
-	if (signal) signals.push(signal);
-	const combined = combineAbortSignals(signals);
-
-	return new Promise<T>((resolve, reject) => {
-		if (combined.aborted) {
-			reject(combined.reason);
-			return;
-		}
-		combined.addEventListener("abort", () => reject(combined.reason), { once: true });
-		promise.then(resolve, reject);
-	});
-}
-
 export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 	const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
 	if (live.length === 1) return live[0];
@@ -34,6 +15,33 @@ export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 		signal.addEventListener("abort", () => abort(signal), { once: true });
 	}
 	return controller.signal;
+}
+
+export function isAbortError(err: unknown): boolean {
+	return err instanceof Error && err.name === "AbortError";
+}
+
+/**
+ * Run `work` but stop waiting when `signal` aborts, rejecting with an
+ * AbortError carrying `message`. A pre-aborted signal rejects without
+ * starting the work at all. This cancels only the WAIT — callers whose
+ * underlying work cannot be killed remotely must say so in `message`.
+ */
+export function raceAbort<T>(
+	work: () => Promise<T>,
+	signal: AbortSignal | undefined,
+	message: string,
+): Promise<T> {
+	if (!signal) return work();
+	if (signal.aborted) return Promise.reject(new DOMException(message, "AbortError"));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(new DOMException(message, "AbortError"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		work().then(
+			(value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
+			(err) => { signal.removeEventListener("abort", onAbort); reject(err); },
+		);
+	});
 }
 
 export function extractError(err: unknown, fallback: string): string {

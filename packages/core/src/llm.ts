@@ -88,8 +88,8 @@ export function collectStepText(result: { text: string; steps: StepResult<ToolSe
   const toolSummaries: string[] = [];
   for (const step of result.steps) {
     for (const tr of step.toolResults) {
-      const output = (tr as any).output ?? (tr as any).result ?? '';
-      const text = typeof output === 'string' ? output : JSON.stringify(output);
+      const { output } = tr as { toolName: string; output?: unknown };
+      const text = typeof output === 'string' ? output : JSON.stringify(output ?? '');
       toolSummaries.push(`[${tr.toolName}] ${text.slice(0, 500)}`);
     }
   }
@@ -99,32 +99,15 @@ export function collectStepText(result: { text: string; steps: StepResult<ToolSe
 }
 
 /**
- * Unified chat-model factory. Collapses the four near-duplicate Workers-AI /
- * AI-Gateway / OpenAI-compatible branches that previously lived in
- * cf-backend/orchestrator.ts, cf-backend/runtime.ts (twice), and
- * cf-backend/exploration.ts into one surface.
- *
+ * Unified chat-model factory for the CLI's endpoint-configured models.
  * Returns a Vercel AI SDK LanguageModel suitable for passing to generateText /
  * streamText / Think. For an LLM primitive (with .stream/.complete), use
  * createVercelAILLM.
- *
- * The `workers-ai` branch keeps the binding lookup opaque — callers pass the
- * DO env binding and we defer to @cloudflare/workers-ai-provider at call time
- * via a factory indirection, so this file has no hard dep on that package.
  */
 // NOTE: the live Workers AI path is `createWorkersAIProvider` (cf-backend),
 // which correctly types sessionAffinity as a string. The CLI is the only
-// `createChatModel` caller and uses `openai-compat`, so no `workers-ai` variant
-// is needed here (a removed `sessionAffinity?: boolean` was a latent footgun —
-// a boolean would serialize to the literal header value "true").
+// `createChatModel` caller and uses `openai-compat` / `anthropic`.
 export type ChatModelConfig =
-  | {
-      kind: 'ai-gateway';
-      baseURL: string;
-      /** Full Authorization header value (e.g. 'Bearer sk-...'). */
-      auth: string;
-      modelId: string;
-    }
   | {
       kind: 'openai-compat';
       name?: string;
@@ -140,13 +123,6 @@ export type ChatModelConfig =
     };
 
 export function createChatModel(config: ChatModelConfig): LanguageModel {
-  if (config.kind === 'ai-gateway') {
-    return createOpenAICompatible({
-      name: 'workers-ai',
-      baseURL: config.baseURL,
-      headers: { Authorization: config.auth },
-    }).chatModel(config.modelId);
-  }
   if (config.kind === 'anthropic') {
     return createAnthropicModel({
       name: 'anthropic',

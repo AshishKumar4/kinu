@@ -20,6 +20,8 @@
  *                       + Vectorize when a VectorStore is wired).
  *   6. fact           — typed keyed world model: remember / recall / forget.
  *                       Gated on deps.facts.
+ *   7. product_change — governed product/UI self-customization lane.
+ *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
  * execute_tools, the think tool) are injected through BuiltinToolDeps so the
@@ -249,7 +251,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const memory = rt.memory;
   const router = rt.executionRouter;
   const shell = rt.shell;
-  const vfs = rt.storage.vfs;
 
   const tools: ToolSet = {};
 

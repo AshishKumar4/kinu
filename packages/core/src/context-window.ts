@@ -1,3 +1,10 @@
+/**
+ * Static context-window FALLBACK for callers that only have a model spec
+ * string. The provider catalog (ModelInfo.contextWindow, live from
+ * models.dev / the Codex models endpoint) is the source of truth — prefer
+ * the reported window when a resolved ModelInfo is available, as the CLI
+ * does (`reportedContextWindow ?? contextWindowForModel(spec)`).
+ */
 const WINDOWS: Array<[RegExp, number]> = [
   [/minimax\/m3/i, 1_000_000],
   [/^codex\/gpt-5\.(?:5|4)\b/i, 272_000],

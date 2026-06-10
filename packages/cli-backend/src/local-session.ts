@@ -39,6 +39,7 @@ import {
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
+import { combineAbortSignals } from '@proteus/agent-utils';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { createLocalAgentSelfProvider } from './agent-self.js';
@@ -940,23 +941,6 @@ export class LocalAgentSession implements BackendHost {
     });
     this.tools = this.wrapToolsForBackground(rawTools);
   }
-}
-
-function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
-  const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (live.length === 1) return live[0];
-  const controller = new AbortController();
-  const abort = (signal: AbortSignal) => {
-    if (!controller.signal.aborted) controller.abort(signal.reason);
-  };
-  for (const signal of live) {
-    if (signal.aborted) {
-      abort(signal);
-      break;
-    }
-    signal.addEventListener('abort', () => abort(signal), { once: true });
-  }
-  return controller.signal;
 }
 
 /** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */

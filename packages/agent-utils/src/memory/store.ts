@@ -1,5 +1,5 @@
 import type { SqlExecutor } from "../types";
-import type { VFS } from "../vfs/types";
+import type { VFS, VFSError } from "../vfs/types";
 import { readVfsText } from "../core/utils";
 import { chunkMarkdown } from "./chunker";
 import { sanitizeFtsQuery } from "./query";
@@ -89,7 +89,13 @@ export class MemoryStore {
 
 	async appendToFile(path: string, content: string): Promise<void> {
 		let existing = "";
-		try { existing = (await this.vfs.readFile(path, { encoding: "utf8" })) as string; } catch { /* new file */ }
+		try {
+			existing = (await this.vfs.readFile(path, { encoding: "utf8" })) as string;
+		} catch (err) {
+			// Only a missing file starts fresh. Any other read failure must
+			// surface — silently overwriting here destroys the existing notes.
+			if ((err as VFSError).code !== "ENOENT") throw err;
+		}
 		await this.writeFile(path, existing + content);
 	}
 

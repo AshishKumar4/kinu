@@ -16,7 +16,9 @@
  *   sandbox.listPorts()
  */
 
+import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
+import { readExecSignal } from './signal.js';
 
 /**
  * Duck-typed handle — matches the subset of @cloudflare/sandbox's getSandbox()
@@ -258,12 +260,20 @@ export function createSandboxExecutor(
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the sandbox container.',
-      execute: async (command: unknown): Promise<string> => {
+      execute: async (command: unknown, options?: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const signal = readExecSignal(options);
         try {
-          const res = await withRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000 })));
+          // The sandbox SDK has no kill for an in-flight exec — abort stops
+          // the wait; the container-side command runs to its own timeout.
+          const res = await raceAbort(
+            () => withRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000 }))),
+            signal,
+            'sandbox exec aborted — the command may still finish inside the container',
+          );
           return normalize(res);
         } catch (err) {
+          if (isAbortError(err)) throw err;
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },

@@ -15,6 +15,19 @@ export interface ShellResult {
 	exitCode: number;
 }
 
+export interface ShellExecOptions {
+	stdin?: string;
+	/** Cancels between commands: the current built-in finishes, the rest of
+	 *  the pipeline/command list is skipped and exec returns exit code 130. */
+	signal?: AbortSignal;
+}
+
+const ABORT_EXIT_CODE = 130;
+
+function abortedResult(stdout = ""): ShellResult {
+	return { stdout, stderr: "aborted", exitCode: ABORT_EXIT_CODE };
+}
+
 type CommandFn = (vfs: VFS, args: string[], stdin?: string) => Promise<string>;
 
 const COMMANDS: Record<string, CommandFn> = {
@@ -34,11 +47,12 @@ const PROGRAM_COMMANDS = new Set([
 
 const SHELL_BUILTINS = new Set(["cd", "export", "source", "alias", "unset", "set"]);
 
-async function execPipeline(vfs: VFS, pipeline: ParsedPipeline, stdin?: string): Promise<ShellResult> {
+async function execPipeline(vfs: VFS, pipeline: ParsedPipeline, stdin?: string, signal?: AbortSignal): Promise<ShellResult> {
 	try {
 		let data = stdin;
 
 		for (const cmd of pipeline.commands) {
+			if (signal?.aborted) return abortedResult();
 			const name = cmd.argv[0];
 			const args = cmd.argv.slice(1);
 
@@ -57,6 +71,8 @@ async function execPipeline(vfs: VFS, pipeline: ParsedPipeline, stdin?: string):
 
 			data = await fn(vfs, args, data);
 		}
+
+		if (signal?.aborted) return abortedResult();
 
 		if (pipeline.redirect && data) {
 			const content = typeof data === "string" ? data : "";
@@ -78,7 +94,8 @@ async function execPipeline(vfs: VFS, pipeline: ParsedPipeline, stdin?: string):
 	}
 }
 
-export async function exec(vfs: VFS, input: string, stdin?: string): Promise<ShellResult> {
+export async function exec(vfs: VFS, input: string, options?: ShellExecOptions): Promise<ShellResult> {
+	const { stdin, signal } = options ?? {};
 	try {
 		const commandList = parseCommandList(input);
 		let lastResult: ShellResult = { stdout: "", stderr: "", exitCode: 0 };
@@ -88,9 +105,13 @@ export async function exec(vfs: VFS, input: string, stdin?: string): Promise<She
 		for (let i = 0; i < commandList.segments.length; i++) {
 			const segment = commandList.segments[i];
 			if (skip) { skip = false; continue; }
+			if (signal?.aborted) return abortedResult(outputs.join(""));
 
-			lastResult = await execPipeline(vfs, segment.pipeline, stdin);
+			lastResult = await execPipeline(vfs, segment.pipeline, stdin, signal);
 			if (lastResult.stdout) outputs.push(lastResult.stdout);
+			if (lastResult.exitCode === ABORT_EXIT_CODE && signal?.aborted) {
+				return abortedResult(outputs.join(""));
+			}
 
 			if (segment.operator === "&&" && lastResult.exitCode !== 0) break;
 			if (segment.operator === "||" && lastResult.exitCode === 0) skip = true;

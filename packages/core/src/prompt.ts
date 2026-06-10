@@ -46,12 +46,6 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   currentDate?: string;
 }
 
-export interface SystemPromptParts {
-  stable: string;
-  context: string;
-  volatile: string;
-}
-
 export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
 
 function renderRuntimeContext(opts: SystemPromptOptions): string {
@@ -266,42 +260,23 @@ function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
   return readSoul(rt.storage.sql) ?? FALLBACK_PURPOSE;
 }
 
-export function buildSystemPromptPartsSync(
+/**
+ * Synchronous because every consumer is: CF's Think.getSystemPrompt returns a
+ * string synchronously and the runtime's sql executor is synchronous.
+ */
+export function buildSystemPromptSync(
   rt: AgentRuntime,
   opts: SystemPromptOptions = {},
-): SystemPromptParts {
+): string {
   const surface = compilePromptSurface(opts);
-  const stable = [
+  return [
     readSoulForPrompt(rt, opts.soulOverride),
     renderRuntimeContext(opts),
     renderOperatingGuidance(surface),
     renderToolsSection(surface),
     renderExecutorSection(surface.selectableExecutors, surface.builtinTools),
     renderAgentStateSection(surface.builtinTools),
+    opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '',
+    renderKnowledgeSection(opts.extraKnowledge),
   ].filter(Boolean).join('\n\n');
-
-  const context = opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '';
-  const volatile = renderKnowledgeSection(opts.extraKnowledge);
-
-  return { stable, context, volatile };
-}
-
-/**
- * Synchronous form. CF's Think.getSystemPrompt returns string synchronously
- * and this runtime's sql executor is also synchronous.
- */
-export function buildSystemPromptSync(
-  rt: AgentRuntime,
-  opts: SystemPromptOptions = {},
-): string {
-  const parts = buildSystemPromptPartsSync(rt, opts);
-  return [parts.stable, parts.context, parts.volatile].filter(Boolean).join('\n\n');
-}
-
-/** Async wrapper for symmetry with other core builders. */
-export async function buildSystemPrompt(
-  rt: AgentRuntime,
-  opts: SystemPromptOptions = {},
-): Promise<string> {
-  return buildSystemPromptSync(rt, opts);
 }

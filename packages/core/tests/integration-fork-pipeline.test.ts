@@ -148,7 +148,7 @@ function seedSource(src: ReturnType<typeof fresh>) {
 }
 
 describe('fork pipeline (end-to-end)', () => {
-  test('payload round-trips through JSON and replays into the fork DB', () => {
+  test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', () => {
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
@@ -160,8 +160,9 @@ describe('fork pipeline (end-to-end)', () => {
 
     // Source side: build payload
     const rawPayload = buildPayload(src, 'm2', 'my-fork');
-    // Simulate the RPC boundary — JSON round-trip
-    const payload = JSON.parse(JSON.stringify(rawPayload));
+    // Simulate the RPC boundary — DO RPC uses structured clone, which
+    // preserves the canonical BLOB (Uint8Array/ArrayBuffer) vfs rows.
+    const payload = structuredClone(rawPayload);
 
     // Fork side: build ephemeral SqlExecutor + run forkAgentStorage
     const srcShim = buildSqlFromPayload(payload);
@@ -221,7 +222,7 @@ describe('fork pipeline (end-to-end)', () => {
     src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
     const rawPayload = buildPayload(src, 'm1', 'empty-fork');
-    const payload = JSON.parse(JSON.stringify(rawPayload));
+    const payload = structuredClone(rawPayload);
     const srcShim = buildSqlFromPayload(payload);
 
     expect(() => forkAgentStorage(srcShim, tgt.sql, {
@@ -249,7 +250,7 @@ describe('fork pipeline (end-to-end)', () => {
 
     seedSource(src);
     const rawPayload = buildPayload(src, 'm2', 'recovered-fork');
-    const payload = JSON.parse(JSON.stringify(rawPayload));
+    const payload = structuredClone(rawPayload);
     const srcShim = buildSqlFromPayload(payload);
 
     forkAgentStorage(srcShim, tgt.sql, {

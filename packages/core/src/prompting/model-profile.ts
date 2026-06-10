@@ -1,14 +1,9 @@
+import type { ModelCapability } from '../providers/types.js';
+
 export type PromptModelFamily = 'kimi' | 'gpt' | 'generic';
 
-export type PromptModelCapability =
-  | 'tools'
-  | 'vision'
-  | 'reasoning'
-  | 'json-mode'
-  | 'structured-outputs'
-  | 'streaming'
-  | 'computer-use'
-  | 'prompt-caching';
+/** Same vocabulary as the provider catalogs — one capability taxonomy. */
+export type PromptModelCapability = ModelCapability;
 
 export interface PromptModelContext {
   id?: string;
@@ -76,12 +71,14 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
 }
 
 function inferredCapabilities(model: PromptModelContext | undefined, family: PromptModelFamily): PromptModelCapability[] {
-  const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
+  // Catalog-reported capabilities (ModelInfo.capabilities) are authoritative.
   if (model?.capabilities?.length) {
     const out = model.capabilities.map(normalizeCapability).filter((c): c is PromptModelCapability => !!c);
     if (model.reasoning && !out.includes('reasoning')) out.push('reasoning');
     return out;
   }
+  // Last-resort id-substring heuristics for callers that pass only a model id.
+  const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
   if (text.includes('o4-mini') || text.includes('deepseek-r1')) {
     return ['streaming', 'reasoning'];
   }

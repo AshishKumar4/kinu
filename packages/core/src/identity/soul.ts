@@ -1,3 +1,20 @@
+/**
+ * SOUL.md — the agent's identity document, stored at the VFS root.
+ *
+ * The soul is an ordinary vfs_files entry written through the canonical
+ * SqliteFS encoding, so every VFS consumer (file manager, workspace shell,
+ * shared scratch) reads the same bytes. Unlike the pre-SOUL.md `agent_soul`
+ * table (creation-only), SOUL.md is deliberately mutable: the user edits it
+ * via the backend setSoul RPC and the agent can evolve it through its own
+ * file tools.
+ *
+ * readSoul performs two one-time migrations for pre-existing agents:
+ *   - `agent_soul` table (pre-b7fefa1) → rendered SOUL.md, table dropped.
+ *   - TEXT-typed SOUL.md rows (written by the broken raw-SQL writer that
+ *     shipped with b7fefa1) → recovered and rewritten as canonical BLOBs.
+ */
+
+import { concatBuffers, rowDataToBytes, writeVfsFileSync } from '@proteus/agent-utils/vfs';
 import type { SqlExecutor } from '../types/primitives.js';
 
 export const SOUL_PATH = 'SOUL.md';
@@ -30,14 +47,6 @@ export function renderSoulMarkdown(input: { name: string; mission?: string }): s
   ].join('\n');
 }
 
-function textFromData(data: unknown): string {
-  if (typeof data === 'string') return data;
-  if (data instanceof Uint8Array) return new TextDecoder().decode(data);
-  if (data instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(data));
-  if (data === null || data === undefined) return '';
-  return String(data);
-}
-
 function soulSummaryFromMarkdown(markdown: string): string {
   const lines = markdown.split(/\r?\n/);
   const missionIndex = lines.findIndex((line) => /^##\s+mission\s*$/i.test(line.trim()));
@@ -64,47 +73,61 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
   return `${summary.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
+type SoulRow = { data: string | ArrayBuffer | Uint8Array | null };
+
 export function readSoul(sql: SqlExecutor): string | null {
-  try {
-    const rows = sql<{ data: unknown }>`
-      SELECT data FROM vfs_files
-      WHERE path = ${SOUL_PATH}
-      ORDER BY chunk_index ASC
-    `;
-    const text = rows.map((row) => textFromData(row.data)).join('');
+  const rows = sql<SoulRow>`
+    SELECT data FROM vfs_files
+    WHERE path = ${SOUL_PATH} AND is_dir = 0
+    ORDER BY chunk_index ASC
+  `;
+  if (rows.length === 0) return migrateLegacyAgentSoul(sql);
+
+  // Rows bound as TEXT by the pre-fix writer: recover the markdown and
+  // rewrite it through the canonical BLOB encoding.
+  if (rows.some((row) => typeof row.data === 'string')) {
+    const text = rows.map((row) => (typeof row.data === 'string' ? row.data : '')).join('');
+    writeSoul(sql, text);
     return text.trim() ? text : null;
-  } catch {
-    try {
-      const rows = sql<{ data: unknown }>`
-        SELECT data FROM vfs_files WHERE path = ${SOUL_PATH} LIMIT 1
-      `;
-      const text = textFromData(rows[0]?.data);
-      return text.trim() ? text : null;
-    } catch {
-      return null;
-    }
   }
+
+  const bytes = concatBuffers(rows.map((row) => rowDataToBytes(row.data)));
+  const text = new TextDecoder().decode(bytes);
+  return text.trim() ? text : null;
 }
 
 export function writeSoul(sql: SqlExecutor, markdown: string): void {
-  const now = Date.now();
-  const size = new TextEncoder().encode(markdown).byteLength;
-  sql`DELETE FROM vfs_files WHERE path = ${SOUL_PATH}`;
-  try {
-    sql`
-      INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
-      VALUES (${SOUL_PATH}, ${0}, ${''}, ${markdown}, ${0}, ${size}, ${now})
-    `;
-  } catch {
-    sql`
-      INSERT OR REPLACE INTO vfs_files (path, data, is_dir, size, mtime)
-      VALUES (${SOUL_PATH}, ${markdown}, ${0}, ${size}, ${now})
-    `;
-  }
+  writeVfsFileSync(sql, SOUL_PATH, markdown);
 }
 
 export function seedSoul(sql: SqlExecutor, input: { name: string; mission?: string }): string {
   const soul = renderSoulMarkdown(input);
   writeSoul(sql, soul);
+  return soul;
+}
+
+/** One-time migration from the pre-SOUL.md `agent_soul` table: render the
+ *  legacy purpose into SOUL.md via the canonical writer, then drop the table.
+ *  Returns the migrated markdown, or null when no legacy soul exists. */
+function migrateLegacyAgentSoul(sql: SqlExecutor): string | null {
+  const legacyTable = sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_soul'
+  `;
+  if (legacyTable.length === 0) return null;
+
+  const purpose = sql<{ purpose: string | null }>`
+    SELECT purpose FROM agent_soul LIMIT 1
+  `[0]?.purpose?.trim();
+  if (!purpose) {
+    sql`DROP TABLE agent_soul`;
+    return null;
+  }
+
+  const name = sql<{ name: string | null }>`
+    SELECT name FROM agent_identity LIMIT 1
+  `[0]?.name ?? '';
+  const soul = renderSoulMarkdown({ name, mission: purpose });
+  writeSoul(sql, soul);
+  sql`DROP TABLE agent_soul`;
   return soul;
 }

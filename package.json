@@ -7,7 +7,7 @@
   "keywords": ["agent", "mcts", "self-evolving", "cloudflare", "durable-objects"],
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "bun test --cwd packages/core",
+    "test": "bun test --cwd packages/agent-utils && bun test --cwd packages/core",
     "check": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli",
     "dev": "bun run --cwd packages/cf-backend start",
     "cli": "bun run packages/cli/bin/cli.ts",

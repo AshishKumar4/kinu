@@ -120,6 +120,9 @@
     "packages/core": {
       "name": "@proteus/core",
       "version": "0.1.0",
+      "dependencies": {
+        "@proteus/agent-utils": "workspace:*",
+      },
       "devDependencies": {
         "@proteus/test-utils": "workspace:*",
       },
@@ -135,6 +138,7 @@
       "name": "@proteus/test-utils",
       "version": "0.1.0",
       "dependencies": {
+        "@proteus/agent-utils": "workspace:*",
         "@proteus/core": "workspace:*",
       },
     },

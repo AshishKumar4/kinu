@@ -156,20 +156,31 @@ export function tokensToCredential(t: DeviceCodeTokens, metadata?: Record<string
   };
 }
 
-export function decodeCodexAccountId(accessToken: string): string | null {
+/** Decode a JWT's payload segment (base64url) — null when undecodable. */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
-    const parts = accessToken.split('.');
+    const parts = token.split('.');
     if (parts.length < 2) return null;
     const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
     const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-    const json = JSON.parse(typeof atob === 'function'
+    const json: unknown = JSON.parse(typeof atob === 'function'
       ? atob(padded)
       : Buffer.from(padded, 'base64').toString('utf-8'));
-    const id = json?.['https://api.openai.com/auth']?.chatgpt_account_id;
-    return typeof id === 'string' && id ? id : null;
+    return json && typeof json === 'object' && !Array.isArray(json)
+      ? json as Record<string, unknown>
+      : null;
   } catch {
     return null;
   }
+}
+
+export function decodeCodexAccountId(accessToken: string): string | null {
+  const payload = decodeJwtPayload(accessToken);
+  const auth = payload?.['https://api.openai.com/auth'];
+  const id = auth && typeof auth === 'object'
+    ? (auth as Record<string, unknown>).chatgpt_account_id
+    : undefined;
+  return typeof id === 'string' && id ? id : null;
 }
 
 export function codexCredentialToHeaders(cred: OAuthCredential): Record<string, string> {
@@ -186,18 +197,9 @@ export function codexCredentialToHeaders(cred: OAuthCredential): Record<string, 
 }
 
 export function codexAccessTokenExpiring(accessToken: string, skewSec = 60): boolean {
-  try {
-    const parts = accessToken.split('.');
-    if (parts.length < 2) return true;
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-    const json = JSON.parse(typeof atob === 'function'
-      ? atob(padded)
-      : Buffer.from(padded, 'base64').toString('utf-8'));
-    const exp = typeof json?.exp === 'number' ? json.exp : null;
-    if (exp == null) return false;
-    return Date.now() / 1000 + skewSec >= exp;
-  } catch {
-    return true;
-  }
+  const payload = decodeJwtPayload(accessToken);
+  if (!payload) return true;
+  const exp = typeof payload.exp === 'number' ? payload.exp : null;
+  if (exp == null) return false;
+  return Date.now() / 1000 + skewSec >= exp;
 }

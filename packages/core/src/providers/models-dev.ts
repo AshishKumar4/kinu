@@ -1,11 +1,11 @@
 import type { ModelCapability, ModelInfo, ProviderDeps } from './types.js';
+import { cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 5 * 60_000;
 
 export type ModelsDevProviderId =
   | 'anthropic'
-  | 'cloudflare-ai-gateway'
   | 'cloudflare-workers-ai'
   | 'openai';
 
@@ -111,21 +111,3 @@ function orderModels(models: ModelInfo[], preferredIds: readonly string[] | unde
   });
 }
 
-function cloneModelInfos(models: readonly ModelInfo[] | undefined): ModelInfo[] {
-  return (models ?? []).map((model) => ({
-    ...model,
-    capabilities: model.capabilities ? [...model.capabilities] : undefined,
-  }));
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}

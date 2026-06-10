@@ -237,3 +237,70 @@ describe('Codex provider contract', () => {
     expect(mock.requests.length).toBe(0);
   });
 });
+
+// ── Catalog caches keyed by credential ────────────────────────────────
+
+describe('listModels cache invalidation on credential change', () => {
+  function makeSwappableDeps(fetchFn: typeof fetch): { deps: ProviderDeps; set: (key: string, auth: AuthResolution | null) => void } {
+    const store = new Map<string, AuthResolution>();
+    return {
+      deps: {
+        env: {},
+        fetch: fetchFn,
+        async getAuth(key) { return store.get(key) ?? null; },
+        async hasCredential(key) { return store.has(key); },
+      },
+      set: (key, auth) => { auth ? store.set(key, auth) : store.delete(key); },
+    };
+  }
+
+  test('OpenRouter: swapping the API key refetches the catalog with the new key', async () => {
+    const mock = createMockFetch([
+      { match: 'openrouter.ai', respond: { status: 200, body: { data: [{ id: 'meta/m1' }] } } },
+    ]);
+    const { deps, set } = makeSwappableDeps(mock.fetch);
+    const provider = createOpenRouterProvider();
+
+    set(OPENROUTER_CRED_KEY, { headers: { Authorization: 'Bearer key-A' } });
+    await provider.listModels(deps);
+    await provider.listModels(deps); // cache hit — same credential
+    expect(mock.requests.length).toBe(1);
+
+    set(OPENROUTER_CRED_KEY, { headers: { Authorization: 'Bearer key-B' } });
+    await provider.listModels(deps);
+    expect(mock.requests.length).toBe(2);
+    expect(mock.requests[1].headers['authorization']).toBe('Bearer key-B');
+  });
+
+  test('OpenRouter: removing the credential clears the catalog instead of serving the cache', async () => {
+    const mock = createMockFetch([
+      { match: 'openrouter.ai', respond: { status: 200, body: { data: [{ id: 'meta/m1' }] } } },
+    ]);
+    const { deps, set } = makeSwappableDeps(mock.fetch);
+    const provider = createOpenRouterProvider();
+
+    set(OPENROUTER_CRED_KEY, { headers: { Authorization: 'Bearer key-A' } });
+    expect((await provider.listModels(deps)).length).toBe(1);
+
+    set(OPENROUTER_CRED_KEY, null);
+    expect(await provider.listModels(deps)).toEqual([]);
+  });
+
+  test('Codex: swapping the ChatGPT account refetches the model catalog', async () => {
+    const mock = createMockFetch([
+      { match: 'chatgpt.com', respond: { status: 200, body: { models: [{ slug: 'gpt-5.5', visibility: 'list' }] } } },
+    ]);
+    const { deps, set } = makeSwappableDeps(mock.fetch);
+    const provider = createCodexProvider();
+
+    set(CODEX_CRED_KEY, { headers: { Authorization: 'Bearer acct-A' } });
+    await provider.listModels(deps);
+    await provider.listModels(deps); // cache hit — same credential
+    expect(mock.requests.length).toBe(1);
+
+    set(CODEX_CRED_KEY, { headers: { Authorization: 'Bearer acct-B' } });
+    await provider.listModels(deps);
+    expect(mock.requests.length).toBe(2);
+    expect(mock.requests[1].headers['authorization']).toBe('Bearer acct-B');
+  });
+});

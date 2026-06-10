@@ -7,7 +7,9 @@
  * shape into Proteus's ExecutorProvider contract.
  */
 
+import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorCapability, ExecutorProvider } from './types.js';
+import { readExecSignal } from './signal.js';
 
 export interface NimbusExecOptions {
   cwd?: string;
@@ -119,11 +121,19 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the Nimbus development environment.',
-      execute: async (command: unknown): Promise<string> => {
+      execute: async (command: unknown, options?: unknown): Promise<string> => {
         if (!box) return NOT_CONFIGURED;
+        const signal = readExecSignal(options);
         try {
-          return normalizeExec(await touch(() => box.exec(String(command))));
+          // Nimbus exec exposes no kill for an in-flight command — abort
+          // stops the wait; the command may still finish in the sandbox.
+          return normalizeExec(await raceAbort(
+            () => touch(() => box.exec(String(command))),
+            signal,
+            'nimbus exec aborted — the command may still finish in the sandbox',
+          ));
         } catch (err) {
+          if (isAbortError(err)) throw err;
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },

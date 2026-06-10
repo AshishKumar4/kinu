@@ -4,7 +4,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
   assertToolsSupportedByModel,
-  buildSystemPromptPartsSync,
   buildSystemPromptSync,
   BUILTIN_TOOLS,
   compilePromptSurface,
@@ -123,13 +122,12 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/plain markdown|markdown/);
   });
 
-  test('splits prompt into stable context and volatile tiers', () => {
+  test('orders core guidance before the volatile knowledge tail', () => {
     const { rt } = createTestRuntime();
-    const parts = buildSystemPromptPartsSync(rt, { extraKnowledge: 'VOLATILE-NOTE' });
-    expect(parts.stable).toContain('Operating guidance');
-    expect(parts.stable).toContain('Tools available this turn');
-    expect(parts.context).toBe('');
-    expect(parts.volatile).toContain('VOLATILE-NOTE');
+    const prompt = buildSystemPromptSync(rt, { extraKnowledge: 'VOLATILE-NOTE' });
+    expect(prompt).toContain('Operating guidance');
+    expect(prompt).toContain('Tools available this turn');
+    expect(prompt.indexOf('Operating guidance')).toBeLessThan(prompt.indexOf('VOLATILE-NOTE'));
   });
 
   test('renders only the available built-in tools for a gated turn', () => {

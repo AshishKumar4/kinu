@@ -111,12 +111,9 @@ export {
   type CraftedToolSource,
 } from './tools/crafted-executor.js';
 export {
-  buildSystemPrompt,
-  buildSystemPromptPartsSync,
   buildSystemPromptSync,
   FALLBACK_PURPOSE,
   type SystemPromptOptions,
-  type SystemPromptParts,
 } from './prompt.js';
 export {
   compilePromptSurface,

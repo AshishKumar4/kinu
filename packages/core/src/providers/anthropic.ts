@@ -9,8 +9,8 @@
 // inside customFetch via the AuthResolver each call.
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
+import type { ModelProvider, ModelInfo } from './types.js';
+import { createAuthedFetch } from './util.js';
 import { listModelsDevProviderModels } from './models-dev.js';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
@@ -41,18 +41,9 @@ export function createAnthropicProvider(): ModelProvider {
       preferredIds: PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = deps.fetch ?? fetch;
-      const customFetch = asFetchFunction(async (input, init) => {
-        const auth = await deps.getAuth(ANTHROPIC_CRED_KEY);
-        if (!auth) {
-          return new Response(
-            JSON.stringify({ error: 'Anthropic API key not configured' }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        const headers = new Headers(init?.headers);
-        for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
-        return baseFetch(input, { ...init, headers });
+      const customFetch = createAuthedFetch(deps, {
+        credKey: ANTHROPIC_CRED_KEY,
+        missingCredentialError: 'Anthropic API key not configured',
       });
       const provider = createAnthropic({ apiKey: 'placeholder', fetch: customFetch });
       return provider.languageModel(modelId);

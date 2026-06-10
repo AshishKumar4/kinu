@@ -1,15 +1,13 @@
 # Data Model
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 All state is stored in a single Durable Object's SQLite database. The schema is split across several subsystems, each owning its tables.
 
 ## Entity Relationship
 
 ```mermaid
 erDiagram
-    agent_soul {
-        TEXT purpose "Immutable agent purpose (NOT NULL)"
-        INTEGER created_at "Epoch ms"
-    }
     agent_identity {
         TEXT id "Stable UUID (NOT NULL)"
         TEXT name "Agent name (NOT NULL)"
@@ -141,12 +139,17 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
 
-    agent_identity ||--|| agent_soul : "has"
     vfs_files ||--o{ memory_chunks : "indexed by"
     memory_chunks ||--|| memory_chunks_fts : "FTS5 sync"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync"
     search_nodes ||--o{ search_nodes : "parent_id"
 ```
+
+## Agent Identity (SOUL.md)
+
+The agent's identity document lives at `SOUL.md` in the VFS root — an ordinary `vfs_files` entry written through the canonical SqliteFS encoding (`writeVfsFileSync`). `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`) are the accessors; the system prompt, evolution engine, and `setSoul` RPC all go through them. SOUL.md is deliberately mutable: the user edits it via `setSoul` and the agent can evolve it through its own file tools (unlike the old creation-only `agent_soul` table).
+
+**Migration:** `readSoul` performs two one-time migrations for pre-existing agents — a legacy `agent_soul` table is rendered into SOUL.md and dropped, and TEXT-typed SOUL.md rows (from a broken raw-SQL writer) are recovered and rewritten as canonical BLOBs.
 
 ## SqliteFS (Virtual Filesystem)
 
@@ -188,11 +191,11 @@ These are managed by Think internally — Proteus reads via `this.messages` but 
 
 Tables are created in `onStart()` (`orchestrator.ts:538-592`):
 1. Migration checks — detect old schemas (missing `chunk_index` in vfs_files, missing `start_line` in memory_chunks) and drop/recreate
-2. `initAllTables(execRaw)` — 14 core tables (agent_soul, agent_identity, search_nodes, scaffold_versions, scaffold_regression_fixtures, task_history, craft_scores, fibers, vfs_files, messages, conversation_history, evolution_events, crafted_tools, executor_output, activity_log)
+2. `initAllTables(execRaw)` — core tables (agent_identity, search_nodes, scaffold_versions, scaffold_regression_fixtures, task_history, craft_scores, fibers, vfs_files via the canonical agent-utils `VFS_SCHEMA_DDL`, messages, conversation_history, evolution_events, crafted_tools, executor_output, activity_log, fork_lineage)
 3. `initSearchTables(execRaw)` — search_nodes (idempotent, already in initAllTables)
 4. `initScaffoldTables(execRaw)` — scaffold_versions, regression_fixtures, task_history
 5. `initCraftScoreTables(execRaw)` — craft_scores
 6. Inline `CREATE TABLE IF NOT EXISTS agent_config(key TEXT PRIMARY KEY, value TEXT)`
-7. `sqliteFS.init()` — ensures vfs_files has correct chunked schema
+7. `sqliteFS.init()` — runs the same canonical `VFS_SCHEMA_DDL` idempotently (self-heals missing indexes on older databases)
 8. `memoryStore.ensureSchema()` — creates memory_chunks + FTS5 virtual table
 9. `craftStore.ensureSchema()` — creates crafted_tools FTS5 + auto-sync triggers

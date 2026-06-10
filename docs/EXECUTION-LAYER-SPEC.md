@@ -1,5 +1,7 @@
 # Execution Layer Architecture Specification
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 > Version 1.1 — April 2026
 > Design principle: **Persistence is immortal. Execution is ephemeral.**
 >
@@ -42,7 +44,7 @@ graph TB
         MCTS[search_nodes]
         Scaffold[scaffold_versions]
         Evolution[evolution_events]
-        Identity[agent_soul + agent_identity]
+        Identity[SOUL.md in VFS + agent_identity]
     end
 
     subgraph "Execution Router"

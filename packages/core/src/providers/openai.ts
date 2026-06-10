@@ -7,8 +7,8 @@
 // the AuthResolver.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
+import type { ModelProvider, ModelInfo } from './types.js';
+import { createAuthedFetch } from './util.js';
 import { listModelsDevProviderModels } from './models-dev.js';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
@@ -39,18 +39,9 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
       preferredIds: PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = deps.fetch ?? fetch;
-      const customFetch = asFetchFunction(async (input, init) => {
-        const auth = await deps.getAuth(OPENAI_CRED_KEY);
-        if (!auth) {
-          return new Response(
-            JSON.stringify({ error: 'OpenAI API key not configured' }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        const headers = new Headers(init?.headers);
-        for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
-        return baseFetch(input, { ...init, headers });
+      const customFetch = createAuthedFetch(deps, {
+        credKey: OPENAI_CRED_KEY,
+        missingCredentialError: 'OpenAI API key not configured',
       });
       const provider = createOpenAI({ apiKey: 'placeholder', fetch: customFetch });
       return useResponses ? provider.responses(modelId) : provider.chat(modelId);

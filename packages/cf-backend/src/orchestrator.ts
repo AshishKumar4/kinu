@@ -117,6 +117,7 @@ import {
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
 } from "@proteus/core";
+import { combineAbortSignals } from "@proteus/agent-utils";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
@@ -4375,22 +4376,5 @@ function uiMessageText(content: string): string {
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
-}
-
-function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
-  const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (live.length === 1) return live[0];
-  const controller = new AbortController();
-  const abort = (signal: AbortSignal) => {
-    if (!controller.signal.aborted) controller.abort(signal.reason);
-  };
-  for (const signal of live) {
-    if (signal.aborted) {
-      abort(signal);
-      break;
-    }
-    signal.addEventListener("abort", () => abort(signal), { once: true });
-  }
-  return controller.signal;
 }
 
