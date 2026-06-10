@@ -5,8 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { MAX_INLINE_ATTACHMENT_BYTES } from '@proteus/core';
 import {
-  MAX_ATTACHMENT_BYTES,
   describePromptAttachment,
   extractPathTokens,
   resolvePromptAttachments,
@@ -116,13 +116,32 @@ describe('resolvePromptAttachments', () => {
   test('an over-cap image is left as a reference with a visible error', async () => {
     const dir = makeDir();
     const big = join(dir, 'huge.png');
-    writeFileSync(big, Buffer.alloc(MAX_ATTACHMENT_BYTES + 1));
+    writeFileSync(big, Buffer.alloc(MAX_INLINE_ATTACHMENT_BYTES + 1));
 
     const result = await resolvePromptAttachments(`look at @${big}`, dir);
     expect(result.files).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('huge.png is too large to attach');
     expect(result.attached[0]!.mediaType).toBeNull();
+  });
+
+  test('the inline cap is a per-message aggregate: a second image that no longer fits falls back to a path reference', async () => {
+    const dir = makeDir();
+    const first = join(dir, 'first.png');
+    const second = join(dir, 'second.png');
+    writeFileSync(first, Buffer.alloc(Math.ceil(MAX_INLINE_ATTACHMENT_BYTES * 0.7)));
+    writeFileSync(second, Buffer.alloc(Math.ceil(MAX_INLINE_ATTACHMENT_BYTES * 0.7)));
+
+    const result = await resolvePromptAttachments(`compare @${first} with @${second}`, dir);
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]!.filename).toBe('first.png');
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('second.png is too large to attach');
+    expect(result.errors[0]).toContain('per-message budget');
+    expect(result.attached).toEqual([
+      { path: first, filename: 'first.png', mediaType: 'image/png', size: Math.ceil(MAX_INLINE_ATTACHMENT_BYTES * 0.7) },
+      { path: second, filename: 'second.png', mediaType: null, size: Math.ceil(MAX_INLINE_ATTACHMENT_BYTES * 0.7) },
+    ]);
   });
 
   test('nonexistent paths and directories are ignored', async () => {

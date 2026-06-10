@@ -13,10 +13,8 @@
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import type { PromptFile } from '@proteus/core';
-
-/** Per-file cap for inlined attachments (matches the web composer). */
-export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+import { MAX_INLINE_ATTACHMENT_BYTES, type PromptFile } from '@proteus/core';
+import { formatBytes } from './display.js';
 
 /** File types worth inlining as model-visible parts. Everything else is
  *  reachable through the agent's read tools, so inlining would only burn
@@ -113,6 +111,9 @@ export async function resolvePromptAttachments(text: string, cwd = process.cwd()
   const errors: string[] = [];
   const seen = new Set<string>();
   const rewrites: Array<{ index: number; raw: string }> = [];
+  // The inline cap is a per-message AGGREGATE across all file parts (they
+  // persist together in one backend message row) — spend it as files inline.
+  let inlineBudget = MAX_INLINE_ATTACHMENT_BYTES;
 
   for (const token of extractPathTokens(text)) {
     const found = await statCandidate(token.path, cwd);
@@ -127,8 +128,11 @@ export async function resolvePromptAttachments(text: string, cwd = process.cwd()
       attached.push({ path: found.path, filename, mediaType: null, size: found.size });
       continue;
     }
-    if (found.size > MAX_ATTACHMENT_BYTES) {
-      errors.push(`${filename} is too large to attach (${formatBytes(found.size)}; max ${formatBytes(MAX_ATTACHMENT_BYTES)}) — left as a path reference.`);
+    if (found.size > inlineBudget) {
+      const reason = found.size > MAX_INLINE_ATTACHMENT_BYTES
+        ? `${formatBytes(found.size)}; max ${formatBytes(MAX_INLINE_ATTACHMENT_BYTES)} per message`
+        : `the ${formatBytes(MAX_INLINE_ATTACHMENT_BYTES)} per-message budget is already used`;
+      errors.push(`${filename} is too large to attach (${reason}) — left as a path reference.`);
       attached.push({ path: found.path, filename, mediaType: null, size: found.size });
       continue;
     }
@@ -136,6 +140,7 @@ export async function resolvePromptAttachments(text: string, cwd = process.cwd()
       const bytes = await readFile(found.path);
       files.push({ filename, mediaType, url: `data:${mediaType};base64,${bytes.toString('base64')}` });
       attached.push({ path: found.path, filename, mediaType, size: found.size });
+      inlineBudget -= found.size;
     } catch (err) {
       errors.push(`Could not read ${filename}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -154,10 +159,4 @@ export async function resolvePromptAttachments(text: string, cwd = process.cwd()
  *  "notes.txt (1.2 KB, referenced)". */
 export function describePromptAttachment(a: ResolvedAttachment): string {
   return `${a.filename} (${formatBytes(a.size)}${a.mediaType ? '' : ', referenced'})`;
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }

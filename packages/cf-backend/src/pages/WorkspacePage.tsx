@@ -10,6 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
+import { MAX_INLINE_ATTACHMENT_BYTES } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { cloudflareReconnectPath, touchAgent, listAvailableModels } from "@/lib/user-api";
@@ -37,10 +38,10 @@ function formatTime(date: Date): string {
 
 /* ── Chat attachments ─────────────────────────────────────────── */
 
-/** Per-file cap for inline chat attachments. Data-URL parts persist in the DO
- *  message table and re-enter model context on later turns — larger files
- *  belong in the file manager (writeExecutorFile → agent VFS). */
-const MAX_CHAT_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+/** Raw bytes a data-URL file part encodes (base64 ≈ 4/3 × raw). */
+function dataUrlRawBytes(url: string): number {
+  return Math.floor(((url.length - url.indexOf(",") - 1) * 3) / 4);
+}
 
 /** A file attachment chip — thumbnail for images, file icon otherwise.
  *  With onRemove it's a pending-composer chip; without, a message chip. */
@@ -606,18 +607,25 @@ export default function WorkspacePage() {
 
   const addFiles = useCallback(async (files: FileList | null | undefined) => {
     if (!files || files.length === 0) return;
-    const all = Array.from(files);
-    const oversize = all.filter((f) => f.size > MAX_CHAT_ATTACHMENT_BYTES);
-    setAttachError(oversize.length > 0
-      ? `Too large to attach (max ${MAX_CHAT_ATTACHMENT_BYTES / (1024 * 1024)} MB): ${oversize.map((f) => f.name).join(", ")}. Upload large files via the Devices surface's files tab.`
+    // MAX_INLINE_ATTACHMENT_BYTES is a per-message AGGREGATE: all pending
+    // data-URL parts persist inside one DO message row (see core/cloud-wire).
+    let budget = MAX_INLINE_ATTACHMENT_BYTES
+      - pendingAttachments.reduce((sum, p) => sum + dataUrlRawBytes(p.url), 0);
+    const accepted: File[] = [];
+    const rejected: string[] = [];
+    for (const f of Array.from(files)) {
+      if (f.size <= budget) { accepted.push(f); budget -= f.size; }
+      else rejected.push(f.name);
+    }
+    setAttachError(rejected.length > 0
+      ? `Chat attachments are capped at ${MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files tab on the Devices surface.`
       : null);
-    const accepted = all.filter((f) => f.size <= MAX_CHAT_ATTACHMENT_BYTES);
     if (accepted.length === 0) return;
     const dt = new DataTransfer();
     for (const f of accepted) dt.items.add(f);
     const parts = await convertFileListToFileUIParts(dt.files);
     setPendingAttachments((prev) => [...prev, ...parts]);
-  }, []);
+  }, [pendingAttachments]);
 
   const onChatDragOver = useCallback((e: ReactDragEvent) => {
     if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
