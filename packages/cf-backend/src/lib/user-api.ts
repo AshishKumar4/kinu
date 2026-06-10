@@ -17,7 +17,6 @@ export interface AgentEntry {
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
-  mode?: 'cloud' | 'local';
 }
 
 export interface CredentialSummary {
