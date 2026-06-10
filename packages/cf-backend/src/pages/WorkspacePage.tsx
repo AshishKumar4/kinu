@@ -463,12 +463,38 @@ function ForkModal({
 }
 
 function ModelSelector({ current, onChange }: { current: string; onChange: (id: string) => void }) {
-  const [models, setModels] = useState<Array<{ spec: string; label: string }>>([]);
-  useEffect(() => {
+  // Tri-state: null = loading, "error" = transient fetch failure (retryable),
+  // [] = the fetch succeeded and genuinely no provider is connected. Only the
+  // last one earns the amber reconnect CTA — flashing it during load or on a
+  // flaky request sent connected users through a full OAuth prompt=login.
+  const [models, setModels] = useState<Array<{ spec: string; label: string }> | null | "error">(null);
+  const fetchModels = useCallback(() => {
+    setModels(null);
     listAvailableModels()
       .then((m) => setModels(m.map((x) => ({ spec: x.spec, label: x.label }))))
-      .catch(() => setModels([]));
+      .catch(() => setModels("error"));
   }, []);
+  useEffect(() => { fetchModels(); }, [fetchModels]);
+  if (models === null) {
+    return (
+      <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 text-[11px] p-text-3" aria-label="Loading models">
+        …
+      </span>
+    );
+  }
+  if (models === "error") {
+    return (
+      <button
+        type="button"
+        onClick={fetchModels}
+        className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 text-[11px] p-text-3 hover:p-text-2"
+        title="Couldn't load the model list — click to retry"
+      >
+        <ArrowsClockwiseIcon size={11} />
+        models unavailable
+      </button>
+    );
+  }
   if (models.length === 0) {
     return (
       <a
