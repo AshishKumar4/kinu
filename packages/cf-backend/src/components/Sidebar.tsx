@@ -15,14 +15,17 @@
  *   └─────────────────┘
  */
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Link, NavLink, useParams } from "react-router-dom";
+import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { listAgents, removeAgent, getProfile, type AgentEntry, type UserProfile } from "../lib/user-api";
 import { CreateAgentModal } from "./CreateAgentModal";
 import { ModeToggle } from "./mode-toggle";
 
 export default function Sidebar() {
-  const { agentId } = useParams();
+  // useParams can't see :agentId from here (the Sidebar renders outside the
+  // route's Outlet) — match the location directly instead.
+  const agentId = useMatch("/agent/:agentId")?.params.agentId;
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -59,9 +62,13 @@ export default function Sidebar() {
 
   const handleDelete = useCallback(async (name: string) => {
     if (!confirm(`Delete agent "${name}" and clear its server-side state?`)) return;
+    // Leave the agent's workspace BEFORE destroying it: the still-mounted
+    // useAgent socket would auto-reconnect to the destroyed DO name and
+    // resurrect an empty ghost agent (idFromName instantiates on connect).
+    if (name === agentId) navigate("/");
     try { await removeAgent(name); await refreshAgents(); }
     catch (err) { alert(`Could not remove: ${(err as Error).message}`); }
-  }, [refreshAgents]);
+  }, [agentId, navigate, refreshAgents]);
 
   return (
     <aside className="hidden w-64 shrink-0 h-full flex-col p-elevated border-r p-border md:flex">
@@ -88,22 +95,26 @@ export default function Sidebar() {
         )}
         <ul className="space-y-0.5">
           {agents.map((a) => (
-            <li key={a.name}>
+            // Link and delete button are siblings (a button inside an anchor is
+            // invalid HTML and breaks keyboard/AT semantics); the button overlays
+            // the row's right edge and is reachable by keyboard via focus-visible.
+            <li key={a.name} className="group relative">
               <NavLink
                 to={`/agent/${a.name}`}
                 className={({ isActive }) =>
-                  `flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm group ${
+                  `flex items-center gap-2 pl-2 pr-7 py-1.5 rounded-md text-sm ${
                     isActive ? 'p-card font-medium' : 'hover:p-card-hover p-text'
                   }`
                 }
               >
                 <span className="truncate">{a.displayName || a.name}</span>
-                <button
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(a.name); }}
-                  className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
-                  title="Remove"
-                ><TrashIcon size={12} /></button>
               </NavLink>
+              <button
+                onClick={() => handleDelete(a.name)}
+                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
+                title="Remove"
+                aria-label={`Remove agent ${a.displayName || a.name}`}
+              ><TrashIcon size={12} /></button>
             </li>
           ))}
         </ul>
