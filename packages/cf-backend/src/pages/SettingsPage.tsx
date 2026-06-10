@@ -4,7 +4,7 @@
  * MCTS knobs, shell-approval mode, GEPA optimisation, pinned skills.
  * (Scaffold promote/rollback + the per-trial verdict live on the Brain surface.)
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
@@ -36,9 +36,15 @@ function Card({ title, icon: Icon, children }: {
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
+const DEFAULT_MCTS = { explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 };
+
 export default function SettingsPage() {
   const { agentId } = useParams();
   const state = useProteus(agentId);
+  // Stable pieces only — `state` itself is a fresh object every render, so
+  // depending on it from load/save creates a self-sustaining refetch loop
+  // that clobbers in-progress edits.
+  const { rpc, connectionStatus, agentStatus, setModel } = state;
 
   const [displayName, setDisplayName] = useState("");
   const [soul, setSoul] = useState("");
@@ -49,24 +55,26 @@ export default function SettingsPage() {
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
   const [currentSpec, setCurrentSpec] = useState<string>("");
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("strict");
-  const [mcts, setMcts] = useState({ explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 });
+  const [mcts, setMcts] = useState(DEFAULT_MCTS);
 
+  // Hydrate identity fields once — never re-set form state from the server
+  // afterwards (later snapshot refreshes would overwrite what the user types).
+  const identityHydrated = useRef(false);
   useEffect(() => {
-    if (state.agentStatus) {
-      setDisplayName(state.agentStatus.displayName || state.agentStatus.name || "");
-      setSoul(state.agentStatus.soul || "");
-    }
-  }, [state.agentStatus]);
+    if (!agentStatus || identityHydrated.current) return;
+    identityHydrated.current = true;
+    setDisplayName(agentStatus.displayName || agentStatus.name || "");
+    setSoul(agentStatus.soul || "");
+  }, [agentStatus]);
 
   const load = useCallback(async () => {
-    if (state.connectionStatus !== "connected") return;
     setErr(null);
     try {
       const [m, current, mode, mc] = await Promise.all([
         listAvailableModels().catch(() => []),
-        (state.rpc("getStoredModelSpec", []) as Promise<{ spec: string | null }>).catch(() => ({ spec: null })),
-        (state.rpc("getShellApprovalMode", []) as Promise<{ mode: ApprovalMode }>).catch(() => ({ mode: 'strict' as ApprovalMode })),
-        (state.rpc("getMctsConfig", []) as Promise<typeof mcts>).catch(() => mcts),
+        rpc<{ spec: string | null }>("getStoredModelSpec", []).catch(() => ({ spec: null })),
+        rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []).catch(() => ({ mode: 'strict' as ApprovalMode })),
+        rpc<typeof DEFAULT_MCTS>("getMctsConfig", []).catch(() => DEFAULT_MCTS),
       ]);
       setModels(m ?? []);
       setCurrentSpec(current?.spec ?? "");
@@ -75,20 +83,26 @@ export default function SettingsPage() {
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, [state]);
+  }, [rpc]);
 
-  useEffect(() => { void load(); }, [load]);
+  // Fetch once per agent connection — not on every render.
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (connectionStatus !== "connected" || loaded.current) return;
+    loaded.current = true;
+    void load();
+  }, [connectionStatus, load]);
 
   const save = useCallback(async () => {
     setSaving(true);
     setErr(null);
     try {
       await Promise.all([
-        state.rpc("setDisplayName", [displayName]),
-        state.rpc("setSoul", [soul]),
-        currentSpec ? state.setModel(currentSpec) : Promise.resolve(),
-        state.rpc("setShellApprovalMode", [approvalMode]),
-        state.rpc("setMctsConfig", [mcts]),
+        rpc("setDisplayName", [displayName]),
+        rpc("setSoul", [soul]),
+        currentSpec ? setModel(currentSpec) : Promise.resolve(),
+        rpc("setShellApprovalMode", [approvalMode]),
+        rpc("setMctsConfig", [mcts]),
       ]);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -97,9 +111,9 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [state, displayName, soul, currentSpec, approvalMode, mcts]);
+  }, [rpc, setModel, displayName, soul, currentSpec, approvalMode, mcts]);
 
-  if (state.connectionStatus !== "connected") {
+  if (connectionStatus !== "connected") {
     return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
   }
 
@@ -195,10 +209,10 @@ export default function SettingsPage() {
             live on the agent's Brain surface (single source of truth). */}
 
         {/* Always-active skills */}
-        <AlwaysActiveSkillsCard rpc={state.rpc} />
+        <AlwaysActiveSkillsCard rpc={rpc} />
 
         {/* GEPA offline scaffold optimisation */}
-        <GepaOptimizationCard rpc={state.rpc} onProposed={() => { void load(); }} />
+        <GepaOptimizationCard rpc={rpc} />
       </div>
     </div>
   );
@@ -216,10 +230,9 @@ interface GepaRunRow {
 }
 
 function GepaOptimizationCard({
-  rpc, onProposed,
+  rpc,
 }: {
   rpc: (method: string, args?: unknown[]) => Promise<unknown>;
-  onProposed: () => void;
 }) {
   const [runs, setRuns] = useState<GepaRunRow[]>([]);
   const [running, setRunning] = useState(false);
@@ -245,7 +258,6 @@ function GepaOptimizationCard({
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
         setMsg(`Improved scaffold proposed as v${r.pendingVersion} (best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}) — it will shadow-eval, then you can promote it from the agent's Brain surface.`);
-        onProposed();
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}).`);
       }
@@ -255,7 +267,7 @@ function GepaOptimizationCard({
     } finally {
       setRunning(false);
     }
-  }, [rpc, onProposed, refresh]);
+  }, [rpc, refresh]);
 
   return (
     <Card title="Scaffold optimisation (GEPA)" icon={SparkleIcon}>
