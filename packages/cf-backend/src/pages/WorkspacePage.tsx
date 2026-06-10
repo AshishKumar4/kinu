@@ -211,7 +211,7 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
 const MessageView = memo(function MessageView({
-  message, isLast, isStreaming, onFork, onFeedback,
+  message, isLast, isStreaming, onFork, onFeedback, feedback,
 }: {
   message: UIMessage;
   isLast: boolean;
@@ -219,8 +219,10 @@ const MessageView = memo(function MessageView({
   /** Called with the message id when user clicks "Fork from here". */
   onFork?: (messageId: string) => void;
   /** Called with the message id + new feedback when user clicks 👍 / 👎.
-   *  Pass null to clear. */
+   *  Pass null to clear. Rejects on RPC failure. */
   onFeedback?: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
+  /** Server-recorded feedback for this message (hydrated on load). */
+  feedback?: 'positive' | 'negative' | null;
 }) {
   const isUser = message.role === "user";
   const isLive = isLast && isStreaming && !isUser;
@@ -338,6 +340,7 @@ const MessageView = memo(function MessageView({
           {!isUser && message.id && onFeedback && (
             <MessageFeedback
               messageId={message.id}
+              current={feedback ?? null}
               onFeedback={onFeedback}
             />
           )}
@@ -348,27 +351,31 @@ const MessageView = memo(function MessageView({
 });
 
 function MessageFeedback({
-  messageId, onFeedback,
+  messageId, current, onFeedback,
 }: {
   messageId: string;
+  /** Server-confirmed state — the toggle only flips when the RPC succeeds. */
+  current: 'positive' | 'negative' | null;
   onFeedback: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
 }) {
-  const [current, setCurrent] = useState<'positive' | 'negative' | null>(null);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   const toggle = useCallback(async (next: 'positive' | 'negative') => {
     if (busy) return;
     setBusy(true);
+    setFailed(false);
     const apply = current === next ? null : next; // click again to clear
     try {
       await onFeedback(messageId, apply);
-      setCurrent(apply);
+    } catch {
+      setFailed(true);
     } finally {
       setBusy(false);
     }
   }, [busy, current, messageId, onFeedback]);
 
   return (
-    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
       <button
         type="button"
         onClick={() => toggle('positive')}
@@ -387,6 +394,7 @@ function MessageFeedback({
         }`}
         title="Mark this response as poor (feeds evolution scoring)"
       >👎</button>
+      {failed && <span className="text-[10px] text-red-400">couldn't save — try again</span>}
     </div>
   );
 }
@@ -607,9 +615,24 @@ export default function WorkspacePage() {
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
+
+  // Thumbs feedback — hydrated from the server (it remembers across reloads)
+  // and only committed locally when the RPC succeeds; failures propagate to
+  // MessageFeedback so the toggle never lies about evolution-scoring input.
+  const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
+  useEffect(() => {
+    if (state.connectionStatus !== "connected") return;
+    state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback')
+      .then(setFeedbackByMessage)
+      .catch(() => {});
+  }, [state.connectionStatus, state.rpc]);
   const onMessageFeedback = useCallback(async (mid: string, fb: 'positive' | 'negative' | null) => {
-    try { await state.rpc('setTurnFeedback', [mid, fb]); }
-    catch (e) { console.warn('[feedback] rpc failed:', e); }
+    await state.rpc('setTurnFeedback', [mid, fb]);
+    setFeedbackByMessage((prev) => {
+      const next = { ...prev };
+      if (fb) next[mid] = fb; else delete next[mid];
+      return next;
+    });
   }, [state.rpc]);
 
   // First-paint loading: only when we genuinely have nothing to show.
@@ -713,6 +736,7 @@ export default function WorkspacePage() {
                   isStreaming={state.isStreaming}
                   onFork={onForkMessage}
                   onFeedback={onMessageFeedback}
+                  feedback={feedbackByMessage[msg.id] ?? null}
                 />
               ))}
             </div>

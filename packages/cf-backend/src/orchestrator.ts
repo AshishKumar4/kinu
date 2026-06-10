@@ -2658,6 +2658,19 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
+  /** All recorded feedback keyed by message id — one round-trip so the chat
+   *  hydrates its thumbs marks on load instead of forgetting them. */
+  @callable()
+  async listTurnFeedback(): Promise<Record<string, 'positive' | 'negative'>> {
+    try {
+      const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
+        SELECT message_id, feedback FROM turn_feedback`;
+      return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
+    } catch {
+      return {};
+    }
+  }
+
   /**
    * Generic agent_config setter. Used by the Settings page for tunables
    * like shadow_sample_rate, auto_promote_scaffold. Allow-listed keys only —
