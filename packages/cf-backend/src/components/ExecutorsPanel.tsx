@@ -596,6 +596,7 @@ function YourPcConnect() {
   const [install, setInstall] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const refresh = useCallback(() => { listDevices().then(setDevices).catch(() => setDevices([])); }, []);
   useEffect(() => {
@@ -606,12 +607,16 @@ function YourPcConnect() {
 
   const issue = useCallback(async () => {
     setIssuing(true);
+    setErr(null);
     try { const r = await registerDevice(); setInstall(r.installCommand); refresh(); }
+    catch (e) { setErr(`Could not register device: ${(e as Error).message}`); }
     finally { setIssuing(false); }
   }, [refresh]);
 
   const revoke = useCallback(async (id: string) => {
-    await revokeDevice(id).catch(() => {});
+    setErr(null);
+    try { await revokeDevice(id); }
+    catch (e) { setErr(`Could not revoke device: ${(e as Error).message}`); }
     refresh();
   }, [refresh]);
 
@@ -641,6 +646,8 @@ function YourPcConnect() {
             ))}
           </div>
         )}
+
+        {err && <div className="text-xs text-red-400">{err}</div>}
 
         {!install ? (
           <button

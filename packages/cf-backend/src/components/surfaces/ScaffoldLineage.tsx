@@ -76,6 +76,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [diff, setDiff] = useState<ScaffoldDiff | null>(null);
   const [verdict, setVerdict] = useState<ShadowVerdict | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [decideErr, setDecideErr] = useState<string | null>(null);
   const [previewTask, setPreviewTask] = useState("");
   const [previewOut, setPreviewOut] = useState<string | null>(null);
 
@@ -86,14 +87,16 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   useEffect(() => { loadVersions(); }, [loadVersions]);
 
   const select = useCallback((version: number) => {
-    setSelected(version); setDiff(null); setVerdict(null); setPreviewOut(null);
+    setSelected(version); setDiff(null); setVerdict(null); setPreviewOut(null); setDecideErr(null);
     rpc<ScaffoldDiff>("getScaffoldDiff", [version]).then(setDiff).catch(() => {});
     rpc<ShadowVerdict>("getShadowVerdict", [version]).then(setVerdict).catch(() => {});
   }, [rpc]);
 
   const decide = useCallback(async (mode: "promote" | "rollback") => {
     setBusy(mode);
+    setDecideErr(null);
     try { await rpc("applyScaffoldDecision", [mode]); loadVersions(); if (selected != null) select(selected); }
+    catch (e) { setDecideErr(`${mode} failed: ${e instanceof Error ? e.message : String(e)}`); }
     finally { setBusy(null); }
   }, [rpc, loadVersions, select, selected]);
 
@@ -172,6 +175,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
               )}
+              {decideErr && <div className="text-[11px] text-red-400">{decideErr}</div>}
             </div>
           )}
         </div>

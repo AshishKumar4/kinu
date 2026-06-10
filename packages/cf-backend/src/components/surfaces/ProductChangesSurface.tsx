@@ -229,9 +229,12 @@ function ChangeList({
 
 function ApprovalRow({ approval, rpc, onRefresh }: { approval: ProductChangeApproval; rpc: Rpc; onRefresh: () => void }) {
   const [busy, setBusy] = useState<"approved" | "rejected" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const decide = async (decision: "approved" | "rejected") => {
     setBusy(decision);
+    setErr(null);
     try { await rpc("decideProductChangeApproval", [approval.id, decision]); onRefresh(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   };
 
@@ -241,6 +244,7 @@ function ApprovalRow({ approval, rpc, onRefresh }: { approval: ProductChangeAppr
       <div className="min-w-0 flex-1">
         <div className="text-xs p-text">{approval.approvalType.replace(/_/g, " ")}</div>
         <div className="text-[10px] p-text-3">{approval.decision} · {timeShort(approval.decidedAt ?? approval.createdAt)}</div>
+        {err && <div className="text-[11px] text-red-400 mt-0.5">{err}</div>}
       </div>
       {approval.decision === "pending" && (
         <div className="flex items-center gap-1">
@@ -298,12 +302,15 @@ function ChangeDetail({
   onRefresh: () => void;
 }) {
   const [busyApproval, setBusyApproval] = useState(false);
+  const [approvalErr, setApprovalErr] = useState<string | null>(null);
   if (!change) return <EmptyState icon={<GitDiffIcon size={28} />} title="Select a change" />;
 
   const pendingApproval = approvals.some((a) => a.decision === "pending");
   const requestApproval = async () => {
     setBusyApproval(true);
+    setApprovalErr(null);
     try { await rpc("requestProductChangeApproval", [change.id, "apply"]); onRefresh(); }
+    catch (e) { setApprovalErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusyApproval(false); }
   };
 
@@ -328,6 +335,7 @@ function ChangeDetail({
             </Button>
           )}
         </div>
+        {approvalErr && <div className="text-[11px] text-red-400 mt-2">Approval request failed: {approvalErr}</div>}
       </section>
 
       {change.previewUrl && (

@@ -229,18 +229,28 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
       const f = await startCodexFlow();
       setFlow(f);
       setPolling(true);
+      const stopPolling = () => {
+        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+        setPolling(false);
+      };
       pollRef.current = setInterval(async () => {
         try {
           const result = await pollCodexFlow();
           if (result.connected) {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-            setPolling(false);
+            stopPolling();
             setFlow(null);
             onChanged();
           } else if (result.error) {
+            // Still-pending polls return { connected: false } with no error;
+            // any error (expired/denied/server) is terminal — stop polling
+            // instead of hammering the endpoint forever.
+            stopPolling();
+            setFlow(null);
             setError(result.error);
           }
         } catch (e) {
+          stopPolling();
+          setFlow(null);
           setError((e as Error).message);
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);

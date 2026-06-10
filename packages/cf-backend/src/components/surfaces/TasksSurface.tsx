@@ -42,15 +42,20 @@ export interface TasksSurfaceProps {
 
 export function TasksSurface({ jobs, onRefresh, rpc }: TasksSurfaceProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const act = useCallback(async (id: string, method: string) => {
     setBusyId(id);
+    setErr(null);
     try { await rpc(method, [id]); onRefresh(); }
+    catch (e) { setErr(`${method.replace("BackgroundJob", "")} failed: ${(e as Error).message}`); }
     finally { setBusyId(null); }
   }, [rpc, onRefresh]);
 
   const clearSettled = useCallback(async () => {
-    try { await rpc("clearBackgroundJobs", []); onRefresh(); } catch { /* nop */ }
+    setErr(null);
+    try { await rpc("clearBackgroundJobs", []); onRefresh(); }
+    catch (e) { setErr(`clear failed: ${(e as Error).message}`); }
   }, [rpc, onRefresh]);
 
   if (jobs.length === 0) {
@@ -73,6 +78,8 @@ export function TasksSurface({ jobs, onRefresh, rpc }: TasksSurfaceProps) {
           </Button>
         )}
       </div>
+
+      {err && <div className="text-xs text-red-400 p-card rounded-lg px-3 py-2">{err}</div>}
 
       <div className="space-y-2">
         {jobs.map((j) => {
