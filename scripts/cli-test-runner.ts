@@ -186,7 +186,7 @@ async function testDbIntegrity() {
     const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
     const tableNames = tables.map(t => t.name);
 
-    const requiredTables = ["agent_identity", "agent_soul", "vfs_files", "search_nodes", "crafted_tools"];
+    const requiredTables = ["agent_identity", "vfs_files", "search_nodes", "crafted_tools"];
     const missing = requiredTables.filter(t => !tableNames.includes(t));
 
     if (missing.length === 0) {
@@ -195,11 +195,15 @@ async function testDbIntegrity() {
       fail("DB tables present", `missing: ${missing.join(", ")}`);
     }
 
-    const soul = db.query("SELECT purpose FROM agent_soul LIMIT 1").get() as { purpose: string } | null;
-    if (soul?.purpose?.includes("E2E test agent")) {
-      pass("DB agent_soul", `purpose: "${soul.purpose}"`);
+    // The soul lives as SOUL.md in the VFS (BLOB chunks), not an agent_soul table.
+    const soulChunks = db.query(
+      "SELECT data FROM vfs_files WHERE path = 'SOUL.md' AND is_dir = 0 ORDER BY chunk_index",
+    ).all() as Array<{ data: Uint8Array }>;
+    const soulText = soulChunks.map(c => new TextDecoder().decode(c.data)).join("");
+    if (soulText.includes("E2E test agent")) {
+      pass("DB SOUL.md", `${soulChunks.length} chunk(s), purpose present`);
     } else {
-      fail("DB agent_soul", `unexpected: ${JSON.stringify(soul)}`);
+      fail("DB SOUL.md", soulChunks.length === 0 ? "SOUL.md missing from vfs_files" : `purpose not found in: ${soulText.slice(0, 120)}`);
     }
 
     const identity = db.query("SELECT name FROM agent_identity LIMIT 1").get() as { name: string } | null;
