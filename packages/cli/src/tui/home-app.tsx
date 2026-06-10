@@ -179,7 +179,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         </text>
 
         {setupRequired && (
-          <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: '#2f2f46', paddingLeft: 1, paddingRight: 1 }}>
+          <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: tuiColors.borderSubtle, paddingLeft: 1, paddingRight: 1 }}>
             <text><strong fg={tuiColors.text}>Setup required</strong></text>
             <text><span fg={tuiColors.muted}>  proteus setup</span> <span fg={tuiColors.text}>connect account and optional local provider</span></text>
             <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud agents only</span></text>
@@ -339,7 +339,7 @@ function ModeSegment(props: {
         border: true,
         borderStyle: 'single',
         borderColor,
-        backgroundColor: props.selected ? '#241b45' : tuiColors.panelDeep,
+        backgroundColor: props.selected ? tuiColors.selectionDeep : tuiColors.panelDeep,
         paddingLeft: 1,
         paddingRight: 1,
         alignItems: 'center',

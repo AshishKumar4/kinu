@@ -23,10 +23,10 @@ function UserMessage({ content, attachments }: { content: string; attachments?: 
         flexDirection="column"
         style={{
           maxWidth: '82%',
-          backgroundColor: '#18213a',
+          backgroundColor: tuiColors.bubbleBg,
           border: true,
           borderStyle: 'single',
-          borderColor: '#273453',
+          borderColor: tuiColors.bubbleBorder,
           paddingLeft: 1,
           paddingRight: 1,
           paddingTop: 0,
