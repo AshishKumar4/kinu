@@ -26,6 +26,7 @@ import {
   resolveCommandDraft,
   type SlashOutcome,
 } from '../slash-commands.js';
+import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
 import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
 import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
@@ -318,9 +319,22 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
       }
       return;
     }
-    addMessage({ role: 'user', content: submitted });
+    // @path mentions (plus quoted/~ path tokens) become attachments: images
+    // and PDFs inline as file parts, other files stay path references.
+    const prompt = await resolvePromptAttachments(submitted);
+    for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
+    addMessage({
+      role: 'user',
+      content: prompt.text,
+      ...(prompt.attached.length > 0 ? { attachments: prompt.attached.map(describePromptAttachment) } : {}),
+    });
     // Errors surface as client error events.
-    try { await client.send(submitted, { cwd: process.cwd() }); } catch { /* rendered via events */ }
+    try {
+      await client.send(
+        prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
+        { cwd: process.cwd() },
+      );
+    } catch { /* rendered via events */ }
   }, [addMessage, applySlashOutcome, client, commands, ready, resumeSession, sessionPicker]);
 
   useEffect(() => {

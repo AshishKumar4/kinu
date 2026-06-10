@@ -16,6 +16,7 @@ import type {
   PendingDeviceConsent,
 } from './agent-client.js';
 import { executeSlashCommand, renderStatusLines, type SlashOutcome } from './slash-commands.js';
+import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
 import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
 import {
   printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator,
@@ -77,13 +78,23 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const prompt = tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
 
   const runTurn = async (input: string) => {
+    // @path mentions (plus quoted/~ path tokens) become attachments: images
+    // and PDFs inline as file parts, other files stay path references.
+    const prompt = await resolvePromptAttachments(input);
+    for (const problem of prompt.errors) console.log(WARN(`  ${problem}`));
+    if (prompt.attached.length > 0) {
+      console.log(DIM(`  📎 ${prompt.attached.map(describePromptAttachment).join(' · ')}`));
+    }
     headerPrinted = false;
     turnInFlight = true;
     interruptRequested = false;
     typing.start();
     const consentWatch = client.consents ? watchConsents(client.consents, client.agentName, rl, tty) : null;
     try {
-      await client.send(input, { cwd: process.cwd() });
+      await client.send(
+        prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
+        { cwd: process.cwd() },
+      );
     } catch (err) {
       typing.stop();
       console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);

@@ -12,9 +12,11 @@ export interface DisplayMessage {
   toolName?: string;
   args?: string;
   timestamp?: string;
+  /** Attachment chip labels (file mentions resolved at submit). */
+  attachments?: string[];
 }
 
-function UserMessage({ content }: { content: string }) {
+function UserMessage({ content, attachments }: { content: string; attachments?: string[] }) {
   return (
     <box flexDirection="row" justifyContent="flex-end" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box
@@ -33,6 +35,9 @@ function UserMessage({ content }: { content: string }) {
       >
         <text><strong fg={tuiColors.blue}>You</strong></text>
         <text><span fg={tuiColors.textBright}>{content}</span></text>
+        {attachments?.map((label, i) => (
+          <text key={i}><span fg={tuiColors.muted}>📎 {label}</span></text>
+        ))}
       </box>
     </box>
   );
@@ -150,7 +155,7 @@ export function MessageList({ messages, streamingText }: Props) {
       {messages.map((msg) => {
         switch (msg.role) {
           case 'user':
-            return <UserMessage key={msg.id} content={msg.content} />;
+            return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} />;
           case 'assistant':
             return <AssistantMessage key={msg.id} content={msg.content} />;
           case 'tool_call':
