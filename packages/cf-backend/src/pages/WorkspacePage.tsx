@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useCallback } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
@@ -523,7 +523,18 @@ export default function WorkspacePage() {
     if (t.isCollapsed()) t.resize("24%"); else t.collapse();
   }, [timelineRef]);
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSent = useRef(false);
+
+  // Auto-grow the chat input with its content (kumo InputArea has no resize
+  // logic). The max-h-40 class clamps growth; beyond it the textarea scrolls
+  // internally. Clearing chatInput after send collapses it back to one row.
+  useLayoutEffect(() => {
+    const el = chatInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [chatInput]);
 
   useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
 
@@ -711,10 +722,10 @@ export default function WorkspacePage() {
             <div className="px-5 py-3 border-t p-border lg:px-7">
               {state.error && <div className="mb-2 text-xs text-red-400 p-card rounded-lg px-3 py-1.5">{state.error}</div>}
               <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
-                <InputArea value={chatInput} onValueChange={setChatInput}
+                <InputArea ref={chatInputRef} value={chatInput} onValueChange={setChatInput}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                   placeholder="Send a message..." disabled={state.connectionStatus !== "connected"} rows={1}
-                  className="flex-1 !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
+                  className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
                 {state.isStreaming
                   ? <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
                   : <button onClick={handleSend} disabled={!chatInput.trim() || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
