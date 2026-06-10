@@ -15,6 +15,7 @@ import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { cloudflareReconnectPath, touchAgent, listAvailableModels } from "@/lib/user-api";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
+import { PreviewFrame } from "@/components/PreviewFrame";
 import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
@@ -318,15 +319,8 @@ const MessageView = memo(function MessageView({
                   surface a live iframe under the tool block so the user sees
                   the running app inline (also promoted to the Output surface). */}
               {previewUrl && (
-                <div className="mt-2 rounded-md p-bg border p-border overflow-hidden">
-                  <div className="px-2 py-1 flex items-center gap-2 text-[11px] p-text-2">
-                    <span className="size-1.5 rounded-full bg-emerald-500" />
-                    <span className="font-mono truncate flex-1">{previewUrl}</span>
-                    <a href={previewUrl} target="_blank" rel="noreferrer" className="ml-auto p-text-2 hover:underline">
-                      open
-                    </a>
-                  </div>
-                  <iframe src={previewUrl} className="w-full h-56 bg-white" title="preview" />
+                <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
+                  <PreviewFrame url={previewUrl} />
                 </div>
               )}
             </div>

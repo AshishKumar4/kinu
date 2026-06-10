@@ -24,11 +24,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  TerminalIcon, FolderOpenIcon, FolderIcon, FileIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon,
-  ArrowLeftIcon, CopyIcon, EyeIcon, WarningIcon, PlugIcon, TrashIcon,
+  TerminalIcon, FolderOpenIcon, FolderIcon, FileIcon, ArrowsClockwiseIcon,
+  ArrowLeftIcon, CopyIcon, WarningIcon, PlugIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import { Badge } from "@cloudflare/kumo";
 import { ExecutorTerminal } from "./ExecutorTerminal";
+import { PreviewFrame } from "./PreviewFrame";
 import type { ExecutorOutput } from "../hooks/use-proteus";
 import type { DirEntry } from "@/lib/protocol";
 import { listDevices, registerDevice, revokeDevice, type UserDevice } from "@/lib/user-api";
@@ -293,7 +294,7 @@ function PerExecutorView(props: PerExecutorViewProps) {
         {active.kind === 'preview' && (() => {
           const p = pinnedPorts.find(x => x.port === active.port);
           if (!p) return <div className="p-6 text-xs p-text-3">Preview no longer available.</div>;
-          return <PreviewPane port={p.port} url={p.url} name={p.name} />;
+          return <PreviewFrame url={p.url} label={`:${p.port}${p.name ? ` · ${p.name}` : ''}`} />;
         })()}
         {active.kind === 'files' && (
           <FilesPane execName={exec.name} rpc={rpc} />
@@ -350,44 +351,6 @@ function UtilityTabButton({ icon: Icon, label, active, badge, onClick }: {
 }
 
 // ── Panes ────────────────────────────────────────────────────────
-
-function PreviewPane({ port, url, name }: { port: number; url: string; name?: string }) {
-  const [reloadKey, setReloadKey] = useState(0);
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="h-full flex flex-col bg-zinc-950">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border bg-[var(--c-elevated,#18181b)]">
-        <span className="size-1.5 rounded-full bg-green-500" />
-        <span className="font-mono text-[11px] p-text-2">:{port}{name ? ` · ${name}` : ''}</span>
-        <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
-        <button
-          onClick={() => { navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Copy URL"
-        >{copied ? <span className="text-[10px]">copied</span> : <CopyIcon size={11} />}</button>
-        <button
-          onClick={() => setReloadKey(k => k + 1)}
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Reload"
-        ><ArrowsClockwiseIcon size={11} /></button>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Open in new tab"
-        ><ArrowSquareOutIcon size={11} /></a>
-      </div>
-      <iframe
-        key={reloadKey}
-        src={url}
-        className="flex-1 w-full bg-white"
-        title={`port-${port}`}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-      />
-    </div>
-  );
-}
 
 function TerminalPane({ execName, outputs, onExecute }: {
   execName: string;

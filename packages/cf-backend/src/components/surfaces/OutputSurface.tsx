@@ -7,10 +7,11 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { MonitorIcon, ArrowSquareOutIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { MonitorIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import type { FileDiff } from "@/lib/diff";
 import { pickDefaultExecutor } from "@/lib/executor-default";
+import { PreviewFrame } from "@/components/PreviewFrame";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { port: number; url: string; name?: string }
@@ -76,14 +77,9 @@ function PreviewView({ pinnedPorts }: { pinnedPorts: PinnedPort[] }) {
           ))}
         </div>
       )}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border text-xs shrink-0">
-        <span className="text-emerald-400 text-[10px]">● live</span>
-        <span className="font-mono p-text-2">{port.name ?? `port ${port.port}`}</span>
-        <a href={port.url} target="_blank" rel="noopener noreferrer" className="ml-auto p-accent hover:opacity-80 flex items-center gap-1" title="Open in new tab">
-          <span className="text-[10px]">open</span><ArrowSquareOutIcon size={11} />
-        </a>
+      <div className="flex-1 min-h-0">
+        <PreviewFrame url={port.url} label={`:${port.port}${port.name ? ` · ${port.name}` : ""}`} />
       </div>
-      <iframe src={port.url} title={`preview-${port.port}`} className="flex-1 w-full bg-white" />
     </div>
   );
 }
