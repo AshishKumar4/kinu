@@ -20,7 +20,6 @@ export interface ChatIngressDeps {
 
 export interface IncomingChat {
   text: string;
-  attachments?: ChatPayload['attachments'];
   session_id: string;       // WebSocket session id used as reply-channel holder
   operator_user_id: string; // From browser auth middleware
   now: number;
@@ -37,10 +36,7 @@ export function publishChatMessage(
   deps: ChatIngressDeps,
   msg: IncomingChat,
 ): ChatIngressResult {
-  const payload: ChatPayload = {
-    text: msg.text,
-    attachments: msg.attachments,
-  };
+  const payload: ChatPayload = { text: msg.text };
 
   // Open a ReplyChannel before publishing so the event row's reply_channel
   // ref is correct. ws_session TTL=0 (bound to socket lifetime).

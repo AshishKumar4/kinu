@@ -124,7 +124,6 @@ export interface ReplyChannelRow {
 
 export interface ChatPayload {
   text: string;
-  attachments?: Array<{ url: string; mediaType: string; size?: number }>;
 }
 
 export interface WebhookPayload {
