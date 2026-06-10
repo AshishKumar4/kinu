@@ -29,6 +29,7 @@ import { createAgentClient } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
+import { watchTerminalConsents } from '../consent-watch.js';
 import { ERR, printToolCall, printToolResult } from '../display.js';
 import {
   executeLocalExecutor,
@@ -73,7 +74,9 @@ export async function runCommand(name: string, promptParts: string[], opts: {
   const client = createAgentClient(target, opts);
   const render = outputMode === 'json' ? createJsonEventWriter(client) : renderRunEvent;
   const unsubscribe = client.subscribe(render);
-  const consentWatch = client.consents && outputMode === 'text' ? watchRunConsents(client) : null;
+  const consentWatch = client.consents && outputMode === 'text'
+    ? watchTerminalConsents(client.consents, client.agentName, askLineOnce)
+    : null;
   try {
     await client.connect();
     await client.send(prompt, { cwd: process.cwd() });
@@ -84,54 +87,24 @@ export async function runCommand(name: string, promptParts: string[], opts: {
   }
 }
 
-/** Surface device-consent requests during a one-shot cloud run: interactive
- *  stdin gets an inline y/a/n prompt, otherwise instructions are printed. */
-function watchRunConsents(client: AgentClient): { stop(): void } {
-  const consents = client.consents!;
-  const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
-  let stopped = false;
-  let prompting = false;
-  const handled = new Set<string>();
-
-  const tick = async () => {
-    if (stopped || prompting) return;
-    let pending;
-    try { pending = await consents.listPending(); } catch { return; }
-    const consent = pending.find((item) => !handled.has(item.consentId));
-    if (!consent || stopped) return;
-    handled.add(consent.consentId);
-
-    if (!tty) {
-      console.log(`\nPC access requested (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
-      console.log(`Approve or deny from the Proteus app, or run: proteus chat ${client.agentName}`);
-      return;
-    }
-
-    prompting = true;
+/** One-shot runs have no resident readline — open one per consent question
+ *  and close it as soon as the line (or an abort) settles. */
+function askLineOnce(question: string, signal: AbortSignal): Promise<string | null> {
+  return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      console.log(`\nPC access request: ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
-      const answer = await new Promise<string>((resolve) => rl.question('[y] allow once · [a] always allow · [n] deny › ', resolve));
-      const normalized = answer.trim().toLowerCase();
-      const decision = normalized === 'y' || normalized === 'yes' || normalized === 'o'
-        ? 'once' as const
-        : normalized === 'a' || normalized === 'always' ? 'always' as const : 'deny' as const;
-      await consents.resolve(consent.consentId, decision);
-    } catch (err) {
-      console.log(`${ERR('error')} ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
+    let settled = false;
+    const settle = (answer: string | null) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
       rl.close();
-      prompting = false;
-    }
-  };
-
-  const interval = setInterval(() => { void tick(); }, 750);
-  return {
-    stop() {
-      stopped = true;
-      clearInterval(interval);
-    },
-  };
+      resolve(answer);
+    };
+    const onAbort = () => settle(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    rl.once('close', () => settle(null));
+    rl.question(question, settle);
+  });
 }
 
 async function runRpc(

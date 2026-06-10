@@ -8,15 +8,10 @@
  */
 
 import * as readline from 'node:readline';
-import type {
-  AgentClient,
-  AgentClientEvent,
-  DeviceConsentDecision,
-  DeviceConsentSurface,
-  PendingDeviceConsent,
-} from './agent-client.js';
+import type { AgentClient, AgentClientEvent } from './agent-client.js';
 import { executeSlashCommand, renderStatusLines, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
+import { watchTerminalConsents } from './consent-watch.js';
 import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
 import {
   printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator,
@@ -27,8 +22,6 @@ export interface ChatLoopOpts {
   client: AgentClient;
   initialPrompt?: string;
 }
-
-const CONSENT_POLL_MS = 750;
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const { client } = opts;
@@ -89,7 +82,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     turnInFlight = true;
     interruptRequested = false;
     typing.start();
-    const consentWatch = client.consents ? watchConsents(client.consents, client.agentName, rl, tty) : null;
+    const consentWatch = client.consents
+      ? watchTerminalConsents(client.consents, client.agentName, (question, signal) => ask(rl, question, signal))
+      : null;
     try {
       await client.send(
         prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
@@ -132,15 +127,24 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   await onExit();
 }
 
-/** Read one line; resolves null on EOF/close so piped input terminates cleanly. */
-function ask(rl: readline.Interface, prompt: string): Promise<string | null> {
+/** Read one line; resolves null on EOF/close (so piped input terminates
+ *  cleanly) and on abort (a consent question cancelled by turn end). Settling
+ *  always detaches the listeners, so abandoned questions never leak them. */
+function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
-    const onClose = () => resolve(null);
-    rl.once('close', onClose);
-    rl.question(prompt, (answer) => {
+    let settled = false;
+    const settle = (answer: string | null) => {
+      if (settled) return;
+      settled = true;
       rl.off('close', onClose);
+      signal?.removeEventListener('abort', onAbort);
       resolve(answer);
-    });
+    };
+    const onClose = () => settle(null);
+    const onAbort = () => settle(null);
+    rl.once('close', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    rl.question(prompt, settle);
   });
 }
 
@@ -241,73 +245,3 @@ function renderClientEvent(
   }
 }
 
-/**
- * Poll pending device consents while a turn is processing. Interactive stdin
- * gets an inline y/a/n prompt; non-interactive runs print actionable
- * instructions once per request so the turn never stalls silently.
- */
-function watchConsents(
-  consents: DeviceConsentSurface,
-  agentName: string,
-  rl: readline.Interface,
-  tty: boolean,
-): { stop(): void } {
-  let stopped = false;
-  let prompting = false;
-  const handled = new Set<string>();
-
-  const promptDecision = async (consent: PendingDeviceConsent): Promise<DeviceConsentDecision> => {
-    console.log(`\n${WARN('PC access request')} from this agent:`);
-    console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
-    console.log(`  ${DIM('Method:')}  ${consent.method}`);
-    console.log(`  ${DIM('Command:')} ${consent.command || '(command)'}`);
-    while (!stopped) {
-      const answer = (await ask(rl, `${DIM('[y] allow once · [a] always allow · [n] deny ›')} `))?.trim().toLowerCase();
-      if (answer === 'y' || answer === 'yes' || answer === 'o') return 'once';
-      if (answer === 'a' || answer === 'always') return 'always';
-      if (answer === 'n' || answer === 'no' || answer === undefined) return 'deny';
-      console.log(DIM('  Please answer y, a, or n.'));
-    }
-    return 'deny';
-  };
-
-  const tick = async () => {
-    if (stopped || prompting) return;
-    let pending: PendingDeviceConsent[];
-    try {
-      pending = await consents.listPending();
-    } catch {
-      return;
-    }
-    const consent = pending.find((item) => !handled.has(item.consentId));
-    if (!consent || stopped) return;
-    handled.add(consent.consentId);
-
-    if (!tty) {
-      console.log(`\n${WARN('PC access requested')} (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
-      console.log(MUTED(`  Approve or deny from the Proteus app, or run: proteus chat ${agentName}`));
-      return;
-    }
-
-    prompting = true;
-    try {
-      const decision = await promptDecision(consent);
-      const result = await consents.resolve(consent.consentId, decision);
-      if (!result.ok) console.log(DIM('  That PC access request is no longer pending.'));
-      else console.log(DIM(`  ${decision === 'deny' ? 'Denied.' : decision === 'always' ? 'Approved (always).' : 'Approved once.'}`));
-    } catch (err) {
-      console.log(`${ERR('error')} ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      prompting = false;
-    }
-  };
-
-  const interval = setInterval(() => { void tick(); }, CONSENT_POLL_MS);
-  void tick();
-  return {
-    stop() {
-      stopped = true;
-      clearInterval(interval);
-    },
-  };
-}

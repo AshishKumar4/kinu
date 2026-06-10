@@ -27,6 +27,7 @@ import {
   type SlashOutcome,
 } from '../slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
+import { watchDeviceConsents } from '../consent-watch.js';
 import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
 import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
@@ -161,43 +162,37 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
     return () => { cancelled = true; };
   }, [client]);
 
-  // Poll pending device consents while a turn is processing (cloud agents).
+  // Watch pending device consents while a turn is processing (cloud agents).
+  // The shared watcher presents each consent once (no re-show when a poll tick
+  // races the resolution) and cancels the overlay when the turn settles.
+  const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
   useEffect(() => {
     const consents = client.consents;
     if (!consents || !isProcessing) {
       setPendingConsent(null);
       return;
     }
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const pending = await consents.listPending();
-        if (!cancelled) setPendingConsent(pending[0] ?? null);
-      } catch {
-        if (!cancelled) setPendingConsent(null);
-      }
-    };
-    void refresh();
-    const interval = setInterval(refresh, 750);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [client, isProcessing]);
+    const watcher = watchDeviceConsents(consents, {
+      present: (consent, signal) => new Promise((resolve) => {
+        const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
+          consentDecisionRef.current = null;
+          setPendingConsent(null);
+          resolve(outcome);
+        };
+        consentDecisionRef.current = settle;
+        setPendingConsent(consent);
+        signal.addEventListener('abort', () => settle('cancelled'), { once: true });
+      }),
+      note: (kind, message) => {
+        addMessage({ role: 'system', content: kind === 'error' ? `Error: ${message}` : message });
+      },
+    });
+    return () => watcher.stop();
+  }, [addMessage, client, isProcessing]);
 
   const resolvePendingConsent = useCallback((decision: DeviceConsentDecision) => {
-    const consent = pendingConsent;
-    const consents = client.consents;
-    if (!consent || !consents) return;
-    setPendingConsent(null);
-    void consents.resolve(consent.consentId, decision)
-      .then((result) => {
-        if (!result.ok) addMessage({ role: 'system', content: 'That PC access request is no longer pending.' });
-      })
-      .catch((err) => {
-        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
-      });
-  }, [addMessage, client, pendingConsent]);
+    consentDecisionRef.current?.(decision);
+  }, []);
 
   const resumeSession = useCallback(async (input: string, available?: CliSessionInfo[]) => {
     const sessions = available ?? client.listSessions();
