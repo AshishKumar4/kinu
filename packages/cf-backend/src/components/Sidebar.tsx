@@ -21,10 +21,18 @@ import { listAgents, removeAgent, getProfile, type AgentEntry, type UserProfile 
 import { CreateAgentModal } from "./CreateAgentModal";
 import { ModeToggle } from "./mode-toggle";
 
+// Route families in App.tsx that mount a live useProteus/useAgent socket for
+// :agentId. Deleting that agent must first navigate away from ALL of them —
+// a still-mounted socket auto-reconnects and resurrects the destroyed DO.
+const AGENT_SCOPED_SECTIONS = ["agent", "mcts", "settings", "triggers"];
+
 export default function Sidebar() {
   // useParams can't see :agentId from here (the Sidebar renders outside the
   // route's Outlet) — match the location directly instead.
-  const agentId = useMatch("/agent/:agentId")?.params.agentId;
+  const sectionMatch = useMatch("/:section/:agentId");
+  const agentId = sectionMatch && AGENT_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
+    ? sectionMatch.params.agentId
+    : undefined;
   const navigate = useNavigate();
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
