@@ -185,6 +185,18 @@ export function useProteus(agentId?: string) {
 
   const isConnected = connectionStatus === "connected";
 
+  // Rebuild the MCTS tree only when the rows actually changed — the polls
+  // return identical data most ticks, and a fresh tree object identity makes
+  // the d3 visualization re-render (and drop tooltips) for nothing.
+  const mctsFingerprint = useRef("");
+  const setMctsTreeFromRows = useCallback((rows: MctsRow[]) => {
+    if (rows.length === 0) return;
+    const fp = rows.map((r) => `${r.id}:${r.visits}:${r.value}:${r.status}`).join("|");
+    if (fp === mctsFingerprint.current) return;
+    mctsFingerprint.current = fp;
+    setMctsTree(buildTree(rows));
+  }, []);
+
   // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
   // read rpc<T>("getFoo", []) cast-free. Memoized on `agent` so it's a stable
   // identity (surface effects keyed on [rpc] don't refetch each render).
@@ -253,7 +265,7 @@ export function useProteus(agentId?: string) {
         const msg = JSON.parse(typeof data === "string" ? data : "");
         if (msg.type === "mcts-progress") {
           if (msg.nodes && msg.nodes.length > 0) {
-            setMctsTree(buildTree(msg.nodes));
+            setMctsTreeFromRows(msg.nodes);
           }
           // Pull the freshest timeline so the new MCTS spans land promptly.
           refreshTimeline();
@@ -276,7 +288,7 @@ export function useProteus(agentId?: string) {
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent, refreshTimeline, refreshBackgroundJobs]);
+  }, [agent, refreshTimeline, refreshBackgroundJobs, setMctsTreeFromRows]);
 
   const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
     setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
@@ -293,7 +305,7 @@ export function useProteus(agentId?: string) {
 
   function refreshLiveData() {
     refreshTimeline();
-    rpc<MctsRow[]>("getMctsTree", []).then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); }).catch(() => {});
+    rpc<MctsRow[]>("getMctsTree", []).then(setMctsTreeFromRows).catch(() => {});
     rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
     // Refresh tools so newly-crafted tools appear without reconnecting.
     rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
@@ -315,7 +327,7 @@ export function useProteus(agentId?: string) {
         setTools(mapToolDescriptions(snap.tools));
         setMemoryContent(snap.memoryContent);
         if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
-        if (snap.mcts.length > 0) setMctsTree(buildTree(snap.mcts));
+        setMctsTreeFromRows(snap.mcts);
         setRunTimeline(snap.timeline);
         setExecutors(snap.executors);
         setLastActiveExecutor(snap.lastActiveExecutor);
@@ -337,6 +349,7 @@ export function useProteus(agentId?: string) {
     setMemory([]);
     setMemoryContent("");
     setMctsTree(null);
+    mctsFingerprint.current = "";
     setRunTimeline([]);
     setPinnedPorts([]);
     setError(null);
