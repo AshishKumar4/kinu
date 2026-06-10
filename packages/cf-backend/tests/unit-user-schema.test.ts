@@ -84,6 +84,33 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
+  test('the raw-token reset is one-shot: never re-drops once the migration version is recorded', () => {
+    const db = new Database(':memory:');
+    initUserTables(sqlExec(db)); // records the migration ledger version
+
+    // Simulate a FUTURE shape change that happens to look "legacy" to the old
+    // boot heuristic (a `token` column). Pre-fix, every boot re-triggered the
+    // DROP, silently disconnecting devices / signing out CLIs.
+    db.exec(`
+      ALTER TABLE user_devices ADD COLUMN token TEXT;
+      INSERT INTO user_devices (id, token_hash, label, token) VALUES ('dev-1', 'hash', 'laptop', 'future-shape');
+    `);
+
+    initUserTables(sqlExec(db));
+
+    expect(columns(db, 'user_devices')).toContain('token');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM user_devices').get<{ n: number }>()!.n).toBe(1);
+    db.close();
+  });
+
+  test('records the schema version after the first boot', () => {
+    const db = new Database(':memory:');
+    initUserTables(sqlExec(db));
+    const row = db.prepare(`SELECT value FROM user_schema_meta WHERE key = 'version'`).get<{ value: string }>();
+    expect(Number(row!.value)).toBeGreaterThanOrEqual(1);
+    db.close();
+  });
+
   test('creates hash-only CLI agent websocket ticket table', () => {
     const db = new Database(':memory:');
 

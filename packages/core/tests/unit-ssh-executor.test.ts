@@ -59,4 +59,43 @@ describe('createSSHTunnelExecutor', () => {
     expect(a).toBe('Written 1 bytes to /tmp/a');
     expect(b).toBe('Written 2 bytes to /tmp/b');
   });
+
+  test('tools reach the hub even when the cached flag is stale-false', async () => {
+    // Regression: agents whose runtime predated the device connection gated
+    // every call on the cached flag, so false could never flip back to true.
+    const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
+    t.isConnected = () => false;
+    const provider = createSSHTunnelExecutor(t);
+
+    expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
+    expect(t.calls).toEqual([{ method: 'exec', params: ['echo hi'] }]);
+    // isAvailable still reports the cached flag (sync badge only).
+    expect(provider.isAvailable()).toBe(false);
+  });
+
+  test('hub/tunnel disconnect errors surface the connect guidance', async () => {
+    const hubRejects: DeviceTransport = {
+      isConnected: () => false,
+      rpc: async () => { throw new Error('no device connected'); },
+    };
+    const tunnelDropped: DeviceTransport = {
+      isConnected: () => true,
+      rpc: async () => { throw new Error('device tunnel not connected'); },
+    };
+
+    const fromHub = await createSSHTunnelExecutor(hubRejects).tools.exec.execute('ls');
+    const fromTunnel = await createSSHTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
+
+    expect(fromHub).toContain('proteus connect');
+    expect(fromTunnel).toContain('proteus connect');
+    await expect(createSSHTunnelExecutor(hubRejects).connect()).rejects.toThrow('proteus connect');
+  });
+
+  test('non-connection errors keep their own message', async () => {
+    const t: DeviceTransport = {
+      isConnected: () => true,
+      rpc: async () => { throw new Error('permission denied'); },
+    };
+    expect(await createSSHTunnelExecutor(t).tools.exec.execute('ls')).toBe('exec error: permission denied');
+  });
 });

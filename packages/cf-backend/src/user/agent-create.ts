@@ -38,8 +38,7 @@ export async function createCloudAgentForUser(
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
-  const hadAgent = await userDO.hasAgent(identity.name);
-  const entry = await userDO.registerAgent(identity.name, identity.displayName, purpose);
+  const { entry, existed } = await userDO.registerAgent(identity.name, identity.displayName, purpose);
   try {
     await initializeOrchestrator(env, userId, entry.name, entry.displayName, purpose, model);
     if (identity.nameOrigin === 'auto' && purpose) {
@@ -47,7 +46,10 @@ export async function createCloudAgentForUser(
     }
     return entry;
   } catch (err) {
-    if (!hadAgent) {
+    // Roll back ONLY a row this create inserted. A pre-existing row — even an
+    // archived one, which registerAgent resurrects on name conflict — must
+    // never be destroyed here: removeAgent wipes the agent's whole DO.
+    if (!existed) {
       try {
         await userDO.removeAgent(entry.name, userId);
       } catch (rollbackErr) {

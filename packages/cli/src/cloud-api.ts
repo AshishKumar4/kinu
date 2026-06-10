@@ -32,6 +32,16 @@ export interface CloudDeviceRegistration {
   origin: string;
 }
 
+export interface CloudDevice {
+  id: string;
+  label: string;
+  os: string | null;
+  hostname: string | null;
+  connected: boolean;
+  createdAt: number;
+  lastSeenAt: number | null;
+}
+
 export interface CloudAgentConnectTicket {
   ticket: string;
   expiresAt: number;
@@ -307,6 +317,10 @@ export async function createCloudWebhookTrigger(
 
 export async function registerCloudDevice(origin: string, token: string, label?: string): Promise<CloudDeviceRegistration> {
   return cloudJson(origin, '/api/cli/devices', { method: 'POST', token, body: { label } });
+}
+
+export async function listCloudDevices(origin: string, token: string): Promise<CloudDevice[]> {
+  return cloudJson(origin, '/api/cli/devices', { token });
 }
 
 function query(opts: Record<string, string | number | undefined>): string {

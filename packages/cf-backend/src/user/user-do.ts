@@ -21,7 +21,6 @@ import {
 } from "agents/mcp/do-oauth-client-provider";
 import {
   nanoid,
-  DeviceTunnel,
   createProductChangeStore,
   productChangeSqlFromExec,
   type Credential,
@@ -41,6 +40,7 @@ import {
   type DeviceCodeStart,
 } from '@proteus/core';
 import { initUserTables } from './schema.js';
+import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
 import { resolveAgentTitle } from '../lib/agent-naming.js';
@@ -164,6 +164,9 @@ function parseCapabilityList(value: string): string[] {
   }
 }
 
+/** Path the worker forwards device-daemon WebSocket upgrades to (pc-handler). */
+const DEVICE_CONNECT_PATH = '/pc/connect';
+
 export class UserDO extends Agent<Env> {
   private _initialized = false;
 
@@ -251,8 +254,11 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
+  /** Insert-or-resurrect a roster row. `existed` reports whether ANY row
+   *  (archived included — a name conflict un-archives) was already there, so
+   *  a failed create can roll back ONLY rows it actually inserted. */
   @callable()
-  async registerAgent(name: string, displayName?: string, purpose?: string): Promise<AgentEntry> {
+  async registerAgent(name: string, displayName?: string, purpose?: string): Promise<{ entry: AgentEntry; existed: boolean }> {
     validateAgentName(name);
     const now = Date.now();
     const existing = this.sqlx<{ display_name: string }>(
@@ -270,7 +276,10 @@ export class UserDO extends Agent<Env> {
          archived_at  = NULL`,
       name, title, now, now,
     );
-    return { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null };
+    return {
+      entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
+      existed: !!existing,
+    };
   }
 
   @callable()
@@ -490,10 +499,73 @@ export class UserDO extends Agent<Env> {
   //
   // The reverse-WS tunnel from a user's machine terminates HERE, not on a
   // specific agent — so one `proteus connect` lets every one of the user's
-  // agents reach the device. Live sockets are held in-memory (an open WS keeps
-  // this DO warm); each is wrapped in a DeviceTunnel that does the JSON-RPC.
-  // Agents reach a device by forwarding to `deviceRpc()` over a DO-to-DO call.
-  private readonly _deviceTunnels = new Map<string, DeviceTunnel>();
+  // agents reach the device. The worker forwards the daemon's upgrade Request
+  // to this DO (a WebSocket itself cannot cross the RPC boundary) and the
+  // socket is accepted inside fetch() as a hibernatable WebSocket owned by
+  // the DeviceSocketHub (tagging, replace-on-reconnect, DeviceTunnel rebuild
+  // on wake). Agents reach a device by forwarding to `deviceRpc()` over a
+  // DO-to-DO call.
+  private readonly _devices = new DeviceSocketHub(this.ctx);
+
+  /** Intercept device-daemon WebSocket upgrades; everything else (agents-SDK
+   *  routing, sub-agents) flows to the SDK untouched. */
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url);
+    return super.fetch(request);
+  }
+
+  /** Verify + consume the daemon's connect ticket and accept its WebSocket.
+   *  Ticket verification lives HERE (not in the worker) so the upgrade is
+   *  safe no matter how the request reached this DO. */
+  private async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('Expected WebSocket', { status: 426 });
+    }
+    const ticket = url.searchParams.get('ticket');
+    const verified = ticket ? await this.verifyDeviceConnectTicket(ticket) : { ok: false as const };
+    if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
+
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    this._devices.accept(verified.deviceId, server);
+    const now = Date.now();
+    this.sqlx(`UPDATE user_devices SET connected_at = ?, last_seen_at = ? WHERE id = ?`, now, now, verified.deviceId);
+    return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
+  }
+
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
+    const deviceId = deviceIdFromSocket(ws);
+    if (!deviceId) return super.webSocketMessage(ws, message);
+    this.ensureInit();
+    const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    // The daemon's HELLO carries metadata; everything else is an RPC response.
+    try {
+      const m = JSON.parse(data) as { type?: string; os?: string; hostname?: string };
+      if (m.type === 'HELLO') {
+        this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
+          m.os ?? null, m.hostname ?? null, Date.now(), deviceId);
+        return;
+      }
+    } catch { /* not JSON / not HELLO — fall through to RPC */ }
+    this._devices.handleMessage(deviceId, data);
+  }
+
+  override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    const deviceId = deviceIdFromSocket(ws);
+    if (!deviceId) return super.webSocketClose(ws, code, reason, wasClean);
+    this.ensureInit();
+    this._devices.handleClose(deviceId, ws);
+    // A replacing socket may already be live — only then keep connected_at.
+    if (!this._devices.isConnected(deviceId)) {
+      try { this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId); } catch { /* nop */ }
+    }
+  }
+
+  override async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    // Device sockets clean up in webSocketClose, which the runtime fires next.
+    if (!deviceIdFromSocket(ws)) return super.webSocketError(ws, error);
+  }
 
   /** Mint a device + connect token. The authenticated CLI receives the raw
    *  token once and writes it to the local daemon config; only its hash is
@@ -559,44 +631,6 @@ export class UserDO extends Agent<Env> {
     return active ? { ok: true, deviceId: row.device_id } : { ok: false };
   }
 
-  /** Accept the daemon's WebSocket and wire it to a DeviceTunnel. Called by
-   *  pc-handler via native DO RPC (WebSockets cross the DO boundary). NOT
-   *  @callable — a WebSocket isn't agents-RPC-serializable. */
-  async attachDeviceSocket(deviceId: string, ws: WebSocket): Promise<void> {
-    this.ensureInit();
-    (ws as unknown as { accept(): void }).accept();
-    this._deviceTunnels.get(deviceId)?.dispose();
-    const tunnel = new DeviceTunnel(ws as unknown as import('@proteus/core').TunnelSocket);
-    this._deviceTunnels.set(deviceId, tunnel);
-    const now = Date.now();
-    this.sqlx(`UPDATE user_devices SET connected_at = ?, last_seen_at = ? WHERE id = ?`, now, now, deviceId);
-    ws.addEventListener('message', (ev: MessageEvent) => {
-      const data = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer);
-      // The daemon's HELLO carries metadata; everything else is an RPC response.
-      try {
-        const m = JSON.parse(data) as { type?: string; os?: string; hostname?: string };
-        if (m.type === 'HELLO') {
-          this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
-            m.os ?? null, m.hostname ?? null, Date.now(), deviceId);
-          return;
-        }
-      } catch { /* not JSON / not HELLO — fall through to RPC */ }
-      tunnel.handleMessage(data);
-    });
-    ws.addEventListener('close', () => {
-      tunnel.dispose();
-      this._deviceTunnels.delete(deviceId);
-      try { this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId); } catch { /* nop */ }
-    });
-  }
-
-  /** The id of a connected device — the requested one, or the first live one. */
-  private connectedDeviceId(deviceId?: string): string | null {
-    if (deviceId) return this._deviceTunnels.get(deviceId)?.isConnected() ? deviceId : null;
-    for (const [id, t] of this._deviceTunnels) if (t.isConnected()) return id;
-    return null;
-  }
-
   private deviceLabel(deviceId: string): string {
     return this.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? 'your device';
   }
@@ -606,20 +640,21 @@ export class UserDO extends Agent<Env> {
    *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
    *  the agent to raise a consent card and await the user's decision. */
   async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string }): Promise<unknown> {
-    const deviceId = this.connectedDeviceId(opts?.deviceId);
+    const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) throw new Error('no device connected');
     if (opts?.agentName) {
       const allowed = await this.checkDeviceConsent(opts.agentName, deviceId, method, params);
       if (!allowed) throw new Error('device use was not approved');
     }
-    const tunnel = this._deviceTunnels.get(deviceId)!;
+    const tunnel = this._devices.tunnel(deviceId);
+    if (!tunnel) throw new Error('no device connected');
     return tunnel.rpc(method, params);
   }
 
   /** Whether any (or a specific) device is live — drives the laptop executor's
    *  availability cache + the UI badge. */
   async isDeviceConnected(deviceId?: string): Promise<boolean> {
-    return this.connectedDeviceId(deviceId) != null;
+    return this._devices.connectedDeviceId(deviceId) != null;
   }
 
   // ── Device consent (ask-once-then-remember) ──────────────────────────
@@ -721,7 +756,8 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /** The user's devices for the Devices tab (live-connected flag from memory). */
+  /** The user's devices for the Devices tab (live-connected flag from the
+   *  hibernatable-socket tags). */
   @callable()
   async listDevices(): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
@@ -734,7 +770,7 @@ export class UserDO extends Agent<Env> {
         WHERE revoked_at IS NULL ORDER BY created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
-        connected: this._deviceTunnels.get(r.id)?.isConnected() ?? false,
+        connected: this._devices.isConnected(r.id),
         createdAt: r.created_at, lastSeenAt: r.last_seen_at,
       }));
   }
@@ -742,8 +778,7 @@ export class UserDO extends Agent<Env> {
   /** Revoke a device: drop its live socket + mark the row revoked. */
   @callable()
   async revokeDevice(deviceId: string): Promise<{ ok: boolean }> {
-    this._deviceTunnels.get(deviceId)?.dispose();
-    this._deviceTunnels.delete(deviceId);
+    this._devices.close(deviceId, 'device revoked');
     this.sqlx(`UPDATE user_devices SET revoked_at = ?, connected_at = NULL WHERE id = ?`, Date.now(), deviceId);
     return { ok: true };
   }

@@ -29,13 +29,12 @@ describe('cloud agent ownership safety', () => {
       async listCredentials() {
         return [];
       },
-      async hasAgent(name: string) {
-        calls.push(`has:${name}`);
-        return false;
-      },
       async registerAgent(name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
-        return { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null };
+        return {
+          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+          existed: false,
+        };
       },
       async removeAgent(name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
@@ -104,13 +103,12 @@ describe('cloud agent ownership safety', () => {
       async listCredentials() {
         return [];
       },
-      async hasAgent(name: string) {
-        calls.push(`has:${name}`);
-        return false;
-      },
       async registerAgent(name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
-        return { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null };
+        return {
+          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+          existed: false,
+        };
       },
       async removeAgent(name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
@@ -154,6 +152,54 @@ describe('cloud agent ownership safety', () => {
     expect(calls).toContain(`claim:${USER_ID}`);
     expect(calls).toContain(`remove:jarvis:${USER_ID}`);
     expect(calls).not.toContain('soul');
+  });
+
+  test('a failed create never destroys a pre-existing (archived) same-name agent', async () => {
+    const calls: string[] = [];
+    const userDO = {
+      async getConfig() { return null; },
+      async getAuthHeaders() { return { authorization: 'Bearer token' }; },
+      async getCredentialBaseURL() {
+        return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+      },
+      async listCredentials() { return []; },
+      // The roster row exists but is ARCHIVED — registerAgent resurrects it
+      // on name conflict and reports existed: true.
+      async registerAgent(name: string, displayName?: string) {
+        calls.push(`register:${name}`);
+        return {
+          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+          existed: true,
+        };
+      },
+      async removeAgent(name: string, ownerUserId: string) {
+        calls.push(`remove:${name}:${ownerUserId}`);
+      },
+    };
+    const orchestrator = {
+      async claimOwner() {
+        calls.push('claim');
+        throw new Error('boot failure');
+      },
+    };
+    const env = {
+      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
+      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
+    } as unknown as Env;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    try {
+      await expect(createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+        name: 'jarvis',
+      })).rejects.toThrow('boot failure');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls).toContain('register:jarvis');
+    expect(calls).toContain('claim');
+    // Pre-fix this destroyed the archived agent's entire DO storage.
+    expect(calls.some((c) => c.startsWith('remove:'))).toBe(false);
   });
 
   test('delete route and teardown require owner-scoped destroy', () => {

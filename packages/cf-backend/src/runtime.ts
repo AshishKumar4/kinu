@@ -53,6 +53,10 @@ import {
   nimbusTenantForUser,
 } from "./nimbus-route.js";
 
+/** How long the laptop executor's cached device-connected flag stays fresh
+ *  before isConnected() kicks a background re-check against the user hub. */
+const DEVICE_CONNECTED_TTL_MS = 5_000;
+
 /**
  * The agent surface these runtime builders need. `env`/`ctx` are `protected`
  * on the DurableObject base (not reachable by these free functions), but the
@@ -202,15 +206,31 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
 
   // Register the laptop executor. The device socket lives on the user's UserDO
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
-  // one connected device serves all of the user's agents. `isAvailable()` is
-  // sync + hot, so we keep a cheap cached flag, seeded once from the hub and
-  // refreshed on each call's outcome.
+  // one connected device serves all of the user's agents. `isConnected()` is
+  // sync + hot (it gates per-turn tool exposure), so it serves a cached flag
+  // refreshed from the hub in the background once it goes stale — a device
+  // connecting AFTER this runtime was built becomes visible within the TTL,
+  // without a DO restart. Actual calls stay authoritative either way: the hub
+  // rejects when no device is connected, and each call's outcome re-seeds the
+  // flag.
   let deviceConnected = false;
+  let deviceCheckedAt = 0;
+  let deviceCheck: Promise<void> | null = null;
+  const refreshDeviceConnected = (): void => {
+    if (deviceCheck || Date.now() - deviceCheckedAt < DEVICE_CONNECTED_TTL_MS) return;
+    const stub = userDOStubFor(agent);
+    if (!stub) { deviceConnected = false; deviceCheckedAt = Date.now(); return; }
+    deviceCheck = (async () => {
+      try { deviceConnected = await stub.isDeviceConnected(); }
+      catch { /* transient hub error — keep the last value */ }
+      finally { deviceCheckedAt = Date.now(); deviceCheck = null; }
+    })();
+  };
   const deviceTransport: DeviceTransport = {
-    isConnected: () => deviceConnected,
+    isConnected: () => { refreshDeviceConnected(); return deviceConnected; },
     rpc: async (method, params) => {
       const stub = userDOStubFor(agent);
-      if (!stub) { deviceConnected = false; throw new Error('no device connected'); }
+      if (!stub) { deviceConnected = false; deviceCheckedAt = Date.now(); throw new Error('no device connected'); }
       try {
         const cwd = typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
           ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
@@ -223,17 +243,18 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
           agentName: agent.name,
         });
         deviceConnected = true;
+        deviceCheckedAt = Date.now();
         return result;
       } catch (err) {
-        if (/no device connected/.test(err instanceof Error ? err.message : String(err))) deviceConnected = false;
+        if (/no device connected/.test(err instanceof Error ? err.message : String(err))) {
+          deviceConnected = false;
+          deviceCheckedAt = Date.now();
+        }
         throw err;
       }
     },
   };
-  void (async () => {
-    const stub = userDOStubFor(agent);
-    if (stub) { try { deviceConnected = await stub.isDeviceConnected(); } catch { /* nop */ } }
-  })();
+  refreshDeviceConnected();
   const sshExecutor = createSSHTunnelExecutor(deviceTransport);
   executionRouter.register(sshExecutor);
 

@@ -17,6 +17,7 @@
  */
 
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
+import { TUNNEL_DISCONNECTED } from './device-tunnel.js';
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
@@ -26,12 +27,21 @@ const NOT_CONNECTED =
  * Transport the laptop executor speaks through. The actual device socket lives
  * on the user-level hub (UserDO); the agent forwards each JSON-RPC call there,
  * so one connected device serves all of a user's agents. `isConnected()` is a
- * cheap CACHED flag (the executor's isAvailable() is sync + hot) — the transport
- * refreshes it from the hub out of band and on each call's outcome.
+ * cheap CACHED flag (the executor's isAvailable() is sync + hot) that the
+ * transport refreshes from the hub out of band — tool calls do NOT gate on it,
+ * they go to the hub and let it answer authoritatively, so a device that
+ * connected after this runtime was built works immediately.
  */
 export interface DeviceTransport {
   rpc(method: string, params: unknown[]): Promise<unknown>;
   isConnected(): boolean;
+}
+
+/** The hub rejects calls when no device socket is live; the tunnel rejects
+ *  in-flight calls when the socket drops. Both mean "not connected". */
+function isNotConnectedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('no device connected') || message.includes(TUNNEL_DISCONNECTED);
 }
 
 /**
@@ -46,7 +56,6 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     exec: {
       description: 'Execute a command on the user\'s local machine via SSH tunnel.',
       execute: async (command: unknown): Promise<string> => {
-        if (!isConnected()) return NOT_CONNECTED;
         try {
           const result = await rpc('exec', [String(command)]) as
             { stdout: string; stderr: string; exitCode: number };
@@ -55,6 +64,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
           }
           return result.stdout || '(no output)';
         } catch (err) {
+          if (isNotConnectedError(err)) return NOT_CONNECTED;
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -63,10 +73,10 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     readFile: {
       description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
       execute: async (path: unknown): Promise<string> => {
-        if (!isConnected()) return NOT_CONNECTED;
         try {
           return String(await rpc('readFile', [String(path)]));
         } catch (err) {
+          if (isNotConnectedError(err)) return NOT_CONNECTED;
           return `readFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -75,7 +85,6 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     writeFile: {
       description: 'Write content to a file on the user\'s local filesystem via SSH tunnel.',
       execute: async (path: unknown, content: unknown): Promise<string> => {
-        if (!isConnected()) return NOT_CONNECTED;
         try {
           const result = await rpc('writeFile', [String(path), String(content)]);
           if (result !== 'ok' && !(isRecord(result) && result.success === true)) {
@@ -84,6 +93,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
           }
           return `Written ${String(content).length} bytes to ${String(path)}`;
         } catch (err) {
+          if (isNotConnectedError(err)) return NOT_CONNECTED;
           return `writeFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -92,7 +102,6 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     readdir: {
       description: 'List directory contents on the user\'s local machine.',
       execute: async (path: unknown): Promise<unknown> => {
-        if (!isConnected()) return NOT_CONNECTED;
         try {
           const result = await rpc('listFiles', [String(path || '/')]);
           if (!Array.isArray(result)) return result;
@@ -101,6 +110,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
             return String(entry);
           });
         } catch (err) {
+          if (isNotConnectedError(err)) return NOT_CONNECTED;
           return `readdir error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -109,10 +119,12 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     exists: {
       description: 'Check if a path exists on the user\'s local machine.',
       execute: async (path: unknown): Promise<unknown> => {
-        if (!isConnected()) return NOT_CONNECTED;
         try {
           return Boolean(await rpc('exists', [String(path)]));
-        } catch { return false; }
+        } catch (err) {
+          if (isNotConnectedError(err)) return NOT_CONNECTED;
+          return false;
+        }
       },
     },
   };
@@ -128,9 +140,13 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     ]),
     isAvailable: () => isConnected(),
     connect: async () => {
-      if (!isConnected()) throw new Error(NOT_CONNECTED);
       // Verify connectivity with a simple echo
-      await rpc('exec', ['echo connected']);
+      try {
+        await rpc('exec', ['echo connected']);
+      } catch (err) {
+        if (isNotConnectedError(err)) throw new Error(NOT_CONNECTED);
+        throw err;
+      }
     },
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
