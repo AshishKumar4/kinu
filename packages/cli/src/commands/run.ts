@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import * as readline from 'node:readline';
 import {
   createCloudWebhookTrigger,
@@ -29,6 +28,7 @@ import { createAgentClient } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
+import { resolvePromptAttachments } from '../attachments.js';
 import { watchTerminalConsents } from '../consent-watch.js';
 import { ERR, printToolCall, printToolResult } from '../display.js';
 import {
@@ -63,12 +63,17 @@ export async function runCommand(name: string, promptParts: string[], opts: {
     return;
   }
 
-  const prompt = await buildPrompt(promptParts);
+  const rawPrompt = await buildPrompt(promptParts);
 
-  if (!prompt) {
+  if (!rawPrompt) {
     await chatCommand(target.requestedName, opts);
     return;
   }
+
+  // Same @path semantics as the chat surfaces: images/PDFs inline as file
+  // parts, other files stay path references the agent reads with its tools.
+  const prompt = await resolvePromptAttachments(rawPrompt);
+  for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
   const client = createAgentClient(target, opts);
@@ -79,7 +84,10 @@ export async function runCommand(name: string, promptParts: string[], opts: {
     : null;
   try {
     await client.connect();
-    await client.send(prompt, { cwd: process.cwd() });
+    await client.send(
+      prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
+      { cwd: process.cwd() },
+    );
   } finally {
     consentWatch?.stop();
     unsubscribe();
@@ -429,22 +437,9 @@ function parseRpc(line: string): { ok: true; value: Record<string, unknown> } | 
 
 async function buildPrompt(parts: string[]): Promise<string> {
   const stdin = !process.stdin.isTTY ? await new Response(Bun.stdin.stream()).text() : '';
-  const chunks: string[] = [];
-  for (const part of parts) {
-    if (part.startsWith('@') && part.length > 1) {
-      const path = part.slice(1);
-      const content = readFileSync(path, 'utf-8');
-      chunks.push(`<file path="${escapeAttr(path)}">\n${content}\n</file>`);
-    } else {
-      chunks.push(part);
-    }
-  }
+  const chunks = [...parts];
   if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
   return chunks.join(' ').trim();
-}
-
-function escapeAttr(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
 function normalizeOutputMode(raw: string | undefined): 'text' | 'json' | 'rpc' {
