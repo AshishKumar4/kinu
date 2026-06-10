@@ -3,7 +3,7 @@
  * surfaces — kept in one place so there is a single source of truth (DRY) for
  * markdown rendering, code blocks, preview-URL detection, and empty states.
  */
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Code } from "@cloudflare/kumo/components/code";
 import { CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
@@ -44,7 +44,9 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
   );
 }
 
-export function MarkdownContent({ content }: { content: string }) {
+// Memoized on the content string — the react-markdown re-parse is the
+// dominant render cost, so unchanged messages must skip it entirely.
+export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown remarkPlugins={[remarkGfm]} components={{
       code({ className, children, ...props }) {
@@ -58,7 +60,7 @@ export function MarkdownContent({ content }: { content: string }) {
       pre({ children }) { return <>{children}</>; },
     }}>{content}</Markdown>
   );
-}
+});
 
 /**
  * Detect a Proteus path-style preview URL anywhere inside a tool result. Tool

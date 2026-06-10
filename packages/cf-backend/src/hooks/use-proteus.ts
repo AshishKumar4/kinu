@@ -208,13 +208,24 @@ export function useProteus(agentId?: string) {
     }
   }, [isStreaming, agent]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Adaptive polling: 1s during streaming for near-real-time spans, 5s when idle
+  const refreshTimeline = useCallback(() => {
+    rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
+  }, [rpc]);
+
+  // Full surface refresh on a steady 5s cadence. The chat stream already
+  // carries the conversation, so streaming only adds a faster (1s) poll of
+  // the run timeline for near-real-time spans — not all seven RPCs.
   useEffect(() => {
     if (!isConnected) return;
-    const ms = isStreaming ? 1000 : 5000;
-    const interval = setInterval(refreshLiveData, ms);
+    const interval = setInterval(refreshLiveData, 5000);
     return () => clearInterval(interval);
-  }, [isConnected, isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!isConnected || !isStreaming) return;
+    const interval = setInterval(refreshTimeline, 1000);
+    return () => clearInterval(interval);
+  }, [isConnected, isStreaming, refreshTimeline]);
 
   const refreshBackgroundJobs = useCallback(() => {
     rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
@@ -255,7 +266,7 @@ export function useProteus(agentId?: string) {
             setMctsTree(buildTree(msg.nodes));
           }
           // Pull the freshest timeline so the new MCTS spans land promptly.
-          rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
+          refreshTimeline();
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
             : [...prev, {
@@ -275,7 +286,7 @@ export function useProteus(agentId?: string) {
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent, rpc, refreshBackgroundJobs]);
+  }, [agent, refreshTimeline, refreshBackgroundJobs]);
 
   const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
     setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
@@ -283,7 +294,7 @@ export function useProteus(agentId?: string) {
   }, [rpc]);
 
   function refreshLiveData() {
-    rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
+    refreshTimeline();
     rpc<MctsRow[]>("getMctsTree", []).then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); }).catch(() => {});
     rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
     // Refresh tools so newly-crafted tools appear without reconnecting.

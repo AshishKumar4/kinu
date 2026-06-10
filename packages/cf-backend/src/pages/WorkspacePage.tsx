@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { memo, useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
@@ -207,7 +207,10 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
   );
 }
 
-function MessageView({
+// Memoized: @ai-sdk's replaceMessage only clones the streaming message, so
+// historical messages keep referential identity across stream ticks and skip
+// re-rendering (and re-parsing their markdown) entirely.
+const MessageView = memo(function MessageView({
   message, isLast, isStreaming, onFork, onFeedback,
 }: {
   message: UIMessage;
@@ -342,7 +345,7 @@ function MessageView({
       )}
     </div>
   );
-}
+});
 
 function MessageFeedback({
   messageId, onFeedback,
@@ -582,6 +585,13 @@ export default function WorkspacePage() {
     state.sendChat(t); setChatInput("");
   }, [chatInput, state]);
 
+  // Identity-stable handlers so memo(MessageView) holds across stream ticks.
+  const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
+  const onMessageFeedback = useCallback(async (mid: string, fb: 'positive' | 'negative' | null) => {
+    try { await state.rpc('setTurnFeedback', [mid, fb]); }
+    catch (e) { console.warn('[feedback] rpc failed:', e); }
+  }, [state.rpc]);
+
   // First-paint loading: only when we genuinely have nothing to show.
   // (STABILITY-AUDIT §A1 — never unmount on transient WS errors.)
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
@@ -681,11 +691,8 @@ export default function WorkspacePage() {
                   message={msg}
                   isLast={i === state.messages.length - 1}
                   isStreaming={state.isStreaming}
-                  onFork={(mid) => setForkFor(mid)}
-                  onFeedback={async (mid, fb) => {
-                    try { await state.rpc('setTurnFeedback', [mid, fb]); }
-                    catch (e) { console.warn('[feedback] rpc failed:', e); }
-                  }}
+                  onFork={onForkMessage}
+                  onFeedback={onMessageFeedback}
                 />
               ))}
             </div>
