@@ -100,6 +100,8 @@ export interface ProteusConfig {
   };
   /** Stdio MCP servers to connect locally (standard mcpServers shape). */
   mcpServers?: Record<string, McpServerConfig>;
+  /** "Don't ask again" for the chat device-connect prompt. */
+  deviceConnectPromptDismissed?: boolean;
 }
 
 export function ensureAgentHome(): void {
