@@ -1,5 +1,7 @@
 import { generateText } from 'ai';
 import {
+  AGENT_IDENTITY_SYSTEM_PROMPT,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
   agentIdentityPrompt,
   createAgentNameFromMission,
   deriveAgentTitle,
@@ -8,7 +10,7 @@ import {
 } from '@proteus/core';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, listAvailableModels, type ModelMenuEntry } from './available-models.js';
+import { listAvailableModels, type ModelMenuEntry } from './available-models.js';
 import type { AgentEntry, UserDO } from './user-do.js';
 
 export interface CreateCloudAgentInput {
@@ -125,7 +127,7 @@ async function suggestCloudAgentDisplayName(
   const provider = createAgentProviderRegistry({ env, userDOStub: userDO, fetch });
   const result = await generateText({
     model: provider.resolveModel(modelSpec),
-    system: 'You create short, useful names for persistent software agents.',
+    system: AGENT_IDENTITY_SYSTEM_PROMPT,
     prompt: agentIdentityPrompt(mission),
     maxOutputTokens: 80,
   });

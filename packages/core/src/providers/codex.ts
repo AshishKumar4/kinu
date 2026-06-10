@@ -20,9 +20,10 @@ import { authCacheKey, cloneModelInfos, isRecord, nonEmptyString, positiveIntege
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
+export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: 'gpt-5.5',       label: 'GPT-5.5 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
+  { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
   { id: 'gpt-5.4',       label: 'GPT-5.4 (Codex)',       capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
   { id: 'gpt-5.4-mini',  label: 'GPT-5.4 mini (Codex)',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex',         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 272_000 },
@@ -43,7 +44,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
   return {
     id: 'codex',
     label: 'ChatGPT Codex (subscription)',
-    defaultModel: 'gpt-5.5',
+    defaultModel: CODEX_DEFAULT_MODEL,
 
     async isAvailable(deps) { return deps.hasCredential(CODEX_CRED_KEY); },
     unavailableReason() {

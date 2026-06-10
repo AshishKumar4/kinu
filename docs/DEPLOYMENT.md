@@ -1,5 +1,7 @@
 # Deployment
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
@@ -82,9 +84,20 @@ printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_
 ### 3. Build and Deploy
 
 ```bash
+bash scripts/deploy.sh        # full pipeline (recommended; see "Deploy Script")
+```
+
+Or by hand, from `packages/cf-backend`:
+
+```bash
 bunx vite build
+bash ../../scripts/build-cli-source-archive.sh
 bunx wrangler deploy
 ```
+
+The CLI source archive step matters: `/downloads/proteus-source.tar.gz` and
+its `.sha256` are static assets baked into the deploy, and the CLI shim
+verifies that checksum by default on install/update.
 
 ### 4. Custom Domain (Optional)
 
@@ -135,12 +148,23 @@ Set:
 bunx wrangler secret put CLOUDFLARE_OAUTH_CLIENT_SECRET
 ```
 
-The production client id, scope, and token auth method are non-secret vars in
-`packages/cf-backend/wrangler.jsonc`.
+The production client id and token auth method are non-secret vars in
+`packages/cf-backend/wrangler.jsonc`. The scopes' source of truth is the
+`CLOUDFLARE_WORKERS_AI_SCOPES` constant in
+`packages/cf-backend/src/lib/cloudflare-oauth.ts`; set a
+`CLOUDFLARE_OAUTH_SCOPES` var only to override it.
 
-## AI Gateway Setup
+## Model Providers
 
-Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/workers-ai/v1` endpoint provides access to Workers AI models.
+Web agents run chat models through the **logged-in user's own Cloudflare
+account**: the Cloudflare OAuth credential (scopes above) powers Workers AI
+calls billed to that user. The platform-level AI Gateway
+(`AI_GATEWAY_URL` + `AI_GATEWAY_AUTH`) is the env-configured fallback
+provider, and the `AI` binding serves platform-side embeddings. Users can
+also attach their own OpenAI / Anthropic / OpenRouter / ChatGPT-Codex
+credentials per account.
+
+To set up the platform AI Gateway:
 
 1. Go to [Cloudflare Dashboard > AI > AI Gateway](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway)
 2. Create a new gateway (e.g., `proteus-ai-gateway`)
@@ -148,11 +172,15 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 4. Create an API token with Workers AI permissions
 5. Set the token as `AI_GATEWAY_AUTH` secret (see above)
 
-### Supported Models
+### Default Workers AI Models
+
+The default model id lives once in `@proteus/core`
+(`DEFAULT_WORKERS_AI_MODEL_ID`); the curated fallback catalog is in
+`packages/cf-backend/src/providers/workers-ai-catalog.ts`.
 
 | Model ID | Name | Description |
 |----------|------|-------------|
-| `@cf/moonshotai/kimi-k2.5` | Kimi K2.5 | Advanced reasoning model with extended thinking |
+| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | Default — reasoning + tools + vision, 262k context |
 | `@cf/meta/llama-4-scout-17b-16e-instruct` | Llama 4 Scout 17B | General-purpose instruction model |
 
 ## Environment Variables
@@ -171,7 +199,7 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 | `GITHUB_OAUTH_CLIENT_SECRET` | Wrangler secret | GitHub OAuth client secret |
 | `CLOUDFLARE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Cloudflare OAuth client id |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | Wrangler secret | Cloudflare OAuth client secret |
-| `CLOUDFLARE_OAUTH_SCOPES` | wrangler.jsonc `vars` | Cloudflare OAuth scopes for profile, account lookup, Workers AI, and AI Gateway |
+| `CLOUDFLARE_OAUTH_SCOPES` | optional override | Defaults to `CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts` |
 | `CLOUDFLARE_AI_GATEWAY_ID` | wrangler.jsonc `vars` | User account AI Gateway id for Workers AI routing; defaults to `default` |
 | `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity |
 | `PROTEUS_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
@@ -179,7 +207,7 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 | `PROTEUS_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
 | `PROTEUS_MODEL` | CLI shell env | Override local agent model |
 | `PROTEUS_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override |
-| `PROTEUS_SOURCE_SHA256` | CLI shell env | Optional SHA-256 for the source tarball override |
+| `PROTEUS_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
 | `PROTEUS_MAX_STEPS` | Shell env | Max tool-call steps (default: 500) |
 
 ## Wrangler Bindings
@@ -189,15 +217,18 @@ Proteus uses Cloudflare AI Gateway as a proxy to Workers AI models. The `/worker
 | `OrchestratorAgent` | Durable Object | Main chat agent (extends Think) |
 | `ExplorationAgent` | Durable Object | MCTS branch agents (Facets) |
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, product changes |
+| `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk` — built-in lightweight sandbox (local DO class, deployed with this Worker) |
+| `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox) — one container per agent |
 | `AUTH_DB` | D1 database | OAuth users, sessions, one-time OAuth state, and CLI browser approval state |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
-| `NIMBUS_SESSION` | Cross-Worker DO | Nimbus dev env (`script_name: "nimbus"`) |
+| `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
+| `BACKUP_BUCKET` | R2 bucket | Sandbox `/workspace` backups (squashfs archives) |
+| `ASSETS` | Static assets | `dist/client` SPA bundle + CLI source archive downloads |
 
-## Unified Deploy (Proteus + Nimbus)
+## Deploy Script
 
-Proteus binds Nimbus via a cross-Worker service binding
-(`script_name: "nimbus"` in `wrangler.jsonc`). Nimbus must be deployed
-**before** Proteus. The unified deploy script handles both:
+Everything ships as one Worker (name `proteus`); `NimbusSession` is a local
+DO class deployed with it — there is no separate Nimbus deploy.
 
 ```bash
 bash scripts/deploy.sh
@@ -207,46 +238,39 @@ bash scripts/deploy.sh
 
 1. **Pre-deploy verification** — runs `scripts/e2e-test.sh`. Skip with
    `SKIP_E2E=1` for doc-only or config-only deploys.
-2. **Nimbus deploy** — `bun install` (if `node_modules` missing),
-   `npx wrangler deploy`. Captures URL + Version ID from the output.
-   Skip with `SKIP_NIMBUS=1` when only Proteus changed.
-3. **Proteus deploy** — `bun install` (if root `node_modules` missing),
-   `vite build`, `npx wrangler deploy`. Verifies the `NIMBUS_SESSION`
+2. **Build** — `bun install` (if root `node_modules` missing), `vite build`,
+   then `scripts/build-cli-source-archive.sh` (CLI source tarball + `.sha256`).
+3. **Deploy** — `npx wrangler deploy`. Verifies the `ProteusSandbox`
    binding appears in wrangler output.
-4. **Smoke test** — curls both URLs, asserts HTTP 200 and that Proteus
-   serves the app.
-5. **Summary** — prints both URLs and Version IDs.
+4. **Smoke test** — asserts HTTP 200 + app content on the production URL,
+   that the CLI shim points at the deployed source archive, that the archive
+   downloads and lists expected files, and that the published `.sha256`
+   matches the served archive (the shim verifies it by default).
+5. **Summary** — prints the URL and Version ID.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `NIMBUS_PATH` | `../nimbus` | Filesystem path to Nimbus checkout |
-| `CLOUDFLARE_ACCOUNT_ID` | `f44999d1ddda7012e9a87729eba250f1` | Account for both Workers |
+| `CLOUDFLARE_ACCOUNT_ID` | `f44999d1ddda7012e9a87729eba250f1` | Deploy account |
 | `SKIP_E2E` | `0` | `1` to skip pre-deploy E2E tests |
-| `SKIP_NIMBUS` | `0` | `1` to deploy Proteus only |
 
-### If Nimbus is not at `../nimbus`
+### Staging
+
+A fully isolated second deployment (`proteus-staging`, own DO namespaces and
+D1 database, `DEV_USER_EMAIL` headless identity) is configured under
+`env.staging` in `wrangler.jsonc`:
 
 ```bash
-git clone https://github.com/AshishKumar4/Nimbus.git ../nimbus
-# Or point at an existing checkout
-NIMBUS_PATH=/path/to/nimbus bash scripts/deploy.sh
+cd packages/cf-backend && bunx wrangler deploy --env staging
 ```
 
 ### Rollback
 
-Cloudflare keeps the last 10 Worker versions. To roll back either Worker:
+Cloudflare keeps the last 10 Worker versions:
 
 ```bash
-# List versions (last 10)
-cd ../nimbus && npx wrangler versions list
-cd packages/cf-backend && npx wrangler versions list
-
-# Roll back to a specific version
+cd packages/cf-backend
+npx wrangler versions list
 npx wrangler rollback --version-id <version-id>
 ```
-
-Proteus and Nimbus roll back independently. If you rolled Nimbus back but
-kept Proteus on the latest, the `NIMBUS_SESSION` binding still points to
-the sibling Worker — the binding resolves to whichever version is live.

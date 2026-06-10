@@ -15,6 +15,7 @@ export { createAgent, wrapDatabase, type AgentBirthConfig, type AgentDatabase } 
 export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/open.js';
 export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
 export {
+  AGENT_IDENTITY_SYSTEM_PROMPT,
   agentIdentityPrompt,
   createAgentNameFromMission,
   deriveAgentTitle,
@@ -333,6 +334,9 @@ export * from './providers/index.js';
 // Credential value shape (still exported for UserDO + tests; the previous
 // CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store.js';
+
+// Wire constants shared by the cf-backend Worker and the CLI.
+export { ORCHESTRATOR_AGENT_SLUG } from './cloud-wire.js';
 
 // safety — approval gating for shell exec
 export {

@@ -37,7 +37,7 @@ const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
   headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.5',
+  model: '@cf/moonshotai/kimi-k2.6',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-full-' + Date.now());

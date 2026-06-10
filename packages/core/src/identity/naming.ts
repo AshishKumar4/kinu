@@ -47,6 +47,10 @@ export function fallbackAgentIdentity(mission: string, id: string): SuggestedAge
   };
 }
 
+/** System prompt paired with agentIdentityPrompt — shared by the CLI's local
+ *  naming call and the server's cloud display-name generation. */
+export const AGENT_IDENTITY_SYSTEM_PROMPT = 'You create short, useful names for persistent software agents.';
+
 export function agentIdentityPrompt(mission: string): string {
   return [
     'Name a Proteus agent from this opening mission.',

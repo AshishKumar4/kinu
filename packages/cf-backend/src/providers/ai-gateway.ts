@@ -4,9 +4,8 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
-import { listModelsDevProviderModels } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, listModelsDevProviderModels } from '@proteus/core';
 import {
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog.js';

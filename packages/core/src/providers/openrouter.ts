@@ -10,7 +10,7 @@ import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from './types.js';
 import { authCacheKey, createAuthedFetch } from './util.js';
 
-const BASE_URL = 'https://openrouter.ai/api/v1';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_CRED_KEY = 'openrouter.bearer';
 
 export interface OpenRouterOptions {
@@ -43,7 +43,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
       }
       const fetchFn = deps.fetch ?? fetch;
       try {
-        const res = await fetchFn(`${BASE_URL}/models`, { headers: auth.headers });
+        const res = await fetchFn(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers });
         if (!res.ok) return [];
         const body = await res.json() as { data?: Array<{
           id: string; name?: string; context_length?: number;
@@ -73,7 +73,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
       });
       return createOpenAICompatible({
         name: 'openrouter',
-        baseURL: BASE_URL,
+        baseURL: OPENROUTER_BASE_URL,
         fetch: customFetch,
       }).chatModel(modelId);
     },

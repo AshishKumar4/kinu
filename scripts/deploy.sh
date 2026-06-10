@@ -2,9 +2,9 @@
 # Proteus deploy pipeline.
 #
 # Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
-# Sandbox DO + Container binding, plus the configured Nimbus endpoint and
-# local-device executor routes. The legacy SKIP_NIMBUS flag is accepted for
-# backward compatibility but does not mutate the Worker config.
+# Sandbox DO + Container binding, the NimbusSession DO, and the local-device
+# executor routes. Pipeline: e2e verification → vite build → CLI source
+# archive → wrangler deploy → smoke test.
 #
 # Usage:
 #   bash scripts/deploy.sh
@@ -20,7 +20,7 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ── Locate Proteus root + Nimbus path ────────────────────────────
+# ── Locate Proteus root ──────────────────────────────────────────
 PROTEUS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROTEUS_ROOT" || { echo -e "${RED}Cannot cd to Proteus root${NC}"; exit 1; }
 
@@ -68,12 +68,6 @@ else
     echo "(Re-run with SKIP_E2E=1 to bypass, e.g. for a doc-only or config-only deploy.)"
     exit 1
   fi
-fi
-
-# Legacy: SKIP_NIMBUS is accepted for backward compat but is a no-op here.
-# Nimbus is selected by Worker config/env, not this deploy script.
-if [ "${SKIP_NIMBUS:-0}" = "1" ]; then
-  echo -e "${YELLOW}SKIP_NIMBUS=1 ignored — Nimbus is configured through the Worker environment.${NC}"
 fi
 
 # ── Step 2: Deploy Proteus ───────────────────────────────────────
@@ -175,6 +169,16 @@ for attempt in 1 2 3 4 5 6; do
 done
 if [ "$CLI_ARCHIVE_OK" = "1" ]; then
   echo -e "${GREEN}✅ Proteus CLI source archive is downloadable${NC}"
+  # The CLI shim verifies this checksum by default — a stale/missing .sha256
+  # bricks installs and updates, so the deploy gate checks it too.
+  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
+  ACTUAL_SHA="$(sha256sum "$CLI_ARCHIVE_TMP" | awk '{print $1}')"
+  if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
+    echo -e "${GREEN}✅ Proteus CLI source checksum matches the published .sha256${NC}"
+  else
+    echo -e "${RED}❌ Published source checksum is missing or does not match the archive${NC}"
+    SMOKE_FAIL=1
+  fi
 else
   echo -e "${RED}❌ Proteus CLI source archive is missing or invalid${NC}"
   SMOKE_FAIL=1

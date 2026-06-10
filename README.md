@@ -1,6 +1,8 @@
 # Proteus
 
-A self-evolving AI agent that improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. Built on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state and formally verified safety properties in Lean 4.
+A self-evolving AI agent that improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state and formally verified safety properties in Lean 4.
+
+> Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
 **Live:** [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
 
@@ -22,16 +24,14 @@ graph TB
     end
 
     subgraph "AI"
-        GW["AI Gateway<br/>/compat/chat/completions"]
-        Model["Workers AI<br/>Kimi K2.5 / Llama 4"]
+        Model["Workers AI<br/>Kimi K2.6 / Llama 4<br/>(user-owned Cloudflare OAuth billing)"]
     end
 
     UI <-->|WebSocket| Worker
     Worker --> Orch
     Orch -->|"subAgent (Facets)"| E1
     Orch -->|"subAgent (Facets)"| E2
-    Orch -->|streamText| GW
-    GW --> Model
+    Orch -->|streamText| Model
 ```
 
 ## Key Features
@@ -74,7 +74,7 @@ and can also configure local provider keys for fully local agents.
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |
-| [Tools](docs/TOOLS.md) | All 15+ agent tools, shell emulator, code execution, crafted tools |
+| [Tools](docs/TOOLS.md) | The builtin agent tools, shell emulator, code execution, crafted tools |
 | [Storage](docs/STORAGE.md) | Data model, SqliteFS, MemoryStore FTS5, table schemas |
 | [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
 | [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 proofs, TSLean type bridge, verified properties |
@@ -93,8 +93,8 @@ and can also configure local provider keys for fully local agents.
 
 ```bash
 bun install
-bun run check                    # TypeScript type-check (0 errors)
-bun test --cwd packages/core     # 63 unit tests
+bun run check                    # type-check every package (+ pc-agent syntax)
+bun test --cwd packages/core     # unit tests (also: cf-backend, cli, cli-backend, agent-utils)
 ```
 
 ## License

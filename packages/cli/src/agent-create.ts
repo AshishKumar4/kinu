@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
+  AGENT_IDENTITY_SYSTEM_PROMPT,
   agentIdentityPrompt,
   createAgent,
   createAgentConfigStore,
@@ -32,7 +33,9 @@ import { ensureLocalDaemonRunning } from './commands/daemon.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 export interface CreateCliAgentInput {
-  name: string;
+  /** Required for local agents. Omit for cloud agents to let the server
+   *  generate the name (cloud naming is server-side). */
+  name?: string;
   displayName?: string;
   nameOrigin?: 'user' | 'auto';
   purpose: string;
@@ -109,7 +112,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-    const userNamed = input.nameOrigin !== 'auto';
+    const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
     const agent = await createCloudAgent(auth.origin, auth.token, {
       name: userNamed ? input.name : undefined,
       displayName: userNamed ? input.displayName ?? input.name : undefined,
@@ -126,10 +129,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
   }
 
-  const displayName = input.displayName ?? input.name;
-  const dir = agentDir(input.name);
-  const dbPath = agentDbPath(input.name);
-  if (existsSync(dbPath)) throw new Error(`Agent "${input.name}" already exists.`);
+  const name = input.name;
+  if (!name) throw new Error('Agent name required for local agents.');
+  const displayName = input.displayName ?? name;
+  const dir = agentDir(name);
+  const dbPath = agentDbPath(name);
+  if (existsSync(dbPath)) throw new Error(`Agent "${name}" already exists.`);
 
   const llmConfig = resolveLLMConfig(input);
   mkdirSync(dir, { recursive: true });
@@ -150,22 +155,22 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   }
 
   upsertAgentConfig({
-    name: input.name,
+    name,
     mode: 'local',
     displayName,
-    localName: input.name,
+    localName: name,
     alias: input.alias || undefined,
   });
-  const aliasPath = input.alias ? writeAliasShim(input.name, input.alias) : undefined;
+  const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
   ensureLocalDaemonRunning();
-  return { name: input.name, displayName, mode: 'local', purpose, model: llmConfig.model, dbPath, aliasPath };
+  return { name, displayName, mode: 'local', purpose, model: llmConfig.model, dbPath, aliasPath };
 }
 
 async function generateIdentityJson(mission: string, opts: SuggestAgentIdentityOptions): Promise<string> {
   const { resolver } = createConfiguredLocalModelResolver(opts);
   const result = await generateText({
     model: resolver.resolveModel(opts.model ?? null),
-    system: 'You create short, useful names for persistent software agents.',
+    system: AGENT_IDENTITY_SYSTEM_PROMPT,
     prompt: agentIdentityPrompt(mission),
     maxOutputTokens: 80,
   });

@@ -12,9 +12,11 @@ import { createAuthedFetch } from './util.js';
 import { listModelsDevProviderModels } from './models-dev.js';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
+export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: 'gpt-5.5',    label: 'GPT-5.5',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
+  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
   { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
   { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000 },
 ];
@@ -31,7 +33,7 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
   return {
     id: 'openai',
     label: 'OpenAI (direct API)',
-    defaultModel: 'gpt-5.5',
+    defaultModel: OPENAI_DEFAULT_MODEL,
     async isAvailable(deps) { return deps.hasCredential(OPENAI_CRED_KEY); },
     unavailableReason() { return 'No OpenAI API key (cred key: `openai.bearer`).'; },
     listModels: (deps) => listModelsDevProviderModels('openai', deps, {

@@ -1,4 +1,5 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
 import {
   createCloudAgentConnectTicket,
   getCloudAgentMessages,
@@ -276,7 +277,7 @@ export class CloudAgentClient implements AgentClient {
 
   private async openSocket(): Promise<void> {
     const { ticket } = await createCloudAgentConnectTicket(this.origin, this.token, this.cloudName);
-    const url = new URL(`/agents/orchestrator-agent/${encodeURIComponent(this.cloudName)}`, this.origin.replace(/\/+$/, ''));
+    const url = new URL(`/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`, this.origin.replace(/\/+$/, ''));
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('ticket', ticket);
 

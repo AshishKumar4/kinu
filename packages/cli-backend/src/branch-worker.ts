@@ -12,7 +12,7 @@
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import { extractJsonObject, jsonObjectOnlyInstruction, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, extractJsonObject, jsonObjectOnlyInstruction, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -28,7 +28,7 @@ const llmConfig: LLMProviderConfig = {
   headers: readJson<Record<string, string>>(process.env.PROTEUS_LLM_HEADERS) ?? {
     Authorization: process.env.PROTEUS_AUTH ?? '',
   },
-  model: process.env.PROTEUS_MODEL ?? '@cf/moonshotai/kimi-k2.6',
+  model: process.env.PROTEUS_MODEL ?? DEFAULT_WORKERS_AI_MODEL_ID,
 };
 
 const modelResolver = createLocalModelResolver({

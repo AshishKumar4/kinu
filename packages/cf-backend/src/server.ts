@@ -20,6 +20,7 @@
  */
 
 import { routeAgentRequest } from "agents";
+import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
 import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
@@ -129,7 +130,7 @@ async function authenticateCliAgentTicketRequest(
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
     const verified = await userDO.verifyCliAgentConnectTicket(ticket, {
       userId,
-      agentClass: 'orchestrator-agent',
+      agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
       capability: 'agent.websocket',
     });
@@ -159,8 +160,10 @@ async function authenticateCliAgentTicketRequest(
   }
 }
 
+const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(`^/agents/${ORCHESTRATOR_AGENT_SLUG}/([^/]+)`);
+
 function extractOrchestratorAgentName(pathname: string): string | null {
-  const match = pathname.match(/^\/agents\/orchestrator-agent\/([^/]+)/);
+  const match = pathname.match(ORCHESTRATOR_AGENT_PATH_RE);
   return match ? decodeURIComponent(match[1]) : null;
 }
 

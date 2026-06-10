@@ -1,3 +1,5 @@
+import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+
 const origin = (process.env.PROTEUS_SMOKE_ORIGIN ?? 'https://proteus-staging.ashishkmr472.workers.dev').replace(/\/+$/, '');
 const agentName = process.env.PROTEUS_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
 const mission = process.env.PROTEUS_SMOKE_MISSION ?? `Verify workspace websocket and snapshot ${new Date().toISOString()}`;
@@ -36,7 +38,7 @@ interface WorkspaceSnapshot {
 
 async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   return new Promise((resolve, reject) => {
-    const url = `${wsOrigin(origin)}/agents/orchestrator-agent/${encodeURIComponent(agentName)}`;
+    const url = `${wsOrigin(origin)}/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(agentName)}`;
     const ws = new WebSocket(url);
     const rpcId = crypto.randomUUID();
     let sentRpc = false;

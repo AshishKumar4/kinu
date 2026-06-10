@@ -1,5 +1,7 @@
 # Proteus — Agent Development Guide
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## Project Overview
 
 Self-evolving agent framework with MCTS parallel exploration, mutable scaffolding,
@@ -39,7 +41,7 @@ tests/          E2E tests (run from repo root)
 
 ### cf-backend Architecture
 
-- `OrchestratorAgent extends Think<Env>` — chat, 5-tool system, evolution hooks
+- `OrchestratorAgent extends Think<Env>` — chat, the 7 builtin tools, evolution hooks
 - `ExplorationAgent extends Agent` — MCTS branch sub-agent via Facets
 - `runtime.ts` — `createCFRuntime()` bridges Think DO context to `AgentRuntime`
 - `wrangler.jsonc` — DO bindings, worker_loaders, AI Gateway, SPA assets
@@ -101,8 +103,8 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 - OrchestratorAgent extends `Think<Env>` from `@cloudflare/think`
 - Think wraps AIChatAgent and provides tool lifecycle, sessions, fibers
-- `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.5`
-- `getTools()` builds 5-tool ToolSet; results are cached per CraftStore version
+- `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.6` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
+- `getTools()` builds the 7-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`); results are cached per CraftStore version
 - `getSystemPrompt()` reads `SOUL.md` from VFS
 - `onChatResponse()` fires evolution async (never blocks TurnQueue)
 - `beforeTurn()` resets per-turn state counters

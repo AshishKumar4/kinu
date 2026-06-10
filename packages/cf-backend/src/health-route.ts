@@ -1,6 +1,8 @@
 // GET /api/health — build-info JSON. Useful for confirming a deploy went out:
 // hit the URL, see the feature list + endpoint map. Public — no auth required.
 
+import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+
 const FEATURES: ReadonlyArray<string> = [
   'd1-oauth-session-auth',
   'd1-read-replica-sessions',
@@ -40,7 +42,7 @@ export function handleHealthRequest(request: Request): Response | null {
       'GET /api/agents/<name>/runs/<id>/events': 'paginated event query',
       'GET /api/agents/<name>/runs/<id>/stream': 'SSE w/ Last-Event-ID resume',
       'POST/GET/DELETE /mcp/v1/<agentName>': 'MCP streamable-HTTP server',
-      '/agents/orchestrator-agent/<name>/...': 'chat WebSocket (Think SDK)',
+      [`/agents/${ORCHESTRATOR_AGENT_SLUG}/<name>/...`]: 'chat WebSocket (Think SDK)',
       // Public
       '/_preview/<port>/<sandbox>/<token>/': 'sandbox container preview proxy',
       '/pc/connect': 'reverse-WebSocket tunnel',

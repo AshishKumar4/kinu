@@ -1,7 +1,4 @@
-import type { ModelInfo } from '@proteus/core';
-
-export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/moonshotai/kimi-k2.6';
-export const DEFAULT_WORKERS_AI_MODEL_SPEC = `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`;
+import { DEFAULT_WORKERS_AI_MODEL_ID, type ModelInfo } from '@proteus/core';
 
 export const WORKERS_AI_PREFERRED_MODEL_IDS = [
   DEFAULT_WORKERS_AI_MODEL_ID,

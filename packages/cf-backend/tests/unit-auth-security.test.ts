@@ -312,7 +312,7 @@ describe('auth and desktop security invariants', () => {
     expect(await installScriptHead!.text()).toBe('');
   });
 
-  test('CLI shim does not hardcode GitHub archive directory names and supports checksum verification', async () => {
+  test('CLI shim does not hardcode GitHub archive directory names and verifies the source checksum by default', async () => {
     const shim = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus'), {} as Env);
     expect(shim?.status).toBe(200);
     const script = await shim!.text();
@@ -320,8 +320,13 @@ describe('auth and desktop security invariants', () => {
     expect(script).toContain('https://proteus.example.com/downloads/proteus-source.tar.gz');
     expect(script).not.toContain('github.com');
     expect(script).not.toContain('Proteus-main');
+    // Default verification fetches the published .sha256 asset; the env var
+    // is only a pin override.
+    expect(script).toContain('"$TARBALL_URL.sha256"');
     expect(script).toContain('PROTEUS_SOURCE_SHA256');
     expect(script).toContain('Source checksum mismatch');
+    const syntaxCheck = Bun.spawnSync(['bash', '-n'], { stdin: Buffer.from(script) });
+    expect(syntaxCheck.exitCode).toBe(0);
 
     const shimHead = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus', { method: 'HEAD' }), {} as Env);
     expect(shimHead?.status).toBe(200);

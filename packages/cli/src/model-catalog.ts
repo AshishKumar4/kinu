@@ -1,5 +1,7 @@
 /** Model catalog entries as both backends expose them through AgentClient. */
 
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
+
 export interface AgentModelEntry {
   spec: string;
   label: string;
@@ -55,7 +57,7 @@ export function contextWindowForSpec(models: readonly AgentModelEntry[], spec: s
 }
 
 function modelRank(model: AgentModelEntry): number {
-  if (model.spec.includes('kimi-k2.6')) return 0;
+  if (model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC) return 0;
   if (model.provider === 'workers-ai') return 1;
   return 2;
 }

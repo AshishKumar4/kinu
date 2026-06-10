@@ -80,7 +80,7 @@ function syntheticIdentity(): Identity {
     id: 'test-agent',
     name: 'test',
     scaffold: {
-      exists: () => false,
+      exists: async () => false,
       read: async () => '',
       write: async () => {},
       version: async () => 0,

@@ -14,7 +14,7 @@ import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareTokenToCredential,
 } from '../lib/cloudflare-oauth.js';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai-catalog.js';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import { notifyAgentsCredentialsChanged } from '../user/agent-access.js';
 
 export async function handleAuthRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {

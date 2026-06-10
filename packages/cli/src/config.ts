@@ -7,7 +7,14 @@ import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSy
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import {
+  ANTHROPIC_BASE_URL,
+  ANTHROPIC_DEFAULT_MODEL,
   CODEX_BASE_URL,
+  CODEX_DEFAULT_MODEL,
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  OPENAI_BASE_URL,
+  OPENAI_DEFAULT_MODEL,
+  OPENROUTER_BASE_URL,
   type LLMProviderConfig,
   type OAuthCredential,
 } from '@proteus/core';
@@ -50,11 +57,7 @@ const RESERVED_ALIASES = new Set([
   'uninstall',
   'doctor',
 ]);
-const DEFAULT_MODEL = '@cf/moonshotai/kimi-k2.6';
 const DEFAULT_ORIGIN = 'https://proteus.ashishkumarsingh.com';
-const OPENAI_BASE_URL = 'https://api.openai.com/v1';
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 
 export type AgentMode = 'local' | 'cloud';
 
@@ -303,7 +306,7 @@ export function resolveLLMConfig(opts?: {
       name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
       baseURL,
       headers: { 'Authorization': auth },
-      model: directEndpointModelId(model ?? DEFAULT_MODEL),
+      model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
     };
   }
 
@@ -323,7 +326,7 @@ export function resolveLLMConfig(opts?: {
     );
   }
 
-  return { name: 'openai-compat', baseURL, headers: { 'Authorization': auth }, model: directEndpointModelId(model ?? DEFAULT_MODEL) };
+  return { name: 'openai-compat', baseURL, headers: { 'Authorization': auth }, model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID) };
 }
 
 /** Local provider credentials used by the CLI backend's provider registry.
@@ -360,7 +363,7 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
       name: 'codex',
       baseURL: CODEX_BASE_URL,
       headers: {},
-      model: stripProvider(providerModel ?? 'gpt-5.5', 'codex'),
+      model: stripProvider(providerModel ?? CODEX_DEFAULT_MODEL, 'codex'),
     };
   }
 
@@ -370,7 +373,7 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
       name: 'openai',
       baseURL: OPENAI_BASE_URL,
       headers: { Authorization: `Bearer ${openaiKey}` },
-      model: stripProvider(providerModel ?? 'gpt-4o-mini', 'openai'),
+      model: stripProvider(providerModel ?? OPENAI_DEFAULT_MODEL, 'openai'),
     };
   }
 
@@ -381,7 +384,6 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
       baseURL: OPENROUTER_BASE_URL,
       headers: {
         Authorization: `Bearer ${openrouterKey}`,
-        'HTTP-Referer': DEFAULT_ORIGIN,
         'X-Title': 'Proteus CLI',
       },
       model: stripProvider(providerModel, 'openrouter'),
@@ -420,10 +422,10 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
 
 function preferredModelFromCredentials(file: ProteusConfig): string | undefined {
   if (file.model) return file.model;
-  if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return 'codex/gpt-5.5';
-  if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return 'openai/gpt-4o-mini';
+  if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
+  if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;
   if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return 'openrouter/openai/gpt-4o-mini';
-  if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return 'anthropic/claude-sonnet-4-5';
+  if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return `anthropic/${ANTHROPIC_DEFAULT_MODEL}`;
   return undefined;
 }
 

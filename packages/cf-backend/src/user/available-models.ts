@@ -18,8 +18,6 @@ export interface ModelMenuEntry {
   contextWindow?: number;
 }
 
-export { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai-catalog.js';
-
 export async function listAvailableModels(env: Env, userId: string): Promise<ModelMenuEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
   const { registry, deps } = createAgentProviderRegistry({

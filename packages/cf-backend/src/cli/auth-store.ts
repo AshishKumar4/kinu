@@ -86,7 +86,11 @@ export function readBearer(request: Request): string | null {
   return match?.[1]?.trim() || null;
 }
 
-function parseCliTokenUserId(token: string): string | null {
+/** Parse the userId embedded in a `ptc_…` CLI token. The format's single
+ *  home, kept in sync with UserDO.mintCliToken (which imports this module's
+ *  parser for verification). This module stays free of `cloudflare:workers`
+ *  imports so unit tests can load it under plain bun. */
+export function parseCliTokenUserId(token: string): string | null {
   const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
   return match?.[1] ?? null;
 }

@@ -1,5 +1,7 @@
 # Proteus extensibility
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 How to plug in a new agentic idea: model provider, exploration strategy,
 inference loop, or runtime surface without touching the orchestrator.
 
@@ -20,9 +22,11 @@ no external attacker, and the cap truncates useful "when to use" guidance).
 - **Refresh-on-failure preserves credential.** `ensureFreshToken` in
   `core/src/providers/codex.ts` keeps the existing credential when a refresh
   attempt fails (transient 500 / network blip) instead of wiping it.
-- **Optional MCP shared-secret auth.** Set `env.MCP_AUTH_TOKEN` and clients
-  must include `Authorization: Bearer <token>`. Timing-safe compare. Off by
-  default — zero behavior change when unset.
+- **Per-user MCP auth.** `/mcp/v1/<agentName>` authenticates every request:
+  external MCP clients send the per-user CLI bearer token
+  (`Authorization: Bearer ptc_…`, verified via `authenticateCliToken`),
+  browsers use the OAuth session, and agent ownership is enforced before any
+  tool runs. There is no shared secret.
 - **AgentConfigStore.** Typed accessors over `agent_config` (`core/src/config/store.ts`)
   with known-key getters/setters. No more scattered raw SQL — adding a new
   tunable means one new accessor, not 5 file edits.

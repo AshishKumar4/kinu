@@ -81,12 +81,14 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       if (setupRequired) throw new Error('Run proteus setup to connect your account or a local model provider.');
       if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud agent.');
       if (mode === 'local' && !localReady) throw new Error('Connect a local provider with proteus provider connect, or switch to cloud after sign-in.');
-      const identity = await suggestAgentIdentityFromMission(mission, opts);
+      // Cloud naming is server-side (async display-name generation after
+      // create); only local agents need a locally generated identity.
+      const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
       const created = await createCliAgent({
         ...opts,
-        name: identity.name,
-        displayName: identity.displayName,
-        nameOrigin: identity.nameOrigin,
+        name: identity?.name,
+        displayName: identity?.displayName,
+        nameOrigin: identity?.nameOrigin,
         purpose: mission,
         mode,
         allowInteractiveAuth: false,
