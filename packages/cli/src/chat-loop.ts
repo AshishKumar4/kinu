@@ -153,7 +153,11 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal): Prom
     const onAbort = () => settle(null);
     rl.once('close', onClose);
     signal?.addEventListener('abort', onAbort, { once: true });
-    rl.question(prompt, settle);
+    try {
+      rl.question(prompt, settle);
+    } catch {
+      settle(null); // readline already closed (stdin hit EOF) — treat as EOF
+    }
   });
 }
 

@@ -27,7 +27,7 @@ interface StubCloud {
 }
 
 /** Minimal cloud origin: device register/list plus /pc/daemon.js. */
-function startStubCloud(opts: { devices?: () => unknown[]; daemonScript?: string } = {}): StubCloud {
+function startStubCloud(opts: { devices?: () => unknown[]; daemonScript?: string; onRegister?: () => void } = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0 };
   const server = Bun.serve({
     port: 0,
@@ -35,6 +35,7 @@ function startStubCloud(opts: { devices?: () => unknown[]; daemonScript?: string
       const url = new URL(req.url);
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         hits.register += 1;
+        opts.onRegister?.();
         return Response.json({
           deviceId: 'dev_1',
           token: 'device-token',
@@ -221,6 +222,121 @@ describe('device-connect daemon lifecycle', () => {
     expect(stub.hits.daemonScript).toBe(0);
     expect(sleeper.killed).toBe(false);
     expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
+  });
+});
+
+describe('classic cloud chat connect prompt', () => {
+  function cloudAgentConfig(origin: string): Record<string, unknown> {
+    return {
+      origin,
+      accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+      agents: {
+        jarvis: {
+          name: 'jarvis',
+          mode: 'cloud',
+          cloudName: 'jarvis',
+          purpose: 'Cloud agent',
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+      },
+    };
+  }
+
+  /** Interactive PTY chat: answer prompts only after they appear. */
+  function spawnChatInPty(home: string) {
+    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
+    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+    const command = [
+      `PROTEUS_HOME=${quote(home)}`,
+      quote(process.execPath),
+      quote(cliBin),
+      'chat',
+      'jarvis',
+      '--classic',
+      '--no-session',
+    ].join(' ');
+    const proc = Bun.spawn({
+      cmd: ['script', '-qefc', command, '/dev/null'],
+      cwd: repoRoot,
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    });
+    let output = '';
+    const drained = (async () => {
+      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
+    })();
+    return {
+      proc,
+      output: () => output,
+      drained,
+      async waitFor(text: string, timeoutMs = 10_000): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        while (!output.includes(text)) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
+          await Bun.sleep(25);
+        }
+      },
+      send(line: string): void {
+        proc.stdin.write(`${line}\n`);
+        proc.stdin.flush();
+      },
+    };
+  }
+
+  test('interactive open offers c/s/n/d and session connect goes end to end', async () => {
+    // Devices connect only after the daemon is registered and started.
+    let registered = false;
+    const daemonScript = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      fs.writeFileSync(path.join(process.env.PROTEUS_HOME, 'fake-daemon.pid'), String(process.pid));
+      setInterval(() => {}, 1000);
+    `;
+    const stub = startStubCloud({
+      devices: () => (registered ? [connectedDevice(true)] : []),
+      daemonScript,
+      onRegister: () => { registered = true; },
+    });
+    const home = makeHome(cloudAgentConfig(stub.origin));
+
+    const chat = spawnChatInPty(home);
+    await chat.waitFor('Let this agent use this PC?');
+    await chat.waitFor("[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again");
+    chat.send('s');
+    await chat.waitFor('Connected for this session.');
+    chat.send('/exit');
+    await chat.proc.exited;
+    await chat.drained;
+
+    expect(stub.hits.register).toBe(1);
+    expect(stub.hits.daemonScript).toBe(1);
+    expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false); // session, not persistent
+
+    // The CLI exited; its exit hook must have killed the session daemon.
+    const daemonPid = Number(readFileSync(join(home, 'fake-daemon.pid'), 'utf-8').trim());
+    expect(await waitForPidExit(daemonPid)).toBe(true);
+  }, 20_000);
+
+  test('non-interactive stdin prints the proteus connect instruction instead', () => {
+    const stub = startStubCloud({ devices: () => [] });
+    const home = makeHome(cloudAgentConfig(stub.origin));
+    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
+
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, cliBin, 'chat', 'jarvis', '--no-session'],
+      cwd: repoRoot,
+      stdin: Buffer.from('/exit\n'),
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, PROTEUS_HOME: home },
+    });
+
+    expect(proc.exitCode).toBe(0);
+    expect(proc.stdout.toString()).toContain('No PC is connected for device access. Connect one with: proteus connect');
+    expect(stub.hits.register).toBe(0);
   });
 });
 
