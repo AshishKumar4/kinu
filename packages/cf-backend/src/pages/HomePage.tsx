@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   ArrowRightIcon,
   BrainIcon,
@@ -11,34 +11,21 @@ import {
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { createAgentFromMission } from "@/lib/create-agent";
-import { listAgents, listAvailableModels, type AgentEntry } from "@/lib/user-api";
+import { useCreateAgent } from "@/hooks/use-create-agent";
+import { listAgents, type AgentEntry } from "@/lib/user-api";
 
 export default function HomePage() {
-  const navigate = useNavigate();
   const [mission, setMission] = useState("");
   const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [hasModels, setHasModels] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const { hasModels, busy, err, create } = useCreateAgent();
 
   useEffect(() => {
     listAgents().then(setAgents).catch(() => setAgents([]));
-    listAvailableModels().then((models) => setHasModels(models.length > 0)).catch(() => setHasModels(false));
   }, []);
 
-  const submit = async (event?: FormEvent) => {
+  const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (busy || !mission.trim()) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const created = await createAgentFromMission(mission);
-      navigate(`/agent/${created.name}`, { state: { initialPrompt: created.mission } });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
+    void create(mission);
   };
 
   return (
@@ -58,7 +45,7 @@ export default function HomePage() {
           </div>
 
           <form
-            onSubmit={(event) => { void submit(event); }}
+            onSubmit={submit}
             className="mt-8 rounded-lg border p-border p-elevated p-3 shadow-[0_18px_70px_rgba(0,0,0,0.18)] sm:p-4"
           >
             <textarea

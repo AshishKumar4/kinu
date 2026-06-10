@@ -1,20 +1,18 @@
 /**
- * Create-agent dialog — the single creation flow, used by both the sidebar
- * "New agent" button and the home-screen CTA (replacing the old window.prompt).
+ * Create-agent dialog — opened by the sidebar "New agent" button. Shares the
+ * creation pipeline (useCreateAgent) with the home-screen mission composer.
  *
  * One prompt box: the mission. It seeds SOUL.md server-side and becomes
  * the opening message. The display title is derived automatically — a
  * deterministic provisional from the mission, replaced by an AI-generated title
  * on the first turn — so there is no name field to fill in.
  */
-import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlusIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { createAgentFromMission } from "@/lib/create-agent";
-import { listAvailableModels } from "@/lib/user-api";
+import { useCreateAgent } from "@/hooks/use-create-agent";
 
 export interface CreateAgentModalProps {
   onClose: () => void;
@@ -22,35 +20,13 @@ export interface CreateAgentModalProps {
 }
 
 export function CreateAgentModal({ onClose, initialMission = "" }: CreateAgentModalProps) {
-  const navigate = useNavigate();
   const [mission, setMission] = useState(initialMission);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [hasModels, setHasModels] = useState<boolean | null>(null);
+  const { hasModels, busy, err, create } = useCreateAgent();
 
-  useEffect(() => {
-    listAvailableModels()
-      .then((models) => setHasModels(models.length > 0))
-      .catch(() => setHasModels(false));
-  }, []);
-
-  const submit = useCallback(async () => {
-    const m = mission.trim();
-    if (!m || busy) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const created = await createAgentFromMission(m);
-      // Dismiss the modal BEFORE navigating: it's rendered by the persistent
-      // Sidebar, so without this the "creating…" scrim stays up over the
-      // freshly-opened agent page. Leave `busy` set — the modal unmounts.
-      onClose();
-      navigate(`/agent/${created.name}`, { state: { initialPrompt: created.mission } });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  }, [mission, busy, navigate, onClose]);
+  // Dismiss the modal BEFORE navigating: it's rendered by the persistent
+  // Sidebar, so without this the "creating…" scrim stays up over the
+  // freshly-opened agent page.
+  const submit = useCallback(() => { void create(mission, onClose); }, [create, mission, onClose]);
 
   return (
     <Modal
@@ -78,7 +54,7 @@ export function CreateAgentModal({ onClose, initialMission = "" }: CreateAgentMo
           id="agent-mission"
           value={mission}
           onChange={(e) => setMission(e.currentTarget.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit(); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
           placeholder="Ask the agent to investigate, build, automate, audit, or improve something."
           rows={7}
           autoFocus
