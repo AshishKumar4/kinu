@@ -19,6 +19,7 @@ import { Link, NavLink, useParams } from "react-router-dom";
 import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { listAgents, removeAgent, getProfile, type AgentEntry, type UserProfile } from "../lib/user-api";
 import { CreateAgentModal } from "./CreateAgentModal";
+import { ModeToggle } from "./mode-toggle";
 
 export default function Sidebar() {
   const { agentId } = useParams();
@@ -129,6 +130,7 @@ export default function Sidebar() {
               <GearIcon size={14} />
               <span>Settings</span>
             </Link>
+            <ModeToggle />
             <a
               href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
