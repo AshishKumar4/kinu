@@ -706,7 +706,9 @@ export default function WorkspacePage() {
                   <ClockIcon size={14} />
                 </button>
                 {state.messages.length > 0 && (
-                  <Button variant="ghost" shape="square" size="sm" onClick={state.clearHistory} icon={<TrashIcon size={12} />} aria-label="Clear" />
+                  <Button variant="ghost" shape="square" size="sm"
+                    onClick={() => { if (confirm("Clear this agent's entire conversation history? This cannot be undone.")) state.clearHistory(); }}
+                    icon={<TrashIcon size={12} />} aria-label="Clear history" />
                 )}
                 <Link to={`/settings/${agentId}`} className="p-text-2 hover:p-text transition-colors" title="Settings">
                   <GearSixIcon size={14} />

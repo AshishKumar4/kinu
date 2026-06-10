@@ -276,7 +276,8 @@ export function useProteus(agentId?: string) {
               deviceLabel: msg.deviceLabel,
               method: msg.method ?? "exec",
               command: msg.command,
-              scope: msg.scope === "all_local_actions" ? "all_local_actions" : "all_local_actions",
+              // The hub grants exactly one scope today (device-consent.ts).
+              scope: "all_local_actions",
               createdAt: Date.now(),
             }]);
         } else if (msg.type === "device_consent_resolved") {
