@@ -122,7 +122,7 @@ export default function UserSettingsPage() {
             <p className="text-xs p-text-2">
               Install the CLI, sign in through the browser, and configure local execution from one terminal command.
             </p>
-            <CommandCopy label="Setup" command={cliSetup?.installCommand ?? "curl -fsSL 'https://proteus.ashishkumarsingh.com/install.sh' | bash"} />
+            <CommandCopy label="Setup" command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
           </div>
         </Card>
 

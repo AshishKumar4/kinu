@@ -4,6 +4,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
+import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
 import { touchAgent } from "../lib/user-api";
@@ -96,7 +97,7 @@ export function useProteus(agentId?: string) {
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
 
   const agent = useAgent({
-    agent: "orchestrator-agent",
+    agent: ORCHESTRATOR_AGENT_SLUG,
     name: agentId || "default",
     // onOpen always wins — even if a prior onError pinned the status to
     // "error", a successful reopen must recover the UI. Without this, a
