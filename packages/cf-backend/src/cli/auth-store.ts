@@ -1,5 +1,24 @@
 import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from '../user/user-do.js';
+import { randomToken, sha256Hex } from '../lib/crypto.js';
+
+/** Thrown when a CLI auth rate limit trips — routes map this (and only
+ *  this) to HTTP 429; every other failure is a real error. */
+export class RateLimitError extends Error {
+  constructor() {
+    super('Too many CLI auth attempts. Try again later.');
+    this.name = 'RateLimitError';
+  }
+}
+
+/** Caller-correctable auth-code failure (unknown / expired / already used)
+ *  — routes map this to HTTP 400. Infra failures stay plain errors (500). */
+export class CliAuthCodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CliAuthCodeError';
+  }
+}
 
 const AUTH_TTL_MS = 10 * 60 * 1000;
 const CLEANUP_RETENTION_MS = 10 * 60 * 1000;
@@ -49,6 +68,58 @@ type CliAuthEnv = {
   UserDO: DurableObjectNamespace<UserDO>;
 };
 
+export interface CliTokenIdentity {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  tokenHash: string;
+  userDO: DurableObjectStub<UserDO>;
+}
+
+export type CliTokenAuth =
+  | { ok: true; identity: CliTokenIdentity }
+  | { ok: false; error: string };
+
+export function readBearer(request: Request): string | null {
+  const header = request.headers.get('authorization') ?? '';
+  const match = /^Bearer\s+(.+)$/i.exec(header);
+  return match?.[1]?.trim() || null;
+}
+
+function parseCliTokenUserId(token: string): string | null {
+  const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
+  return match?.[1] ?? null;
+}
+
+/** Authenticate a `ptc_…` CLI bearer token from the Authorization header.
+ *  Routes to the UserDO embedded in the token, verifies the stored hash.
+ *  Shared by the CLI HTTP API and the MCP server (external MCP clients
+ *  can't do browser OAuth; the CLI token is their per-user credential). */
+export async function authenticateCliToken(
+  request: Request,
+  env: Pick<CliAuthEnv, 'UserDO'>,
+): Promise<CliTokenAuth> {
+  const token = readBearer(request);
+  if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
+  const userId = parseCliTokenUserId(token);
+  if (!userId) return { ok: false, error: 'Malformed CLI token' };
+  const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+  const verified = await userDO.verifyCliToken(token);
+  if (!verified.ok || !verified.user || !verified.tokenHash) {
+    return { ok: false, error: verified.error ?? 'Invalid CLI token' };
+  }
+  return {
+    ok: true,
+    identity: {
+      userId: verified.user.id,
+      email: verified.user.email,
+      displayName: verified.user.displayName,
+      tokenHash: verified.tokenHash,
+      userDO,
+    },
+  };
+}
+
 export async function startCliAuth(
   env: CliAuthEnv,
   origin: string,
@@ -85,8 +156,10 @@ export async function startCliAuth(
         expiresAt: new Date(expiresAt).toISOString(),
         intervalSeconds: POLL_INTERVAL_SECONDS,
       };
-    } catch {
-      // Code collision; retry with a new code.
+    } catch (e) {
+      // Retry only on a code/token collision; anything else (missing table,
+      // D1 outage, …) is a real failure that must surface, not loop 10x.
+      if (!isUniqueConstraintError(e)) throw e;
     }
   }
   throw new Error('Could not allocate a CLI auth code.');
@@ -186,19 +259,24 @@ export async function approveCliAuth(
     `SELECT user_code, device_name, status, origin, user_id, user_email, token_exp, expires_at, approved_at
        FROM cli_auth_requests WHERE user_code = ?`,
   ).bind(code).first<CliAuthRow>();
-  if (!row) throw new Error('Unknown CLI auth code.');
+  if (!row) throw new CliAuthCodeError('Unknown CLI auth code.');
 
   const status = currentStatus(row.status, row.expires_at);
   if (status === 'approved' || status === 'consumed') {
+    // Idempotent replay only for the original approver. Anyone else
+    // presenting an already-approved code must not learn whose it is.
+    if (row.user_id !== identity.userId) {
+      throw new CliAuthCodeError('CLI auth code already used.');
+    }
     return {
       ok: true,
       status: 'approved',
-      user: { id: row.user_id ?? identity.userId, email: row.user_email ?? identity.email },
+      user: { id: identity.userId, email: row.user_email ?? identity.email },
     };
   }
   if (status !== 'pending') {
     await session.prepare(`UPDATE cli_auth_requests SET status = 'expired', token_exp = NULL WHERE user_code = ?`).bind(code).run();
-    throw new Error('CLI auth code expired. Run proteus auth again.');
+    throw new CliAuthCodeError('CLI auth code expired. Run proteus auth again.');
   }
 
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId)) as DurableObjectStub<UserDO>;
@@ -241,12 +319,16 @@ async function rateLimit(db: D1Database, key: string, limit: number, windowMs: n
     ).bind(key, now + windowMs).run();
     return;
   }
-  if (row.count >= limit) throw new Error('Too many CLI auth attempts. Try again later.');
+  if (row.count >= limit) throw new RateLimitError();
   await session.prepare(`UPDATE cli_auth_rate SET count = count + 1 WHERE key = ?`).bind(key).run();
 }
 
 function primarySession(db: D1Database): D1DatabaseSession {
   return db.withSession('first-primary');
+}
+
+function isUniqueConstraintError(e: unknown): boolean {
+  return e instanceof Error && /UNIQUE constraint failed/i.test(e.message);
 }
 
 function currentStatus(status: string, expiresAt: number): CliAuthRequestInfo['status'] {
@@ -280,15 +362,3 @@ function createUserCode(): string {
   return `${out.slice(0, 4)}-${out.slice(4)}`;
 }
 
-function randomToken(bytes: number): string {
-  const data = crypto.getRandomValues(new Uint8Array(bytes));
-  let bin = '';
-  for (const b of data) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}

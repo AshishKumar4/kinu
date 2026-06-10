@@ -1,0 +1,30 @@
+// Shared token/hash primitives for cf-backend — one home instead of per-file
+// copies in the auth, CLI, and route modules.
+
+/** URL-safe base64 token from `bytes` of CSPRNG output. */
+export function randomToken(bytes: number): string {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  let bin = '';
+  for (const b of data) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+/** Lowercase hex string from `bytes` of CSPRNG output. */
+export function randomHex(bytes: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Constant-time string comparison — guards secret checks against
+ *  timing-side-channel enumeration. */
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}

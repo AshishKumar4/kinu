@@ -7,8 +7,9 @@
 // from that email. Production must leave that variable unset.
 
 import { readD1Bookmark, verifySession } from './d1-store.js';
+import { sha256Hex } from '../lib/crypto.js';
 
-const SESSION_COOKIE_NAME = '__Host-proteus_session';
+export const SESSION_COOKIE_NAME = '__Host-proteus_session';
 
 export interface AuthIdentity {
   /** Stable Proteus user id. */
@@ -25,20 +26,23 @@ export interface AuthIdentity {
   d1Bookmark?: string | null;
 }
 
+/** Step-up (fresh-auth) window for sensitive operations — creating webhook
+ *  ingress endpoints requires an interactive sign-in within this window. */
+export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+
+/** Single step-up rule for every webhook-creation path: web sessions check
+ *  the session auth time; the CLI checks its token mint time (minting
+ *  requires a live browser approval, so it is the CLI's interactive-auth
+ *  timestamp). */
+export function isFreshAuthTime(authTimeMs: number | null | undefined, now = Date.now()): boolean {
+  return typeof authTimeMs === 'number' && authTimeMs > 0 && now - authTimeMs <= STEP_UP_WINDOW_MS;
+}
+
 export class AuthError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
     this.name = 'AuthError';
   }
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  const view = new Uint8Array(hash);
-  let out = '';
-  for (let i = 0; i < view.length; i++) out += view[i].toString(16).padStart(2, '0');
-  return out;
 }
 
 /** Deterministic dev user id: sha256(email) truncated to 32 hex chars. */

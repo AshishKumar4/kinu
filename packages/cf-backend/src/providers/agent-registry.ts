@@ -91,11 +91,14 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   // Sync model construction does not mean sync credential access: providers
   // that need user credentials resolve them inside custom fetch wrappers.
+  // workers-ai resolves the user's Cloudflare OAuth credential through the
+  // UserDO stub — without a stub every request is a guaranteed 401, so the
+  // sync default must skip it and fall back to the env-bound ai-gateway.
   function syncDefaultProvider(): string {
-    if (registry.get('workers-ai')) return 'workers-ai';
+    if (stub && registry.get('workers-ai')) return 'workers-ai';
     if (typeof opts.env.AI_GATEWAY_URL === 'string' && opts.env.AI_GATEWAY_URL
      && typeof opts.env.AI_GATEWAY_AUTH === 'string' && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
-    throw new Error('No sync-resolvable provider registered.');
+    throw new Error('No sync-resolvable provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');
   }
   function syncDefaultModelId(provider: string): string {
     const fallback = registry.get('workers-ai')?.defaultModel ?? '';

@@ -22,19 +22,8 @@ import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { readWebhookBodyText } from './body.js';
 import { normalizeWebhookRateLimitPerMin } from './webhook-rate-limit.js';
-
-const STEP_UP_WINDOW_MS = 5 * 60 * 1000;   // 5-min window for sensitive ops
-
-function json(body: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status: init.status ?? 200,
-    headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
-  });
-}
-
-function err(status: number, message: string): Response {
-  return json({ error: message }, { status });
-}
+import { err, json, safeJson } from '../lib/http.js';
+import { isFreshAuthTime } from '../auth/session.js';
 
 function requestAuthTimeMs(request: Request): number | null {
   const forwarded = Number(request.headers.get('x-proteus-auth-time') ?? '');
@@ -135,9 +124,9 @@ async function handleTriggersRoute(
       return json(await agent.listTriggers());
     }
     if (method === 'POST') {
-      // Step-up auth required for trigger creation.
-      const iat = requestAuthTimeMs(request);
-      if (!iat || Date.now() - iat > STEP_UP_WINDOW_MS) {
+      // Step-up auth required for trigger creation (shared rule with the
+      // CLI webhook route — see auth/session.ts isFreshAuthTime).
+      if (!isFreshAuthTime(requestAuthTimeMs(request))) {
         return err(401, 'step-up auth required (re-login within 5 minutes)');
       }
       const body = await safeJson<{
@@ -204,8 +193,4 @@ function extractHeaders(request: Request): Record<string, string> {
   const out: Record<string, string> = {};
   request.headers.forEach((value, key) => { out[key] = value; });
   return out;
-}
-
-async function safeJson<T = unknown>(request: Request): Promise<T | null> {
-  try { return (await request.json()) as T; } catch { return null; }
 }

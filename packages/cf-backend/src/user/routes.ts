@@ -32,18 +32,8 @@ import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels } from './available-models.js';
-import { createCloudAgentForUser } from './agent-create.js';
-
-function json(body: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
-  });
-}
-
-function err(status: number, message: string): Response {
-  return json({ error: message }, { status });
-}
+import { handleCreateAgentRequest, notifyAgentsCredentialsChanged } from './agent-access.js';
+import { err, json, safeJson } from '../lib/http.js';
 
 function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
   return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
@@ -83,18 +73,7 @@ export async function handleUserRequest(
     return json(await stub.listAgents());
   }
   if (path === '/agents' && method === 'POST') {
-    const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
-    if (!body) return err(400, 'Body must be JSON');
-    if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
-    try {
-      const entry = await createCloudAgentForUser(env, identity.userId, stub, body, {
-        waitUntil: (promise) => ctx?.waitUntil(promise),
-      });
-      return json(entry, { status: 201 });
-    } catch (e) {
-      const message = (e as Error).message;
-      return err(message.startsWith('Cloudflare Workers AI is not connected') ? 409 : 400, message);
-    }
+    return handleCreateAgentRequest(request, env, identity.userId, stub, ctx);
   }
   const agentTouchMatch = path.match(/^\/agents\/([^/]+)\/touch$/);
   if (agentTouchMatch && method === 'POST') {
@@ -138,12 +117,16 @@ export async function handleUserRequest(
     if (method === 'POST') {
       const body = await safeJson(request);
       if (body === null) return err(400, 'Body must be JSON');
-      try { await stub.setCredential(key, body); return json({ ok: true }); }
+      try { await stub.setCredential(key, body); }
       catch (e) { return err(400, (e as Error).message); }
+      notifyAgentsCredentialsChanged(env, stub, ctx);
+      return json({ ok: true });
     }
     if (method === 'DELETE') {
-      try { await stub.deleteCredential(key); return json({ ok: true }); }
+      try { await stub.deleteCredential(key); }
       catch (e) { return err(400, (e as Error).message); }
+      notifyAgentsCredentialsChanged(env, stub, ctx);
+      return json({ ok: true });
     }
   }
 
@@ -153,6 +136,7 @@ export async function handleUserRequest(
   }
   if (path === '/codex' && method === 'DELETE') {
     await stub.disconnectCodex();
+    notifyAgentsCredentialsChanged(env, stub, ctx);
     return json({ ok: true });
   }
   if (path === '/codex/start' && method === 'POST') {
@@ -160,8 +144,11 @@ export async function handleUserRequest(
     catch (e) { return err(502, (e as Error).message); }
   }
   if (path === '/codex/poll' && method === 'POST') {
-    try { return json(await stub.pollCodexDeviceFlow()); }
-    catch (e) { return err(502, (e as Error).message); }
+    try {
+      const status = await stub.pollCodexDeviceFlow();
+      if (status.connected) notifyAgentsCredentialsChanged(env, stub, ctx);
+      return json(status);
+    } catch (e) { return err(502, (e as Error).message); }
   }
 
   // ── Config (defaults) ──────────────────────────────────────────────
@@ -243,8 +230,4 @@ function publicOrigin(request: Request): string {
   // the request URL itself because Workers preserves the visitor's scheme
   // and host in `request.url` for proxied requests.
   return new URL(request.url).origin;
-}
-
-async function safeJson<T = unknown>(request: Request): Promise<T | null> {
-  try { return (await request.json()) as T; } catch { return null; }
 }

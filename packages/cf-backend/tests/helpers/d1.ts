@@ -2,19 +2,22 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export function makeD1(db: Database): D1Database {
+/** `onQuery` fires before each statement executes — lets tests count
+ *  statements or inject concurrent writes to simulate races. */
+export function makeD1(db: Database, onQuery?: (query: string) => void): D1Database {
   const session = {
     prepare(query: string) {
       return {
         bind(...bindings: unknown[]) {
-          const stmt = db.prepare(query);
           return {
             async run() {
-              stmt.run(...bindings);
+              onQuery?.(query);
+              db.prepare(query).run(...bindings);
               return { success: true };
             },
             async first<T>() {
-              return (stmt.get(...bindings) ?? null) as T | null;
+              onQuery?.(query);
+              return (db.prepare(query).get(...bindings) ?? null) as T | null;
             },
           };
         },

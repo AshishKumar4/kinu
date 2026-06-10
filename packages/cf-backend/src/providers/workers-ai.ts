@@ -25,7 +25,7 @@ export function agentAffinityKey(name: string): string {
   return `proteus-${name}`;
 }
 
-export function createWorkersAIProvider(_opts: WorkersAIOptions = {}): ModelProvider {
+export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvider {
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
@@ -53,6 +53,9 @@ export function createWorkersAIProvider(_opts: WorkersAIOptions = {}): ModelProv
 
         const headers = new Headers(init?.headers);
         for (const [key, value] of Object.entries(auth.headers)) headers.set(key, value);
+        // Replica pinning for the server-side prefix cache — without this
+        // header same-agent turns route randomly and the cache never hits.
+        if (opts.sessionAffinity) headers.set('x-session-affinity', opts.sessionAffinity);
         const originalUrl = typeof input === 'string' ? input
           : input instanceof URL ? input.toString()
             : input.url;

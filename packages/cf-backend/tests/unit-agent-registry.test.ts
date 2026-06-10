@@ -98,3 +98,28 @@ describe('AgentProviderRegistry composition', () => {
     for (const p of credGated) expect(p.available).toBe(false);
   });
 });
+
+describe('sync default provider with a null UserDO stub (inline-branch context)', () => {
+  // Regression: workers-ai is credential-gated through UserDO; with a null
+  // stub its requests are guaranteed 401s, so the sync default must fall
+  // back to the env-bound ai-gateway instead of picking workers-ai.
+  test('falls back to ai-gateway when env-bound gateway is configured', () => {
+    const reg = createAgentProviderRegistry({
+      env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
+      userDOStub: null,
+    });
+    expect(reg.normalizeSpecSync(null))
+      .toBe('ai-gateway/workers-ai/@cf/moonshotai/kimi-k2.6');
+  });
+
+  test('throws loudly when no sync-usable provider exists', () => {
+    const reg = createAgentProviderRegistry({ env: {}, userDOStub: null });
+    expect(() => reg.normalizeSpecSync(null)).toThrow(/No sync-resolvable provider/);
+  });
+
+  test('explicit workers-ai specs still pass through unchanged', () => {
+    const reg = createAgentProviderRegistry({ env: {}, userDOStub: null });
+    expect(reg.normalizeSpecSync('workers-ai/@cf/moonshotai/kimi-k2.6'))
+      .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+  });
+});

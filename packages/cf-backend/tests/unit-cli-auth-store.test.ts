@@ -6,6 +6,9 @@ import {
   startCliAuth,
 } from '../src/cli/auth-store.js';
 import { createAuthDatabase, makeD1 } from './helpers/d1.js';
+import { Database } from 'bun:sqlite';
+import { RateLimitError } from '../src/cli/auth-store.js';
+import { handleCliRequest } from '../src/cli/routes.js';
 
 function setupEnv() {
   const db = createAuthDatabase();
@@ -60,5 +63,80 @@ describe('D1-backed CLI auth store', () => {
     expect(second.status).toBe('expired');
     expect(second.message).toContain('already delivered');
     expect(minted).toHaveLength(1);
+  });
+});
+
+describe('CLI auth approval replay', () => {
+  const approver = {
+    userId: '0123456789abcdef0123456789abcdef',
+    email: 'ashish@example.com',
+    sub: 'sub',
+    provider: 'test',
+    authTime: Date.now(),
+  };
+
+  test('replay by the original approver stays idempotent', async () => {
+    const { env } = setupEnv();
+    const started = await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1');
+    await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
+
+    const replay = await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
+    expect(replay).toMatchObject({ ok: true, status: 'approved', user: { id: approver.userId } });
+  });
+
+  test('an already-approved code is rejected for any other user (no identity disclosure)', async () => {
+    const { env } = setupEnv();
+    const started = await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1');
+    await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
+
+    const stranger = { ...approver, userId: 'feedfacefeedfacefeedfacefeedface', email: 'mallory@example.com' };
+    expect(approveCliAuth(env, started.userCode, stranger, '10.0.0.9'))
+      .rejects.toThrow('CLI auth code already used.');
+  });
+});
+
+describe('CLI auth error propagation', () => {
+  test('startCliAuth surfaces real DB failures instead of retrying as collisions', async () => {
+    const broken = new Database(':memory:'); // no tables at all
+    const env = {
+      AUTH_DB: makeD1(broken),
+      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
+    } as unknown as Env;
+    expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
+      .rejects.toThrow(/no such table/i);
+  });
+
+  test('rate limiting throws the typed RateLimitError', async () => {
+    const { env, db } = setupEnv();
+    db.exec(`INSERT INTO cli_auth_rate (key, count, reset_at) VALUES ('start:127.0.0.1', 20, ${Date.now() + 600_000})`);
+    expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
+      .rejects.toBeInstanceOf(RateLimitError);
+  });
+});
+
+describe('CLI auth route status mapping', () => {
+  function startRequest() {
+    return new Request('https://proteus.example.com/api/cli/auth/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-connecting-ip': '127.0.0.1' },
+      body: JSON.stringify({ deviceName: 't' }),
+    });
+  }
+
+  test('rate-limited start → 429', async () => {
+    const { env, db } = setupEnv();
+    db.exec(`INSERT INTO cli_auth_rate (key, count, reset_at) VALUES ('start:127.0.0.1', 20, ${Date.now() + 600_000})`);
+    const res = await handleCliRequest(startRequest(), env);
+    expect(res?.status).toBe(429);
+  });
+
+  test('infra failure during start → 500, not 429', async () => {
+    const env = {
+      AUTH_DB: makeD1(new Database(':memory:')),
+      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
+    } as unknown as Env;
+    const res = await handleCliRequest(startRequest(), env);
+    expect(res?.status).toBe(500);
+    expect((await res?.json() as { error: string }).error).toMatch(/no such table/i);
   });
 });

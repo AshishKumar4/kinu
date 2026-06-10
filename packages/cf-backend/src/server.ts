@@ -9,6 +9,8 @@
  *   4. / — public landing page when no Proteus session is present.
  *   5. /install, /install.sh, /downloads/proteus, /api/cli/* — CLI install/auth/API.
  *   6. /api/health — public build-info endpoint (no auth).
+ *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
+ *       enforced inside (external MCP clients can't do browser OAuth).
  *   7. AUTH GATE — every other request needs a Proteus browser session
  *      (or DEV_USER_EMAIL in local/staging dev).
  *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
@@ -33,8 +35,10 @@ import {
   authenticateRequest, AuthError, isPublicPath,
   type AuthIdentity,
 } from "./auth/session.js";
-import { d1BookmarkCookie } from "./auth/d1-store.js";
+import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
+import { claimOwnedAgent } from "./user/agent-access.js";
+import { err } from "./lib/http.js";
 
 /** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
  *  the only `/api/agents/<name>/...` route that bypasses browser OAuth (it has
@@ -78,36 +82,16 @@ function authError(request: Request, e: AuthError): Response {
   });
 }
 
-/** Verify the caller owns the agent named in the URL. Returns 404 if the
- *  agent isn't in this user's registry; creation must go through the explicit
- *  user/CLI create APIs so websocket probes cannot register agents. */
+/** Verify the caller owns the agent named in the URL via the shared
+ *  registry-membership + claimOwner policy. Returns a denial response or
+ *  null when access is granted. */
 async function ensureAgentOwnership(
   env: Env,
   identity: AuthIdentity,
   agentName: string,
 ): Promise<Response | null> {
-  const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
-  if (!(await userDO.hasAgent(agentName))) {
-    return new Response(JSON.stringify({ error: `Agent ${agentName} not in your registry. Create it via POST /api/user/agents first.` }), {
-      status: 404, headers: { 'content-type': 'application/json' },
-    });
-  }
-  // Claim ownership on the orchestrator's own agent_identity. Idempotent;
-  // throws if the agent is already owned by a different user — translate
-  // to 403 for the caller, surfacing the real error so we can diagnose
-  // boot/schema issues rather than masking them as "name taken".
-  const orchestrator = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
-  try {
-    await orchestrator.claimOwner(identity.userId);
-  } catch (e) {
-    const msg = (e as Error).message ?? '';
-    const status = /owned by a different user/i.test(msg) ? 403 : 500;
-    console.error(`[server] claimOwner(${agentName}) failed:`, msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status, headers: { 'content-type': 'application/json' },
-    });
-  }
-  return null;
+  const result = await claimOwnedAgent(env, identity.userId, agentName);
+  return result.ok ? null : err(result.status, result.error);
 }
 
 function extractAgentName(pathname: string): string | null {
@@ -116,9 +100,6 @@ function extractAgentName(pathname: string): string | null {
   if (m) return decodeURIComponent(m[1]);
   // /agents/orchestrator-agent/<name>/...  (Think framework convention)
   m = pathname.match(/^\/agents\/[^/]+\/([^/]+)/);
-  if (m) return decodeURIComponent(m[1]);
-  // /mcp/v1/<name>
-  m = pathname.match(/^\/mcp\/v1\/([^/]+)/);
   if (m) return decodeURIComponent(m[1]);
   return null;
 }
@@ -212,6 +193,14 @@ export default {
     const healthResp = handleHealthRequest(request);
     if (healthResp) return healthResp;
 
+    // 6b. MCP server — its own auth (CLI bearer token for external MCP
+    //     clients, which can never pass the browser-session gate below;
+    //     session/dev identity otherwise) + per-agent ownership inside.
+    if (url.pathname.startsWith("/mcp/v1/")) {
+      const mcpResp = await handleMcpRequest(request, env);
+      if (mcpResp) return mcpResp;
+    }
+
     // 7. Public bypass list.
     if (isPublicPath(url.pathname)) {
       return env.ASSETS.fetch(request);
@@ -265,8 +254,6 @@ export default {
 
       const runEventsResp = await handleRunEventsRequest(reqWithId, env);
       if (runEventsResp) return withD1Bookmark(runEventsResp, identity);
-      const mcpResp = await handleMcpRequest(reqWithId, env);
-      if (mcpResp) return withD1Bookmark(mcpResp, identity);
       // EventsHub authenticated routes: /triggers, /events
       const hubResp = await handleHubRequest(reqWithId, env, agentName);
       if (hubResp) return withD1Bookmark(hubResp, identity);
@@ -288,7 +275,7 @@ function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
 
 function wantsHtml(request: Request): boolean {
   const url = new URL(request.url);
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/agents/') || url.pathname.startsWith('/mcp/')) {
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/agents/')) {
     return false;
   }
   const accept = request.headers.get('accept') ?? '';
@@ -297,9 +284,5 @@ function wantsHtml(request: Request): boolean {
 
 function withD1Bookmark(response: Response, identity: AuthIdentity): Response {
   if (response.status === 101) return response;
-  const cookie = d1BookmarkCookie(identity.d1Bookmark ?? null);
-  if (!cookie) return response;
-  const headers = new Headers(response.headers);
-  headers.append('set-cookie', cookie);
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return withD1BookmarkCookie(response, identity.d1Bookmark);
 }

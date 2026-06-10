@@ -1,20 +1,16 @@
 import type { AuthIdentity } from '../auth/session.js';
-import { AuthError, authenticateRequest } from '../auth/session.js';
+import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
+import { err, escapeHtml, json, safeJson } from '../lib/http.js';
+import { randomToken, timingSafeEqual } from '../lib/crypto.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
-import type { UserDO } from '../user/user-do.js';
-import { approveCliAuth, inspectCliAuth, pollCliAuth, startCliAuth } from './auth-store.js';
+import {
+  CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
+  inspectCliAuth, pollCliAuth, startCliAuth, type CliTokenIdentity,
+} from './auth-store.js';
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
-import { createCloudAgentForUser } from '../user/agent-create.js';
-
-interface CliIdentity {
-  userId: string;
-  email: string;
-  displayName: string | null;
-  tokenHash: string;
-  userDO: DurableObjectStub<UserDO>;
-}
+import { claimOwnedAgent, handleCreateAgentRequest } from '../user/agent-access.js';
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
@@ -54,7 +50,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     try {
       return json(await startCliAuth(env, url.origin, approvalOrigin(env, url), body?.deviceName, clientKey(request)));
     } catch (e) {
-      return err(429, (e as Error).message);
+      return cliAuthError(e);
     }
   }
 
@@ -64,7 +60,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     try {
       return json(await pollCliAuth(env, body.deviceToken, clientKey(request)));
     } catch (e) {
-      return err(429, (e as Error).message);
+      return cliAuthError(e);
     }
   }
 
@@ -75,7 +71,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     const body = await safeJson<{ userCode?: string }>(request);
     if (!body?.userCode) return err(400, 'userCode required');
     try { return json(await approveCliAuth(env, body.userCode, identity, clientKey(request))); }
-    catch (e) { return err(400, (e as Error).message); }
+    catch (e) { return cliAuthError(e); }
   }
 
   const cli = await authenticateCli(request, env);
@@ -102,17 +98,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/agents' && method === 'POST') {
-    const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
-    if (!body?.name?.trim() && !body?.purpose?.trim()) return err(400, 'purpose required');
-    try {
-      const entry = await createCloudAgentForUser(env, cli.userId, cli.userDO, body, {
-        waitUntil: (promise) => ctx?.waitUntil(promise),
-      });
-      return json(entry, { status: 201 });
-    } catch (e) {
-      const message = (e as Error).message;
-      return err(message.startsWith('Cloudflare Workers AI is not connected') ? 409 : 400, message);
-    }
+    return handleCreateAgentRequest(request, env, cli.userId, cli.userDO, ctx);
   }
 
   const connectTicketMatch = path.match(/^\/agents\/([^/]+)\/connect-ticket$/);
@@ -210,6 +196,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (webhookTriggerMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(webhookTriggerMatch[1]));
     if (agent instanceof Response) return agent;
+    // Webhook creation is step-up gated on every path. The CLI's
+    // interactive-auth timestamp is its token mint time (minting requires
+    // a live browser approval), so a fresh `proteus auth` satisfies it.
+    const tokens = await cli.userDO.listCliTokens();
+    const mintedAt = tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
+    if (!isFreshAuthTime(mintedAt)) {
+      return err(401, 'step-up auth required: run `proteus auth` again — webhook creation needs a sign-in within the last 5 minutes');
+    }
     const body = await safeJson<{
       label?: string;
       auth_mode?: 'hmac' | 'bearer' | 'mtls';
@@ -225,7 +219,6 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
         secret: body.secret,
         accepted_content_type: body.accepted_content_type,
         rate_limit_per_min: body.rate_limit_per_min,
-        trust: 'owner',
       }), { status: 201 });
     } catch (e) {
       return err(400, (e as Error).message);
@@ -365,59 +358,10 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   return err(404, `No such CLI route: ${method} ${path}`);
 }
 
-async function cliAgent(env: Env, cli: CliIdentity, name: string): Promise<CliAgentRpc | Response> {
-  if (!(await cli.userDO.hasAgent(name))) return err(404, `Agent ${name} not found.`);
-  const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(name)) as unknown as CliAgentRpc;
-  try {
-    await agent.claimOwner(cli.userId);
-    return agent;
-  } catch (e) {
-    return err(403, (e as Error).message);
-  }
-}
-
-interface CliAgentRpc {
-  claimOwner(userId: string): Promise<unknown>;
-  getAgentStatus(): Promise<unknown>;
-  getToolDescriptions(): Promise<unknown>;
-  getChatHistory(limit?: number): Promise<unknown>;
-  listPendingConsents(): Promise<unknown>;
-  resolveDeviceConsent(consentId: string, decision: 'once' | 'always' | 'deny'): Promise<unknown>;
-  getStoredModelSpec(): Promise<unknown>;
-  setModel(spec: string): Promise<unknown>;
-  listTriggers(): Promise<unknown>;
-  createDurableWebhook(opts: {
-    label: string;
-    auth_mode: 'hmac' | 'bearer' | 'mtls';
-    secret?: string;
-    accepted_content_type?: string;
-    rate_limit_per_min?: number;
-    trust?: 'authenticated' | 'owner';
-  }): Promise<unknown>;
-  createTimerTrigger(opts: {
-    cron?: string;
-    atMs?: number;
-    label?: string;
-    payload?: Record<string, unknown>;
-    trust?: 'authenticated' | 'owner';
-  }): Promise<unknown>;
-  cancelTrigger(triggerId: string): Promise<unknown>;
-  listBackgroundJobs(limit?: number): Promise<unknown>;
-  cancelBackgroundJob(jobId: string): Promise<unknown>;
-  cancelCurrentWork(): Promise<unknown>;
-  getWorkspaceSnapshot(): Promise<unknown>;
-  getMemoryContent(): Promise<unknown>;
-  searchMemoryHybrid(query: string, limit?: number): Promise<unknown>;
-  listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }): Promise<unknown>;
-  getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<unknown>;
-  getMctsTree(): Promise<unknown>;
-  getMctsNodeDetail(nodeId: string): Promise<unknown>;
-  getHeadRuns(limit?: number): Promise<unknown>;
-  getGepaRuns(limit?: number): Promise<unknown>;
-  getGepaRun(runId: string): Promise<unknown>;
-  getExecutors(): Promise<unknown>;
-  executeInExecutor(executorId: string, command: string): Promise<unknown>;
-  getProductChangeBoard(limit?: number): Promise<unknown>;
+async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<DurableObjectStub<OrchestratorAgent> | Response> {
+  const result = await claimOwnedAgent(env, cli.userId, name);
+  if (!result.ok) return err(result.status, result.error);
+  return result.agent;
 }
 
 function readIntParam(url: URL, key: string): number | undefined {
@@ -442,34 +386,9 @@ function clientKey(request: Request): string {
     ?? 'unknown';
 }
 
-async function authenticateCli(request: Request, env: Env): Promise<CliIdentity | Response> {
-  const token = readBearer(request);
-  if (!token) return err(401, 'Missing Authorization: Bearer <token>');
-  const userId = parseCliTokenUserId(token);
-  if (!userId) return err(401, 'Malformed CLI token');
-  const userDO = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-  const verified = await userDO.verifyCliToken(token);
-  if (!verified.ok || !verified.user || !verified.tokenHash) {
-    return err(401, verified.error ?? 'Invalid CLI token');
-  }
-  return {
-    userId: verified.user.id,
-    email: verified.user.email,
-    displayName: verified.user.displayName,
-    tokenHash: verified.tokenHash,
-    userDO,
-  };
-}
-
-function readBearer(request: Request): string | null {
-  const header = request.headers.get('authorization') ?? '';
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match?.[1]?.trim() || null;
-}
-
-function parseCliTokenUserId(token: string): string | null {
-  const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
-  return match?.[1] ?? null;
+async function authenticateCli(request: Request, env: Env): Promise<CliTokenIdentity | Response> {
+  const result = await authenticateCliToken(request, env);
+  return result.ok ? result.identity : err(401, result.error);
 }
 
 async function renderBrowserApproval(request: Request, env: Env): Promise<Response> {
@@ -527,7 +446,7 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
   const code = String(form.get('userCode') ?? '');
   const csrf = String(form.get('csrf') ?? '');
   const cookieCsrf = readCookie(request, 'proteus_cli_auth_csrf');
-  if (!csrf || !cookieCsrf || !constantTimeEqual(csrf, cookieCsrf)) {
+  if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
     return html('Proteus CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
   }
   if (!code) return html('Proteus CLI Auth', '<p>Missing CLI auth code.</p>', 400);
@@ -1073,15 +992,12 @@ exec bun run packages/cli/bin/cli.ts "$@"
   });
 }
 
-function json(body: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
-  });
-}
-
-function err(status: number, message: string): Response {
-  return json({ error: message }, { status });
+/** Rate limits are 429, caller-correctable code failures are 400, and
+ *  everything else (D1 outage, UserDO failure, …) is a real 500. */
+function cliAuthError(e: unknown): Response {
+  if (e instanceof RateLimitError) return err(429, e.message);
+  if (e instanceof CliAuthCodeError) return err(400, e.message);
+  return err(500, e instanceof Error ? e.message : String(e));
 }
 
 function accessError(e: unknown, request?: Request): Response {
@@ -1144,19 +1060,6 @@ function html(title: string, body: string, status = 200, init: ResponseInit = {}
   });
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-async function safeJson<T = unknown>(request: Request): Promise<T | null> {
-  try { return (await request.json()) as T; } catch { return null; }
-}
-
 function csrfCookie(value: string): string {
   return `proteus_cli_auth_csrf=${value}; Path=/cli/auth; Max-Age=600; HttpOnly; Secure; SameSite=Strict`;
 }
@@ -1182,16 +1085,3 @@ function isSameOriginPost(request: Request): boolean {
   return !referer || referer.startsWith(`${url.origin}/`);
 }
 
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-function randomToken(bytes: number): string {
-  const data = crypto.getRandomValues(new Uint8Array(bytes));
-  let bin = '';
-  for (const b of data) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}

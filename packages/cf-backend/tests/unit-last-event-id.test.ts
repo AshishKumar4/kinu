@@ -4,7 +4,7 @@
 // negatives-less-than--1/strings, and default to -1 (replay from start).
 import { describe, test, expect } from 'bun:test';
 
-/** Mirror of the validator at run-events-routes.ts:107-112. Kept in sync
+/** Mirror of the Last-Event-ID validator in run-events-routes.ts. Kept in sync
  *  with the production code via this test — if the production logic
  *  changes, update both. */
 function validateSinceIndex(lastEventId: string | null): number {

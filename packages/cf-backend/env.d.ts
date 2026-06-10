@@ -46,11 +46,6 @@ declare global {
     /** Static asset binding — required for SPA fallback when the Worker
      *  runs first on every route (see `run_worker_first` in wrangler). */
     ASSETS: Fetcher;
-    /** Optional shared-secret for the MCP server endpoint. When set,
-     *  `/mcp/v1/*` requests must include `Authorization: Bearer <token>`.
-     *  When unset, the MCP endpoint is open (dev / personal-account mode).
-     *  Set in prod: `echo "<long-random>" | npx wrangler secret put MCP_AUTH_TOKEN` */
-    MCP_AUTH_TOKEN?: string;
     /** Google OAuth client settings. Client secret must be a Wrangler secret. */
     GOOGLE_OAUTH_CLIENT_ID?: string;
     GOOGLE_OAUTH_CLIENT_SECRET?: string;

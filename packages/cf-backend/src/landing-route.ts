@@ -1,6 +1,7 @@
 import { AuthError, authenticateRequest } from './auth/session.js';
 import { buildCliInstallCommand } from './cli/install-command.js';
 import { publicHtmlHeaders } from './lib/security-headers.js';
+import { escapeHtml } from './lib/http.js';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
@@ -409,15 +410,6 @@ function landingResponse(origin: string): Response {
   </script>
 </body>
 </html>`, landingInit());
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 function landingInit(): ResponseInit {

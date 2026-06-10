@@ -593,8 +593,9 @@ function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<voi
 function createInlineBranch(agent: AgentHost): BranchHandle {
   // Capture only env (not agent.sql / agent.ctx.storage) so the branch
   // closure satisfies StorageIsolation. Stored credentials are not available
-  // here — inline branches use the env-bound providers (workers-ai or
-  // ai-gateway) only, which need no credential reads.
+  // here — with a null UserDO stub the registry's sync default skips the
+  // credential-gated workers-ai and uses the env-bound ai-gateway, which
+  // needs no credential reads.
   const reg = createAgentProviderRegistry({
     env: agent.env,
     userDOStub: null,

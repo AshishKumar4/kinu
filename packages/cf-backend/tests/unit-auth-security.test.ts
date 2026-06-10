@@ -11,6 +11,7 @@ import {
 } from '../src/lib/cloudflare-oauth.js';
 import { buildCliInstallCommand } from '../src/cli/install-command.js';
 import { handleCliRequest } from '../src/cli/routes.js';
+import { sanitizeReturnTo } from '../src/auth/d1-store.js';
 
 const root = join(import.meta.dir, '..');
 
@@ -225,8 +226,12 @@ describe('auth and desktop security invariants', () => {
 
   test('OAuth sessions are HttpOnly host cookies and state is server-side', () => {
     const routes = source('src/auth/routes.ts');
+    const session = source('src/auth/session.ts');
     const d1Store = source('src/auth/d1-store.ts');
-    expect(routes).toContain('__Host-proteus_session');
+    // The cookie name has exactly one home (auth/session.ts); routes reuse it.
+    expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-proteus_session'");
+    expect(routes).toContain('SESSION_COOKIE_NAME');
+    expect(routes).not.toContain('__Host-proteus_session');
     expect(routes).toContain('HttpOnly; Secure; SameSite=Lax');
     expect(d1Store).toContain('DELETE FROM auth_oauth_states');
     expect(d1Store).toContain('RETURNING provider, code_verifier');
@@ -369,5 +374,25 @@ describe('auth and desktop security invariants', () => {
     expect(home).toContain('CloudflareAIConnectNotice');
     expect(modal).toContain('CloudflareAIConnectNotice');
     expect(settings).toContain('Cloudflare Workers AI');
+  });
+});
+
+describe('sanitizeReturnTo (single strict implementation)', () => {
+  test('accepts plain relative paths', () => {
+    expect(sanitizeReturnTo('/agents/jarvis')).toBe('/agents/jarvis');
+    expect(sanitizeReturnTo('/user/settings?tab=mcp')).toBe('/user/settings?tab=mcp');
+  });
+
+  test('rejects absolute, protocol-relative, and backslash escapes', () => {
+    expect(sanitizeReturnTo('https://evil.example')).toBe('/');
+    expect(sanitizeReturnTo('//evil.example')).toBe('/');
+    expect(sanitizeReturnTo('/\\evil.example')).toBe('/');
+    expect(sanitizeReturnTo('')).toBe('/');
+  });
+
+  test('rejects redirect loops back into the auth flow (strict rules apply on the D1 path too)', () => {
+    expect(sanitizeReturnTo('/auth/github/start')).toBe('/');
+    expect(sanitizeReturnTo('/login')).toBe('/');
+    expect(sanitizeReturnTo('/logout')).toBe('/');
   });
 });
