@@ -12,10 +12,18 @@ import type { AgentClient, AgentClientEvent } from './agent-client.js';
 import { executeSlashCommand, renderStatusLines, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
 import { watchTerminalConsents } from './consent-watch.js';
+import {
+  connectDevice,
+  describeConnectOutcome,
+  deviceStatusLine,
+  dismissDeviceConnectPrompt,
+  shouldOfferDeviceConnect,
+} from './device-connect.js';
+import { requireAuthConfig } from './config.js';
 import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
 import {
   printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator,
-  ACCENT, DIM, MUTED, ERR, WARN,
+  ACCENT, DIM, MUTED, ERR, OK, WARN,
 } from './display.js';
 
 export interface ChatLoopOpts {
@@ -67,6 +75,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     console.log(`\n${ACCENT(client.agentName)} ${DIM(`${client.mode} chat`)}`);
     console.log(DIM('Type a message, /help for commands, /exit to leave. Ctrl+C interrupts a running turn.\n'));
   }
+  if (client.mode === 'cloud') await maybeOfferDeviceConnect(rl, tty);
 
   const prompt = tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
 
@@ -113,7 +122,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
     if (input.startsWith('/')) {
       try {
-        const done = await applySlashOutcome(client, await executeSlashCommand(client, input));
+        const done = await applySlashOutcome(client, rl, await executeSlashCommand(client, input));
         if (done === 'exit') { await onExit(); return; }
       } catch (err) {
         console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
@@ -148,7 +157,68 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal): Prom
   });
 }
 
-async function applySlashOutcome(client: AgentClient, outcome: SlashOutcome): Promise<'ok' | 'exit'> {
+/**
+ * The natural device-access flow: when a cloud chat opens with no PC
+ * connected, offer to connect this one — once per CLI invocation, with a
+ * persisted "don't ask again". Reuses the consent-watch ask pattern; a
+ * non-interactive stdin gets the `proteus connect` instruction instead.
+ */
+async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Promise<void> {
+  if (!(await shouldOfferDeviceConnect())) return;
+  if (!tty) {
+    console.log(MUTED('No PC is connected for device access. Connect one with: proteus connect'));
+    return;
+  }
+  console.log(`${WARN('Let this agent use this PC?')}`);
+  console.log(MUTED('  No PC is connected to your account yet. Cloud agents run local commands'));
+  console.log(MUTED('  through the Proteus daemon, asking consent per command.'));
+  await promptDeviceConnect(rl, { allowDismiss: true });
+  console.log('');
+}
+
+async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss: boolean }): Promise<void> {
+  const choices = opts.allowDismiss
+    ? `[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again ›`
+    : `[c] connect & keep connected · [s] this session only · [n] not now ›`;
+  for (;;) {
+    const answer = (await ask(rl, `${DIM(choices)} `))?.trim().toLowerCase();
+    if (answer === undefined || answer === 'n' || answer === 'no') return; // EOF or not now
+    if (answer === 'c' || answer === 's') {
+      await runDeviceConnect(answer === 's');
+      return;
+    }
+    if (opts.allowDismiss && answer === 'd') {
+      dismissDeviceConnectPrompt();
+      console.log(DIM(`  Won't ask again. Connect anytime with /connect or: proteus connect`));
+      return;
+    }
+    console.log(DIM(opts.allowDismiss ? '  Please answer c, s, n, or d.' : '  Please answer c, s, or n.'));
+  }
+}
+
+async function runDeviceConnect(session: boolean): Promise<void> {
+  try {
+    const auth = requireAuthConfig();
+    let waiting = false;
+    const result = await connectDevice(auth, {
+      session,
+      onPoll: () => {
+        if (!waiting) {
+          process.stdout.write(DIM('  Waiting for the daemon to connect'));
+          waiting = true;
+        }
+        process.stdout.write(DIM('.'));
+      },
+    });
+    if (waiting) process.stdout.write('\n');
+    const outcome = describeConnectOutcome(result, session);
+    console.log(`  ${outcome.ok ? OK('✓') : ERR('✗')} ${outcome.message}`);
+  } catch (err) {
+    console.log(`  ${ERR('✗')} ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function applySlashOutcome(client: AgentClient, rl: readline.Interface, outcome: SlashOutcome): Promise<'ok' | 'exit'> {
   switch (outcome.kind) {
     case 'exit':
       return 'exit';
@@ -189,6 +259,16 @@ async function applySlashOutcome(client: AgentClient, outcome: SlashOutcome): Pr
       }
       console.log(`\n${MUTED(renderSessionBrowser(outcome.mode, sessions))}`);
       if (outcome.mode === 'resume') console.log(MUTED('Resume with /resume <number|id>.'));
+      console.log('');
+      return 'ok';
+    }
+    case 'device-connect': {
+      console.log(`\n${DIM('Devices:')} ${await deviceStatusLine()}`);
+      if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+        await promptDeviceConnect(rl, { allowDismiss: false });
+      } else {
+        console.log(MUTED('Connect this PC with: proteus connect'));
+      }
       console.log('');
       return 'ok';
     }

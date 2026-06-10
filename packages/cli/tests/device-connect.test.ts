@@ -224,6 +224,19 @@ describe('device-connect daemon lifecycle', () => {
   });
 });
 
+describe('/connect slash command', () => {
+  test('is offered to consent-capable clients and returns the device-connect outcome', async () => {
+    const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands.js');
+    const cloudish = { consents: {}, localControls: null } as unknown as Parameters<typeof executeSlashCommand>[0];
+    const localish = { consents: null, localControls: {} } as unknown as Parameters<typeof executeSlashCommand>[0];
+
+    expect(commandsForClient(cloudish).map((c) => c.name)).toContain('/connect');
+    expect(commandsForClient(localish).map((c) => c.name)).not.toContain('/connect');
+    expect(await executeSlashCommand(cloudish, '/connect')).toEqual({ kind: 'device-connect' });
+    expect(await executeSlashCommand(localish, '/connect')).toEqual({ kind: 'unknown', command: '/connect' });
+  });
+});
+
 describe('desktop command reuses device-connect', () => {
   test('desktop.ts keeps zero duplicated daemon/registration logic', () => {
     const source = readFileSync(resolve(repoRoot, 'packages/cli/src/commands/desktop.ts'), 'utf8');
