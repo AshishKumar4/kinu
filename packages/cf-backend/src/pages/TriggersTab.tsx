@@ -16,7 +16,7 @@ import { useParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { Modal } from "@/components/ui/Modal";
 import {
-  PlugIcon, PlusIcon, TrashIcon, CopyIcon, ArrowSquareOutIcon,
+  PlugIcon, PlusIcon, TrashIcon, CopyIcon,
   CheckIcon, WarningIcon, ArrowLeftIcon,
 } from "@phosphor-icons/react";
 import {
