@@ -46,6 +46,7 @@ import { initUserTables } from './schema.js';
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
+import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { resolveAgentTitle } from '../lib/agent-naming.js';
 import { DEVICE_CONSENT_SCOPE, summarizeDeviceAction, type DeviceConsentScope } from './device-consent.js';
 import {
@@ -130,12 +131,6 @@ export interface CliAgentConnectTicketVerification {
   error?: string;
 }
 
-async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
-}
-
 export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
   const match = /^pat_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(ticket);
   return match?.[1] ?? null;
@@ -144,13 +139,6 @@ export function parseCliAgentConnectTicketUserId(ticket: string): string | null 
 function cleanCliTokenLabel(label?: string): string {
   const trimmed = (label ?? '').trim().replace(/\s+/g, ' ');
   return trimmed ? trimmed.slice(0, 80) : 'Proteus CLI';
-}
-
-function randomToken(bytes: number): string {
-  const data = crypto.getRandomValues(new Uint8Array(bytes));
-  let bin = '';
-  for (const b of data) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 function parseCapabilityList(value: string): string[] {

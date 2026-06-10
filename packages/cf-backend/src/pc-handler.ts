@@ -14,6 +14,7 @@
  */
 
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
+import { json, safeJson } from "./lib/http.js";
 
 const DAEMON_JS_URL = "/pc/daemon.js";
 
@@ -112,15 +113,4 @@ async function handlePcConnect(request: Request, env: Env): Promise<Response> {
   // upgrade Request can. Forward it to the UserDO, which verifies + consumes
   // the ticket and accepts the socket inside its own fetch().
   return ns.get(ns.idFromName(userId)).fetch(request);
-}
-
-function json(body: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: { "content-type": "application/json", ...(init.headers as Record<string, string> | undefined) },
-  });
-}
-
-async function safeJson<T = unknown>(request: Request): Promise<T | null> {
-  try { return (await request.json()) as T; } catch { return null; }
 }
