@@ -11,6 +11,7 @@ import {
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage } from "ai";
 import { useProteus } from "@/hooks/use-proteus";
+import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { cloudflareReconnectPath, touchAgent, listAvailableModels } from "@/lib/user-api";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
@@ -518,11 +519,10 @@ export default function WorkspacePage() {
     if (!t) return;
     if (t.isCollapsed()) t.resize("24%"); else t.collapse();
   }, [timelineRef]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const initialPromptSent = useRef(false);
 
   useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [state.messages]);
 
   // Auto-switch the work surface to the live Preview the moment a new sandbox
   // port is exposed — the running app becomes the centre of attention.
@@ -668,7 +668,7 @@ export default function WorkspacePage() {
                 ErrorBoundary'd so a single malformed message doesn't
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+            <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
               {state.messages.length === 0 && !state.isStreaming && (
                 <div className="flex flex-col items-center justify-center h-full">
                   <BrainIcon size={36} className="p-text-3 mb-3" />
@@ -688,7 +688,6 @@ export default function WorkspacePage() {
                   }}
                 />
               ))}
-              <div ref={messagesEndRef} />
             </div>
             </ErrorBoundary>
 
