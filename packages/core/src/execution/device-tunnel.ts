@@ -30,6 +30,18 @@ interface RpcResponse { id?: string; result?: unknown; error?: string }
 
 export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 
+/** Thrown by the user-level device hub (UserDO) when no device socket is
+ *  live. Matchers in other packages key on this exact string — never reword
+ *  the throw sites without it. */
+export const NO_DEVICE_CONNECTED = 'no device connected';
+
+/** Both the hub's "no socket" rejection and the tunnel's "socket dropped"
+ *  rejection mean the same thing to callers: the device is not connected. */
+export function isDeviceNotConnectedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes(NO_DEVICE_CONNECTED) || message.includes(TUNNEL_DISCONNECTED);
+}
+
 export class DeviceTunnel {
   private pending = new Map<string, Pending>();
   private seq = 0;

@@ -21,7 +21,10 @@ export {
   isSandboxTransientError,
 } from './sandbox.js';
 export { createSSHTunnelExecutor, type DeviceTransport } from './ssh.js';
-export { DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED } from './device-tunnel.js';
+export {
+  DeviceTunnel, type TunnelSocket,
+  TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+} from './device-tunnel.js';
 
 // Nimbus — WebSocket client for github.com/AshishKumar4/Nimbus.
 // Stays in this directory because Nimbus is just another ExecutorProvider.

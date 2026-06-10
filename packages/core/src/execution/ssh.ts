@@ -18,7 +18,7 @@
 
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
-import { TUNNEL_DISCONNECTED } from './device-tunnel.js';
+import { isDeviceNotConnectedError } from './device-tunnel.js';
 import { readExecSignal } from './signal.js';
 
 const NOT_CONNECTED =
@@ -37,13 +37,6 @@ const NOT_CONNECTED =
 export interface DeviceTransport {
   rpc(method: string, params: unknown[]): Promise<unknown>;
   isConnected(): boolean;
-}
-
-/** The hub rejects calls when no device socket is live; the tunnel rejects
- *  in-flight calls when the socket drops. Both mean "not connected". */
-function isNotConnectedError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return message.includes('no device connected') || message.includes(TUNNEL_DISCONNECTED);
 }
 
 /**
@@ -73,7 +66,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
           return result.stdout || '(no output)';
         } catch (err) {
           if (isAbortError(err)) throw err;
-          if (isNotConnectedError(err)) return NOT_CONNECTED;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -85,7 +78,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
         try {
           return String(await rpc('readFile', [String(path)]));
         } catch (err) {
-          if (isNotConnectedError(err)) return NOT_CONNECTED;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
           return `readFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -102,7 +95,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
           }
           return `Written ${String(content).length} bytes to ${String(path)}`;
         } catch (err) {
-          if (isNotConnectedError(err)) return NOT_CONNECTED;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
           return `writeFile error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -119,7 +112,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
             return String(entry);
           });
         } catch (err) {
-          if (isNotConnectedError(err)) return NOT_CONNECTED;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
           return `readdir error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -131,7 +124,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
         try {
           return Boolean(await rpc('exists', [String(path)]));
         } catch (err) {
-          if (isNotConnectedError(err)) return NOT_CONNECTED;
+          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
           return false;
         }
       },
@@ -153,7 +146,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
       try {
         await rpc('exec', ['echo connected']);
       } catch (err) {
-        if (isNotConnectedError(err)) throw new Error(NOT_CONNECTED);
+        if (isDeviceNotConnectedError(err)) throw new Error(NOT_CONNECTED);
         throw err;
       }
     },

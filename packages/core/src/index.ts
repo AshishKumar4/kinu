@@ -243,7 +243,7 @@ export {
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   isSandboxTransientError,
   createSSHTunnelExecutor, type DeviceTransport,
-  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED,
+  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   createNimbusExecutor, type NimbusExecutorOpts, type NimbusSandboxHandle,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,

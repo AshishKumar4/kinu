@@ -23,6 +23,7 @@ import type {
 import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
+  NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
@@ -230,7 +231,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     isConnected: () => { refreshDeviceConnected(); return deviceConnected; },
     rpc: async (method, params) => {
       const stub = userDOStubFor(agent);
-      if (!stub) { deviceConnected = false; deviceCheckedAt = Date.now(); throw new Error('no device connected'); }
+      if (!stub) { deviceConnected = false; deviceCheckedAt = Date.now(); throw new Error(NO_DEVICE_CONNECTED); }
       try {
         const cwd = typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
           ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
@@ -246,7 +247,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
         deviceCheckedAt = Date.now();
         return result;
       } catch (err) {
-        if (/no device connected/.test(err instanceof Error ? err.message : String(err))) {
+        if (isDeviceNotConnectedError(err)) {
           deviceConnected = false;
           deviceCheckedAt = Date.now();
         }

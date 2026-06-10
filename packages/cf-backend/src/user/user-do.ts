@@ -21,6 +21,7 @@ import {
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
 import {
+  NO_DEVICE_CONNECTED,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createProductChangeStore,
@@ -638,13 +639,13 @@ export class UserDO extends Agent<Env> {
    *  the agent to raise a consent card and await the user's decision. */
   async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string }): Promise<unknown> {
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
-    if (!deviceId) throw new Error('no device connected');
+    if (!deviceId) throw new Error(NO_DEVICE_CONNECTED);
     if (opts?.agentName) {
       const allowed = await this.checkDeviceConsent(opts.agentName, deviceId, method, params);
       if (!allowed) throw new Error('device use was not approved');
     }
     const tunnel = this._devices.tunnel(deviceId);
-    if (!tunnel) throw new Error('no device connected');
+    if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
     return tunnel.rpc(method, params);
   }
 
