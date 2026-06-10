@@ -22,16 +22,17 @@
  * tab row. The agent's internal workspace is available from a subdued control
  * because it is state storage, not a user-facing execution device.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import {
   TerminalIcon, FolderOpenIcon, FolderIcon, FileIcon, ArrowsClockwiseIcon,
-  ArrowLeftIcon, CopyIcon, WarningIcon, PlugIcon, TrashIcon,
+  ArrowLeftIcon, CopyIcon, WarningIcon, PlugIcon, TrashIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
-import { Badge } from "@cloudflare/kumo";
+import { Badge, Loader } from "@cloudflare/kumo";
 import { ExecutorTerminal } from "./ExecutorTerminal";
 import { PreviewFrame } from "./PreviewFrame";
 import type { ExecutorOutput } from "../hooks/use-proteus";
 import type { DirEntry } from "@/lib/protocol";
+import { MAX_UPLOAD_BYTES, encodeBase64 } from "@/lib/files";
 import { listDevices, registerDevice, revokeDevice, type UserDevice } from "@/lib/user-api";
 
 const EXECUTOR_LABELS: Record<string, string> = {
@@ -377,9 +378,12 @@ function joinPath(dir: string, name: string): string {
   return dir === "/" ? `/${name}` : `${dir}/${name}`;
 }
 
+interface UploadState { name: string; status: "uploading" | "error"; error?: string }
+
 /** General per-executor file manager: typed directory listing (getExecutorFiles)
- *  + a text viewer (readExecutorFile). Drives its own fetches off the stable
- *  `rpc`, so it only re-reads when the path or executor changes. */
+ *  + a text viewer (readExecutorFile) + uploads (writeExecutorFile) via drop or
+ *  the Upload button. Drives its own fetches off the stable `rpc`, so it only
+ *  re-reads when the path or executor changes. */
 function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
   const [path, setPath] = useState("/");
   const [entries, setEntries] = useState<DirEntry[]>([]);
@@ -388,6 +392,9 @@ function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
   const [viewing, setViewing] = useState<string | null>(null);   // full path of file in the viewer
   const [file, setFile] = useState<FileState | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  const [uploads, setUploads] = useState<UploadState[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (p: string) => {
     setLoading(true);
@@ -413,6 +420,42 @@ function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
   // Re-list on path/executor change; leaving any open file viewer.
   useEffect(() => { setViewing(null); refresh(path); }, [path, execName, refresh]);
 
+  // Sequential per-file upload into the current directory; failed files stay
+  // listed with their error until the next upload batch replaces them.
+  const uploadFiles = useCallback(async (files: FileList | null | undefined) => {
+    if (!files || files.length === 0) return;
+    const list = Array.from(files);
+    setUploads(list.map((f) => ({ name: f.name, status: "uploading" as const })));
+    for (const f of list) {
+      try {
+        if (f.size > MAX_UPLOAD_BYTES) throw new Error(`too large (max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`);
+        const b64 = encodeBase64(new Uint8Array(await f.arrayBuffer()));
+        const r = await rpc("writeExecutorFile", [execName, joinPath(path, f.name), b64]) as { ok?: true; error?: string };
+        if (r.error) throw new Error(r.error);
+        setUploads((prev) => prev.filter((u) => u.name !== f.name));
+      } catch (e) {
+        setUploads((prev) => prev.map((u) => u.name === f.name
+          ? { ...u, status: "error" as const, error: e instanceof Error ? e.message : String(e) }
+          : u));
+      }
+    }
+    await refresh(path);
+  }, [rpc, execName, path, refresh]);
+
+  const onListDragOver = useCallback((e: ReactDragEvent) => {
+    if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
+  }, []);
+  const onListDragLeave = useCallback((e: ReactDragEvent) => {
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+    setDragOver(false);
+  }, []);
+  const onListDrop = useCallback((e: ReactDragEvent) => {
+    if (!e.dataTransfer.files.length) return;
+    e.preventDefault();
+    setDragOver(false);
+    void uploadFiles(e.dataTransfer.files);
+  }, [uploadFiles]);
+
   const segments = path === "/" ? [] : path.split("/").filter(Boolean);
 
   return (
@@ -428,9 +471,16 @@ function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
             {i < segments.length - 1 && <span className="p-text-3">/</span>}
           </span>
         ))}
+        <input ref={uploadInputRef} type="file" multiple className="hidden"
+          onChange={(e) => { void uploadFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
+        <button
+          onClick={() => uploadInputRef.current?.click()}
+          className="ml-auto flex items-center gap-1 p-text-3 hover:p-text p-1"
+          title={`Upload files to ${path}`}
+        ><UploadSimpleIcon size={11} />Upload</button>
         <button
           onClick={() => viewing ? openFile(viewing) : refresh(path)}
-          className="ml-auto p-text-3 hover:p-text p-1"
+          className="p-text-3 hover:p-text p-1"
           title="Refresh"
         ><ArrowsClockwiseIcon size={11} /></button>
       </div>
@@ -443,8 +493,18 @@ function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
           onBack={() => setViewing(null)}
         />
       ) : (
-        <div className="flex-1 overflow-y-auto px-3 py-2 text-xs space-y-0.5">
+        <div
+          className={`flex-1 overflow-y-auto px-3 py-2 text-xs space-y-0.5 ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
+          onDragOver={onListDragOver} onDragLeave={onListDragLeave} onDrop={onListDrop}
+        >
           {err && <div className="text-red-400">{err}</div>}
+          {uploads.map((u) => (
+            <div key={u.name} className="flex items-center gap-1.5 font-mono">
+              {u.status === "uploading"
+                ? <><Loader size="sm" /><span className="p-text-2 truncate">{u.name}</span><span className="p-text-3">uploading…</span></>
+                : <><WarningIcon size={12} className="text-red-400 shrink-0" /><span className="p-text-2 truncate">{u.name}</span><span className="text-red-400 truncate">{u.error}</span></>}
+            </div>
+          ))}
           {loading && <div className="p-text-3">Loading…</div>}
           {!loading && segments.length > 0 && (
             <button

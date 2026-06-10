@@ -36,7 +36,7 @@ import { nextCronFire } from "./lib/cron.js";
 import { compactionThreshold } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
-import { parseReaddirEntries, sortDirEntries } from "./lib/files.js";
+import { parseReaddirEntries, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
 import { deriveAgentTitle } from "./lib/agent-naming.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -3474,6 +3474,20 @@ export class OrchestratorAgent extends Think<Env> {
       if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
       if (text.length > MAX) return { content: text.slice(0, MAX), truncated: true };
       return { content: text };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Upload one file into an executor (file-manager drop/Upload). Mirrors
+   *  readExecutorFile's dispatch: workspace → VFS (binary-safe), others →
+   *  provider writeFile tool; read-only executors get a typed error. */
+  @callable() async writeExecutorFile(executorId: string, path: string, contentBase64: string): Promise<ExecutorWriteResult> {
+    try {
+      return await writeExecutorFileOp({
+        vfs: this.rt.storage.vfs,
+        getProvider: (id) => this.rt.executionRouter?.getProvider(id),
+      }, executorId, path, contentBase64);
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
