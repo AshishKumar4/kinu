@@ -61,6 +61,14 @@ function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () =>
   );
 }
 
+/** Render one file part inside a message: inline preview for images, a
+ *  filename chip for everything else. */
+function FilePartView({ part }: { part: FileUIPart }) {
+  return part.mediaType.startsWith("image/")
+    ? <img src={part.url} alt={part.filename ?? "image"} className="max-h-48 max-w-full rounded-lg border p-border" />
+    : <AttachmentChip part={part} />;
+}
+
 function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date }) {
   if (!createdAt) return null;
   const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
@@ -266,9 +274,15 @@ const MessageView = memo(function MessageView({
   }
 
   if (isUser) {
+    const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-start animate-fade-in group">
         <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-bl-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
+          {fileParts.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
+              {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
+            </div>
+          )}
           {getMessageText(message)}
           {canFork && (
             <button
@@ -288,6 +302,7 @@ const MessageView = memo(function MessageView({
   const hasContent = message.parts.some(p =>
     (p.type === "text" && (p as { text: string }).text) ||
     (p.type === "reasoning" && (p as { text?: string }).text) ||
+    p.type === "file" ||
     isToolUIPart(p)
   );
 
@@ -319,6 +334,9 @@ const MessageView = memo(function MessageView({
         if (part.type === "reasoning") {
           const t = (part as { text?: string }).text;
           return t ? <ReasoningBlock key={i} text={t} /> : null;
+        }
+        if (part.type === "file") {
+          return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
         }
         if (part.type === "text") {
           const t = (part as { text: string }).text;

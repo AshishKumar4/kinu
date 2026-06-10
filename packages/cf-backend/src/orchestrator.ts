@@ -143,7 +143,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Extract plain text from the last user message in a ModelMessage[]. Used
  *  by skills resolution to look for `/skill-name` invocations and keyword
- *  matches without needing to know the AI SDK content-part union shape. */
+ *  matches without needing to know the AI SDK content-part union shape.
+ *  Deliberately text-only: file/image attachment parts are dropped here, but
+ *  they still reach the model — the evolved-scaffold path hands this flattened
+ *  text to the scaffold as `task` while `host.defaultInference()` streams the
+ *  original opts.messages with all parts intact (see runStreamText). */
 function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
