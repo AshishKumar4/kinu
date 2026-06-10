@@ -234,13 +234,13 @@ function MessageView({
 
   if (isUser) {
     return (
-      <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
+      <div className="flex flex-col items-start animate-fade-in group">
+        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-bl-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
           {getMessageText(message)}
           {canFork && (
             <button
               onClick={() => onFork!(message.id)}
-              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+              className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
               title="Fork from here"
             >
               <GitBranchIcon size={12} />
