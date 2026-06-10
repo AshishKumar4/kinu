@@ -1,21 +1,38 @@
-import { Link, Outlet } from "react-router-dom";
-import { BrainIcon, GearIcon, PlusIcon } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { Link, Outlet, useLocation } from "react-router-dom";
+import { BrainIcon, GearIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 
 /**
  * Top-level shell — left rail (Sidebar with user info + agent list) +
- * right pane (route outlet). The right pane is per-agent for /agent/*
- * routes and a welcome screen at /, and the user-settings page at
- * /user/settings.
+ * right pane (route outlet). Below md the rail becomes a drawer summoned
+ * from the mobile header, so phones get the same roster, New-agent flow,
+ * theme toggle and sign-out as desktop.
  */
 export default function Layout() {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const location = useLocation();
+
+  // Any navigation (agent link, settings, new-agent create) closes the drawer.
+  useEffect(() => { setDrawerOpen(false); }, [location]);
+
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-elevated px-3 md:hidden">
-        <Link to="/" className="flex items-center gap-2 rounded-md px-2 py-1.5">
-          <BrainIcon size={21} weight="duotone" className="p-accent" />
-          <span className="font-medium tracking-tight">Proteus</span>
-        </Link>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Open menu"
+            onClick={() => setDrawerOpen(true)}
+            className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text"
+          >
+            <ListIcon size={18} />
+          </button>
+          <Link to="/" className="flex items-center gap-2 rounded-md px-2 py-1.5">
+            <BrainIcon size={21} weight="duotone" className="p-accent" />
+            <span className="font-medium tracking-tight">Proteus</span>
+          </Link>
+        </div>
         <div className="flex items-center gap-1">
           <Link to="/" aria-label="New agent" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <PlusIcon size={16} />
@@ -25,7 +42,22 @@ export default function Layout() {
           </Link>
         </div>
       </header>
-      <Sidebar />
+
+      {/* Desktop rail */}
+      <aside className="hidden w-64 shrink-0 h-full p-elevated border-r p-border md:block">
+        <Sidebar />
+      </aside>
+
+      {/* Mobile drawer */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-elevated border-r p-border shadow-2xl">
+            <Sidebar />
+          </aside>
+        </div>
+      )}
+
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <Outlet />
       </main>

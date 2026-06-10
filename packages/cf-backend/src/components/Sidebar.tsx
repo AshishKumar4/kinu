@@ -70,8 +70,10 @@ export default function Sidebar() {
     catch (err) { alert(`Could not remove: ${(err as Error).message}`); }
   }, [agentId, navigate, refreshAgents]);
 
+  // The responsive wrappers (desktop rail / mobile drawer) live in layout.tsx;
+  // this renders just the column content so both reuse one roster + user menu.
   return (
-    <aside className="hidden w-64 shrink-0 h-full flex-col p-elevated border-r p-border md:flex">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Logo + new agent */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
         <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
@@ -154,6 +156,6 @@ export default function Sidebar() {
       </div>
 
       {showCreate && <CreateAgentModal onClose={() => setShowCreate(false)} />}
-    </aside>
+    </div>
   );
 }
