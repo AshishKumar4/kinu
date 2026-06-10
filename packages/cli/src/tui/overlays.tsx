@@ -2,6 +2,7 @@ import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
 import type { SlashCommandInfo } from '../slash-commands.js';
 import type { AgentModelEntry } from '../model-catalog.js';
+import type { DeviceConnectPromptState } from './use-device-connect.js';
 import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
 
@@ -156,6 +157,60 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
       <PaletteLine text={`Method: ${consent.method}`} width={innerWidth} color={tuiColors.muted} />
       <PaletteLine text={`Command: ${consent.command || '(command)'}`} width={innerWidth} color={tuiColors.textStrong} />
       <PaletteLine text="Y/O approve once · A always allow this agent · N deny" width={innerWidth} color={tuiColors.accentStrong} />
+    </PaletteFrame>
+  );
+}
+
+interface DeviceConnectOverlayProps {
+  prompt: DeviceConnectPromptState;
+  terminal: OverlayGeometry;
+}
+
+export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayProps) {
+  const paletteWidth = boundedPaletteWidth(terminal, 0.52, 52, 86);
+  const paletteHeight = 9;
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  return (
+    <PaletteFrame
+      title="Let this agent use this PC?"
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      {prompt.phase === 'ask' ? (
+        <>
+          <PaletteLine text={prompt.statusLine} width={innerWidth} color={tuiColors.text} />
+          <PaletteLine text="Cloud agents run local commands through the Proteus daemon," width={innerWidth} color={tuiColors.muted} />
+          <PaletteLine text="asking consent per command." width={innerWidth} color={tuiColors.muted} />
+          <PaletteLine text="C connect & keep connected · S this session only" width={innerWidth} color={tuiColors.accentStrong} />
+          <PaletteLine text="N not now · D don't ask again" width={innerWidth} color={tuiColors.muted} />
+        </>
+      ) : prompt.phase === 'connecting' ? (
+        <>
+          <PaletteLine
+            text={prompt.session ? 'Connecting this PC for this session…' : 'Connecting this PC…'}
+            width={innerWidth}
+            color={tuiColors.text}
+          />
+          <PaletteLine
+            text={`Waiting for the daemon to connect${'.'.repeat(1 + (prompt.ticks % 3))}`}
+            width={innerWidth}
+            color={tuiColors.accent}
+          />
+        </>
+      ) : (
+        <>
+          <PaletteLine
+            text={`${prompt.ok ? '✓' : '✗'} ${prompt.message}`}
+            width={innerWidth}
+            color={prompt.ok ? tuiColors.green : tuiColors.red}
+          />
+          <PaletteLine text="Press any key to continue" width={innerWidth} color={tuiColors.muted} />
+        </>
+      )}
     </PaletteFrame>
   );
 }

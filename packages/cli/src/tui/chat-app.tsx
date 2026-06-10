@@ -33,7 +33,8 @@ import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { StatusView } from './help-view.js';
-import { CommandHintOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
+import { CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
+import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { estimateContextTokens } from './context-status.js';
 import { useStreamingBuffer } from './streaming-buffer.js';
 import { renderSessionBrowser, selectSession } from './session-browser.js';
@@ -72,6 +73,7 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
   const initialPromptSentRef = useRef(false);
   const stream = useStreamingBuffer(setStreamingText);
   const commands = useMemo(() => commandsForClient(client), [client]);
+  const deviceConnect = useDeviceConnectPrompt();
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
@@ -139,13 +141,17 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         } catch { /* hydration is best effort; the welcome message stands */ }
       }
       await client.connect();
-      if (!cancelled) setReady(true);
+      if (cancelled) return;
+      setReady(true);
+      // Natural device access: a cloud chat with no connected PC offers to
+      // connect this one (at most once per CLI invocation).
+      if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
     })();
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [client, handleClientEvent, hydrateHistory]);
+  }, [client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -273,6 +279,9 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         addMessage({ role: 'system', content: renderSessionBrowser(outcome.mode, sessions) });
         return;
       }
+      case 'device-connect':
+        await deviceConnect.open();
+        return;
       case 'cancel':
         if (modelPicker) {
           setModelPicker(null);
@@ -288,7 +297,7 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         addMessage({ role: 'system', content: `Unknown command: ${outcome.command}. Type /help` });
         return;
     }
-  }, [addMessage, client, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker]);
+  }, [addMessage, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
@@ -341,6 +350,7 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
   }, [handleSubmit, initialPrompt, ready]);
 
   useKeyboard((key) => {
+    if (deviceConnect.handleKey(key)) return;
     if (pendingConsent) {
       if (key.name === 'o' || key.name === 'y' || key.name === 'return') {
         resolvePendingConsent('once');
@@ -432,7 +442,7 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
-          focused={ready && !isProcessing && !modelPicker}
+          focused={ready && !isProcessing && !modelPicker && !deviceConnect.state}
           placeholder={!ready ? 'Connecting…' : isProcessing ? 'Waiting for response… (Esc interrupts)' : modelPicker ? 'Select a model or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
@@ -459,6 +469,7 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
       )}
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width, height }} />}
+      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
     </box>
   );
 }

@@ -6,7 +6,7 @@ import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { SLASH_COMMANDS } from '../src/slash-commands.js';
-import { CommandHintOverlay, ModelPickerOverlay } from '../src/tui/overlays.js';
+import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay } from '../src/tui/overlays.js';
 import type { AgentModelEntry } from '../src/model-catalog.js';
 import { MessageList } from '../src/tui/messages.js';
 
@@ -99,6 +99,63 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('device-connect overlay offers connect, session, not-now, and dismiss choices', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <DeviceConnectOverlay
+            prompt={{ phase: 'ask', statusLine: 'No PC is connected to your account yet.' }}
+            terminal={{ width: 96, height: 24 }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('Let this agent use this PC?');
+      expect(frame).toContain('No PC is connected to your account yet.');
+      expect(frame).toContain('C connect & keep connected · S this session only');
+      expect(frame).toContain("N not now · D don't ask again");
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('device-connect overlay shows connect progress and the result', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <DeviceConnectOverlay
+            prompt={{ phase: 'connecting', session: true, ticks: 1 }}
+            terminal={{ width: 96, height: 24 }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('Waiting for the daemon to connect..');
+
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <DeviceConnectOverlay
+            prompt={{ phase: 'result', ok: true, message: 'Connected for this session.' }}
+            terminal={{ width: 96, height: 24 }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('✓ Connected for this session.');
+      expect(frame).toContain('Press any key to continue');
     } finally {
       root.render(<box />);
       renderer.destroy();

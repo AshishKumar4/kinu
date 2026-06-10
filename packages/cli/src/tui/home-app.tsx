@@ -10,6 +10,8 @@ import {
 } from '../agent-create.js';
 import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list.js';
 import type { AgentMode } from '../config.js';
+import { DeviceConnectOverlay } from './overlays.js';
+import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { tuiColors } from './theme.js';
 
 export type HomeTuiAction =
@@ -37,6 +39,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0);
   const [agentPage, setAgentPage] = useState(0);
   const textareaRef = useRef<TextareaRenderable | null>(null);
+  const deviceConnect = useDeviceConnectPrompt();
   const cloudReady = isCloudAuthConfigured();
   const localReady = isLocalModelConfigured();
   const setupRequired = !cloudReady && !localReady;
@@ -93,14 +96,18 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         mode,
         allowInteractiveAuth: false,
       });
+      // A new cloud agent with no connected PC: offer to connect this one
+      // before the chat opens (the modal resolves immediately otherwise).
+      if (created.mode === 'cloud') await deviceConnect.offerIfUnconnected();
       finishHome?.({ type: 'open-agent', name: created.name, initialPrompt: mission });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
-  }, [busy, cloudReady, draft, localReady, mode, opts, setupRequired]);
+  }, [busy, cloudReady, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, setupRequired]);
 
   useKeyboard((key) => {
+    if (deviceConnect.handleKey(key)) return;
     if (busy) return;
     if (key.name === 'escape') {
       finishHome?.({ type: 'exit' });
@@ -314,6 +321,8 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           </box>
         )}
       </box>
+
+      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
     </box>
   );
 }
