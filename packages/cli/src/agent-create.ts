@@ -185,7 +185,7 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
 function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
   const configured = rawModel ?? loadConfigFile().model;
   if (configured) return configured;
-  if (llm.name === 'workers-ai') return llm.model.startsWith('@cf/') ? `workers-ai/${llm.model}` : `workers-ai/${llm.model}`;
+  if (llm.name === 'workers-ai') return `workers-ai/${llm.model}`;
   if (llm.name === 'codex') return llm.model.startsWith('codex/') ? llm.model : `codex/${llm.model}`;
   if (llm.name === 'openai') return `openai/${llm.model}`;
   if (llm.name === 'openrouter') return `openrouter/${llm.model}`;

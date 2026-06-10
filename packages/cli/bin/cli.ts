@@ -103,7 +103,6 @@ llmOpts(
   program
     .command('run <name> [prompt...]')
     .description('Run an agent once, or open chat when no prompt is provided')
-    .option('-p, --print', 'Print response and exit')
     .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
     .option('-c, --continue', 'Continue the latest recorded CLI session')
     .option('-r, --resume', 'Resume the latest recorded CLI session')

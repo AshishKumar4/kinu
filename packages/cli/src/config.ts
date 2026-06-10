@@ -77,8 +77,6 @@ export interface ProteusConfig {
   user?: { id: string; email: string; displayName?: string | null };
   agents?: Record<string, ProteusAgentConfig>;
   aliases?: Record<string, string>;
-  baseUrl?: string;
-  auth?: string;
   model?: string;
   providers?: {
     openai?: { apiKey?: string };
@@ -162,6 +160,12 @@ export function requireAuthConfig(): { origin: string; token: string; user?: Pro
   const token = config.accessToken;
   if (!token) {
     throw new Error('Not authenticated. Run: proteus auth');
+  }
+  if (config.tokenExpiresAt) {
+    const expiresAt = Date.parse(config.tokenExpiresAt);
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+      throw new Error('Your Proteus CLI session has expired. Run: proteus auth');
+    }
   }
   return { origin, token, user: config.user };
 }
@@ -279,15 +283,15 @@ export function resolveLLMConfig(opts?: {
 }): LLMProviderConfig {
   const file = loadConfigFile();
 
+  // Direct-endpoint overrides come only from explicit flags or env; provider
+  // credentials in config.json are the persistent source of truth.
   const baseURL = opts?.baseUrl
     ?? process.env.PROTEUS_BASE_URL
-    ?? process.env.AI_GATEWAY_BASE_URL
-    ?? file.baseUrl;
+    ?? process.env.AI_GATEWAY_BASE_URL;
 
   const auth = opts?.auth
     ?? process.env.PROTEUS_AUTH
-    ?? process.env.AI_GATEWAY_AUTH
-    ?? file.auth;
+    ?? process.env.AI_GATEWAY_AUTH;
 
   const model = opts?.model
     ?? process.env.PROTEUS_MODEL

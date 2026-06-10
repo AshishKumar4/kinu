@@ -10,6 +10,7 @@ import {
 } from '../agent-create.js';
 import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list.js';
 import type { AgentMode } from '../config.js';
+import { tuiColors } from './theme.js';
 
 export type HomeTuiAction =
   | { type: 'open-agent'; name: string; initialPrompt?: string }
@@ -141,12 +142,12 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       flexDirection="column"
       alignItems="center"
       justifyContent={height < 32 ? 'flex-start' : 'center'}
-      style={{ height: '100%', backgroundColor: '#0f0f23', paddingLeft: 2, paddingRight: 2 }}
+      style={{ height: '100%', backgroundColor: tuiColors.bg, paddingLeft: 2, paddingRight: 2 }}
     >
       <box style={{ width: panelWidth, marginBottom: 1 }}>
         <text>
-          <strong fg="#c4b5fd">Proteus</strong>{' '}
-          <span fg="#6b7280">agent workspace</span>
+          <strong fg={tuiColors.accentStrong}>Proteus</strong>{' '}
+          <span fg={tuiColors.muted}>agent workspace</span>
         </text>
       </box>
 
@@ -156,8 +157,8 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           width: panelWidth,
           border: true,
           borderStyle: 'single',
-          borderColor: '#3b3b5c',
-          backgroundColor: '#171725',
+          borderColor: tuiColors.border,
+          backgroundColor: tuiColors.panel,
           paddingLeft: 2,
           paddingRight: 2,
           paddingTop: 1,
@@ -165,8 +166,8 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         }}
       >
         <text>
-          <strong fg="#e5e7eb">{agents.length === 0 ? 'Start with a mission' : 'What should Proteus do next?'}</strong>{'\n'}
-          <span fg="#6b7280">
+          <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'Start with a mission' : 'What should Proteus do next?'}</strong>{'\n'}
+          <span fg={tuiColors.muted}>
             {setupRequired
               ? 'Connect Proteus once, then this screen can create and open agents directly.'
               : agents.length === 0
@@ -177,18 +178,18 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
 
         {setupRequired && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: '#2f2f46', paddingLeft: 1, paddingRight: 1 }}>
-            <text><strong fg="#d1d5db">Setup required</strong></text>
-            <text><span fg="#6b7280">  proteus setup</span> <span fg="#d1d5db">connect account and optional local provider</span></text>
-            <text><span fg="#6b7280">  proteus auth</span>  <span fg="#d1d5db">connect cloud agents only</span></text>
-            <text><span fg="#6b7280">  proteus provider connect codex</span> <span fg="#d1d5db">connect local model access</span></text>
+            <text><strong fg={tuiColors.text}>Setup required</strong></text>
+            <text><span fg={tuiColors.muted}>  proteus setup</span> <span fg={tuiColors.text}>connect account and optional local provider</span></text>
+            <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud agents only</span></text>
+            <text><span fg={tuiColors.muted}>  proteus provider connect codex</span> <span fg={tuiColors.text}>connect local model access</span></text>
           </box>
         )}
 
         {agents.length > 0 && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1 }}>
             <text>
-              <span fg={focusArea === 'agents' ? '#c4b5fd' : '#8b5cf6'}>Agents</span>
-              <span fg="#6b7280">  {focusArea === 'agents' ? '↑/↓ select · Enter open' : 'Tab to focus'}</span>
+              <span fg={focusArea === 'agents' ? tuiColors.accentStrong : tuiColors.accentDeep}>Agents</span>
+              <span fg={tuiColors.muted}>  {focusArea === 'agents' ? '↑/↓ select · Enter open' : 'Tab to focus'}</span>
             </text>
             {visibleAgents.map((agent, index) => {
               const absoluteIndex = agentPageStart + index;
@@ -198,7 +199,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
                   key={agent.name}
                   style={{
                     height: 1,
-                    backgroundColor: selected ? '#2d2259' : '#171725',
+                    backgroundColor: selected ? tuiColors.selection : tuiColors.panel,
                     paddingLeft: 1,
                     paddingRight: 1,
                   }}
@@ -209,16 +210,16 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
                   }}
                 >
                   <text>
-                    <span fg={selected ? '#c4b5fd' : '#6b7280'}>{selected ? '› ' : '  '}</span>
-                    <span fg={selected ? '#e5e7eb' : '#d1d5db'}>{agent.label}</span>
-                    <span fg="#6b7280">  {agent.mode}</span>
+                    <span fg={selected ? tuiColors.accentStrong : tuiColors.muted}>{selected ? '› ' : '  '}</span>
+                    <span fg={selected ? tuiColors.textStrong : tuiColors.text}>{agent.label}</span>
+                    <span fg={tuiColors.muted}>  {agent.mode}</span>
                   </text>
                 </box>
               );
             })}
             {agentPageCount > 1 && (
               <text>
-                <span fg="#6b7280">  Page {agentPage + 1}/{agentPageCount} · Left/Right or PgUp/PgDn</span>
+                <span fg={tuiColors.muted}>  Page {agentPage + 1}/{agentPageCount} · Left/Right or PgUp/PgDn</span>
               </text>
             )}
           </box>
@@ -231,8 +232,8 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
               marginTop: 1,
               border: true,
               borderStyle: 'single',
-              borderColor: busy ? '#4a4a6a' : focusArea === 'mission' ? '#7c3aed' : '#3b3b5c',
-              backgroundColor: '#10101c',
+              borderColor: busy ? tuiColors.borderMuted : focusArea === 'mission' ? tuiColors.borderActive : tuiColors.border,
+              backgroundColor: tuiColors.panelDeep,
               paddingLeft: 1,
               paddingRight: 1,
             }}
@@ -262,11 +263,11 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
 
         <box flexDirection="column" style={{ marginTop: 1 }}>
           <text>
-            <span fg="#8b5cf6">Mode: </span>
-            <span fg={mode === 'cloud' ? (cloudReady ? '#d1d5db' : '#f59e0b') : (localReady ? '#d1d5db' : '#f59e0b')}>
+            <span fg={tuiColors.accentDeep}>Mode: </span>
+            <span fg={mode === 'cloud' ? (cloudReady ? tuiColors.text : tuiColors.amberDeep) : (localReady ? tuiColors.text : tuiColors.amberDeep)}>
               {modeLabel}
             </span>
-            <span fg="#6b7280">  {focusArea === 'mode' ? '←/→ or Enter switches' : 'Tab to focus'}</span>
+            <span fg={tuiColors.muted}>  {focusArea === 'mode' ? '←/→ or Enter switches' : 'Tab to focus'}</span>
           </text>
           <box flexDirection="row" style={{ height: 3, marginTop: 1 }}>
             <ModeSegment
@@ -292,22 +293,22 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             />
           </box>
           <text>
-            <span fg="#6b7280">
+            <span fg={tuiColors.muted}>
               {setupRequired
                 ? 'Run one setup command above, then return here · Esc exit'
                 : `${agents.length > 0 ? 'Tab focus · ↑/↓ select · Enter open · ' : 'Tab focus mode · '}Ctrl/Alt+Enter create · Esc exit`}
             </span>
           </text>
           <text>
-            <span fg={cloudReady ? '#4ade80' : '#6b7280'}>{cloudReady ? '●' : '○'} Cloud account</span>
-            <span fg="#6b7280">  </span>
-            <span fg={localReady ? '#4ade80' : '#6b7280'}>{localReady ? '●' : '○'} Local provider</span>
+            <span fg={cloudReady ? tuiColors.green : tuiColors.muted}>{cloudReady ? '●' : '○'} Cloud account</span>
+            <span fg={tuiColors.muted}>  </span>
+            <span fg={localReady ? tuiColors.green : tuiColors.muted}>{localReady ? '●' : '○'} Local provider</span>
           </text>
         </box>
 
         {error && (
           <box style={{ marginTop: 1 }}>
-            <text><span fg="#f87171">{error}</span></text>
+            <text><span fg={tuiColors.red}>{error}</span></text>
           </box>
         )}
       </box>
@@ -323,11 +324,11 @@ function ModeSegment(props: {
   onSelect: () => void;
 }) {
   const borderColor = props.selected
-    ? props.focused ? '#a78bfa' : '#7c3aed'
-    : '#3b3b5c';
+    ? props.focused ? tuiColors.accent : tuiColors.borderActive
+    : tuiColors.border;
   const textColor = props.ready
-    ? props.selected ? '#e5e7eb' : '#d1d5db'
-    : '#f59e0b';
+    ? props.selected ? tuiColors.textStrong : tuiColors.text
+    : tuiColors.amberDeep;
   return (
     <box
       style={{
@@ -336,7 +337,7 @@ function ModeSegment(props: {
         border: true,
         borderStyle: 'single',
         borderColor,
-        backgroundColor: props.selected ? '#241b45' : '#10101c',
+        backgroundColor: props.selected ? '#241b45' : tuiColors.panelDeep,
         paddingLeft: 1,
         paddingRight: 1,
         alignItems: 'center',
@@ -347,7 +348,7 @@ function ModeSegment(props: {
       }}
     >
       <text>
-        <span fg={props.selected ? '#4ade80' : '#6b7280'}>{props.selected ? '●' : '○'}</span>
+        <span fg={props.selected ? tuiColors.green : tuiColors.muted}>{props.selected ? '●' : '○'}</span>
         {' '}
         <strong fg={textColor}>{props.label}</strong>
       </text>

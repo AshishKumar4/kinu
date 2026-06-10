@@ -1,20 +1,14 @@
 import { existsSync } from 'node:fs';
 import * as readline from 'node:readline';
-import {
-  agentDbPath,
-  requireAuthConfig,
-  resolveAgentRef,
-} from '../config.js';
-import { createDefaultTuiSession, runTuiChat } from '../tui/chat-app.js';
+import { agentDbPath, resolveAgentRef } from '../config.js';
+import { resolveAgentTarget } from '../agent-target.js';
+import { createAgentClient } from '../client-factory.js';
+import { runTuiChat } from '../tui/chat-app.js';
 import { runChatLoop } from '../chat-loop.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
 import { printError, ACCENT, DIM } from '../display.js';
-import { runCloudChatLoop } from '../cloud-chat-loop.js';
-import { runCloudTuiChat } from '../tui/cloud-chat-app.js';
-import { createCliSession } from '../session.js';
 import { listKnownAgents } from '../agent-list.js';
 import { runHomeTui } from '../tui/home-app.js';
-import { openLocalTuiAgent } from '../tui/local-agent.js';
 
 export async function chatCommand(name: string | undefined, opts: {
   model?: string; baseUrl?: string; auth?: string; classic?: boolean; initialPrompt?: string;
@@ -52,51 +46,21 @@ export async function chatCommand(name: string | undefined, opts: {
     }
   }
 
-  const configured = name ? resolveAgentRef(name) : null;
-  if (configured?.mode === 'cloud') {
-    const auth = requireAuthConfig();
-    const session = createCliSession(configured.name, opts);
-    const cloudOpts = {
-      origin: auth.origin,
-      token: auth.token,
-      agentName: configured.name,
-      cloudName: configured.cloudName ?? configured.name,
-      session,
-      sessionOptions: opts,
-      hydrateTranscript: Boolean(opts.session || opts.continue || opts.resume || opts.fork),
-      initialPrompt: opts.initialPrompt,
-      model: opts.model,
-      baseUrl: opts.baseUrl,
-      auth: opts.auth,
-    };
-    if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) await runCloudChatLoop(cloudOpts);
-    else await runCloudTuiChat(cloudOpts);
-    return;
-  }
-  if (configured?.mode === 'local') name = configured.localName ?? configured.name;
-
-  const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) {
+  if (!resolveAgentRef(name) && !existsSync(agentDbPath(name))) {
     printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
     process.exit(1);
   }
 
-  ensureLocalDaemonRunning();
-  const local = openLocalTuiAgent(name, opts);
+  const target = resolveAgentTarget(name);
+  if (target.mode === 'local') ensureLocalDaemonRunning();
+  const client = createAgentClient(target, opts);
+  const hydrateHistory = target.mode === 'cloud'
+    ? !opts.initialPrompt
+    : Boolean(opts.session || opts.continue || opts.resume || opts.fork);
 
-  // Use TUI by default, fall back to classic readline with --classic flag
-  // or when stdin is not a TTY (piped input)
-  const session = createDefaultTuiSession(name, opts);
-  if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop({ ...local, ...session });
+  if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
+    await runChatLoop({ client, initialPrompt: opts.initialPrompt });
   } else {
-    await runTuiChat({
-      ...local,
-      ...session,
-      sessionOptions: opts,
-      hydrateTranscript: Boolean(opts.session || opts.continue || opts.resume || opts.fork),
-      initialPrompt: opts.initialPrompt,
-    });
+    await runTuiChat({ client, hydrateHistory, initialPrompt: opts.initialPrompt });
   }
-  local.close();
 }

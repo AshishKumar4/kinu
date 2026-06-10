@@ -26,11 +26,3 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
   });
   return { llmConfig, resolver };
 }
-
-export function getConfiguredLocalModelSpec(opts: LocalModelResolverOptions = {}): string | null {
-  try {
-    return createConfiguredLocalModelResolver(opts).resolver.normalizeSpecSync(opts.model ?? null);
-  } catch {
-    return null;
-  }
-}

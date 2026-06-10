@@ -1,12 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import * as readline from 'node:readline';
-import { Database } from 'bun:sqlite';
-import { createLocalModelResolver, LocalAgentSession, openAgentCLI, resolveChatModel, type SessionEvent } from '@proteus/cli-backend';
-import {
-  CONFIG_PATH, agentDbPath, createCodexAuthStore, requireAuthConfig, resolveLLMConfig,
-  resolveMcpServers, resolveProviderCredentials,
-} from '../config.js';
-import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import {
   createCloudWebhookTrigger,
   executeCloudExecutor,
@@ -30,16 +23,16 @@ import {
   setCloudAgentModel,
   stopCloudAgent,
 } from '../cloud-api.js';
-import { CloudAgentClient } from '../cloud-agent-client.js';
-import type { AgentTurnResult } from '../agent-client.js';
-import { renderCloudTurn } from '../cloud-chat-loop.js';
+import { requireAuthConfig } from '../config.js';
+import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
+import { createAgentClient } from '../client-factory.js';
+import type { AgentClient, AgentClientEvent } from '../agent-client.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
-import { ACCENT, DIM, ERR, printToolCall, printToolResult } from '../display.js';
+import { ERR, printToolCall, printToolResult } from '../display.js';
 import {
   executeLocalExecutor,
   getLocalAgentState,
-  getLocalStoredModel,
   getLocalGepaRun,
   getLocalMctsNode,
   getLocalProductBoard,
@@ -48,30 +41,21 @@ import {
   listLocalExecutors,
   listLocalGepaRuns,
   listLocalHeads,
-  listLocalJobs,
   listLocalMcts,
   listLocalTriggers,
   listLocalTimeline,
   markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
-  setLocalStoredModel,
 } from '../local-inspection.js';
-import {
-  createCliSession,
-  defaultConversationIdForCliOptions,
-  type CliSession,
-} from '../session.js';
-import { recordCliSessionEvent } from '../session-recorder.js';
 
 export async function runCommand(name: string, promptParts: string[], opts: {
   model?: string; baseUrl?: string; auth?: string; classic?: boolean;
-  mode?: string; print?: boolean;
+  mode?: string;
   continue?: boolean; resume?: boolean; session?: string; sessionDir?: string; noSession?: boolean; name?: string; fork?: string;
 }): Promise<void> {
   const outputMode = normalizeOutputMode(opts.mode);
   const target = resolveAgentTarget(name);
-  const canonicalName = target.name;
 
   if (outputMode === 'rpc') {
     await runRpc(target, opts);
@@ -85,92 +69,85 @@ export async function runCommand(name: string, promptParts: string[], opts: {
     return;
   }
 
-  const session = createCliSession(canonicalName, {
-    ...opts,
-    conversationId: target.mode === 'local'
-      ? defaultConversationIdForCliOptions(opts)
-      : undefined,
-  });
-  session.append('user', { text: prompt, cwd: process.cwd(), backend: target.mode });
-
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
-    const client = new CloudAgentClient({ origin: auth.origin, token: auth.token, name: target.cloudName });
-    const result = await client.send(prompt, { cwd: process.cwd() }).finally(() => client.close());
-    session.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
-    if (outputMode === 'json') writeCloudJsonEvents(session, canonicalName, result);
-    else renderCloudTurn(result);
-    return;
+  if (target.mode === 'local') ensureLocalDaemonRunning();
+  const client = createAgentClient(target, opts);
+  const render = outputMode === 'json' ? createJsonEventWriter(client) : renderRunEvent;
+  const unsubscribe = client.subscribe(render);
+  const consentWatch = client.consents && outputMode === 'text' ? watchRunConsents(client) : null;
+  try {
+    await client.connect();
+    await client.send(prompt, { cwd: process.cwd() });
+  } finally {
+    consentWatch?.stop();
+    unsubscribe();
+    await client.close();
   }
-
-  ensureLocalDaemonRunning();
-  await runLocalTurn(target.localName, prompt, opts, session, outputMode);
 }
 
-async function runLocalTurn(
-  name: string,
-  prompt: string,
-  opts: {
-    model?: string; baseUrl?: string; auth?: string;
-    noSession?: boolean; session?: string; continue?: boolean; resume?: boolean; fork?: string;
-  },
-  cliSession: CliSession,
-  outputMode: 'text' | 'json',
-): Promise<void> {
-  const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
+/** Surface device-consent requests during a one-shot cloud run: interactive
+ *  stdin gets an inline y/a/n prompt, otherwise instructions are printed. */
+function watchRunConsents(client: AgentClient): { stop(): void } {
+  const consents = client.consents!;
+  const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  let stopped = false;
+  let prompting = false;
+  const handled = new Set<string>();
 
-  const writer = outputMode === 'json' ? new JsonEventWriter(cliSession, name) : null;
-  const llmConfig = resolveLLMConfig(opts);
-  const providerCredentials = resolveProviderCredentials();
-  const codexAuthStore = createCodexAuthStore();
-  const modelResolver = createLocalModelResolver({ llm: llmConfig, credentials: providerCredentials, codexAuthStore });
-  const mcpServers = resolveMcpServers();
-  const db = new Database(dbPath);
-  const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
-  const session = new LocalAgentSession({
-    rt,
-    db,
-    model: resolveChatModel(llmConfig),
-    modelResolver,
-    sessionId: durableLocalSessionId(opts, cliSession),
-    persistMessages: !opts.noSession,
-    onEvent: (event) => {
-      recordCliSessionEvent(cliSession, event, 'local');
-      if (writer) writer.write(event);
-      else renderEvent(event);
+  const tick = async () => {
+    if (stopped || prompting) return;
+    let pending;
+    try { pending = await consents.listPending(); } catch { return; }
+    const consent = pending.find((item) => !handled.has(item.consentId));
+    if (!consent || stopped) return;
+    handled.add(consent.consentId);
+
+    if (!tty) {
+      console.log(`\nPC access requested (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
+      console.log(`Approve or deny from the Proteus app, or run: proteus chat ${client.agentName}`);
+      return;
+    }
+
+    prompting = true;
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      console.log(`\nPC access request: ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
+      const answer = await new Promise<string>((resolve) => rl.question('[y] allow once · [a] always allow · [n] deny › ', resolve));
+      const normalized = answer.trim().toLowerCase();
+      const decision = normalized === 'y' || normalized === 'yes' || normalized === 'o'
+        ? 'once' as const
+        : normalized === 'a' || normalized === 'always' ? 'always' as const : 'deny' as const;
+      await consents.resolve(consent.consentId, decision);
+    } catch (err) {
+      console.log(`${ERR('error')} ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      rl.close();
+      prompting = false;
+    }
+  };
+
+  const interval = setInterval(() => { void tick(); }, 750);
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(interval);
     },
-  });
-  if (Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
-  try {
-    await session.recoverBackgroundJobs();
-    await session.send(prompt);
-    await session.end();
-  } finally {
-    db.close();
-  }
+  };
 }
 
 async function runRpc(
   target: AgentTarget,
   opts: {
     model?: string; baseUrl?: string; auth?: string;
-    noSession?: boolean; session?: string; continue?: boolean; resume?: boolean; fork?: string;
+    noSession?: boolean; session?: string; sessionDir?: string; continue?: boolean; resume?: boolean; fork?: string; name?: string;
   },
 ): Promise<void> {
-  const name = target.name;
-  const cliSession = createCliSession(name, {
-    ...opts,
-    conversationId: target.mode === 'local'
-      ? defaultConversationIdForCliOptions(opts)
-      : undefined,
-  });
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
-  output({ type: 'session', id: cliSession.id, agent: name, backend: target.mode, cwd: process.cwd() });
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const client = new CloudAgentClient({ origin: auth.origin, token: auth.token, name: target.cloudName });
+    const client = createAgentClient(target, opts);
+    output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'cloud', cwd: process.cwd() });
+    const unsubscribe = client.subscribe((event) => output({ type: 'event', event }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     try {
       for await (const line of rl) {
@@ -192,51 +169,29 @@ async function runRpc(
           output({ id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' });
           continue;
         }
-        cliSession.append('user', { text: message, backend: 'cloud' });
         output({ type: 'turn_start', id: cmd.value.id });
         const result = await client.send(message, { cwd: process.cwd() });
-        cliSession.append('assistant', { text: result.text, toolCalls: result.toolCalls ?? [], steps: result.steps ?? 0 });
         output({ type: 'message_end', role: 'assistant', text: result.text });
         output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });
-        output({ type: 'turn_end', steps: result.steps ?? 0 });
+        output({ type: 'turn_end', steps: result.steps });
       }
     } finally {
-      client.close();
+      unsubscribe();
+      await client.close();
     }
     return;
   }
 
-  const localAgentName = target.localName;
-  const dbPath = agentDbPath(localAgentName);
-  if (!existsSync(dbPath)) throw new Error(`Agent "${localAgentName}" not found. Create it with: proteus create ${localAgentName}`);
-  let db: Database | null = null;
-  let session: LocalAgentSession | null = null;
-
-  const ensureSession = async (): Promise<LocalAgentSession> => {
-    if (session) return session;
-    ensureLocalDaemonRunning();
-    const llmConfig = resolveLLMConfig(opts);
-    const providerCredentials = resolveProviderCredentials();
-    const codexAuthStore = createCodexAuthStore();
-    const modelResolver = createLocalModelResolver({ llm: llmConfig, credentials: providerCredentials, codexAuthStore });
-    const mcpServers = resolveMcpServers();
-    db = new Database(dbPath);
-    const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
-    session = new LocalAgentSession({
-      rt,
-      db,
-      model: resolveChatModel(llmConfig),
-      modelResolver,
-      sessionId: durableLocalSessionId(opts, cliSession),
-      persistMessages: !opts.noSession,
-      onEvent: (event) => {
-        recordCliSessionEvent(cliSession, event, 'local');
-        output({ type: 'event', event });
-      },
-    });
-    if (Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
-    await session.recoverBackgroundJobs();
-    return session;
+  ensureLocalDaemonRunning();
+  const client = createAgentClient(target, opts);
+  client.subscribe((event) => output({ type: 'event', event }));
+  output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'local', cwd: process.cwd() });
+  // Defer MCP connection and job recovery until the first prompt.
+  let connected = false;
+  const ensureConnected = async () => {
+    if (connected) return;
+    connected = true;
+    await client.connect();
   };
 
   try {
@@ -248,7 +203,7 @@ async function runRpc(
       if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
       if (cmd.value.type !== 'prompt') {
         try {
-          const data = await runLocalRpcCommand(localAgentName, cmd.value, session, cliSession.id);
+          const data = await runLocalRpcCommand(target.localName, cmd.value, client);
           output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data });
         } catch (err) {
           output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) });
@@ -260,15 +215,12 @@ async function runRpc(
         output({ id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' });
         continue;
       }
-      cliSession.append('user', { text: message, backend: 'local' });
-      await (await ensureSession()).send(message);
+      await ensureConnected();
+      await client.send(message, { cwd: process.cwd() });
       output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });
     }
   } finally {
-    const liveSession = session as LocalAgentSession | null;
-    const liveDb = db as Database | null;
-    await liveSession?.end().catch(() => {});
-    liveDb?.close();
+    await client.close().catch(() => {});
   }
 }
 
@@ -343,31 +295,29 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
   }
 }
 
-async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, session: LocalAgentSession | null, sessionId: string): Promise<unknown> {
+async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, client: AgentClient): Promise<unknown> {
   const type = String(cmd.type);
   switch (type) {
     case 'get_state':
     case 'state':
       return {
         ...(getLocalAgentState(name) as Record<string, unknown>),
-        sessionId,
-        tools: session ? session.toolNames() : getLocalToolSurface(name),
-        model: session ? session.getEffectiveModelSpec() : getLocalStoredModel(name).spec,
+        sessionId: client.cliSession.id,
+        tools: getLocalToolSurface(name),
+        model: await client.getModelSpec(),
       };
     case 'status':
       return getLocalAgentState(name);
     case 'tools':
-      return session ? session.describeTools() : getLocalToolSurface(name);
+      return client.describeTools();
     case 'model': {
       const spec = stringField(cmd, 'spec');
-      return spec
-        ? (session ? session.setModel(spec) : setLocalStoredModel(name, spec))
-        : (session ? session.getStoredModelSpec() : getLocalStoredModel(name));
+      return spec ? client.setModel(spec) : { spec: await client.getModelSpec() };
     }
     case 'triggers':
-      return session ? session.listTriggers() : listLocalTriggers(name);
+      return listLocalTriggers(name);
     case 'jobs':
-      return session ? session.listBackgroundJobs(numberField(cmd, 'limit') ?? 20) : listLocalJobs(name, numberField(cmd, 'limit') ?? 20);
+      return client.listJobs(numberField(cmd, 'limit') ?? 20);
     case 'memory': {
       const query = stringField(cmd, 'query');
       return query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) };
@@ -402,7 +352,7 @@ async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, se
     case 'product':
       return getLocalProductBoard(name, numberField(cmd, 'limit') ?? 20);
     case 'stop':
-      session?.interrupt();
+      client.stop();
       return { interrupted: true, cancelledBackgroundJobs: markLocalBackgroundJobsCancelled(name) };
     default:
       throw new Error('Unsupported command');
@@ -430,18 +380,8 @@ function webhookAuthMode(value: string | undefined): 'hmac' | 'bearer' | 'mtls' 
   throw new Error('authMode must be hmac, bearer, or mtls');
 }
 
-function durableLocalSessionId(opts: {
-  noSession?: boolean;
-  session?: string;
-  continue?: boolean;
-  resume?: boolean;
-  fork?: string;
-}, cliSession: CliSession): string {
-  if (opts.noSession) return cliSession.id;
-  return cliSession.conversationId;
-}
-
-function renderEvent(event: SessionEvent): void {
+/** Plain streaming renderer for one-shot runs (pipe-friendly: raw deltas). */
+function renderRunEvent(event: AgentClientEvent): void {
   switch (event.type) {
     case 'text-delta':
       process.stdout.write(event.delta);
@@ -459,55 +399,26 @@ function renderEvent(event: SessionEvent): void {
       console.log('');
       break;
     case 'turn-start':
+    case 'step-finish':
     case 'evolution':
     case 'broadcast':
       break;
   }
 }
 
-async function buildPrompt(parts: string[]): Promise<string> {
-  const stdin = !process.stdin.isTTY ? await new Response(Bun.stdin.stream()).text() : '';
-  const chunks: string[] = [];
-  for (const part of parts) {
-    if (part.startsWith('@') && part.length > 1) {
-      const path = part.slice(1);
-      const content = readFileSync(path, 'utf-8');
-      chunks.push(`<file path="${escapeAttr(path)}">\n${content}\n</file>`);
-    } else {
-      chunks.push(part);
-    }
-  }
-  if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
-  return chunks.join(' ').trim();
-}
-
-function writeCloudJsonEvents(session: CliSession, agent: string, result: AgentTurnResult): void {
+function createJsonEventWriter(client: AgentClient): (event: AgentClientEvent) => void {
+  let wroteHeader = false;
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
-  output({ type: 'session', id: session.id, agent, backend: 'cloud', cwd: process.cwd() });
-  output({ type: 'turn_start', kind: 'user' });
-  for (const call of result.toolCalls ?? []) {
-    output({ type: 'tool_call', toolName: call.name, args: call.args });
-    if (call.result !== undefined) output({ type: 'tool_result', toolName: call.name, result: call.result });
-  }
-  output({ type: 'message_end', role: 'assistant', text: result.text });
-  output({ type: 'turn_end', steps: result.steps ?? 0 });
+  return (event) => {
+    if (!wroteHeader) {
+      wroteHeader = true;
+      output({ type: 'session', id: client.cliSession.id, agent: client.agentName, backend: client.mode, cwd: process.cwd() });
+    }
+    for (const value of jsonEvents(event)) output(value);
+  };
 }
 
-class JsonEventWriter {
-  private wroteHeader = false;
-  constructor(private readonly session: CliSession, private readonly agent: string) {}
-  write(event: SessionEvent): void {
-    if (!this.wroteHeader) {
-      process.stdout.write(`${JSON.stringify({ type: 'session', id: this.session.id, agent: this.agent, backend: 'local', cwd: process.cwd() })}\n`);
-      this.wroteHeader = true;
-    }
-    for (const value of localJsonEvents(event)) {
-      process.stdout.write(`${JSON.stringify(value)}\n`);
-    }
-  }
-}
-
-function localJsonEvents(event: SessionEvent): unknown[] {
+function jsonEvents(event: AgentClientEvent): unknown[] {
   switch (event.type) {
     case 'turn-start':
       return [{ type: 'turn_start', kind: event.kind, text: event.text, ...(event.event ? { event: event.event } : {}) }];
@@ -519,9 +430,11 @@ function localJsonEvents(event: SessionEvent): unknown[] {
       return [{ type: 'tool_result', toolName: event.toolName, result: event.result }];
     case 'turn-end':
       return [
-        { type: 'message_end', role: 'assistant', text: event.turn.assistantResponse },
+        { type: 'message_end', role: 'assistant', text: event.turn.text },
         { type: 'turn_end', steps: event.turn.steps, durationMs: event.turn.durationMs, hadError: event.turn.hadError },
       ];
+    case 'step-finish':
+      return [];
     case 'error':
       return [{ type: 'error', message: event.message }];
     case 'evolution':
@@ -539,6 +452,22 @@ function parseRpc(line: string): { ok: true; value: Record<string, unknown> } | 
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+async function buildPrompt(parts: string[]): Promise<string> {
+  const stdin = !process.stdin.isTTY ? await new Response(Bun.stdin.stream()).text() : '';
+  const chunks: string[] = [];
+  for (const part of parts) {
+    if (part.startsWith('@') && part.length > 1) {
+      const path = part.slice(1);
+      const content = readFileSync(path, 'utf-8');
+      chunks.push(`<file path="${escapeAttr(path)}">\n${content}\n</file>`);
+    } else {
+      chunks.push(part);
+    }
+  }
+  if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
+  return chunks.join(' ').trim();
 }
 
 function escapeAttr(value: string): string {

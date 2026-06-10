@@ -5,9 +5,9 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
-import { LOCAL_COMMANDS } from '../src/tui/commands.js';
+import { SLASH_COMMANDS } from '../src/slash-commands.js';
 import { CommandHintOverlay, ModelPickerOverlay } from '../src/tui/overlays.js';
-import type { TuiModelEntry } from '../src/tui/model-types.js';
+import type { AgentModelEntry } from '../src/model-catalog.js';
 import { MessageList } from '../src/tui/messages.js';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -28,7 +28,7 @@ describe('CLI TUI layout', () => {
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
-          <CommandHintOverlay commands={LOCAL_COMMANDS} terminal={{ width: 80, height: 24 }} />
+          <CommandHintOverlay commands={SLASH_COMMANDS} terminal={{ width: 80, height: 24 }} />
         </box>,
       );
       await renderSettled(renderOnce);
@@ -162,7 +162,7 @@ function lineContaining(frame: string, text: string) {
   return line;
 }
 
-const MODELS: TuiModelEntry[] = [
+const MODELS: AgentModelEntry[] = [
   {
     provider: 'workers-ai',
     id: '@cf/moonshotai/kimi-k2.6',

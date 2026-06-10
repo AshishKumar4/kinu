@@ -4,13 +4,13 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { AGENT_HOME } from './config.js';
+import type { AgentTranscriptMessage } from './agent-client.js';
 
 export type CliSessionMode = 'record' | 'none';
 
@@ -280,10 +280,69 @@ function readSessionRaw(path: string): {
   return { header, entries, lastEntryId, entryCount, firstUserText };
 }
 
-export function rotateSessionFile(path: string, suffix = 'bak'): string {
-  const next = `${path}.${suffix}-${Date.now()}`;
-  renameSync(path, next);
-  return next;
+/** Map recorded JSONL entries to renderable transcript messages. */
+export function transcriptMessages(entries: CliSessionEntry[], maxEntries = 40): AgentTranscriptMessage[] {
+  return entries
+    .filter(isRenderableEntry)
+    .slice(-maxEntries)
+    .flatMap((entry) => {
+      const message = entryToMessage(entry);
+      return message ? [message] : [];
+    });
+}
+
+function isRenderableEntry(entry: CliSessionEntry): boolean {
+  return entry.type === 'user'
+    || entry.type === 'assistant'
+    || entry.type === 'tool_call'
+    || entry.type === 'tool_result'
+    || entry.type === 'error';
+}
+
+function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
+  switch (entry.type) {
+    case 'user':
+      return textEntry(entry, 'user');
+    case 'assistant':
+      return textEntry(entry, 'assistant');
+    case 'tool_call':
+      return {
+        id: entry.id,
+        role: 'tool_call',
+        content: '',
+        toolName: typeof entry.toolName === 'string' ? entry.toolName : 'tool',
+        args: safeJson(entry.args),
+      };
+    case 'tool_result':
+      return {
+        id: entry.id,
+        role: 'tool_result',
+        content: typeof entry.result === 'string' ? entry.result : safeJson(entry.result),
+      };
+    case 'error':
+      return {
+        id: entry.id,
+        role: 'system',
+        content: `Error: ${typeof entry.message === 'string' ? entry.message : safeJson(entry.message)}`,
+      };
+    default:
+      return null;
+  }
+}
+
+function textEntry(entry: CliSessionEntry, role: 'user' | 'assistant'): AgentTranscriptMessage | null {
+  const text = entry.text;
+  if (typeof text !== 'string' || !text.trim()) return null;
+  return { id: entry.id, role, content: text.trim() };
+}
+
+function safeJson(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function createSessionId(): string {

@@ -1,108 +1,194 @@
 /**
- * Interactive chat REPL — a thin presentation layer over LocalAgentSession.
- *
- * The session (in @proteus/cli-backend) owns the whole agent loop: streaming,
- * tool calls, per-turn accounting, evolution, background jobs, and the reactor.
- * This renders its SessionEvent stream to the terminal and feeds it user input.
+ * Interactive chat REPL — the single classic (readline) chat surface for both
+ * backends, parameterized by an AgentClient. The client owns transport,
+ * recording, and history; this renders its streaming event feed, dispatches
+ * slash commands through the shared command core, surfaces device-consent
+ * requests inline while a turn is processing, and maps the first Ctrl+C during
+ * a turn to client.stop() (second Ctrl+C, or Ctrl+C while idle, exits).
  */
 
 import * as readline from 'node:readline';
-import type { AgentRuntime, AgentInfo, SearchNode, LLMProviderConfig } from '@proteus/core';
-import { LocalAgentSession, resolveChatModel, type LocalModelResolver, type LocalSessionDb, type SessionEvent, type McpServerConfig } from '@proteus/cli-backend';
-import { defaultAgentSessionId, type CliSession } from './session.js';
-import { recordCliSessionEvent } from './session-recorder.js';
+import type {
+  AgentClient,
+  AgentClientEvent,
+  DeviceConsentDecision,
+  DeviceConsentSurface,
+  PendingDeviceConsent,
+} from './agent-client.js';
+import { executeSlashCommand, renderStatusLines, type SlashOutcome } from './slash-commands.js';
+import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
 import {
-  printChatBanner, printSlashHelp, printAgentStatus,
-  printSearchTree, printToolCall, printToolResult,
-  printEvolutionEvent, createTypingIndicator,
+  printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator,
   ACCENT, DIM, MUTED, ERR, WARN,
 } from './display.js';
 
 export interface ChatLoopOpts {
-  rt: AgentRuntime;
-  db: LocalSessionDb;
-  info: AgentInfo;
-  dbSize: number;
-  llmConfig: LLMProviderConfig;
-  modelResolver?: LocalModelResolver;
-  refreshInfo: () => AgentInfo;
-  noAutoEvolve?: boolean;
-  mcpServers?: Record<string, McpServerConfig>;
-  cliSession?: CliSession;
-  localSessionId?: string;
+  client: AgentClient;
+  initialPrompt?: string;
 }
 
+const CONSENT_POLL_MS = 750;
+
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
-  const { rt, db, dbSize, llmConfig, modelResolver, refreshInfo, noAutoEvolve, mcpServers } = opts;
-  let info = opts.info;
+  const { client } = opts;
+  const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  // Per-turn render state — reset on every turn-start so the agent-name header
+  // Per-turn render state — reset on every user turn so the agent-name header
   // prints once per turn and the typing indicator stops on first output.
-  const typing = createTypingIndicator(info.name);
+  const typing = createTypingIndicator(client.agentName);
   let headerPrinted = false;
-
-  const session = new LocalAgentSession({
-    rt, db, model: resolveChatModel(llmConfig), modelResolver, noAutoEvolve,
-    sessionId: opts.localSessionId ?? defaultAgentSessionId(),
-    persistMessages: opts.cliSession?.mode !== 'none',
-    onEvent: (event) => {
-      recordCliSessionEvent(opts.cliSession, event, 'local');
-      renderEvent(event, info.name, typing, () => headerPrinted, (v) => { headerPrinted = v; });
-    },
-  });
-
-  if (mcpServers && Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
-  printChatBanner(info, session.toolNames(), !noAutoEvolve);
-  // Recover background jobs orphaned by a previous exit.
-  void session.recoverBackgroundJobs();
-
-  const prompt = () => `${ACCENT(info.name)} ${DIM('›')} `;
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: prompt() });
-
+  let turnInFlight = false;
+  let interruptRequested = false;
   let exiting = false;
+
+  const unsubscribe = client.subscribe((event) =>
+    renderClientEvent(event, client.agentName, typing, () => headerPrinted, (v) => { headerPrinted = v; }));
+
   const onExit = async () => {
     if (exiting) return;
     exiting = true;
-    // Flush a partial evolution window (5s cap so Ctrl+C never hangs).
-    try { await Promise.race([session.end(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* best effort */ }
+    unsubscribe();
+    // close() flushes a partial evolution window; cap it so Ctrl+C never hangs.
+    try { await Promise.race([client.close(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* best effort */ }
     console.log(DIM('\n  Goodbye.\n'));
     rl.close();
     process.exit(0);
   };
-  process.on('SIGINT', () => { session.interrupt(); void onExit(); });
 
-  rl.prompt();
+  const onInterrupt = () => {
+    if (turnInFlight && !interruptRequested) {
+      interruptRequested = true;
+      client.stop();
+      console.log(WARN('\n  Interrupting the active turn… (Ctrl+C again to exit)'));
+      return;
+    }
+    void onExit();
+  };
+  rl.on('SIGINT', onInterrupt);
+  process.on('SIGINT', onInterrupt);
 
-  for await (const line of rl) {
+  await client.connect();
+  if (tty) {
+    console.log(`\n${ACCENT(client.agentName)} ${DIM(`${client.mode} chat`)}`);
+    console.log(DIM('Type a message, /help for commands, /exit to leave. Ctrl+C interrupts a running turn.\n'));
+  }
+
+  const prompt = tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
+
+  const runTurn = async (input: string) => {
+    headerPrinted = false;
+    turnInFlight = true;
+    interruptRequested = false;
+    typing.start();
+    const consentWatch = client.consents ? watchConsents(client.consents, client.agentName, rl, tty) : null;
+    try {
+      await client.send(input, { cwd: process.cwd() });
+    } catch (err) {
+      typing.stop();
+      console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
+    } finally {
+      consentWatch?.stop();
+      turnInFlight = false;
+      typing.stop();
+    }
+    console.log('\n');
+  };
+
+  if (opts.initialPrompt?.trim()) {
+    await runTurn(opts.initialPrompt.trim());
+  }
+
+  while (!exiting) {
+    const line = await ask(rl, prompt);
+    if (line === null) break; // EOF
     const input = line.trim();
-    if (!input) { rl.prompt(); continue; }
+    if (!input) continue;
 
     if (input.startsWith('/')) {
-      const result = await handleSlash(input, rt, info, dbSize, refreshInfo, session);
-      if (result === 'exit') { await onExit(); return; }
-      if (result === 'refresh') info = refreshInfo();
-      rl.prompt();
+      try {
+        const done = await applySlashOutcome(client, await executeSlashCommand(client, input));
+        if (done === 'exit') { await onExit(); return; }
+      } catch (err) {
+        console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
+      }
       continue;
     }
 
-    headerPrinted = false;
-    typing.start();
-    opts.cliSession?.append('user', { text: input, cwd: process.cwd(), backend: 'local' });
-    try {
-      await session.send(input);
-    } catch (err) {
-      typing.stop();
-      console.log(`\n${ERR('error')} ${(err as Error).message}\n`);
+    await runTurn(input);
+  }
+
+  await onExit();
+}
+
+/** Read one line; resolves null on EOF/close so piped input terminates cleanly. */
+function ask(rl: readline.Interface, prompt: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const onClose = () => resolve(null);
+    rl.once('close', onClose);
+    rl.question(prompt, (answer) => {
+      rl.off('close', onClose);
+      resolve(answer);
+    });
+  });
+}
+
+async function applySlashOutcome(client: AgentClient, outcome: SlashOutcome): Promise<'ok' | 'exit'> {
+  switch (outcome.kind) {
+    case 'exit':
+      return 'exit';
+    case 'text':
+      console.log(`\n${MUTED(outcome.text)}\n`);
+      return 'ok';
+    case 'model-set':
+      console.log(`\n${DIM('Model:')} ${ACCENT(outcome.spec)}\n`);
+      return 'ok';
+    case 'status':
+      console.log('');
+      for (const line of renderStatusLines(outcome.status)) console.log(`  ${DIM(line)}`);
+      console.log('');
+      return 'ok';
+    case 'model-picker': {
+      const current = await client.getModelSpec();
+      console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);
+      const models = await client.listModels().catch(() => []);
+      if (models.length > 0) {
+        console.log(DIM('Available (set with /model <spec>):'));
+        for (const model of models.slice(0, 40)) console.log(`  ${ACCENT(model.spec)} ${DIM('—')} ${model.label}`);
+        if (models.length > 40) console.log(DIM(`  … ${models.length - 40} more`));
+      }
+      console.log('');
+      return 'ok';
     }
-    if (!headerPrinted) typing.stop();
-    console.log('\n');
-    rl.prompt();
+    case 'sessions': {
+      const sessions = client.listSessions();
+      if (outcome.mode === 'resume' && outcome.resumeRef) {
+        const selected = selectSession(sessions, outcome.resumeRef);
+        if (!selected) {
+          console.log(WARN(`  No matching session for "${outcome.resumeRef}".`));
+          return 'ok';
+        }
+        await client.resumeConversation(selected.info.id);
+        console.log(`\n${DIM('Resumed')} ${ACCENT(selected.label)}\n`);
+        return 'ok';
+      }
+      console.log(`\n${MUTED(renderSessionBrowser(outcome.mode, sessions))}`);
+      if (outcome.mode === 'resume') console.log(MUTED('Resume with /resume <number|id>.'));
+      console.log('');
+      return 'ok';
+    }
+    case 'cancel':
+      console.log(DIM('  Nothing to cancel.'));
+      return 'ok';
+    case 'unknown':
+      console.log(WARN(`  Unknown command: ${outcome.command}. Type /help`));
+      return 'ok';
   }
 }
 
-/** Render one SessionEvent to the terminal. */
-function renderEvent(
-  event: SessionEvent, agentName: string, typing: { stop: () => void },
+/** Render one AgentClientEvent to the terminal. */
+function renderClientEvent(
+  event: AgentClientEvent, agentName: string, typing: { stop: () => void },
   getHeader: () => boolean, setHeader: (v: boolean) => void,
 ): void {
   const header = () => {
@@ -138,111 +224,79 @@ function renderEvent(
       console.log(`\n${ERR('error')} ${event.message}\n`);
       break;
     case 'turn-end':
+    case 'step-finish':
     case 'broadcast':
       break;
   }
 }
 
-// ── Slash commands ────────────────────────────────────────────────
+/**
+ * Poll pending device consents while a turn is processing. Interactive stdin
+ * gets an inline y/a/n prompt; non-interactive runs print actionable
+ * instructions once per request so the turn never stalls silently.
+ */
+function watchConsents(
+  consents: DeviceConsentSurface,
+  agentName: string,
+  rl: readline.Interface,
+  tty: boolean,
+): { stop(): void } {
+  let stopped = false;
+  let prompting = false;
+  const handled = new Set<string>();
 
-async function handleSlash(
-  input: string, rt: AgentRuntime, info: AgentInfo, dbSize: number,
-  refreshInfo: () => AgentInfo, session: LocalAgentSession,
-): Promise<'exit' | 'refresh' | 'ok'> {
-  const cmd = input.split(/\s+/)[0]!.toLowerCase();
-  switch (cmd) {
-    case '/exit': case '/quit': return 'exit';
-    case '/status': printAgentStatus(refreshInfo(), dbSize); return 'refresh';
-    case '/help': printSlashHelp(); return 'ok';
-    case '/tools': {
-      console.log(`\n${DIM('Built-in tools:')}`);
-      for (const { name, description } of session.describeTools()) {
-        console.log(`  ${ACCENT(name)} ${DIM('—')} ${description}`);
-      }
-      const crafted = rt.craftStore.list();
-      if (crafted.length > 0) {
-        console.log(`\n${DIM('Crafted tools:')}`);
-        for (const t of crafted) console.log(`  ${ACCENT(t.name)} ${DIM('—')} ${t.description.slice(0, 60)}`);
-      }
-      console.log('');
-      return 'ok';
+  const promptDecision = async (consent: PendingDeviceConsent): Promise<DeviceConsentDecision> => {
+    console.log(`\n${WARN('PC access request')} from this agent:`);
+    console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
+    console.log(`  ${DIM('Method:')}  ${consent.method}`);
+    console.log(`  ${DIM('Command:')} ${consent.command || '(command)'}`);
+    while (!stopped) {
+      const answer = (await ask(rl, `${DIM('[y] allow once · [a] always allow · [n] deny ›')} `))?.trim().toLowerCase();
+      if (answer === 'y' || answer === 'yes' || answer === 'o') return 'once';
+      if (answer === 'a' || answer === 'always') return 'always';
+      if (answer === 'n' || answer === 'no' || answer === undefined) return 'deny';
+      console.log(DIM('  Please answer y, a, or n.'));
     }
-    case '/memory': {
-      const content = await rt.memory.read('memory/MEMORY.md');
-      if (content) console.log(`\n${DIM('memory/MEMORY.md:')}\n${MUTED(content.slice(0, 1500))}\n`);
-      else console.log(DIM('  Memory is empty.'));
-      return 'ok';
+    return 'deny';
+  };
+
+  const tick = async () => {
+    if (stopped || prompting) return;
+    let pending: PendingDeviceConsent[];
+    try {
+      pending = await consents.listPending();
+    } catch {
+      return;
     }
-    case '/always': {
-      const args = input.split(/\s+/).slice(1);
-      if (args.length === 0) {
-        const cur = session.getAlwaysActiveSkills();
-        console.log(cur.length
-          ? `\n${DIM('Always-active skills:')} ${cur.join(', ')}\n`
-          : DIM('  No always-active skills set. Usage: /always <name>… (or "none" to clear).'));
-      } else {
-        const names = args[0] === 'none' ? [] : args;
-        session.setAlwaysActiveSkills(names);
-        console.log(DIM(names.length ? `  Always-active skills: ${names.join(', ')}` : '  Cleared always-active skills.'));
-      }
-      return 'ok';
+    const consent = pending.find((item) => !handled.has(item.consentId));
+    if (!consent || stopped) return;
+    handled.add(consent.consentId);
+
+    if (!tty) {
+      console.log(`\n${WARN('PC access requested')} (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
+      console.log(MUTED(`  Approve or deny from the Proteus app, or run: proteus chat ${agentName}`));
+      return;
     }
-    case '/approval': {
-      const mode = input.slice(cmd.length).trim();
-      if (!mode) {
-        console.log(`\n${DIM('Shell approval:')} ${session.getShellApprovalMode().mode}\n`);
-        return 'ok';
-      }
-      if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
-        console.log(WARN('  Usage: /approval strict | allow_all | deny_all'));
-        return 'ok';
-      }
-      const result = session.setShellApprovalMode(mode);
-      console.log(`\n${DIM('Shell approval:')} ${ACCENT(result.mode)}\n`);
-      return 'ok';
+
+    prompting = true;
+    try {
+      const decision = await promptDecision(consent);
+      const result = await consents.resolve(consent.consentId, decision);
+      if (!result.ok) console.log(DIM('  That PC access request is no longer pending.'));
+      else console.log(DIM(`  ${decision === 'deny' ? 'Denied.' : decision === 'always' ? 'Approved (always).' : 'Approved once.'}`));
+    } catch (err) {
+      console.log(`${ERR('error')} ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      prompting = false;
     }
-    case '/model': {
-      const spec = input.slice(cmd.length).trim();
-      if (!spec) {
-        const stored = session.getStoredModelSpec().spec;
-        console.log(`\n${DIM('Stored model:')} ${stored ?? '(default)'}`);
-        console.log(`${DIM('Effective:')} ${session.getEffectiveModelSpec()}\n`);
-      } else {
-        try {
-          const result = session.setModel(spec);
-          console.log(`\n${DIM('Model:')} ${ACCENT(result.spec)}\n`);
-        } catch (err) {
-          console.log(`\n${ERR('error')} ${(err as Error).message}\n`);
-        }
-      }
-      return 'ok';
-    }
-    case '/models': {
-      const providers = await session.listModelProviders();
-      if (providers.length === 0) {
-        console.log(DIM('  No local provider registry is configured for this session.'));
-        return 'ok';
-      }
-      console.log(`\n${DIM('Providers:')}`);
-      for (const p of providers) {
-        console.log(`  ${p.available ? ACCENT(p.id) : MUTED(p.id)} ${DIM('—')} ${p.available ? 'available' : p.unavailableReason ?? 'unavailable'}`);
-      }
-      const models = await session.listAvailableModels();
-      if (models.length > 0) {
-        console.log(`\n${DIM('Models:')}`);
-        for (const m of models.slice(0, 40)) console.log(`  ${ACCENT(`${m.provider}/${m.id}`)} ${DIM('—')} ${m.label ?? m.id}`);
-        if (models.length > 40) console.log(DIM(`  … ${models.length - 40} more`));
-      }
-      console.log('');
-      return 'ok';
-    }
-    case '/tree': {
-      const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
-      printSearchTree(nodes);
-      return 'ok';
-    }
-    default:
-      console.log(WARN(`  Unknown command: ${cmd}. Type /help`));
-      return 'ok';
-  }
+  };
+
+  const interval = setInterval(() => { void tick(); }, CONSENT_POLL_MS);
+  void tick();
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(interval);
+    },
+  };
 }

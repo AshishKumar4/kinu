@@ -1,13 +1,13 @@
-import type { SessionEvent } from '@proteus/cli-backend';
+import type { AgentClientEvent, AgentClientMode } from './agent-client.js';
 import type { CliSession } from './session.js';
 
-export function recordCliSessionEvent(
-  session: CliSession | undefined,
-  event: SessionEvent,
-  backend: 'local' | 'cloud' = 'local',
+/** Record one AgentClientEvent to the JSONL terminal log. Both backend clients
+ *  route their event stream through this, so entry shapes never drift. */
+export function recordAgentClientEvent(
+  session: CliSession,
+  event: AgentClientEvent,
+  backend: AgentClientMode,
 ): void {
-  if (!session) return;
-
   switch (event.type) {
     case 'tool-call':
       session.append('tool_call', { toolName: event.toolName, args: event.args, backend });
@@ -17,7 +17,7 @@ export function recordCliSessionEvent(
       break;
     case 'turn-end':
       session.append('assistant', {
-        text: event.turn.assistantResponse,
+        text: event.turn.text,
         steps: event.turn.steps,
         durationMs: event.turn.durationMs,
         hadError: event.turn.hadError,
@@ -29,6 +29,7 @@ export function recordCliSessionEvent(
       break;
     case 'turn-start':
     case 'text-delta':
+    case 'step-finish':
     case 'evolution':
     case 'broadcast':
       break;

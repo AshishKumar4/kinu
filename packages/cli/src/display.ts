@@ -268,21 +268,6 @@ export function printError(message: string, hint?: string): void {
   console.error('');
 }
 
-// ── Chat banner ──────────────────────────────────────────────────
-
-export function printChatBanner(info: AgentInfo, tools: string[], autoEvolve: boolean): void {
-  const w = termWidth();
-  const L = (label: string) => DIM(label.padEnd(10));
-  console.log('');
-  console.log(`${BRAND} ${DIM('— Chat')}`);
-  console.log(boxTop(w));
-  console.log(boxRow(L('Agent:'), ACCENT(info.name), w));
-  console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 18), w));
-  console.log(boxRow(L('Tools:'), DIM(tools.join(', ')), w));
-  console.log(boxBot(w));
-  console.log(`${DIM(`  Evolution: ${autoEvolve ? 'auto' : 'off'}  ·  Type /help for commands`)}\n`);
-}
-
 // ── Help screen ──────────────────────────────────────────────────
 
 export function printHelp(): void {
@@ -330,22 +315,6 @@ export function printHelp(): void {
   console.log(`  ${DIM('$')} proteus sessions jarvis`);
   console.log(`  ${DIM('$')} proteus daemon status`);
   console.log(`  ${DIM('$')} proteus connect\n`);
-}
-
-// ── Chat slash-command help ──────────────────────────────────────
-
-export function printSlashHelp(): void {
-  console.log(`\n${chalk.bold('Commands:')}`);
-  console.log(`  ${ACCENT('/status')}    Show agent status`);
-  console.log(`  ${ACCENT('/tools')}     List available tools`);
-  console.log(`  ${ACCENT('/model')}     Show or set the active model (/model <spec>)`);
-  console.log(`  ${ACCENT('/models')}    List locally configured model providers`);
-  console.log(`  ${ACCENT('/memory')}    Show agent memory`);
-  console.log(`  ${ACCENT('/tree')}      Show MCTS search tree`);
-  console.log(`  ${ACCENT('/always')}    Pin always-active skills (/always <name>… | none)`);
-  console.log(`  ${ACCENT('/approval')}  Show or set shell approval mode`);
-  console.log(`  ${ACCENT('/help')}      Show this help`);
-  console.log(`  ${ACCENT('/exit')}      End conversation\n`);
 }
 
 // ── Utilities ────────────────────────────────────────────────────

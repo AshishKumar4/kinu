@@ -31,8 +31,8 @@ function UserMessage({ content }: { content: string }) {
           paddingBottom: 0,
         }}
       >
-        <text><strong fg="#60a5fa">You</strong></text>
-        <text><span fg="#e2e8f0">{content}</span></text>
+        <text><strong fg={tuiColors.blue}>You</strong></text>
+        <text><span fg={tuiColors.textBright}>{content}</span></text>
       </box>
     </box>
   );
@@ -50,7 +50,7 @@ function AssistantMessage({ content }: { content: string }) {
           paddingRight: 1,
         }}
       >
-        <text><strong fg="#c4b5fd">Agent</strong></text>
+        <text><strong fg={tuiColors.accentStrong}>Agent</strong></text>
         <markdown
           width="100%"
           syntaxStyle={markdownSyntax}
@@ -78,7 +78,7 @@ function StreamingMessage({ content }: { content: string }) {
           paddingRight: 1,
         }}
       >
-        <text><strong fg="#c4b5fd">Agent</strong></text>
+        <text><strong fg={tuiColors.accentStrong}>Agent</strong></text>
         <markdown
           width="100%"
           syntaxStyle={markdownSyntax}
@@ -89,7 +89,7 @@ function StreamingMessage({ content }: { content: string }) {
           fg={tuiColors.text}
           bg={tuiColors.bg}
         />
-        <text><span fg="#7c3aed">▌</span></text>
+        <text><span fg={tuiColors.borderActive}>▌</span></text>
       </box>
     </box>
   );
@@ -99,9 +99,9 @@ function ToolCallMessage({ toolName, args }: { toolName: string; args?: string }
   return (
     <box style={{ paddingLeft: 4, marginBottom: 0 }}>
       <text>
-        <span fg="#f59e0b">⚡ </span>
-        <span fg="#fbbf24">{toolName}</span>
-        {args ? <span fg="#6b7280"> {args.slice(0, 80)}{args.length > 80 ? '…' : ''}</span> : null}
+        <span fg={tuiColors.amberDeep}>⚡ </span>
+        <span fg={tuiColors.amber}>{toolName}</span>
+        {args ? <span fg={tuiColors.muted}> {args.slice(0, 80)}{args.length > 80 ? '…' : ''}</span> : null}
       </text>
     </box>
   );
@@ -112,7 +112,7 @@ function ToolResultMessage({ content }: { content: string }) {
   return (
     <box style={{ paddingLeft: 6, marginBottom: 1 }}>
       <text>
-        <span fg="#6b7280">↳ {truncated}</span>
+        <span fg={tuiColors.muted}>↳ {truncated}</span>
       </text>
     </box>
   );
@@ -122,8 +122,8 @@ function EvolutionMessage({ content }: { content: string }) {
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <span fg="#a78bfa">✦ </span>
-        <span fg="#8b5cf6">{content}</span>
+        <span fg={tuiColors.accent}>✦ </span>
+        <span fg={tuiColors.accentDeep}>{content}</span>
       </text>
     </box>
   );
@@ -133,7 +133,7 @@ function SystemMessage({ content }: { content: string }) {
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <span fg="#6b7280">{content}</span>
+        <span fg={tuiColors.muted}>{content}</span>
       </text>
     </box>
   );

@@ -1,14 +1,14 @@
-export interface TuiModelEntry {
-  id?: string;
+/** Model catalog entries as both backends expose them through AgentClient. */
+
+export interface AgentModelEntry {
   spec: string;
   label: string;
   provider: string;
   capabilities?: string[];
   contextWindow?: number;
-  source?: 'cloud' | 'local' | 'both';
 }
 
-export function normalizeModelEntries(rows: unknown[]): TuiModelEntry[] {
+export function normalizeModelEntries(rows: unknown[]): AgentModelEntry[] {
   return rows.flatMap((row) => {
     if (!row || typeof row !== 'object') return [];
     const item = row as Record<string, unknown>;
@@ -30,10 +30,34 @@ export function normalizeModelEntries(rows: unknown[]): TuiModelEntry[] {
   });
 }
 
-export function contextWindowForSpec(models: readonly TuiModelEntry[], spec: string | null | undefined): number | undefined {
+/** Collapse duplicate specs (union capabilities) and sort the platform default
+ *  first — used by the cloud catalog, which merges several provider feeds. */
+export function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
+  const bySpec = new Map<string, AgentModelEntry>();
+  for (const row of rows) {
+    const existing = bySpec.get(row.spec);
+    if (!existing) {
+      bySpec.set(row.spec, row);
+      continue;
+    }
+    bySpec.set(row.spec, {
+      ...existing,
+      capabilities: [...new Set([...(existing.capabilities ?? []), ...(row.capabilities ?? [])])],
+    });
+  }
+  return [...bySpec.values()].sort((a, b) => modelRank(a) - modelRank(b) || a.label.localeCompare(b.label));
+}
+
+export function contextWindowForSpec(models: readonly AgentModelEntry[], spec: string | null | undefined): number | undefined {
   const normalized = spec?.trim();
   if (!normalized) return undefined;
   return models.find((model) => model.spec === normalized)?.contextWindow;
+}
+
+function modelRank(model: AgentModelEntry): number {
+  if (model.spec.includes('kimi-k2.6')) return 0;
+  if (model.provider === 'workers-ai') return 1;
+  return 2;
 }
 
 function stringValue(value: unknown): string | null {

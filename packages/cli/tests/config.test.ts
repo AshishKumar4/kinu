@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -48,4 +48,34 @@ describe("CLI config safety", () => {
     expect(proc.exitCode).toBe(0);
     expect(proc.stdout.toString().trim()).toBe(resolve(proteusHome));
   });
+
+  test("requireAuthConfig enforces token expiry", () => {
+    const expired = runRequireAuth(new Date(Date.now() - 60_000).toISOString());
+    expect(expired.stdout.toString()).toContain("session has expired");
+
+    const valid = runRequireAuth(new Date(Date.now() + 60_000).toISOString());
+    expect(valid.stdout.toString().trim()).toBe("ok");
+  });
 });
+
+function runRequireAuth(tokenExpiresAt: string) {
+  const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-auth-"));
+  tempDirs.push(proteusHome);
+  writeFileSync(
+    join(proteusHome, "config.json"),
+    JSON.stringify({ accessToken: "ptc_test", tokenExpiresAt }),
+    { mode: 0o600 },
+  );
+  const script = `
+    import { requireAuthConfig } from './packages/cli/src/config.ts';
+    try { requireAuthConfig(); console.log('ok'); }
+    catch (err) { console.log(err instanceof Error ? err.message : String(err)); }
+  `;
+  return Bun.spawnSync({
+    cmd: [process.execPath, "-e", script],
+    cwd: resolve(__dirname, "../../.."),
+    env: { ...process.env, PROTEUS_HOME: proteusHome },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}

@@ -12,7 +12,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function runCli(home: string, args: string[]) {
+function runCli(home: string, args: string[], extraEnv: Record<string, string> = {}) {
   return Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
     cwd: repoRoot,
@@ -21,6 +21,7 @@ function runCli(home: string, args: string[]) {
     env: {
       ...process.env,
       PROTEUS_HOME: home,
+      ...extraEnv,
     },
   });
 }
@@ -137,5 +138,25 @@ describe("CLI inspection commands", () => {
     const executors = runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
     expect(executors.stdout.toString()).toContain("laptop");
+  });
+
+  test("proteus model normalizes specs through the provider resolver", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+    const llmEnv = { PROTEUS_BASE_URL: "http://localhost:1/v1", PROTEUS_AUTH: "Bearer x" };
+
+    // Bare model ids get the configured fallback provider, exactly like
+    // /model inside a live chat session (one normalizer, no drift).
+    const bare = runCli(home, ["model", "localtest", "gpt-4o-mini"], llmEnv);
+    expect(bare.exitCode).toBe(0);
+    expect(bare.stdout.toString()).toContain("workers-ai/gpt-4o-mini");
+
+    const cf = runCli(home, ["model", "localtest", "@cf/meta/llama-3.1-8b-instruct"], llmEnv);
+    expect(cf.exitCode).toBe(0);
+    expect(cf.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+
+    const stored = runCli(home, ["model", "localtest"], llmEnv);
+    expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
   });
 });

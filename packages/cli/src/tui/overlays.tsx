@@ -1,7 +1,7 @@
 import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
-import type { TuiCommand } from './commands.js';
-import type { TuiModelEntry } from './model-types.js';
+import type { SlashCommandInfo } from '../slash-commands.js';
+import type { AgentModelEntry } from '../model-catalog.js';
 import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
 
@@ -11,7 +11,7 @@ export interface OverlayGeometry {
 }
 
 interface CommandHintProps {
-  commands: readonly TuiCommand[];
+  commands: readonly SlashCommandInfo[];
   terminal: OverlayGeometry;
 }
 
@@ -57,12 +57,12 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
 }
 
 interface ModelPickerProps {
-  models: readonly TuiModelEntry[];
+  models: readonly AgentModelEntry[];
   currentSpec: string | null;
   terminal: OverlayGeometry;
   loading?: boolean;
   error?: string | null;
-  onSelect: (model: TuiModelEntry) => void;
+  onSelect: (model: AgentModelEntry) => void;
 }
 
 export function ModelPickerOverlay({ models, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
@@ -118,7 +118,7 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
             textColor: tuiColors.text,
             focusedBackgroundColor: tuiColors.panel,
             focusedTextColor: tuiColors.text,
-            selectedBackgroundColor: '#2d2259',
+            selectedBackgroundColor: tuiColors.selection,
             selectedTextColor: tuiColors.textStrong,
             descriptionColor: tuiColors.muted,
             selectedDescriptionColor: tuiColors.accentStrong,
@@ -155,7 +155,7 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
       <PaletteLine text={`Agent wants to use ${consent.deviceLabel} for a local action.`} width={innerWidth} color={tuiColors.text} />
       <PaletteLine text={`Method: ${consent.method}`} width={innerWidth} color={tuiColors.muted} />
       <PaletteLine text={`Command: ${consent.command || '(command)'}`} width={innerWidth} color={tuiColors.textStrong} />
-      <PaletteLine text="O approve once · A always allow this agent · N deny" width={innerWidth} color={tuiColors.accentStrong} />
+      <PaletteLine text="Y/O approve once · A always allow this agent · N deny" width={innerWidth} color={tuiColors.accentStrong} />
     </PaletteFrame>
   );
 }
@@ -183,12 +183,12 @@ export function PhaseLine({ label }: { label: string | null }) {
   );
 }
 
-function isModelEntry(value: unknown): value is TuiModelEntry {
+function isModelEntry(value: unknown): value is AgentModelEntry {
   return !!value
     && typeof value === 'object'
-    && typeof (value as TuiModelEntry).spec === 'string'
-    && typeof (value as TuiModelEntry).label === 'string'
-    && typeof (value as TuiModelEntry).provider === 'string';
+    && typeof (value as AgentModelEntry).spec === 'string'
+    && typeof (value as AgentModelEntry).label === 'string'
+    && typeof (value as AgentModelEntry).provider === 'string';
 }
 
 interface PaletteFrameProps {

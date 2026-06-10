@@ -8,8 +8,9 @@ import {
   listCliSessions,
   readCliSessionTranscript,
   resolveRequestedSession,
+  transcriptMessages,
 } from "../src/session.js";
-import { renderSessionBrowser, selectSession, transcriptToMessages } from "../src/tui/session-browser.js";
+import { renderSessionBrowser, selectSession } from "../src/tui/session-browser.js";
 
 const tempDirs: string[] = [];
 
@@ -49,9 +50,9 @@ describe("CLI sessions", () => {
     session.append("assistant", { text: "done" });
 
     const transcript = readCliSessionTranscript("jarvis", session.id, { sessionDir });
-    const messages = transcriptToMessages(transcript);
+    const messages = transcriptMessages(transcript.entries);
 
-    expect(messages.map((message) => message.role)).toEqual(["system", "user", "tool_call", "tool_result", "assistant"]);
+    expect(messages.map((message) => message.role)).toEqual(["user", "tool_call", "tool_result", "assistant"]);
     expect(messages.at(-1)?.content).toBe("done");
   });
 

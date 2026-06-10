@@ -24,6 +24,7 @@ import {
 } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
 import { agentDbPath } from './config.js';
+import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 type SqliteDb = Database;
 
@@ -344,7 +345,9 @@ export function getLocalStoredModel(name: string): { spec: string | null } {
 }
 
 export function setLocalStoredModel(name: string, spec: string): { ok: true; spec: string } {
-  const normalized = normalizeLocalModelSpec(spec);
+  if (!spec.trim()) throw new Error('model spec required');
+  // One normalizer: the same provider-registry resolution the live session uses.
+  const normalized = createConfiguredLocalModelResolver().resolver.normalizeSpecSync(spec);
   return withLocalWritableDb(name, (db) => {
     initAgentConfigTable((ddl) => db.exec(ddl));
     createAgentConfigStore(makeSql(db)).setModel(normalized);
@@ -612,14 +615,6 @@ const NOOP_ALARM = {
   scheduleAt() {},
   currentAlarm() { return null; },
 };
-
-function normalizeLocalModelSpec(spec: string): string {
-  const s = spec.trim();
-  if (!s) throw new Error('model spec required');
-  if (s.startsWith('@cf/')) return `workers-ai/${s}`;
-  if (/^[A-Za-z0-9_.:-]+\/.+$/.test(s)) return s;
-  return s;
-}
 
 function hubSql(db: SqliteDb): HubSql {
   return {
