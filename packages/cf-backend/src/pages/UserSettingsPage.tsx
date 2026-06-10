@@ -242,15 +242,17 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
             onChanged();
           } else if (result.error) {
             // Still-pending polls return { connected: false } with no error;
-            // any error (expired/denied/server) is terminal — stop polling
-            // instead of hammering the endpoint forever.
+            // a reported error (expired/denied/no flow) is terminal — stop
+            // polling instead of hammering the endpoint forever.
             stopPolling();
             setFlow(null);
             setError(result.error);
+          } else {
+            setError(null); // still pending — clear any transient poll error
           }
         } catch (e) {
-          stopPolling();
-          setFlow(null);
+          // Thrown = the poll request itself failed (network blip) — show it
+          // but keep polling; the flow may still complete.
           setError((e as Error).message);
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);
