@@ -540,31 +540,14 @@ export default function WorkspacePage() {
 
   // Auto-switch the work surface to the live Preview the moment a new sandbox
   // port is exposed — the running app becomes the centre of attention.
+  // (Port discovery itself lives in useProteus' live-data poll, so this fires
+  // from any surface.)
   const prevPortCountRef = useRef(0);
   useEffect(() => {
     const n = state.pinnedPorts.length;
     if (n > prevPortCountRef.current) setSurface("Output");
     prevPortCountRef.current = n;
   }, [state.pinnedPorts.length]);
-
-  // Port discovery is a real executor operation for some backends. Keep it
-  // scoped to the user-visible surfaces instead of polling from every page.
-  useEffect(() => {
-    if (state.connectionStatus !== "connected") return;
-    if (surface !== "Devices" && surface !== "Output") return;
-    const sandboxActive = state.executors.some((e) => e.name === "sandbox" && e.active);
-    if (!sandboxActive && state.pinnedPorts.length === 0) return;
-    let cancelled = false;
-    const refresh = async () => {
-      if (!cancelled) await state.refreshPinnedPorts();
-    };
-    void refresh();
-    const id = window.setInterval(refresh, 4000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [surface, state.connectionStatus, state.executors, state.pinnedPorts.length, state.refreshPinnedPorts]);
 
   // A timeline span drives the work surface (Column C): pin the selection and,
   // when the span maps to a specific surface, switch to it. Turning off Follow

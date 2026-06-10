@@ -82,8 +82,11 @@ export function useProteus(agentId?: string) {
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
-  // Pinned (exposed) ports for sandbox previews. Refreshed only when the UI is
-  // looking at preview/device state; listing ports must not provision sandboxes.
+  // Pinned (exposed) ports for sandbox previews. Refreshed with the live-data
+  // poll on every surface so auto-switch-to-preview, the Output/Devices badges
+  // and ExecutorsPanel auto-focus stay live wherever the user is. Listing
+  // ports never provisions a sandbox: getExposedPorts returns [] server-side
+  // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
   // Background tasks (auto-detached >30s tool calls) — single source for the
   // Tasks surface + the Tasks-tab running badge (visible on any surface).
@@ -231,19 +234,6 @@ export function useProteus(agentId?: string) {
     rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
   }, [rpc]);
 
-  const refreshPinnedPorts = useCallback(async () => {
-    if (connectionStatus !== "connected") {
-      setPinnedPorts([]);
-      return;
-    }
-    try {
-      const r = await rpc<{ ports?: Array<{ port: number; url?: string; name?: string }> }>("getExposedPorts", ["sandbox"]);
-      setPinnedPorts((r.ports ?? [])
-        .filter(p => typeof p.port === "number" && p.url)
-        .map(p => ({ port: p.port, url: p.url!, name: p.name })));
-    } catch { /* ignore transient */ }
-  }, [rpc, connectionStatus]);
-
   const abortChat = useCallback(() => {
     stop();
     rpc("cancelCurrentWork", [])
@@ -293,6 +283,14 @@ export function useProteus(agentId?: string) {
     rpc("resolveDeviceConsent", [consentId, decision]).catch(() => {});
   }, [rpc]);
 
+  function refreshExposedPorts() {
+    rpc<{ ports?: Array<{ port: number; url?: string; name?: string }> }>("getExposedPorts", ["sandbox"])
+      .then((r) => setPinnedPorts((r.ports ?? [])
+        .filter(p => typeof p.port === "number" && p.url)
+        .map(p => ({ port: p.port, url: p.url!, name: p.name }))))
+      .catch(() => { /* ignore transient */ });
+  }
+
   function refreshLiveData() {
     refreshTimeline();
     rpc<MctsRow[]>("getMctsTree", []).then((list) => { if (list.length > 0) setMctsTree(buildTree(list)); }).catch(() => {});
@@ -301,6 +299,7 @@ export function useProteus(agentId?: string) {
     rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
     rpc<ExecutorInfo[]>("getExecutors", []).then(setExecutors).catch(() => {});
     refreshBackgroundJobs();
+    refreshExposedPorts();
     // Re-hydrate any consent cards still pending after a reload.
     rpc<PendingConsent[]>("listPendingConsents", []).then(setPendingConsents).catch(() => {});
   }
@@ -323,6 +322,7 @@ export function useProteus(agentId?: string) {
         const outputs = new Map<string, ExecutorOutput[]>();
         for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
         setExecutorOutputs(outputs);
+        refreshExposedPorts();
       })
       .catch((err) => {
         fetched.current = false;
@@ -338,6 +338,7 @@ export function useProteus(agentId?: string) {
     setMemoryContent("");
     setMctsTree(null);
     setRunTimeline([]);
+    setPinnedPorts([]);
     setError(null);
   }, [agentId]);
 
@@ -445,7 +446,6 @@ export function useProteus(agentId?: string) {
     executeInExecutor,
     /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
     pinnedPorts,
-    refreshPinnedPorts,
     /** Background tasks + a live running count for the Tasks-tab badge. */
     backgroundJobs,
     runningTaskCount: backgroundJobs.filter((j) => j.status === "running").length,
