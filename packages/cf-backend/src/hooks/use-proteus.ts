@@ -6,6 +6,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
+import type { FileUIPart, UIMessage } from "ai";
 import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
 import { touchAgent } from "../lib/user-api";
 
@@ -364,8 +365,16 @@ export function useProteus(agentId?: string) {
     }
   }, [error]);
 
-  const sendChat = useCallback((content: string) => {
-    sendMessage({ role: "user", parts: [{ type: "text", text: content }] });
+  // File attachments ride as data-URL FileUIParts ahead of the text part —
+  // the whole downstream pipeline (WS transport, DO persistence, Think's
+  // convertToModelMessages) natively carries them to multimodal models.
+  const sendChat = useCallback((content: string, files: FileUIPart[] = []) => {
+    const parts: UIMessage["parts"] = [
+      ...files,
+      ...(content ? [{ type: "text" as const, text: content }] : []),
+    ];
+    if (parts.length === 0) return;
+    sendMessage({ role: "user", parts });
   }, [sendMessage]);
 
   const searchMemory = useCallback((q: string) => {

@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
@@ -6,10 +6,10 @@ import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
-  WarningCircleIcon, ProhibitIcon, DesktopTowerIcon,
+  WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
 } from "@phosphor-icons/react";
-import { isToolUIPart, getToolName } from "ai";
-import type { UIMessage } from "ai";
+import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
+import type { UIMessage, FileUIPart } from "ai";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { cloudflareReconnectPath, touchAgent, listAvailableModels } from "@/lib/user-api";
@@ -33,6 +33,32 @@ function getMessageText(msg: UIMessage): string {
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/* ── Chat attachments ─────────────────────────────────────────── */
+
+/** Per-file cap for inline chat attachments. Data-URL parts persist in the DO
+ *  message table and re-enter model context on later turns — larger files
+ *  belong in the file manager (writeExecutorFile → agent VFS). */
+const MAX_CHAT_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+/** A file attachment chip — thumbnail for images, file icon otherwise.
+ *  With onRemove it's a pending-composer chip; without, a message chip. */
+function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
+  const name = part.filename ?? "file";
+  return (
+    <span className="inline-flex items-center gap-1.5 max-w-56 rounded-md border p-border p-elevated pl-1.5 pr-1.5 py-1 text-[11px] p-text-2">
+      {part.mediaType.startsWith("image/")
+        ? <img src={part.url} alt={name} className="size-5 rounded object-cover shrink-0" />
+        : <FileIcon size={13} className="p-text-3 shrink-0" />}
+      <span className="truncate font-mono">{name}</span>
+      {onRemove && (
+        <button onClick={onRemove} className="p-0.5 rounded hover:p-card-hover p-text-3 hover:p-text cursor-pointer" aria-label={`Remove ${name}`}>
+          <XIcon size={11} />
+        </button>
+      )}
+    </span>
+  );
 }
 
 function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date }) {
@@ -553,6 +579,41 @@ export default function WorkspacePage() {
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSent = useRef(false);
+  // Pending chat attachments — fed by the attach button, paste, and drag-drop
+  // onto the chat column; rendered as removable chips above the input.
+  const [pendingAttachments, setPendingAttachments] = useState<FileUIPart[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = useCallback(async (files: FileList | null | undefined) => {
+    if (!files || files.length === 0) return;
+    const all = Array.from(files);
+    const oversize = all.filter((f) => f.size > MAX_CHAT_ATTACHMENT_BYTES);
+    setAttachError(oversize.length > 0
+      ? `Too large to attach (max ${MAX_CHAT_ATTACHMENT_BYTES / (1024 * 1024)} MB): ${oversize.map((f) => f.name).join(", ")}. Upload large files via the Devices surface's files tab.`
+      : null);
+    const accepted = all.filter((f) => f.size <= MAX_CHAT_ATTACHMENT_BYTES);
+    if (accepted.length === 0) return;
+    const dt = new DataTransfer();
+    for (const f of accepted) dt.items.add(f);
+    const parts = await convertFileListToFileUIParts(dt.files);
+    setPendingAttachments((prev) => [...prev, ...parts]);
+  }, []);
+
+  const onChatDragOver = useCallback((e: ReactDragEvent) => {
+    if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
+  }, []);
+  const onChatDragLeave = useCallback((e: ReactDragEvent) => {
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+    setDragOver(false);
+  }, []);
+  const onChatDrop = useCallback((e: ReactDragEvent) => {
+    if (!e.dataTransfer.files.length) return;
+    e.preventDefault();
+    setDragOver(false);
+    void addFiles(e.dataTransfer.files);
+  }, [addFiles]);
 
   // Auto-grow the chat input with its content (kumo InputArea has no resize
   // logic). The max-h-40 class clamps growth; beyond it the textarea scrolls
@@ -603,9 +664,13 @@ export default function WorkspacePage() {
   }, [state.connectionStatus, location.state, location.pathname, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
-    const t = chatInput.trim(); if (!t || state.isStreaming) return;
-    state.sendChat(t); setChatInput("");
-  }, [chatInput, state]);
+    const t = chatInput.trim();
+    if ((!t && pendingAttachments.length === 0) || state.isStreaming) return;
+    state.sendChat(t, pendingAttachments);
+    setChatInput("");
+    setPendingAttachments([]);
+    setAttachError(null);
+  }, [chatInput, pendingAttachments, state]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
@@ -671,7 +736,16 @@ export default function WorkspacePage() {
       <PanelGroup className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
         <Panel minSize={24} defaultSize={42}>
-          <div className="flex flex-col h-full border-r p-border">
+          <div className="relative flex flex-col h-full border-r p-border"
+            onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
+            {dragOver && (
+              <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
+                style={{ borderColor: "var(--c-accent)", background: "var(--c-accent-subtle)" }}>
+                <div className="flex items-center gap-2 text-sm p-text px-3 py-1.5 rounded-lg p-elevated border p-border">
+                  <PaperclipIcon size={16} className="p-accent" />Drop files to attach
+                </div>
+              </div>
+            )}
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
               <div className="flex items-center gap-3">
@@ -747,17 +821,34 @@ export default function WorkspacePage() {
               </div>
             )}
 
-            {/* Input */}
-            <div className="px-5 py-3 border-t p-border lg:px-7">
+            {/* Input — paste handled on the wrapper so clipboard files attach
+                regardless of which composer child holds focus. */}
+            <div className="px-5 py-3 border-t p-border lg:px-7"
+              onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
               {state.error && <div className="mb-2 text-xs text-red-400 p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+              {attachError && <div className="mb-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">{attachError}</div>}
+              {pendingAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {pendingAttachments.map((p, i) => (
+                    <AttachmentChip key={`${p.filename ?? "file"}-${i}`} part={p}
+                      onRemove={() => setPendingAttachments(prev => prev.filter((_, j) => j !== i))} />
+                  ))}
+                </div>
+              )}
               <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+                <input ref={fileInputRef} type="file" multiple className="hidden"
+                  onChange={e => { void addFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
+                <button onClick={() => fileInputRef.current?.click()} disabled={state.connectionStatus !== "connected"}
+                  className="p-text-3 hover:p-text transition-colors p-1.5 mb-0.5 cursor-pointer" aria-label="Attach files" title="Attach files">
+                  <PaperclipIcon size={16} />
+                </button>
                 <InputArea ref={chatInputRef} value={chatInput} onValueChange={setChatInput}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                   placeholder="Send a message..." disabled={state.connectionStatus !== "connected"} rows={1}
                   className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
                 {state.isStreaming
                   ? <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
-                  : <button onClick={handleSend} disabled={!chatInput.trim() || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
+                  : <button onClick={handleSend} disabled={(!chatInput.trim() && pendingAttachments.length === 0) || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
               </div>
             </div>
           </div>
