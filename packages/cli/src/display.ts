@@ -213,19 +213,6 @@ export function printSearchTree(nodes: SearchNode[]): void {
   console.log('');
 }
 
-// ── Evolution progress ───────────────────────────────────────────
-
-export function printEvolveProgress(iteration: number, budget: number, branchScores: Array<{ action: string; score: number }>): void {
-  const pct = Math.round((iteration / budget) * 100);
-  const filled = Math.round((iteration / budget) * 20);
-  const bar = `${OK('█'.repeat(filled))}${DIM('░'.repeat(20 - filled))}`;
-  console.log(`  ${bar} ${pct}% ${DIM(`(${iteration}/${budget})`)}`);
-  for (const b of branchScores) {
-    const scoreColor = b.score > 0.7 ? OK : b.score > 0.4 ? WARN : ERR;
-    console.log(`    ${scoreColor(b.score.toFixed(2))} ${DIM(b.action.slice(0, 60))}`);
-  }
-}
-
 // ── Tool call display (for chat) ─────────────────────────────────
 
 export function printToolCall(toolName: string, args: Record<string, unknown>): void {
@@ -319,7 +306,7 @@ export function printHelp(): void {
 
 // ── Utilities ────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
