@@ -6,6 +6,7 @@
 // Local/staging dev: if `env.DEV_USER_EMAIL` is set, we synthesize an identity
 // from that email. Production must leave that variable unset.
 
+import { DEVICE_CONNECT_PATH } from '@proteus/core';
 import { readD1Bookmark, verifySession } from './d1-store.js';
 import { sha256Hex } from '../lib/crypto.js';
 
@@ -105,7 +106,8 @@ export function isPublicPath(pathname: string): boolean {
   if (pathname.startsWith('/auth/')) return true;
   if (pathname.startsWith('/api/auth/')) return true;
   if (pathname.startsWith('/_preview/')) return true;
-  if (pathname.startsWith('/pc/connect')) return true; // reverse-WS tunnel uses its own auth
+  // covers /pc/connect and /pc/connect-ticket — the tunnel uses its own auth
+  if (pathname.startsWith(DEVICE_CONNECT_PATH)) return true;
   if (pathname.startsWith('/assets/')) return true;    // hashed static bundles
   return false;
 }

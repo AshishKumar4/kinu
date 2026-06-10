@@ -6,6 +6,11 @@
 // builder must all agree on this slug, so it lives once here.
 export const ORCHESTRATOR_AGENT_SLUG = 'orchestrator-agent';
 
+// The user-device daemon dials this path for its reverse-WebSocket tunnel.
+// The worker route, the auth bypass list, and the UserDO's in-fetch matcher
+// must all agree on it — it lives once here.
+export const DEVICE_CONNECT_PATH = '/pc/connect';
+
 // Per-message AGGREGATE cap on raw attachment bytes inlined into a chat
 // message as data-URL file parts — shared by the web composer and the CLI.
 // The binding constraint is persistence: the cloud backend stores each chat

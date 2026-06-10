@@ -21,6 +21,7 @@ import {
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
 import {
+  DEVICE_CONNECT_PATH,
   NO_DEVICE_CONNECTED,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
@@ -149,9 +150,6 @@ function parseCapabilityList(value: string): string[] {
     return [];
   }
 }
-
-/** Path the worker forwards device-daemon WebSocket upgrades to (pc-handler). */
-const DEVICE_CONNECT_PATH = '/pc/connect';
 
 export class UserDO extends Agent<Env> {
   private _initialized = false;

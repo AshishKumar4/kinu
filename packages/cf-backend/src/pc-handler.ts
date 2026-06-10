@@ -14,6 +14,7 @@
  */
 
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
+import { DEVICE_CONNECT_PATH } from "@proteus/core";
 import { json, safeJson } from "./lib/http.js";
 
 const DAEMON_JS_URL = "/pc/daemon.js";
@@ -31,7 +32,7 @@ export async function handlePcRequest(request: Request, env: Env): Promise<Respo
   if (path === "/pc/connect-ticket") {
     return handlePcConnectTicket(request, env);
   }
-  if (path === "/pc/connect") {
+  if (path === DEVICE_CONNECT_PATH) {
     return handlePcConnect(request, env);
   }
   return new Response("Not found", { status: 404 });

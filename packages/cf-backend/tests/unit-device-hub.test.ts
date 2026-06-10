@@ -154,7 +154,7 @@ describe('/pc/connect upgrade wiring', () => {
 
   test('the UserDO intercepts /pc/connect and verifies the ticket inside its own fetch', () => {
     const userDO = read('src/user/user-do.ts');
-    expect(userDO).toContain("const DEVICE_CONNECT_PATH = '/pc/connect'");
+    expect(userDO).toContain('DEVICE_CONNECT_PATH,'); // imported from @proteus/core — the single wire-path home
     expect(userDO).toContain('if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url)');
     expect(userDO).toContain('await this.verifyDeviceConnectTicket(ticket)');
     expect(userDO).toContain('return super.fetch(request)');
