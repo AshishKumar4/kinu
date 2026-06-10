@@ -139,6 +139,32 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1]!.content).toBe('hello there');
   });
 
+  test('attachments reach the model as [file…, text] user content parts', async () => {
+    let observed: ModelMessage[] = [];
+    const { db, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
+
+    await session.send({
+      text: 'what is in this image?',
+      files: [{
+        filename: 'square.png',
+        mediaType: 'image/png',
+        url: 'data:image/png;base64,iVBORw0KGgo=',
+      }],
+    });
+
+    const user = [...observed].reverse().find((m) => m.role === 'user');
+    expect(user).toBeDefined();
+    expect(Array.isArray(user!.content)).toBe(true);
+    const parts = user!.content as Array<Record<string, unknown>>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'image/png', filename: 'square.png' });
+    expect(parts[1]).toMatchObject({ type: 'text', text: 'what is in this image?' });
+
+    // The durable transcript persists the text — never the data-URL payload.
+    const rows = db.query(`SELECT role, content FROM messages ORDER BY created_at`).all() as Array<{ role: string; content: string }>;
+    expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
+  });
+
   test('restores persisted history for the same durable session id', async () => {
     const { db, rt, session } = setup('remembered answer');
     await session.send('remember this');

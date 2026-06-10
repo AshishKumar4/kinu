@@ -15,7 +15,7 @@
 import { type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
-  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult,
+  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
   HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
@@ -143,6 +143,8 @@ export interface LocalAgentSessionOpts {
 
 interface QueueItem {
   text: string;
+  /** Attachments for a user turn — forwarded to the model as file parts. */
+  files?: ReadonlyArray<PromptFile>;
   metadata?: ProgrammaticTurn['metadata'];
   kind: 'user' | 'programmatic';
   resolve: () => void;
@@ -485,10 +487,12 @@ export class LocalAgentSession implements BackendHost {
   // ── Public driver API ──────────────────────────────────────────────
 
   /** Run a user turn (and any programmatic turns it cascades). Resolves when
-   *  the user's own turn has finished. */
-  send(text: string): Promise<void> {
+   *  the user's own turn has finished. Attachments (data-URL PromptFiles)
+   *  become file parts on the turn's user message. */
+  send(input: string | { text: string; files: ReadonlyArray<PromptFile> }): Promise<void> {
+    const { text, files } = typeof input === 'string' ? { text: input, files: undefined } : input;
     return new Promise((resolve) => {
-      this.queue.push({ text, kind: 'user', resolve });
+      this.queue.push({ text, files, kind: 'user', resolve });
       void this.pump();
     });
   }
@@ -624,7 +628,15 @@ export class LocalAgentSession implements BackendHost {
       ...(activeSkills ? { activeSkills } : {}),
     }) + this.factsTail();
 
-    this.history.push({ role: 'user', content: item.text });
+    // Attachments ride as ModelMessage file parts (the same shape ai's
+    // convertToModelMessages emits for FileUIParts on the cloud path), so
+    // multimodal models receive them natively from streamText.
+    const fileParts = (item.files ?? []).map((f) => ({
+      type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
+    }));
+    this.history.push(fileParts.length > 0
+      ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+      : { role: 'user', content: item.text });
 
     const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
     let fullText = '';

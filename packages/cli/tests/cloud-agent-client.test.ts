@@ -151,6 +151,34 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
+  test('send with files transmits [file…, text] parts on the user message', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+
+    const files = [
+      { filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' },
+      { filename: 'spec.pdf', mediaType: 'application/pdf', url: 'data:application/pdf;base64,JVBERg==' },
+    ];
+    const turn = client.send({ text: 'describe these', files });
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+
+    const messages = request.body.messages as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.role).toBe('user');
+    expect(messages[0]!.parts).toEqual([
+      { type: 'file', mediaType: 'image/png', filename: 'shot.png', url: 'data:image/png;base64,iVBORw0KGgo=' },
+      { type: 'file', mediaType: 'application/pdf', filename: 'spec.pdf', url: 'data:application/pdf;base64,JVBERg==' },
+      { type: 'text', text: 'describe these' },
+    ]);
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'two files' }, true));
+    await expect(turn).resolves.toMatchObject({ text: 'two files' });
+    await client.close();
+  });
+
   test('error frame rejects the turn with the server message', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

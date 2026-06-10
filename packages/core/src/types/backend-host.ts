@@ -37,6 +37,15 @@ export interface ProgrammaticTurn {
   readonly metadata?: { proteusEvent?: string; [key: string]: unknown };
 }
 
+/** A file attached to a user prompt — the ai-sdk FileUIPart payload (sans tag).
+ *  `url` is a data: URL so the part crosses every transport (cloud UIMessage
+ *  parts, local ModelMessage file content) without provider-side fetching. */
+export interface PromptFile {
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly url: string;
+}
+
 export interface EnqueueTurnResult {
   /** 'skipped' when a newer turn generation pre-empted this injection — the
    *  caller leaves a breadcrumb so a settled result isn't silently lost. */

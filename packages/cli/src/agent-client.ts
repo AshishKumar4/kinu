@@ -7,11 +7,23 @@
  * (`consents`, `localControls`) and is null elsewhere.
  */
 
-import type { BroadcastEvent, ShellApprovalMode } from '@proteus/core';
+import type { BroadcastEvent, PromptFile, ShellApprovalMode } from '@proteus/core';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelEntry } from './model-catalog.js';
 
 export type AgentClientMode = 'local' | 'cloud';
+
+/** A user prompt: plain text, or text plus file attachments (data-URL
+ *  PromptFiles, built from @path mentions by the chat surfaces). */
+export type AgentPrompt = string | { text: string; files: ReadonlyArray<PromptFile> };
+
+export function promptText(prompt: AgentPrompt): string {
+  return typeof prompt === 'string' ? prompt : prompt.text;
+}
+
+export function promptFiles(prompt: AgentPrompt): ReadonlyArray<PromptFile> {
+  return typeof prompt === 'string' ? [] : prompt.files;
+}
 
 export interface AgentToolCallResult {
   name: string;
@@ -133,7 +145,7 @@ export interface AgentClient {
   subscribe(listener: (event: AgentClientEvent) => void): () => void;
   /** Run one user turn. Events stream through subscribe(); the JSONL log is
    *  appended internally. */
-  send(prompt: string, opts?: AgentClientSendOptions): Promise<AgentTurnResult>;
+  send(prompt: AgentPrompt, opts?: AgentClientSendOptions): Promise<AgentTurnResult>;
   /** Interrupt the in-flight turn (Esc / Ctrl+C / /stop). */
   stop(): void;
   close(): Promise<void>;
@@ -165,11 +177,14 @@ export interface AgentUiMessage {
   parts: Array<Record<string, unknown>>;
 }
 
-export function createUserUiMessage(text: string): AgentUiMessage {
+export function createUserUiMessage(text: string, files: ReadonlyArray<PromptFile> = []): AgentUiMessage {
   return {
     id: crypto.randomUUID(),
     role: 'user',
-    parts: [{ type: 'text', text }],
+    parts: [
+      ...files.map((f) => ({ type: 'file', mediaType: f.mediaType, filename: f.filename, url: f.url })),
+      ...(text || files.length === 0 ? [{ type: 'text', text }] : []),
+    ],
   };
 }
 

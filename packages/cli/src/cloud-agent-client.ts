@@ -26,9 +26,12 @@ import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from 
 import {
   asRecord,
   createUserUiMessage,
+  promptFiles,
+  promptText,
   type AgentClient,
   type AgentClientEvent,
   type AgentClientSendOptions,
+  type AgentPrompt,
   type AgentClientStatus,
   type AgentJobSummary,
   type AgentSearchNode,
@@ -108,14 +111,21 @@ export class CloudAgentClient implements AgentClient {
     return () => this.listeners.delete(listener);
   }
 
-  async send(prompt: string, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
-    const text = prompt.trim();
-    if (!text) throw new Error('prompt required');
+  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
+    const text = promptText(prompt).trim();
+    const files = promptFiles(prompt);
+    if (!text && files.length === 0) throw new Error('prompt required');
     await this.ensureOpen();
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud agent connection is not open.');
 
-    this.activeCliSession.append('user', { text, cwd: opts.cwd ?? process.cwd(), backend: 'cloud' });
+    // The JSONL log records attachment names, never the data-URL payloads.
+    this.activeCliSession.append('user', {
+      text,
+      cwd: opts.cwd ?? process.cwd(),
+      backend: 'cloud',
+      ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
+    });
     this.emit({ type: 'turn-start', kind: 'user', text });
 
     const requestId = randomRequestId();
@@ -136,7 +146,7 @@ export class CloudAgentClient implements AgentClient {
           init: {
             method: 'POST',
             body: JSON.stringify({
-              messages: [createUserUiMessage(text)],
+              messages: [createUserUiMessage(text, files)],
               trigger: 'submit-message',
               ...(opts.cwd ? { cwd: opts.cwd } : {}),
             }),

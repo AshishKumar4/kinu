@@ -29,11 +29,16 @@ import {
 } from './session.js';
 import { recordAgentClientEvent } from './session-recorder.js';
 import { normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
+import {
+  promptFiles,
+  promptText,
+} from './agent-client.js';
 import type {
   AgentClient,
   AgentClientEvent,
   AgentClientSendOptions,
   AgentClientStatus,
+  AgentPrompt,
   AgentJobSummary,
   AgentSearchNode,
   AgentToolSurface,
@@ -146,15 +151,23 @@ export class LocalAgentClient implements AgentClient {
     return () => this.listeners.delete(listener);
   }
 
-  async send(prompt: string, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
+  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
     if (this.pending) throw new Error('A turn is already in progress.');
-    this.activeCliSession.append('user', { text: prompt, cwd: opts.cwd ?? process.cwd(), backend: 'local' });
+    const text = promptText(prompt);
+    const files = promptFiles(prompt);
+    // The JSONL log records attachment names, never the data-URL payloads.
+    this.activeCliSession.append('user', {
+      text,
+      cwd: opts.cwd ?? process.cwd(),
+      backend: 'local',
+      ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
+    });
     const pending: PendingLocalTurn = {
       result: { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false },
     };
     this.pending = pending;
     try {
-      await this.session.send(prompt);
+      await this.session.send(files.length > 0 ? { text, files } : text);
       return pending.result;
     } finally {
       if (this.pending === pending) this.pending = null;
