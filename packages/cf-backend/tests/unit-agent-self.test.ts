@@ -9,7 +9,8 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
     proposeCurriculumTasks: async (count) => { calls.push(`propose:${count}`); return [{ id: "t1" }]; },
     listCurriculumTasks: async (status) => { calls.push(`list:${status}`); return []; },
     setCurriculumTaskStatus: async (id, status) => { calls.push(`set:${id}:${status}`); return { ok: true }; },
-    proposeScaffold: async (rationale, code) => { calls.push(`scaffold:${rationale.length}:${code.length}`); return { ok: true, version: 2 }; },
+    proposeScaffold: async (rationale, code, baseVersion) => { calls.push(`scaffold:${rationale.length}:${code.length}:${baseVersion ?? 'live'}`); return { ok: true, version: 2 }; },
+    listScaffoldVersions: async (limit) => { calls.push(`archive:${limit ?? 'all'}`); return [{ version: 0, status: "current" }]; },
     createTimerTrigger: (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
     cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
     ...over,
@@ -22,7 +23,7 @@ describe("createAgentSelfProvider — shape", () => {
     expect(p.name).toBe("agent");
     expect(p.positionalArgs).toBe(true);
     expect(p.types).toContain("agent.schedule".replace("agent.", "")); // declares schedule
-    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "schedule", "cancelSchedule"]) {
+    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule"]) {
       expect(typeof p.tools[name]?.execute).toBe("function");
       expect(p.tools[name]?.description.length).toBeGreaterThan(0);
     }
@@ -46,17 +47,39 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const code = "async function* run(rt, task) { await host.defaultInference(); }";
     const r = await p.tools.proposeScaffold.execute(rationale, code);
     expect(r).toEqual({ ok: true, version: 2 });
-    expect(host.calls).toEqual([`scaffold:${rationale.length}:${code.length}`]);
+    expect(host.calls).toEqual([`scaffold:${rationale.length}:${code.length}:live`]);
   });
 
-  test("proposeScaffold rejects missing rationale/code without delegating", async () => {
+  test("proposeScaffold passes an archive baseVersion through (DGM branch)", async () => {
+    const host = fakeHost();
+    const p = createAgentSelfProvider(host);
+    const rationale = "Revive the branching-heads stepping stone from v1 with a tighter merge step.";
+    const code = "async function* run(rt, task) { await host.defaultInference(); }";
+    const r = await p.tools.proposeScaffold.execute(rationale, code, 1);
+    expect(r).toEqual({ ok: true, version: 2 });
+    expect(host.calls).toEqual([`scaffold:${rationale.length}:${code.length}:1`]);
+  });
+
+  test("proposeScaffold rejects missing rationale/code or a bad baseVersion without delegating", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
     expect(await p.tools.proposeScaffold.execute("", "code")).toEqual(
       { error: expect.stringContaining("rationale must be a non-empty string") });
     expect(await p.tools.proposeScaffold.execute("a rationale", 42)).toEqual(
       { error: expect.stringContaining("code must be a non-empty string") });
+    expect(await p.tools.proposeScaffold.execute("a rationale", "code", -1)).toEqual(
+      { error: expect.stringContaining("baseVersion must be a non-negative integer") });
+    expect(await p.tools.proposeScaffold.execute("a rationale", "code", 1.5)).toEqual(
+      { error: expect.stringContaining("baseVersion must be a non-negative integer") });
     expect(host.calls).toEqual([]);
+  });
+
+  test("scaffoldVersions exposes the archive read-only via the host", async () => {
+    const host = fakeHost();
+    const p = createAgentSelfProvider(host);
+    const r = await p.tools.scaffoldVersions.execute(10);
+    expect(r).toEqual([{ version: 0, status: "current" }]);
+    expect(host.calls).toEqual(["archive:10"]);
   });
 
   test("acceptCurriculumTask rejects a non-string id", async () => {
