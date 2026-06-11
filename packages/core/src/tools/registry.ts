@@ -51,8 +51,10 @@ export interface BuiltinToolSpec {
 export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   execute_tools: {
     name: 'execute_tools',
+    // llm.query is deliberately NOT here — it exists only on the CF backend,
+    // so the prompt advertises it via a backend-gated line instead.
     summary:
-      'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, agent helpers, and llm.query.',
+      'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
     whenToUse: 'Use for multi-step logic, file operations, crafted tool calls, scheduling, and operations that need shared state.',
     whenNotToUse: 'Do not use for a single shell command when `run` is enough.',
     result: 'Returns a structured execution result or error object from the codemode runtime.',
@@ -71,11 +73,16 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse: 'Do not load broad skills speculatively; they consume context and can over-constrain unrelated work.',
     result: 'Returns skill metadata, skill content, or mutation status.',
   },
+  // The think spec below is the SINGLE SOURCE of strategy doctrine — the
+  // system prompt and the UI render from it; the think tool's own docstring
+  // derives from the registered strategies' descriptions.
   think: {
     name: 'think',
-    summary: 'Run a deeper reasoning strategy: single-shot, mcts, or heads.',
-    whenToUse: 'Use heads for independent subtasks and mcts for hard approach search where competing branches are useful.',
-    whenNotToUse: 'Do not use for simple linear tasks or when branches would race on the same mutable files.',
+    summary: 'Run a deeper reasoning strategy: heads (parallel sub-agents) or mcts (approach search).',
+    whenToUse:
+      'heads = 2-6 independent subtasks, each running its own full multi-step tool loop concurrently (takes minutes; may auto-background). ' +
+      'mcts = compare competing approaches when the right path is unclear — branches propose and score TEXT ONLY and cannot run tools.',
+    whenNotToUse: 'Neither is for linear work you can simply do directly, nor when branches would race on the same mutable resource.',
     result: 'Returns a strategy result with branch/head outputs, scores, and selected work.',
   },
   memory: {

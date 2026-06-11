@@ -214,7 +214,11 @@ function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): bool
   return tools.includes(name);
 }
 
-function renderAgentStateSection(tools: readonly BuiltinToolName[]): string {
+function renderAgentStateSection(surface: PromptSurface): string {
+  const tools = surface.builtinTools;
+  // The RLM provider (llm.query) and the mutable scaffold live on the CF
+  // backend only — never advertise them where they would throw.
+  const isCf = surface.backend === 'cf';
   const parts: string[] = [];
 
   parts.push([
@@ -227,6 +231,7 @@ function renderAgentStateSection(tools: readonly BuiltinToolName[]): string {
       '## Memory and facts',
       '- Use `fact` for keyed state the agent should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
       '- Use `memory` for longer prose notes or lessons that are useful across turns.',
+      '- Your failures are recorded as lessons in memory — search before retrying similar work.',
       '- Prefer updating stale facts over adding contradictory new ones.',
     ].join('\n'));
   }
@@ -235,8 +240,11 @@ function renderAgentStateSection(tools: readonly BuiltinToolName[]): string {
     parts.push([
       '## Code execution and learned capabilities',
       '- `execute_tools` runs JavaScript against the active executor/codemode namespaces.',
-      '- Crafted tools saved in the CraftStore become callable as `codemode.<name>(args)` / `tools.<name>(args)` when injected.',
-      '- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs; handle either a string result or `{ error }`.',
+      '- Before building from scratch, check `workspace.listTools()` and `memory` search for existing tools and prior lessons.',
+      '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
+      ...(isCf ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs; handle either a string result or `{ error }`.'] : []),
+      '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
+      ...(isCf ? ['- `agent.proposeScaffold(rationale, code)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live.'] : []),
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder.',
       '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
     ].join('\n'));
@@ -245,9 +253,8 @@ function renderAgentStateSection(tools: readonly BuiltinToolName[]): string {
   if (hasTool(tools, 'think')) {
     parts.push([
       '## Parallel sub-agents',
-      '`think({ strategy: "heads", task, heads })` spawns 2-6 INDEPENDENT heads that run concurrently, each with its own multi-step loop and a bounded recursive split depth of 3.',
-      '`think({ strategy: "mcts", task })` runs parallel tree-search rollouts over candidate approaches.',
-      'Use parallel heads only when work splits into genuinely independent subproblems. Avoid concurrent writes to the same mutable resource.',
+      '`think({ strategy: "heads", task, heads })` heads are 2-6 real concurrent sub-agents, each with its own multi-step tool loop and a bounded recursive split depth of 3.',
+      'Heads leave durable findings under `shared/findings/` in the workspace — read them after the merge when you need detail beyond the merged summary.',
     ].join('\n'));
   }
 
@@ -298,7 +305,7 @@ export function buildSystemPromptSync(
     renderOperatingGuidance(surface),
     renderToolsSection(surface),
     renderExecutorSection(surface),
-    renderAgentStateSection(surface.builtinTools),
+    renderAgentStateSection(surface),
     opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '',
     renderKnowledgeSection(opts.extraKnowledge),
   ].filter(Boolean).join('\n\n');

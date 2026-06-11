@@ -26,9 +26,28 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/Parallel sub-agents/);
-    expect(prompt).toMatch(/2-6 INDEPENDENT/);
+    expect(prompt).toMatch(/2-6 real concurrent sub-agents/);
     expect(prompt).toMatch(/depth of 3/);
     expect(prompt).toMatch(/NOT stateless between turns/);
+    // Heads leave a readable artifact trail the model should know about.
+    expect(prompt).toContain('shared/findings/');
+  });
+
+  test('teaches the honest strategy doctrine: mcts branches cannot run tools', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/score TEXT ONLY/);
+    expect(prompt).toMatch(/cannot run tools/);
+  });
+
+  test('teaches craft-on-repeat, search-before-solve, and the lessons loop', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toContain('workspace.createTool');
+    expect(prompt).toContain('workspace.listTools()');
+    expect(prompt).toMatch(/next execute_tools call/);            // freshness, not "when injected"
+    expect(prompt).toMatch(/failures are recorded as lessons/i);  // close the lesson loop
+    expect(prompt).toContain('agent.proposeCurriculum');
   });
 
   test('honors soulOverride', () => {
@@ -46,14 +65,22 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('teaches llm.query through the real execution surface (no hallucinated symbols)', () => {
+  test('advertises llm.query and proposeScaffold only on the CF backend (where they exist)', () => {
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Code execution and learned capabilities/);
-    expect(prompt).toMatch(/llm\.query/);
+    const cf = buildSystemPromptSync(rt, { backend: 'cf' });
+    expect(cf).toMatch(/Code execution and learned capabilities/);
+    expect(cf).toMatch(/llm\.query/);
+    expect(cf).toContain('agent.proposeScaffold');
     // Regression: we previously had `splitLargeText(input, 4000)` which
     // doesn't exist anywhere in the runtime surface.
-    expect(prompt).not.toContain('splitLargeText');
+    expect(cf).not.toContain('splitLargeText');
+
+    // The RLM provider and the scaffold are CF-only — advertising them on the
+    // CLI sent the model to call namespaces that throw.
+    const cli = buildSystemPromptSync(rt, { backend: 'cli-local' });
+    expect(cli).toMatch(/Code execution and learned capabilities/);
+    expect(cli).not.toMatch(/llm\.query/);
+    expect(cli).not.toContain('agent.proposeScaffold');
   });
 
   test('does not advertise the removed Session context tools/blocks', () => {
@@ -252,15 +279,15 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt, { mode: 'product_change' })).toContain('Never deploy Proteus product changes');
   });
 
-  test('does NOT promise unimplemented strategies (ToT/GoT/Reflexion as if they exist)', () => {
+  test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: the `think` tool description previously claimed support for
-    // strategies that don't exist. Build the prompt and check it doesn't
-    // promise them as if they're available.
+    // strategies that don't exist. Build the prompt and check it advertises
+    // exactly the two USEFUL ones — single-shot stays registered for eval
+    // harnesses but is pure overhead for a chat model, so it's not advertised.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    // The think description should mention the THREE that exist explicitly.
-    expect(prompt).toMatch(/single-shot/);
     expect(prompt).toMatch(/mcts/);
     expect(prompt).toMatch(/heads/);
+    expect(prompt).not.toMatch(/single-shot/);
   });
 });

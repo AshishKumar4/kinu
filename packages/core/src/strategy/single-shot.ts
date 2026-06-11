@@ -8,6 +8,9 @@ export function createSingleShotStrategy(): ExplorationStrategy {
     id: 'single-shot',
     label: 'Single shot',
     description: 'One LLM call, returned verbatim. Baseline strategy.',
+    // Eval-harness baseline only: a chat model calling think for one LLM call
+    // would be pure overhead, so it is not in the LLM-visible enum.
+    advertised: false,
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
       const { text, usage } = await generateText({

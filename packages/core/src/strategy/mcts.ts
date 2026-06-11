@@ -32,8 +32,8 @@ export function createMCTSStrategy(): ExplorationStrategy {
     id: 'mcts',
     label: 'MCTS (parallel tree search)',
     description:
-      'Monte Carlo Tree Search over parallel exploration branches. Best for ' +
-      'multi-step planning where the right approach is not obvious upfront.',
+      'Monte Carlo Tree Search: compare competing approaches when the right path ' +
+      'is unclear. Branches propose and score TEXT ONLY — they cannot run tools.',
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
       const o = (ctx.options?.mcts ?? {}) as Partial<MCTSStrategyOptions>;

@@ -64,8 +64,11 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
-  const strategies = deps.registry.list().map(s => s.id);
-  const descriptions = deps.registry.list()
+  // Only advertised strategies appear in the enum + docstring; the dispatch
+  // below still resolves any registered id (eval harnesses use the baseline).
+  const advertised = deps.registry.list().filter(s => s.advertised !== false);
+  const strategies = advertised.map(s => s.id);
+  const descriptions = advertised
     .map(s => `  - **${s.id}** — ${s.description ?? s.label ?? s.id}`)
     .join('\n');
   const hasHeads = strategies.includes('heads');
@@ -74,9 +77,7 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
     description:
       'Run an exploration strategy over the task and return the best candidate.\n' +
       'Strategies available:\n' + descriptions + '\n\n' +
-      'Pick the cheapest strategy that fits: single-shot for simple tasks, mcts for ' +
-      'multi-step planning, heads for distinct sub-questions. Strategies share ONE ' +
-      'agent surface — no need to remember per-strategy tool names.' +
+      'Use only when the task genuinely needs it — not for linear work you can simply do directly.' +
       (hasHeads
         ? '\n\nFor strategy=heads, pass `heads` (2–6 specs, each {task, rationale, model?}) ' +
           'and optionally `merge_strategy` (synthesize | best_of | consensus).'

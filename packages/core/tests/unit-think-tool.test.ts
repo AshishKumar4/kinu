@@ -149,14 +149,27 @@ describe('createThinkTool — strategy dispatch', () => {
     expect(observedBudget?.wallClockMs).toBe(999);
   });
 
-  test('inputSchema enum is built from the registry at construction time', () => {
+  test('inputSchema enum lists only ADVERTISED strategies', () => {
     const reg = createStrategyRegistry();
-    reg.register(createSingleShotStrategy());
+    reg.register(createSingleShotStrategy());   // advertised: false (eval baseline)
     reg.register(createTestStrategy({ id: 'custom' }));
     const { rt } = createTestRuntime();
     const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
-    // Schema's strategy field enum should list both ids.
     const schema = tool.inputSchema as { jsonSchema: { properties: { strategy: { enum: string[] } } } };
-    expect(schema.jsonSchema.properties.strategy.enum).toEqual(['single-shot', 'custom']);
+    expect(schema.jsonSchema.properties.strategy.enum).toEqual(['custom']);
+    expect(tool.description).not.toContain('single-shot');
+  });
+
+  test('non-advertised strategies stay dispatchable by id (eval harness path)', async () => {
+    const reg = createStrategyRegistry();
+    reg.register({ ...createTestStrategy({ id: 'baseline', answer: 'from baseline' }), advertised: false });
+    const { rt } = createTestRuntime();
+    const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
+    const result = await tool.execute(
+      { strategy: 'baseline', task: 'x' },
+      {} as never,
+    ) as { strategy: string; text: string };
+    expect(result.strategy).toBe('baseline');
+    expect(result.text).toBe('from baseline');
   });
 });

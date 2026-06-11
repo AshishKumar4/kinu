@@ -64,6 +64,11 @@ export interface ExplorationStrategy {
   readonly id: string;
   readonly label?: string;
   readonly description?: string;
+  /** Default true. False = registered for programmatic/eval use (the think
+   *  tool still dispatches it by id) but omitted from the LLM-visible enum
+   *  and docstring — e.g. the single-shot baseline, which a chat model never
+   *  needs (it IS a single shot). */
+  readonly advertised?: boolean;
   explore(ctx: StrategyContext): Promise<StrategyResult>;
 }
 
