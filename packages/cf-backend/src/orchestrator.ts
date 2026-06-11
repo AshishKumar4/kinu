@@ -126,7 +126,7 @@ import {
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
-  claimAlternateTakesForTurn, listAlternateTakeSets, latestAlternateTakeSet,
+  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
   recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
@@ -1588,7 +1588,10 @@ export class OrchestratorAgent extends Think<Env> {
       console.warn('[proteus] event emit failed at onChatResponse:', err);
     }
     if (result.status !== "completed") {
-      // An aborted/errored live turn leaves nothing to compare a branch against.
+      // An aborted/errored live turn leaves nothing to compare a branch
+      // against — and any takes its think-mcts runs captured competed for an
+      // answer that no longer exists, so the next turn must not claim them.
+      try { purgeUnclaimedAlternateTakes(this.boundSql); } catch { /* no takes table yet */ }
       this.settlePendingBranches(null, '');
       return;
     }
@@ -1637,11 +1640,18 @@ export class OrchestratorAgent extends Think<Env> {
     // review (engine.reviewTurn, dispatched when the NEXT user message
     // arrives) populates it from explicit thumbs or the follow-up classifier.
     const msgId = (result.message as { id?: string } | null | undefined)?.id;
+    if (!msgId) {
+      // Completed but unattributable — without a message id the takes cannot
+      // credit this turn, and they must not leak into the next one's claim.
+      try { purgeUnclaimedAlternateTakes(this.boundSql); } catch { /* no takes table yet */ }
+    }
     if (msgId) {
       // Alternate Takes captured during this turn's think-mcts runs get the
       // turn id they competed for, so a pick can credit the right turn.
       try {
-        claimAlternateTakesForTurn(this.boundSql, { turnId: msgId, sessionId: 'default' });
+        claimAlternateTakesForTurn(this.boundSql, {
+          turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
+        });
       } catch { /* no takes table yet — the first MCTS run creates it */ }
       const craftNames = this.acc.toolCalls
         .map(tc => tc.name)

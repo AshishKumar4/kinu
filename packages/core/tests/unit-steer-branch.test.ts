@@ -129,7 +129,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
     expect(set.chosenNodeId).toBeNull();
 
     // Already claimed — the turn-end claim sweep finds nothing unclaimed.
-    expect(claimAlternateTakesForTurn(sql, { turnId: 'other', sessionId: 'default' })).toBe(0);
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'other', sessionId: 'default', startedAt: 0 })).toBe(0);
     expect(latestAlternateTakeSet(sql)!.turnId).toBe('turn-9');
   });
 

@@ -235,6 +235,7 @@ export { estimateCost } from './mcts/cost.js';
 // Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
 export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
+  purgeUnclaimedAlternateTakes,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   recordBranchTakeSet, buildTakeContinuationPrompt,
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,

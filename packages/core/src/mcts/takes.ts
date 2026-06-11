@@ -187,11 +187,15 @@ export function recordBranchTakeSet(
 
 /** Attach the take sets captured during the just-finished turn (MCTS runs
  *  mid-turn, before the assistant message id exists) to that turn's id.
+ *  The claim is scoped to this turn's window: stale unclaimed sets left by a
+ *  turn that never claimed (aborted/errored, or completed without a message
+ *  id) are purged instead of misattributed into the preference ledger.
  *  Returns how many sets were claimed. */
 export function claimAlternateTakesForTurn(
   sql: SqlExecutor,
-  input: { turnId: string; sessionId: string },
+  input: { turnId: string; sessionId: string; startedAt: number },
 ): number {
+  sql`DELETE FROM alternate_takes WHERE turn_id IS NULL AND created_at < ${input.startedAt}`;
   const unclaimed = sql<{ id: string }>`
     SELECT id FROM alternate_takes WHERE turn_id IS NULL`;
   for (const row of unclaimed) {
@@ -199,6 +203,13 @@ export function claimAlternateTakesForTurn(
         WHERE id = ${row.id}`;
   }
   return unclaimed.length;
+}
+
+/** Drop unclaimed take sets when a turn settles without an id to claim them
+ *  with (aborted, errored, or no assistant message) — they competed for an
+ *  answer that no longer exists, so the next turn must not inherit them. */
+export function purgeUnclaimedAlternateTakes(sql: SqlExecutor): void {
+  sql`DELETE FROM alternate_takes WHERE turn_id IS NULL`;
 }
 
 interface RawTakeRow {

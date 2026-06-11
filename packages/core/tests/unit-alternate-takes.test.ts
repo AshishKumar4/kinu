@@ -8,6 +8,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers.js';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
+  purgeUnclaimedAlternateTakes,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes.js';
@@ -93,12 +94,40 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     const { sql } = setup();
     insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
     insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
-    captureAlternateTakes(sql, { task: 'the task', winnerId: 'w1', epsilon: 0.1 });
-    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 'default' })).toBe(1);
+    captureAlternateTakes(sql, { task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
     expect(latestAlternateTakeSet(sql)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
     // A later turn with no new capture claims nothing (no re-claim).
-    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-2', sessionId: 'default' })).toBe(0);
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
     expect(latestAlternateTakeSet(sql)!.turnId).toBe('msg-1');
+  });
+
+  test('never claims captures left over from an earlier turn that did not settle', () => {
+    const { sql } = setup();
+    insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
+    insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
+    // Captured at t=1000 during a turn that aborted before claiming.
+    captureAlternateTakes(sql, { task: 'the doomed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    // The NEXT completed turn started later — it must purge, not adopt.
+    expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
+    expect(latestAlternateTakeSet(sql)).toBeNull();
+  });
+
+  test('purgeUnclaimedAlternateTakes drops unclaimed sets and keeps claimed ones', () => {
+    const { sql } = setup();
+    insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
+    insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
+    captureAlternateTakes(sql, { task: 'claimed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 });
+
+    insertNode(sql, { id: 'w2', value: 0.9, text: 'c' });
+    insertNode(sql, { id: 'r2', value: 0.88, text: 'd' });
+    captureAlternateTakes(sql, { task: 'aborted task', winnerId: 'w2', epsilon: 0.1, now: 2_000 });
+
+    purgeUnclaimedAlternateTakes(sql);
+    const remaining = listAlternateTakeSets(sql);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ turnId: 'msg-1', task: 'claimed task' });
   });
 });
 
@@ -106,7 +135,7 @@ function capturedSet(sql: ReturnType<typeof makeSql>) {
   insertNode(sql, { id: 'win', value: 0.9, text: 'winning approach' });
   insertNode(sql, { id: 'alt', value: 0.85, text: 'alternative approach' });
   captureAlternateTakes(sql, { task: 'the task', winnerId: 'win', epsilon: 0.1 });
-  claimAlternateTakesForTurn(sql, { turnId: 'msg-9', sessionId: 'default' });
+  claimAlternateTakesForTurn(sql, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
   sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u-9', 'default', 'user', 'please solve it')`;
   sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;
   return latestAlternateTakeSet(sql)!;

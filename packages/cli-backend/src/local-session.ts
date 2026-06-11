@@ -42,7 +42,7 @@ import {
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
-  claimAlternateTakesForTurn, latestAlternateTakeSet, recordTakePick,
+  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
@@ -931,12 +931,18 @@ export class LocalAgentSession implements BackendHost {
     const assistantMsgId = this.persist(item.text, injections.map((injection) => injection.text), fullText);
 
     // Alternate Takes captured during this turn's think-mcts runs get the
-    // turn id they competed for, so a pick can credit the right turn.
-    if (assistantMsgId) {
-      try {
-        claimAlternateTakesForTurn(this.rt.storage.sql, { turnId: assistantMsgId, sessionId: this.sessionId });
-      } catch { /* no takes table yet — the first MCTS run creates it */ }
-    }
+    // turn id they competed for, so a pick can credit the right turn. A turn
+    // that settles without an assistant message id cannot be credited — its
+    // captures are purged so the next turn never claims them as its own.
+    try {
+      if (assistantMsgId) {
+        claimAlternateTakesForTurn(this.rt.storage.sql, {
+          turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
+        });
+      } else {
+        purgeUnclaimedAlternateTakes(this.rt.storage.sql);
+      }
+    } catch { /* no takes table yet — the first MCTS run creates it */ }
 
     // Steer-as-Branch redirects launched during this turn settle against its
     // answer — detached, so a slow branch never delays turn-end.
