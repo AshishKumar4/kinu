@@ -2,7 +2,11 @@
 // feed it their discovered files (root-most first, nearest last).
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from '@proteus/test-utils';
-import { buildSystemPromptSync, renderAgentsMdSection } from '../src/index.ts';
+import {
+  buildSystemPromptSync, collectWorkspaceAgentsMd, renderAgentsMdSection,
+} from '../src/index.ts';
+import type { VFS } from '../src/types/primitives.js';
+import type { ExecutorProvider, ExecutorStatus } from '../src/execution/types.js';
 
 describe('renderAgentsMdSection', () => {
   test('renders a delimited block with provenance and precedence guidance', () => {
@@ -74,5 +78,74 @@ describe('buildSystemPromptSync — agentsMd option', () => {
   test('renders no block when absent', () => {
     const { rt } = createTestRuntime();
     expect(buildSystemPromptSync(rt)).not.toContain('Project instructions (AGENTS.md)');
+  });
+});
+
+function fakeVfs(files: Record<string, string>): VFS {
+  return {
+    readFile: async (path: string) => {
+      if (path in files) return files[path]!;
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+    },
+  } as unknown as VFS;
+}
+
+function fakeSandbox(opts: { active: boolean; read?: string | (() => Promise<string>) }): ExecutorProvider {
+  const status: ExecutorStatus = {
+    configured: true, available: true, active: opts.active,
+    status: opts.active ? 'active' : 'idle',
+  };
+  return {
+    name: 'sandbox', kind: 'sandbox', capabilities: new Set(),
+    isAvailable: () => true,
+    getStatus: () => status,
+    connect: async () => {}, disconnect: async () => {},
+    tools: opts.read === undefined ? {} : {
+      readFile: {
+        description: 'read',
+        execute: async () => (typeof opts.read === 'function' ? opts.read() : opts.read),
+      },
+    },
+  } as unknown as ExecutorProvider;
+}
+
+describe('collectWorkspaceAgentsMd — cloud discovery', () => {
+  test('reads the VFS root file and the active sandbox workspace, nearest last', async () => {
+    const files = await collectWorkspaceAgentsMd(
+      fakeVfs({ 'AGENTS.md': 'workspace defaults' }),
+      fakeSandbox({ active: true, read: 'sandbox project rules' }),
+    );
+    expect(files.map((f) => f.content)).toEqual(['workspace defaults', 'sandbox project rules']);
+    expect(files[0]!.path).toContain('agent workspace');
+    expect(files[1]!.path).toContain('sandbox');
+  });
+
+  test('never touches an inactive sandbox and survives a missing VFS file', async () => {
+    let touched = false;
+    const files = await collectWorkspaceAgentsMd(
+      fakeVfs({}),
+      fakeSandbox({ active: false, read: async () => { touched = true; return 'x'; } }),
+    );
+    expect(files).toEqual([]);
+    expect(touched).toBe(false);
+  });
+
+  test('treats sandbox error strings and read failures as absent', async () => {
+    for (const read of [
+      'read error: exit 1',
+      'Sandbox executor not configured. Add the @cloudflare/sandbox binding',
+      async (): Promise<string> => { throw new Error('rpc dropped'); },
+    ]) {
+      const files = await collectWorkspaceAgentsMd(
+        fakeVfs({ 'AGENTS.md': 'defaults' }),
+        fakeSandbox({ active: true, read }),
+      );
+      expect(files.map((f) => f.content)).toEqual(['defaults']);
+    }
+  });
+
+  test('works with no sandbox provider at all', async () => {
+    const files = await collectWorkspaceAgentsMd(fakeVfs({ 'AGENTS.md': 'defaults' }));
+    expect(files.map((f) => f.content)).toEqual(['defaults']);
   });
 });

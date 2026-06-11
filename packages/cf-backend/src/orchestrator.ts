@@ -122,6 +122,8 @@ import {
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
+  // AGENTS.md (agents.md standard) — cloud workspace discovery
+  collectWorkspaceAgentsMd,
 } from "@proteus/core";
 import { combineAbortSignals } from "@proteus/agent-utils";
 import { createCodeTool } from "@cloudflare/codemode/ai";
@@ -1371,6 +1373,14 @@ export class OrchestratorAgent extends Think<Env> {
       console.warn('[proteus] device status refresh failed:', (err as Error).message);
     }
 
+    // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
+    // when one is already active. Like skills/MCP, this is turn-scoped state,
+    // so it rides the beforeTurn system override, not the cached base prompt.
+    const agentsMd = await collectWorkspaceAgentsMd(
+      this.rt.storage.vfs,
+      this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
+    );
+
     // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
     // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
     // this path can reflect the device status refreshed above plus the turn's
@@ -1382,6 +1392,7 @@ export class OrchestratorAgent extends Think<Env> {
       executors: execs,
       availableTools: activeTools,
       ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
+      ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       model: { id: modelId ?? undefined },

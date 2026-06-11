@@ -161,6 +161,7 @@ export {
 } from './prompting/model-profile.js';
 export {
   renderAgentsMdSection,
+  collectWorkspaceAgentsMd,
   AGENTS_MD_MAX_CHARS,
   type AgentsMdFile,
 } from './prompting/agents-md.js';

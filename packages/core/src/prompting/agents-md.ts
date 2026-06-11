@@ -9,6 +9,9 @@
  * anything cut is truncated/omitted with an explicit note.
  */
 
+import type { VFS } from '../types/primitives.js';
+import type { ExecutorProvider } from '../execution/types.js';
+
 export interface AgentsMdFile {
   /** Where the file was found — shown to the model as provenance. */
   path: string;
@@ -71,4 +74,39 @@ export function renderAgentsMdSection(
     if (entry) parts.push(`### ${entry.path}`, entry.body);
   }
   return parts.join('\n\n');
+}
+
+/**
+ * AGENTS.md discovery for cloud workspaces: the agent VFS root provides
+ * defaults; the sandbox workspace — read only when a container is already
+ * active, never provisioned for this — is the "nearest" file and wins on
+ * conflict. Best-effort: a failed read yields an absent file, never an error.
+ */
+export async function collectWorkspaceAgentsMd(
+  vfs: VFS,
+  sandbox?: ExecutorProvider,
+): Promise<AgentsMdFile[]> {
+  const out: AgentsMdFile[] = [];
+  try {
+    const text = await vfs.readFile('AGENTS.md', { encoding: 'utf8' });
+    if (typeof text === 'string' && text.trim()) {
+      out.push({ path: 'AGENTS.md (agent workspace)', content: text });
+    }
+  } catch { /* absent */ }
+  try {
+    if (sandbox?.getStatus?.().active) {
+      const read = sandbox.tools.readFile;
+      if (read) {
+        const res = await read.execute('/workspace/AGENTS.md');
+        // The sandbox provider returns error strings instead of throwing
+        // ('read error: …' / the not-configured notice) — treat those as absent.
+        if (typeof res === 'string' && res.trim() && !/^read error:|not configured/i.test(res)) {
+          out.push({ path: '/workspace/AGENTS.md (sandbox)', content: res });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[proteus] sandbox AGENTS.md read failed:', (err as Error).message);
+  }
+  return out;
 }
