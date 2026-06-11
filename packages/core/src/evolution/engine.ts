@@ -297,7 +297,11 @@ export class EvolutionEngine {
       const base = selectEvolutionBase(archive, {
         exploreShare: this.agentConfig.getScaffoldExploreShare(),
       });
-      const baseCode = base ? await readScaffoldVersion(this.rt, base.version) : null;
+      // The live file IS the current version's content; only an archived
+      // stepping stone needs the versioned-backup read (v0 has no backup).
+      const baseCode = base
+        ? (base.mode === 'current' ? currentScaffold : await readScaffoldVersion(this.rt, base.version))
+        : null;
 
       const proposed = await this.rt.llm.complete(
         buildScaffoldProposalPrompt(
