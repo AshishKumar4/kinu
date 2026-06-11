@@ -1,15 +1,13 @@
 /**
  * Local code executor for CLI backend using Bun subprocess.
  *
- * Runs user code in a separate Bun process with a 30-second timeout, under
- * the host's OS sandbox (see src/sandbox.ts): the agent's SandboxPolicy
- * bounds filesystem writes and network. Tool-backed execution runs
- * in-process because provider functions cannot be passed across process
- * boundaries — those tools enforce the policy at their own seams.
+ * Runs user code in a separate Bun process with a 30-second timeout.
+ * This is a local convenience boundary, not a security sandbox: code executes
+ * with the user's OS permissions. Tool-backed execution runs in-process because
+ * provider functions cannot be passed across process boundaries.
  */
 
 import type { Executor, ExecuteResult, ResolvedProvider } from '@proteus/core';
-import { annotateSandboxDenial, sandboxLaunch, type HostSandbox } from './sandbox.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
@@ -39,7 +37,7 @@ function addImplicitReturn(code: string): string {
   return lines.join('\n');
 }
 
-export function createSandboxedExecutor(sandbox: HostSandbox): Executor {
+export function createSandboxedExecutor(): Executor {
   return {
     async execute(code, providers): Promise<ExecuteResult> {
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
@@ -50,13 +48,13 @@ export function createSandboxedExecutor(sandbox: HostSandbox): Executor {
         return executeInProcess(code, providerList);
       }
 
-      return executeInSubprocess(code, sandbox);
+      return executeInSubprocess(code);
     },
   };
 }
 
-/** Execute in an OS-sandboxed Bun subprocess with timeout. */
-async function executeInSubprocess(code: string, sandbox: HostSandbox): Promise<ExecuteResult> {
+/** Execute in a Bun subprocess with timeout. */
+async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   const tmpFile = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
   // LLMs often send bare expressions (e.g., "7 * 13") without return.
   // Strategy: try as expression first, fall back to statements with
@@ -79,10 +77,7 @@ async function executeInSubprocess(code: string, sandbox: HostSandbox): Promise<
   writeFileSync(tmpFile, wrapper);
 
   try {
-    // Under 'read-only' the policy mounts a fresh tmpfs over /tmp, so the
-    // wrapper script must be ro-bound back into the sandbox to stay readable.
-    const { policy, launch } = sandboxLaunch(sandbox, ['bun', 'run', tmpFile], { readOnlyFiles: [tmpFile] });
-    const proc = Bun.spawn([...launch.argv], {
+    const proc = Bun.spawn(['bun', 'run', tmpFile], {
       stdout: 'pipe',
       stderr: 'pipe',
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
@@ -93,10 +88,7 @@ async function executeInSubprocess(code: string, sandbox: HostSandbox): Promise<
     clearTimeout(timeout);
 
     const stdout = await new Response(proc.stdout).text();
-    const stderr = annotateSandboxDenial(policy, launch, {
-      exitCode,
-      stderr: await new Response(proc.stderr).text(),
-    });
+    const stderr = await new Response(proc.stderr).text();
 
     if (exitCode !== 0) {
       return { result: undefined, error: stderr.trim() || `Process exited with code ${exitCode}` };
@@ -106,10 +98,7 @@ async function executeInSubprocess(code: string, sandbox: HostSandbox): Promise<
     try {
       const parsed = JSON.parse(lastLine) as { ok: boolean; result?: unknown; error?: string };
       if (parsed.ok) return { result: parsed.result };
-      // Errors thrown INSIDE the wrapper exit 0 — run denial detection on the
-      // reported message so sandbox blocks still surface as escalations.
-      const error = annotateSandboxDenial(policy, launch, { exitCode: 1, stderr: parsed.error ?? 'Unknown error' });
-      return { result: undefined, error };
+      return { result: undefined, error: parsed.error ?? 'Unknown error' };
     } catch {
       return { result: stdout.trim() || undefined };
     }

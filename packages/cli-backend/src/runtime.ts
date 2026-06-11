@@ -12,15 +12,11 @@ import type { CraftedTool } from '@proteus/core';
 import type { ExecutorProvider } from '@proteus/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, type SandboxPolicy, buildRuntime,
+  type LLMProviderConfig, buildRuntime,
   DefaultExecutionRouter, createInlineExecutor,
-  initAgentConfigTable, createAgentConfigStore,
-  resolveSandboxPolicy, isPathWritable, escalationForWrite, formatSandboxEscalation,
 } from '@proteus/core';
-import { detectSandboxBackend, sandboxLaunch, annotateSandboxDenial, type HostSandbox } from './sandbox.js';
 import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
@@ -232,44 +228,27 @@ export function createCLIRuntime(
   // workspace provider and a bound POSIX shell. In CLI/local mode the shell is
   // the user's real machine, rooted at the process cwd where `proteus` or an
   // alias was invoked. Durable agent memory still lives in SQLite/VFS.
-  //
-  // Every local spawn runs under the agent's OS sandbox policy (config-store
-  // sandbox_mode, default workspace-write: cwd + tmp writable, network off).
-  // The policy resolves fresh per spawn so operator changes apply immediately.
-  initAgentConfigTable(execRaw);
-  const agentConfig = createAgentConfigStore(sql);
-  const hostSandbox: HostSandbox = {
-    backend: detectSandboxBackend(),
-    getPolicy: () => resolveSandboxPolicy({
-      mode: agentConfig.getSandboxMode(),
-      workspaceRoot: process.cwd(),
-      tmpDir: tmpdir(),
-      extraWritableRoots: agentConfig.getSandboxWritableRoots(),
-      network: agentConfig.getSandboxNetwork(),
-    }),
-  };
-  const shell: Shell = createHostShell(process.cwd(), hostSandbox);
+  const shell: Shell = createHostShell(process.cwd());
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
-  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, hostSandbox.getPolicy));
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell));
 
   return buildRuntime({
-    sql, execRaw, vfs, llm, executor: createSandboxedExecutor(hostSandbox), schedule,
+    sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel,
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell,
   });
 }
 
-export function createHostShell(cwd: string, sandbox: HostSandbox): Shell {
+export function createHostShell(cwd: string): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       return new Promise((resolve) => {
         const stdin = typeof stdinOrOptions === 'string' ? stdinOrOptions : stdinOrOptions?.stdin;
         const signal = typeof stdinOrOptions === 'string' ? undefined : stdinOrOptions?.signal;
         let settled = false;
-        const { policy, launch } = sandboxLaunch(sandbox, ['/bin/sh', '-lc', command]);
-        const child = spawn(launch.argv[0]!, launch.argv.slice(1), {
+        const child = spawn('/bin/sh', ['-lc', command], {
           cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
           env: process.env,
@@ -300,14 +279,10 @@ export function createHostShell(cwd: string, sandbox: HostSandbox): Shell {
         child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
         child.on('close', (code, signalName) => {
           const aborted = signal?.aborted || signalName === 'SIGTERM' || signalName === 'SIGKILL';
-          const exitCode = code ?? (aborted ? 130 : 0);
-          const baseStderr = aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr;
           finish({
             stdout,
-            // Sandbox-enforced denials surface as structured escalations,
-            // never as bare command failures.
-            stderr: aborted ? baseStderr : annotateSandboxDenial(policy, launch, { exitCode, stderr: baseStderr }),
-            exitCode,
+            stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
+            exitCode: code ?? (aborted ? 130 : 0),
           });
         });
         if (stdin) child.stdin.end(stdin);
@@ -317,7 +292,7 @@ export function createHostShell(cwd: string, sandbox: HostSandbox): Shell {
   };
 }
 
-function createLocalLaptopExecutor(cwd: string, shell: Shell, getPolicy: () => SandboxPolicy): ExecutorProvider {
+function createLocalLaptopExecutor(cwd: string, shell: Shell): ExecutorProvider {
   const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
   return {
     name: 'laptop',
@@ -345,12 +320,6 @@ function createLocalLaptopExecutor(cwd: string, shell: Shell, getPolicy: () => S
         description: 'Write a UTF-8 file on the local machine. Parent directories are created.',
         execute: async (path: unknown, content: unknown) => {
           const p = toHostPath(path);
-          // Same policy the OS enforces on spawned commands, applied at the
-          // in-process write seam (this call never reaches a sandboxed spawn).
-          const policy = getPolicy();
-          if (!isPathWritable(policy, p)) {
-            return formatSandboxEscalation(escalationForWrite(policy, p));
-          }
           await fs.mkdir(resolvePath(p, '..'), { recursive: true });
           await fs.writeFile(p, String(content), 'utf-8');
           return `Written ${String(content).length} bytes to ${p}`;

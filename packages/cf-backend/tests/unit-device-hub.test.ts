@@ -138,35 +138,6 @@ describe('DeviceSocketHub', () => {
     expect(ws.closed).toEqual([{ code: 1000, reason: 'device revoked' }]);
     expect(hub.isConnected('dev-a')).toBe(false);
   });
-
-  test('a HELLO frame stashes the daemon sandbox report; RPC frames still reach the tunnel', async () => {
-    const ctx = fakeCtx();
-    const hub = new DeviceSocketHub(ctx);
-    const ws = fakeSocket();
-    hub.accept('dev-a', ws);
-    expect(hub.sandboxReport('dev-a')).toBeNull(); // pre-sandbox daemons
-
-    const sandbox = {
-      mode: 'workspace-write', writableRoots: ['/home/u', '/tmp'], network: false,
-      backend: 'bwrap', enforced: { filesystem: true, network: true },
-    };
-    hub.handleMessage('dev-a', JSON.stringify({ type: 'HELLO', user: 'u', os: 'linux', sandbox }));
-    expect(hub.sandboxReport('dev-a')).toEqual(sandbox);
-    expect(deviceIdFromSocket(ws)).toBe('dev-a'); // device tag survives the re-attach
-
-    const pending = hub.tunnel('dev-a')!.rpc('exec', ['ls']);
-    const frame = JSON.parse(ws.sent[0]!) as { id: string };
-    hub.handleMessage('dev-a', JSON.stringify({ id: frame.id, result: 'ok' }));
-    expect(await pending).toBe('ok');
-  });
-
-  test('malformed HELLO sandbox values are ignored, not stored', () => {
-    const ctx = fakeCtx();
-    const hub = new DeviceSocketHub(ctx);
-    hub.accept('dev-a', fakeSocket());
-    hub.handleMessage('dev-a', JSON.stringify({ type: 'HELLO', sandbox: { mode: 'yolo' } }));
-    expect(hub.sandboxReport('dev-a')).toBeNull();
-  });
 });
 
 describe('/pc/connect upgrade wiring', () => {

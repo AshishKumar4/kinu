@@ -111,40 +111,6 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalMode()).toBe('strict');
   });
 
-  test('sandboxMode: defaults to workspace-write, validates input', () => {
-    const c = setup();
-    expect(c.getSandboxMode()).toBe('workspace-write');
-    c.setSandboxMode('read-only');
-    expect(c.getSandboxMode()).toBe('read-only');
-    c.setSandboxMode('full');
-    expect(c.getSandboxMode()).toBe('full');
-    expect(() => c.setSandboxMode('yolo' as never)).toThrow('invalid sandbox mode');
-    // Garbage in DB → workspace-write fallback.
-    c.set(AGENT_CONFIG_KEYS.sandboxMode, 'bogus');
-    expect(c.getSandboxMode()).toBe('workspace-write');
-  });
-
-  test('sandboxNetwork: defaults OFF', () => {
-    const c = setup();
-    expect(c.getSandboxNetwork()).toBe(false);
-    c.setSandboxNetwork(true);
-    expect(c.getSandboxNetwork()).toBe(true);
-    c.setSandboxNetwork(false);
-    expect(c.getSandboxNetwork()).toBe(false);
-  });
-
-  test('sandboxWritableRoots: JSON array round-trip, absolute paths only', () => {
-    const c = setup();
-    expect(c.getSandboxWritableRoots()).toEqual([]);
-    c.setSandboxWritableRoots(['/data', 'relative/nope', '/data']);
-    expect(c.getSandboxWritableRoots()).toEqual(['/data']);
-    c.setSandboxWritableRoots([]);
-    expect(c.get(AGENT_CONFIG_KEYS.sandboxWritableRoots)).toBeNull();
-    // Malformed JSON in DB → no extra roots.
-    c.set(AGENT_CONFIG_KEYS.sandboxWritableRoots, '{nope');
-    expect(c.getSandboxWritableRoots()).toEqual([]);
-  });
-
   test('sleepTimeCompute: boolean coerces "true" / "false" strings', () => {
     const c = setup();
     expect(c.getSleepTimeComputeEnabled()).toBe(false);

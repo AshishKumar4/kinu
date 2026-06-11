@@ -17,7 +17,7 @@ import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
-  HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode, SandboxMode,
+  HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
 } from '@proteus/core';
@@ -27,7 +27,7 @@ import {
   EventLog, initEventsHubTables,
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
-  initAgentConfigTable, createAgentConfigStore, isSandboxMode,
+  initAgentConfigTable, createAgentConfigStore,
   initFactsTable, createFactsStore, renderFactsBlock,
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
@@ -313,18 +313,6 @@ export class LocalAgentSession implements BackendHost {
     this.config.setShellApprovalMode(mode);
     this.invalidateModelState();
     this.ensureModelState();
-    return { ok: true, mode };
-  }
-
-  /** OS sandbox mode for local execution. The operator-facing grant path:
-   *  only this surface (never the LLM) can raise the mode towards 'full'. */
-  getSandboxMode(): { mode: SandboxMode } {
-    return { mode: this.config.getSandboxMode() };
-  }
-
-  setSandboxMode(mode: SandboxMode): { ok: true; mode: SandboxMode } {
-    if (!isSandboxMode(mode)) throw new Error(`invalid sandbox mode: ${String(mode)}`);
-    this.config.setSandboxMode(mode);
     return { ok: true, mode };
   }
 
