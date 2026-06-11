@@ -361,6 +361,45 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('do not stop or wrap up tasks early due to token-budget concerns');
   });
 
+  test('per-section char budgets stay pinned (additions must be deliberate)', () => {
+    // Budget regression gate: each builder-owned section of the representative
+    // CF surface stays within its pinned ceiling, so prompt growth is a
+    // reviewed decision, not drift. Ceilings are ~10% over 2026-06 measured
+    // sizes — raise one ONLY alongside an intentional content change.
+    const BUDGETS: Record<string, number> = {
+      'Runtime context': 160,
+      'Operating guidance': 560,
+      'Tools available this turn': 1050,
+      'Execution environments': 2000,
+      'Persistence': 700,
+      'Memory and facts': 560,
+      'Code execution and learned capabilities': 1530,
+      'Parallel sub-agents': 380,
+      'Background work': 260,
+      'Proteus product changes': 290,
+      'Output format': 180,
+    };
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'laptop'],
+      currentDate: '2026-06-11',
+      model: { id: 'anthropic/claude-sonnet-4.5' },
+    });
+    const sections = new Map<string, number>();
+    for (const block of prompt.split(/\n(?=## )/)) {
+      const title = block.split('\n', 1)[0].replace(/^## /, '');
+      sections.set(title, block.length);
+    }
+    const problems: string[] = [];
+    for (const [title, budget] of Object.entries(BUDGETS)) {
+      const size = sections.get(title);
+      if (size === undefined) problems.push(`section "${title}" missing from the prompt`);
+      else if (size > budget) problems.push(`section "${title}" is ${size} chars — over its ${budget}-char budget`);
+    }
+    expect(problems).toEqual([]);
+  });
+
   test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: the `think` tool description previously claimed support for
     // strategies that don't exist. Build the prompt and check it advertises
