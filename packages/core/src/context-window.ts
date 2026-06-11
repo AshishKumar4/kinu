@@ -30,6 +30,12 @@ export function contextWindowForModel(spec: string): number {
 
 export const COMPACT_AT_UTILIZATION = 0.85;
 
+/** Threshold from a KNOWN window — use when the provider catalog reported
+ *  ModelInfo.contextWindow (the source of truth) for the resolved model. */
+export function compactionThresholdForWindow(contextWindow: number, utilization: number = COMPACT_AT_UTILIZATION): number {
+  return Math.floor(contextWindow * utilization);
+}
+
 export function compactionThreshold(spec: string, utilization: number = COMPACT_AT_UTILIZATION): number {
-  return Math.floor(contextWindowForModel(spec) * utilization);
+  return compactionThresholdForWindow(contextWindowForModel(spec), utilization);
 }

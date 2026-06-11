@@ -37,6 +37,7 @@ import {
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
+  appendVolatileContextMessage, hashSystemPrompt,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -761,6 +762,9 @@ export class LocalAgentSession implements BackendHost {
     // Nearest-file-wins AGENTS.md chain, re-read each turn so edits land
     // immediately (a handful of stat calls — negligible next to the LLM call).
     const agentsMd = discoverAgentsMd(this.cwd);
+    // The byte-stable cache prefix — per-turn state (facts, executor status,
+    // activation reasons) rides in the volatile context message appended to
+    // the turn's messages below, sharing the seam with the DO backend.
     const systemPrompt = buildSystemPromptSync(this.rt, {
       extraKnowledge: knowledge || undefined,
       executors,
@@ -773,7 +777,8 @@ export class LocalAgentSession implements BackendHost {
       currentDate: currentDateForPrompt(),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       ...(activeSkills ? { activeSkills } : {}),
-    }) + this.factsTail();
+    });
+    this.recordSystemPromptHash(systemPrompt);
 
     // Attachments ride as ModelMessage file parts (the same shape ai's
     // convertToModelMessages emits for FileUIParts on the cloud path), so
@@ -784,6 +789,15 @@ export class LocalAgentSession implements BackendHost {
     this.history.push(fileParts.length > 0
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
+
+    // The volatile turn context (facts, executor status, activation reasons)
+    // rides as ONE trailing message for THIS turn only — it is never pushed
+    // into the durable history, so the stable prefix stays cacheable.
+    const turnMessages = appendVolatileContextMessage(this.history, {
+      factsBlock: this.renderFactsForTurn(),
+      executors,
+      ...(activeSkills ? { activeSkills } : {}),
+    });
 
     const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
     let fullText = '';
@@ -796,7 +810,7 @@ export class LocalAgentSession implements BackendHost {
     // so role alternation holds). streamText rebuilds each step's messages
     // from scratch, so every drained injection is re-applied at the position
     // (in base-message coordinates) where it first entered the conversation.
-    const baseLength = this.history.length;
+    const baseLength = turnMessages.length;
     const injections: Array<{ index: number; message: ModelMessage; text: string }> = [];
     const prepareStepMessages = ({ messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
       if (this.pendingSteers.length > 0) {
@@ -822,7 +836,7 @@ export class LocalAgentSession implements BackendHost {
         model,
         modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
         system: systemPrompt,
-        history: this.history,
+        history: turnMessages,
         tools: turnTools,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
@@ -984,7 +998,8 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Re-run a task for the replay-eval harness: the current system prompt
-   *  (knowledge tail + facts + soul) and model, isolated history, no tools
+   *  (knowledge tail + soul) and model, the facts world model as the same
+   *  volatile context message live turns get, isolated history, no tools
    *  (see the engine-construction note). */
   private async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
@@ -995,13 +1010,16 @@ export class LocalAgentSession implements BackendHost {
       mode: 'chat',
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       currentDate: currentDateForPrompt(),
-    }) + this.factsTail();
+    });
     let text = '';
     for await (const ev of runChat({
       model,
       modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       system: systemPrompt,
-      history: [{ role: 'user', content: task }],
+      history: appendVolatileContextMessage(
+        [{ role: 'user', content: task }],
+        { factsBlock: this.renderFactsForTurn() },
+      ),
       tools: {},
       maxSteps: 1,
     })) {
@@ -1011,14 +1029,23 @@ export class LocalAgentSession implements BackendHost {
     return text;
   }
 
-  /** The recent-facts world-model block appended to every system prompt (single
-   *  source with the DO's getSystemPrompt). */
-  private factsTail(): string {
+  /** The recent-facts world-model block for the volatile turn context (single
+   *  seam with the DO backend — see core prompting/volatile-context.ts). */
+  private renderFactsForTurn(): string | undefined {
     try {
-      const block = renderFactsBlock(this.factsStore.recentTopK(20), { maxChars: 2000 });
-      if (block) return `\n\n## World model (facts you remembered):\n${block}`;
-    } catch { /* facts table not yet populated */ }
-    return '';
+      return renderFactsBlock(this.factsStore.recentTopK(20), { maxChars: 2000 }) || undefined;
+    } catch { return undefined; /* facts table not yet populated */ }
+  }
+
+  /** Byte-stability telemetry: the system prompt should change only on real
+   *  agent events (soul/skill/model). Emits only on change to stay quiet. */
+  private lastSystemPromptHash: string | null = null;
+  private recordSystemPromptHash(system: string): void {
+    const hash = hashSystemPrompt(system);
+    if (this.lastSystemPromptHash !== null && this.lastSystemPromptHash !== hash) {
+      this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
+    }
+    this.lastSystemPromptHash = hash;
   }
 
   /** The unified `think` tool — single-shot + MCTS + heads. MCTS explores over

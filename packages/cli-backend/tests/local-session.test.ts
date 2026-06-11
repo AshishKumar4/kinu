@@ -169,9 +169,12 @@ describe('LocalAgentSession.send — a user turn', () => {
       }],
     });
 
-    const user = [...observed].reverse().find((m) => m.role === 'user');
+    // The trailing user message is the volatile turn context; the attachment
+    // rides on the user's own message (the one carrying a file part).
+    const user = [...observed].reverse().find((m) =>
+      m.role === 'user' && Array.isArray(m.content) &&
+      (m.content as Array<{ type?: string }>).some((p) => p?.type === 'file'));
     expect(user).toBeDefined();
-    expect(Array.isArray(user!.content)).toBe(true);
     const parts = user!.content as Array<Record<string, unknown>>;
     expect(parts).toHaveLength(2);
     expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'image/png', filename: 'square.png' });
@@ -180,6 +183,42 @@ describe('LocalAgentSession.send — a user turn', () => {
     // The durable transcript persists the text — never the data-URL payload.
     const rows = db.query(`SELECT role, content FROM messages ORDER BY created_at`).all() as Array<{ role: string; content: string }>;
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
+  });
+
+  test('facts ride the trailing volatile context message, never the system prompt', async () => {
+    // Cache-prefix stability: the system prompt must stay byte-stable across
+    // turns, so per-turn state (the facts world model, executor status) is
+    // appended as ONE trailing user message instead.
+    let observed: ModelMessage[] = [];
+    let system = '';
+    const model = historyCapturingModel('ok', (messages) => { observed = messages; });
+    const base = model as unknown as { doStream: (o: never) => unknown };
+    const inner = base.doStream.bind(base);
+    base.doStream = ((options: { prompt?: Array<{ role: string; content: unknown }> }) => {
+      const sys = (options.prompt ?? []).find((m) => m.role === 'system');
+      if (typeof sys?.content === 'string') system = sys.content;
+      return inner(options as never);
+    }) as never;
+    const { db, session } = setup('ok', model);
+
+    await session.send('hi');
+    const factsBefore = observed.map(messageText).join('\n');
+    expect(factsBefore).not.toContain('FACT-MARKER');
+
+    // Seed a fact, then run another turn — it must surface in the tail.
+    db.exec(`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+             VALUES ('test.marker', '"FACT-MARKER"', 1.0, 'tool', ${Date.now()})`);
+    await session.send('and now?');
+
+    expect(system).not.toContain('FACT-MARKER');
+    const tail = messageText(observed.at(-1)!);
+    expect(tail).toStartWith('[Turn context');
+    expect(tail).toContain('World model');
+    expect(tail).toContain('FACT-MARKER');
+
+    // The volatile message is turn-scoped — never persisted.
+    const rows = db.query(`SELECT content FROM messages`).all() as Array<{ content: string }>;
+    expect(rows.some((r) => r.content.includes('Turn context'))).toBe(false);
   });
 
   test('the knowledge block carries the TAIL of MEMORY.md (newest lessons)', async () => {
@@ -250,7 +289,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     await resumed.send('what did I say?');
     await resumed.end();
 
-    const text = observed.map(messageText);
+    // The volatile turn-context message (executor status etc.) trails the
+    // user's message and is never persisted — filter it for the order checks.
+    const text = observed.map(messageText).filter((t) => !t.startsWith('[Turn context'));
     expect(text).toContain('remember this');
     expect(text).toContain('remembered answer');
     expect(text.at(-1)).toBe('what did I say?');

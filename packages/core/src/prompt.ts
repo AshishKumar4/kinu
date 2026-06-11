@@ -152,28 +152,23 @@ function renderToolsSection(surface: PromptSurface): string {
   ].join('\n');
 }
 
-function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
-  if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
-  if (exec.active || exec.status === 'active') return 'active';
-  if (exec.status === 'idle' || exec.configured) return 'ready on demand';
-  return 'available';
-}
-
+/** Doctrine only — live availability labels render in the per-turn volatile
+ *  context message (prompting/volatile-context.ts), never in this cacheable
+ *  prefix, so a sandbox waking up doesn't re-prefill the whole conversation. */
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
-  const suffix = ` (${executorAvailabilityLabel(exec)})`;
   switch (exec.name) {
       case 'workspace':
         return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state; do not treat it as the user\'s PC or a full Linux sandbox.';
       case 'nimbus':
-        return `- **nimbus.*** / \`runtime: "nimbus"\`${suffix}: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.`;
+        return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
       case 'sandbox':
-        return `- **sandbox.*** / \`runtime: "sandbox"\`${suffix}: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.`;
+        return '- **sandbox.*** / `runtime: "sandbox"`: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.';
       case 'laptop':
         return backend === 'cli-local'
-          ? `- **laptop.*** / \`runtime: "laptop"\`${suffix}: the local machine the Proteus CLI is running on — direct access, no tunnel or consent prompt.`
-          : `- **laptop.*** / \`runtime: "laptop"\`${suffix}: the user's OWN PC, connected through the Proteus device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.`;
+          ? '- **laptop.*** / `runtime: "laptop"`: the local machine the Proteus CLI is running on — direct access, no tunnel or consent prompt.'
+          : "- **laptop.*** / `runtime: \"laptop\"`: the user's OWN PC, connected through the Proteus device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.";
       default:
-        return `- **${exec.name}.***${suffix}: available executor namespace.`;
+        return `- **${exec.name}.***: available executor namespace.`;
   }
 }
 
@@ -311,6 +306,18 @@ function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
   return readSoul(rt.storage.sql) ?? FALLBACK_PURPOSE;
 }
 
+/** Skill BODIES belong in the stable prefix (an activation-set change is a
+ *  deliberate cache bust), but the per-turn activation REASONS do not — the
+ *  same active set must render byte-identically regardless of which keyword
+ *  matched. Reasons render in the volatile turn context instead; name order
+ *  is pinned so set equality means byte equality. */
+function stableActiveSkills(activeSkills: ActiveSkillSet): ActiveSkillSet {
+  return {
+    active: [...activeSkills.active].sort((a, b) => a.name.localeCompare(b.name)),
+    reasons: [],
+  };
+}
+
 /**
  * Synchronous because every consumer is: CF's Think.getSystemPrompt returns a
  * string synchronously and the runtime's sql executor is synchronous.
@@ -328,7 +335,7 @@ export function buildSystemPromptSync(
     renderExecutorSection(surface),
     renderAgentStateSection(surface),
     opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
-    opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '',
+    opts.activeSkills ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills)).trim() : '',
     renderKnowledgeSection(opts.extraKnowledge),
   ].filter(Boolean).join('\n\n');
 }

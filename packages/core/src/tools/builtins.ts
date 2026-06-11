@@ -32,6 +32,7 @@ import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
+import { clampToolResult, withClampedToolResult } from './clamp.js';
 import type { CraftedToolExecute } from './crafted-executor.js';
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { DEFAULT_CONFIG } from '../config.js';
@@ -302,6 +303,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
+  // Restorable result budget: oversize execute_tools results are offloaded to
+  // the workspace VFS and clamped to head+tail (see clamp.ts). The `run` tool
+  // clamps at its own return sites below.
+  tools.execute_tools = withClampedToolResult(tools.execute_tools, rt.storage.vfs);
+
   // ── 2. run ───────────────────────────────────────────────────────────────
   // Shell command tool. The `runtime` parameter dispatches through the
   // ExecutionRouter — workspace (default) hits the in-VFS virtual shell;
@@ -354,13 +360,17 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
       }
 
+      // Restorable result budget — full stdout/stderr is offloaded to the
+      // workspace VFS before clamping (see clamp.ts), so big outputs never
+      // rot the session and nothing is lost.
+      const clamp = (text: string) => clampToolResult(text, { vfs: rt.storage.vfs });
       const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
         if (!shell) return 'Error: no workspace shell available in this runtime.';
         const result = await shell.exec(args.command, signal ? { signal } : undefined);
-        if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
-        return result.stdout || '(no output)';
+        if (result.exitCode !== 0) return clamp(`Error (exit ${result.exitCode}): ${result.stderr}`);
+        return clamp(result.stdout || '(no output)');
       }
       const provider = router?.getProvider(runtimeKey);
       if (!provider) {
@@ -389,7 +399,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
         });
       }
-      return (await execTool.execute(args.command, signal ? { signal } : undefined)) as string;
+      return clamp(String(await execTool.execute(args.command, signal ? { signal } : undefined)));
     },
   });
 

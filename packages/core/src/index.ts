@@ -120,7 +120,17 @@ export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
-export { COMPACT_AT_UTILIZATION, compactionThreshold, contextWindowForModel } from './context-window.js';
+export { COMPACT_AT_UTILIZATION, compactionThreshold, compactionThresholdForWindow, contextWindowForModel } from './context-window.js';
+export {
+  buildCompactionSummaryPrompt,
+  renderCompactionTranscript,
+  wrapCompactionSummary,
+  stripCheckpointPreamble,
+  CONTEXT_CHECKPOINT_PREFIX,
+  type CompactableMessage,
+  type CompactableMessagePart,
+  type CompactionSummaryPromptInput,
+} from './compaction.js';
 
 // Canonical tool registry + factories (shared across CF and CLI)
 export {
@@ -134,6 +144,14 @@ export {
   type BuiltinToolSpec,
 } from './tools/registry.js';
 export { buildBuiltinTools, type BuiltinToolDeps, type ProductChangeToolDeps } from './tools/builtins.js';
+export {
+  clampToolResult,
+  clampSerializedToolResult,
+  withClampedToolResult,
+  DEFAULT_TOOL_RESULT_MAX_CHARS,
+  TOOL_OUTPUT_DIR,
+  type ClampToolResultOptions,
+} from './tools/clamp.js';
 export {
   codegenDisallowed,
   toCraftedToolSource,
@@ -176,6 +194,14 @@ export {
   AGENTS_MD_MAX_CHARS,
   type AgentsMdFile,
 } from './prompting/agents-md.js';
+export {
+  appendVolatileContextMessage,
+  executorAvailabilityLabel,
+  hashSystemPrompt,
+  renderVolatileContext,
+  VOLATILE_CONTEXT_HEADER,
+  type VolatileTurnContext,
+} from './prompting/volatile-context.js';
 export {
   extractJsonArray,
   extractJsonObject,
