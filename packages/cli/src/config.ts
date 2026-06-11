@@ -40,6 +40,8 @@ const RESERVED_ALIASES = new Set([
   'provider',
   'providers',
   'run',
+  'exec',
+  'tokens',
   'chat',
   'evolve',
   'status',
@@ -162,9 +164,14 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 export function requireAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
   const config = loadConfigFile();
   const origin = resolveCloudOrigin();
+  // CI path: a token from the environment (typically a scoped `pta_…` access
+  // token from `proteus tokens create`) wins over the stored interactive
+  // session. Long-lived by design — the server is the validity authority.
+  const envToken = process.env.PROTEUS_TOKEN?.trim();
+  if (envToken) return { origin, token: envToken };
   const token = config.accessToken;
   if (!token) {
-    throw new Error('Not authenticated. Run: proteus auth');
+    throw new Error('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
   }
   if (config.tokenExpiresAt) {
     const expiresAt = Date.parse(config.tokenExpiresAt);

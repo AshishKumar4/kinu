@@ -160,7 +160,7 @@ export async function executorsCommand(
   opts: InspectOpts = {},
 ): Promise<void> {
   if (executor) {
-    await execCommand(name, executor, commandParts, opts);
+    await runExecutorCommand(name, executor, commandParts, opts);
     return;
   }
   const target = resolveAgentTarget(name);
@@ -171,7 +171,7 @@ export async function executorsCommand(
   printRows(data, opts, formatExecutorRow);
 }
 
-export async function execCommand(name: string, executor: string, commandParts: string[] = [], opts: InspectOpts = {}): Promise<void> {
+async function runExecutorCommand(name: string, executor: string, commandParts: string[] = [], opts: InspectOpts = {}): Promise<void> {
   const command = commandParts.join(' ').trim();
   if (!command) throw new Error('command required');
   const target = resolveAgentTarget(name);

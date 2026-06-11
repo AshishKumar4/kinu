@@ -6,7 +6,7 @@
 import { Command, Option } from 'commander';
 import { createCommand } from '../src/commands/create.js';
 import { chatCommand } from '../src/commands/chat.js';
-import { runCommand } from '../src/commands/run.js';
+import { execCommand, runCommand } from '../src/commands/run.js';
 import { authCommand, logoutCommand, whoamiCommand } from '../src/commands/auth.js';
 import { aliasCommand, aliasesCommand, unaliasCommand } from '../src/commands/alias.js';
 import { desktopCommand } from '../src/commands/desktop.js';
@@ -21,7 +21,6 @@ import { listCommand } from '../src/commands/list.js';
 import { jobsCommand, modelCommand, toolsCommand, triggersCommand } from '../src/commands/control.js';
 import {
   eventsCommand,
-  execCommand,
   executorsCommand,
   gepaCommand,
   headsCommand,
@@ -34,6 +33,7 @@ import {
   webhookCommand,
 } from '../src/commands/inspect.js';
 import { exportCommand, importCommand } from '../src/commands/export-import.js';
+import { tokensCommand } from '../src/commands/tokens.js';
 import { printHelp, printError } from '../src/display.js';
 
 const program = new Command();
@@ -78,6 +78,14 @@ program
   .description('Sign out of the Proteus CLI')
   .option('--origin <url>', 'Proteus app origin')
   .action(wrapAction(logoutCommand));
+
+program
+  .command('tokens [action] [name]')
+  .description('Manage long-lived CI access tokens (list, create, revoke)')
+  .option('--name <name>', 'Token name for create')
+  .option('--scopes <scopes>', 'Comma-separated scopes: agent.exec, agent.read')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(tokensCommand));
 
 program
   .command('setup')
@@ -234,11 +242,17 @@ program
   .option('--json', 'Print raw JSON')
   .action(wrapAction(executorsCommand));
 
-program
-  .command('exec <name> <executor> [command...]')
-  .description('Run a command through an agent executor')
-  .option('--json', 'Print raw JSON')
-  .action(wrapAction(execCommand));
+llmOpts(
+  program
+    .command('exec [prompt...]')
+    .description('Run one agent task headlessly and exit (CI-friendly; executor passthrough lives under `executors`)')
+    .option('-a, --agent <name>', 'Agent to run (defaults to the only configured agent)')
+    .option('--json', 'Emit line-delimited JSON events')
+    .option('--resume <sessionId>', 'Continue a recorded CLI session')
+    .option('--session-dir <dir>', 'Override CLI session storage directory')
+    .option('--no-session', 'Do not record this run')
+    .option('-n, --name <label>', 'Human-readable session label'),
+).action(wrapAction(execCommand));
 
 program
   .command('product <name>')

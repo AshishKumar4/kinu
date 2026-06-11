@@ -315,6 +315,30 @@ export async function createCloudWebhookTrigger(
   });
 }
 
+export interface CloudAccessToken {
+  tokenHash: string;
+  name: string;
+  scopes: string[];
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+export async function createCliAccessToken(
+  origin: string,
+  token: string,
+  input: { name: string; scopes: string[] },
+): Promise<{ token: string; name: string; scopes: string[]; createdAt: number }> {
+  return cloudJson(origin, '/api/cli/tokens', { method: 'POST', token, body: input });
+}
+
+export async function listCliAccessTokens(origin: string, token: string): Promise<{ tokens: CloudAccessToken[] }> {
+  return cloudJson(origin, '/api/cli/tokens', { token });
+}
+
+export async function revokeCliAccessToken(origin: string, token: string, ref: string): Promise<{ ok: boolean }> {
+  return cloudJson(origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token });
+}
+
 export async function registerCloudDevice(origin: string, token: string, label?: string): Promise<CloudDeviceRegistration> {
   return cloudJson(origin, '/api/cli/devices', { method: 'POST', token, body: { label } });
 }

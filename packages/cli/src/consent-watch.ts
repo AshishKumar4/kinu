@@ -135,6 +135,45 @@ export function watchTerminalConsents(
   });
 }
 
+/**
+ * Headless (CI) consent watcher for `proteus exec`: never prompts. Every
+ * pending device consent is denied immediately — fail closed — with
+ * actionable pre-authorization instructions, and the run is flagged through
+ * `onDenied` so it exits nonzero. Pre-authorized ("always") devices never
+ * raise a consent, so they are unaffected.
+ */
+export function watchHeadlessConsents(
+  consents: DeviceConsentSurface,
+  agentName: string,
+  opts: { json: boolean; onDenied(): void },
+): { stop(): void } {
+  const instructions = `Pre-authorize with "always allow" via proteus chat ${agentName} or the Proteus app, then re-run.`;
+  return watchDeviceConsents(consents, {
+    present: (consent) => {
+      opts.onDenied();
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({
+          type: 'consent_denied',
+          consentId: consent.consentId,
+          deviceLabel: consent.deviceLabel,
+          method: consent.method,
+          command: consent.command,
+          message: `PC access denied (headless run). ${instructions}`,
+        })}\n`);
+      } else {
+        console.error(`\n${WARN('PC access denied (headless run)')} ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
+        console.error(MUTED(`  ${instructions}`));
+      }
+      return Promise.resolve('deny');
+    },
+    note: (kind, message) => {
+      // The consent_denied line already reports the outcome; only real
+      // failures of the deny round-trip are worth surfacing.
+      if (kind === 'error') console.error(`${ERR('error')} ${message}`);
+    },
+  });
+}
+
 async function promptConsentDecision(
   consent: PendingDeviceConsent,
   askLine: ConsentAskLine,

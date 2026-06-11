@@ -1,4 +1,5 @@
 import { initProductChangeTables } from '@proteus/core';
+import { initAccessTokenTable } from '../cli/access-token-store.js';
 
 // UserDO SQL schema. All tables live inside a single Durable Object instance
 // keyed by the stable Proteus userId resolved by the D1 auth store.
@@ -139,6 +140,10 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_cli_tokens_active ON user_cli_tokens (expires_at, revoked_at)`);
+
+  // Long-lived, scoped CI access tokens (`pta_…`) — table shape owned by the
+  // access-token store next to the rest of the CLI bearer machinery.
+  initAccessTokenTable(sql);
 
   // Per-(agent, device) consent policy. Ask-once-then-remember: a missing row
   // means ASK (the agent raises a card in chat the first time it touches the

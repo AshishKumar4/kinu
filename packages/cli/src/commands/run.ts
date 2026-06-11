@@ -22,14 +22,15 @@ import {
   setCloudAgentModel,
   stopCloudAgent,
 } from '../cloud-api.js';
-import { requireAuthConfig } from '../config.js';
+import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { createAgentClient } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
+import type { CliSessionOptions } from '../session.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
 import { resolvePromptAttachments } from '../attachments.js';
-import { watchTerminalConsents } from '../consent-watch.js';
+import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch.js';
 import { ERR, printToolCall, printToolResult } from '../display.js';
 import {
   executeLocalExecutor,
@@ -50,10 +51,27 @@ import {
   searchLocalMemory,
 } from '../local-inspection.js';
 
-export async function runCommand(name: string, promptParts: string[], opts: {
-  model?: string; baseUrl?: string; auth?: string; classic?: boolean;
+interface OneShotLlmOpts {
+  model?: string;
+  baseUrl?: string;
+  auth?: string;
+}
+
+/** Session flags as Commander actually delivers them: `--no-session` arrives
+ *  as `session: false` on the shared option key, not as `noSession: true`. */
+interface OneShotSessionFlags {
+  continue?: boolean;
+  resume?: boolean;
+  session?: string | false;
+  sessionDir?: string;
+  noSession?: boolean;
+  name?: string;
+  fork?: string;
+}
+
+export async function runCommand(name: string, promptParts: string[], opts: OneShotLlmOpts & OneShotSessionFlags & {
+  classic?: boolean;
   mode?: string;
-  continue?: boolean; resume?: boolean; session?: string; sessionDir?: string; noSession?: boolean; name?: string; fork?: string;
 }): Promise<void> {
   const outputMode = normalizeOutputMode(opts.mode);
   const target = resolveAgentTarget(name);
@@ -66,33 +84,138 @@ export async function runCommand(name: string, promptParts: string[], opts: {
   const rawPrompt = await buildPrompt(promptParts);
 
   if (!rawPrompt) {
-    await chatCommand(target.requestedName, opts);
+    await chatCommand(target.requestedName, {
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      auth: opts.auth,
+      classic: opts.classic,
+      ...sessionOptions(opts),
+    });
     return;
   }
 
+  const failed = await runOneShot(target, rawPrompt, opts, {
+    json: outputMode === 'json',
+    headless: false,
+  });
+  if (failed) process.exitCode = 1;
+}
+
+export interface ExecOptions extends OneShotLlmOpts {
+  agent?: string;
+  json?: boolean;
+  resume?: string;
+  session?: string | false;
+  sessionDir?: string;
+  name?: string;
+}
+
+/**
+ * `proteus exec` — the headless face of the one-shot run machinery. Built for
+ * CI: no prompts of any kind (device consents are denied, fail closed, with
+ * pre-authorization instructions), `--json` streams line-delimited events,
+ * and the exit code is honest — 0 only when the turn completed without
+ * errors or denied consents.
+ */
+export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
+  const rawPrompt = await buildPrompt(promptParts);
+  if (!rawPrompt) {
+    throw new Error('A task prompt is required. Usage: proteus exec "task" [--agent <name>] [--json]');
+  }
+  const target = resolveAgentTarget(resolveExecAgentName(opts.agent));
+  const failed = await runOneShot(target, rawPrompt, {
+    model: opts.model,
+    baseUrl: opts.baseUrl,
+    auth: opts.auth,
+    session: opts.resume ?? opts.session,
+    sessionDir: opts.sessionDir,
+    name: opts.name,
+  }, {
+    json: opts.json === true,
+    headless: true,
+  });
+  process.exitCode = failed ? 1 : 0;
+}
+
+/** exec is non-interactive, so an omitted --agent only works when there is
+ *  exactly one configured agent to mean. */
+function resolveExecAgentName(explicit?: string): string {
+  if (explicit?.trim()) return explicit.trim();
+  const agents = listConfiguredAgentRefs();
+  if (agents.length === 1) return agents[0]!.name;
+  throw new Error(agents.length === 0
+    ? 'No agents configured. Create one with: proteus create <name>, or pass --agent <name>.'
+    : `Multiple agents configured — pass --agent <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
+}
+
+/**
+ * The single one-shot run path behind `proteus run <name> "prompt"` and
+ * `proteus exec`: resolve attachments, stream the turn through the
+ * AgentClient seam, watch device consents (interactively or fail-closed),
+ * and report whether anything failed.
+ */
+async function runOneShot(
+  target: AgentTarget,
+  rawPrompt: string,
+  opts: OneShotLlmOpts & OneShotSessionFlags,
+  surface: { json: boolean; headless: boolean },
+): Promise<boolean> {
   // Same @path semantics as the chat surfaces: images/PDFs inline as file
   // parts, other files stay path references the agent reads with its tools.
   const prompt = await resolvePromptAttachments(rawPrompt);
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, opts);
-  const render = outputMode === 'json' ? createJsonEventWriter(client) : renderRunEvent;
-  const unsubscribe = client.subscribe(render);
-  const consentWatch = client.consents && outputMode === 'text'
-    ? watchTerminalConsents(client.consents, client.agentName, askLineOnce)
-    : null;
+  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) });
+
+  let failed = false;
+  const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
+  const unsubscribe = client.subscribe((event) => {
+    if (event.type === 'error') failed = true;
+    render(event);
+  });
+  const consentWatch = !client.consents
+    ? null
+    : surface.headless
+      ? watchHeadlessConsents(client.consents, client.agentName, { json: surface.json, onDenied: () => { failed = true; } })
+      : surface.json
+        ? null
+        : watchTerminalConsents(client.consents, client.agentName, askLineOnce);
   try {
     await client.connect();
-    await client.send(
+    const result = await client.send(
       prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
       { cwd: process.cwd() },
     );
+    if (result.hadError) failed = true;
+  } catch (err) {
+    // In-stream failures already surfaced as an error event; only report
+    // failures that never reached the stream (connect, ticket, transport).
+    const alreadyReported = failed;
+    failed = true;
+    if (!alreadyReported) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', message })}\n`);
+      else console.error(`${ERR('error')} ${message}`);
+    }
   } finally {
     consentWatch?.stop();
     unsubscribe();
     await client.close();
   }
+  return failed;
+}
+
+function sessionOptions(opts: OneShotSessionFlags): CliSessionOptions {
+  return {
+    continue: opts.continue,
+    resume: opts.resume === true,
+    session: typeof opts.session === 'string' ? opts.session : undefined,
+    sessionDir: opts.sessionDir,
+    noSession: opts.noSession === true || opts.session === false,
+    name: opts.name,
+    fork: opts.fork,
+  };
 }
 
 /** One-shot runs have no resident readline — open one per consent question
@@ -117,16 +240,14 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
 
 async function runRpc(
   target: AgentTarget,
-  opts: {
-    model?: string; baseUrl?: string; auth?: string;
-    noSession?: boolean; session?: string; sessionDir?: string; continue?: boolean; resume?: boolean; fork?: string; name?: string;
-  },
+  opts: OneShotLlmOpts & OneShotSessionFlags,
 ): Promise<void> {
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) };
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const client = createAgentClient(target, opts);
+    const client = createAgentClient(target, clientOpts);
     output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'cloud', cwd: process.cwd() });
     const unsubscribe = client.subscribe((event) => output({ type: 'event', event }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -164,7 +285,7 @@ async function runRpc(
   }
 
   ensureLocalDaemonRunning();
-  const client = createAgentClient(target, opts);
+  const client = createAgentClient(target, clientOpts);
   client.subscribe((event) => output({ type: 'event', event }));
   output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'local', cwd: process.cwd() });
   // Defer MCP connection and job recovery until the first prompt.

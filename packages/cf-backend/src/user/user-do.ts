@@ -15,6 +15,16 @@
  */
 import { Agent, callable } from "agents";
 import { parseCliTokenUserId } from "../cli/auth-store.js";
+import {
+  isAccessTokenHashActive,
+  listAccessTokens as listAccessTokenRows,
+  mintAccessToken as mintAccessTokenRow,
+  revokeAccessToken as revokeAccessTokenRow,
+  verifyAccessToken as verifyAccessTokenRow,
+  type AccessTokenMint,
+  type AccessTokenRecord,
+  type AccessTokenScope,
+} from "../cli/access-token-store.js";
 import { MCPClientManager } from "agents/mcp/client";
 import {
   DurableObjectOAuthClientProvider,
@@ -121,6 +131,8 @@ export interface CliTokenVerification {
   user?: { id: string; email: string; displayName: string | null };
   tokenHash?: string;
   expiresAt?: number;
+  /** Present only for scoped `pta_…` access tokens; session tokens are unscoped. */
+  scopes?: AccessTokenScope[];
   error?: string;
 }
 
@@ -375,6 +387,42 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
+  // ── CI access tokens (long-lived, scoped `pta_…` bearers) ──────────
+
+  /** Mint a scoped access token. The step-up policy (interactive session
+   *  token, freshly minted) is enforced by the CLI routes; this DO owns the
+   *  hash-only storage plus name/scope validation. */
+  async mintAccessToken(userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
+    this.ensureInit();
+    return mintAccessTokenRow(this.ctx.storage.sql, userId, name, scopes);
+  }
+
+  /** Verify a `pta_…` access token presented as a bearer. Same contract as
+   *  verifyCliToken, with the granted scopes attached. */
+  async verifyAccessToken(token: string): Promise<CliTokenVerification> {
+    this.ensureInit();
+    const verified = await verifyAccessTokenRow(this.ctx.storage.sql, token);
+    if (!verified.ok) return { ok: false, error: verified.error };
+    const profile = await this.getProfile();
+    if (!profile) return { ok: false, error: 'profile missing' };
+    return {
+      ok: true,
+      user: { id: verified.userId, email: profile.email, displayName: profile.displayName },
+      tokenHash: verified.tokenHash,
+      scopes: verified.scopes,
+    };
+  }
+
+  async listAccessTokens(): Promise<AccessTokenRecord[]> {
+    this.ensureInit();
+    return listAccessTokenRows(this.ctx.storage.sql);
+  }
+
+  async revokeAccessToken(ref: string): Promise<{ ok: true; revoked: boolean }> {
+    this.ensureInit();
+    return revokeAccessTokenRow(this.ctx.storage.sql, ref);
+  }
+
   async issueCliAgentConnectTicket(input: {
     userId: string;
     agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
@@ -391,11 +439,7 @@ export class UserDO extends Agent<Env> {
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
-    const activeToken = this.sqlx<{ expires_at: number }>(
-      `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
-      input.cliTokenHash,
-    )[0];
-    if (!activeToken || activeToken.expires_at <= now) return { ok: false, error: 'invalid CLI token' };
+    if (!this.cliBearerHashActive(input.cliTokenHash, now)) return { ok: false, error: 'invalid CLI token' };
 
     const capabilities = input.capabilities?.length ? input.capabilities : [CLI_AGENT_WEBSOCKET_CAPABILITY];
     if (!capabilities.includes(CLI_AGENT_WEBSOCKET_CAPABILITY)) return { ok: false, error: 'missing websocket capability' };
@@ -458,11 +502,7 @@ export class UserDO extends Agent<Env> {
 
     this.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
     if (!(await this.hasAgent(expected.agentName))) return { ok: false, error: 'agent not found' };
-    const activeToken = this.sqlx<{ expires_at: number }>(
-      `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
-      row.cli_token_hash,
-    )[0];
-    if (!activeToken || activeToken.expires_at <= now) return { ok: false, error: 'invalid CLI token' };
+    if (!this.cliBearerHashActive(row.cli_token_hash, now)) return { ok: false, error: 'invalid CLI token' };
     const profile = await this.getProfile();
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
@@ -478,6 +518,17 @@ export class UserDO extends Agent<Env> {
   async revokeCliToken(tokenHash: string): Promise<{ ok: boolean }> {
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) throw new Error('invalid token hash');
     return this.revokeCliTokenHash(tokenHash);
+  }
+
+  /** A connect ticket stays bound to the bearer that minted it: an
+   *  interactive session token (expiring) or a live access token (revocable). */
+  private cliBearerHashActive(tokenHash: string, now: number): boolean {
+    const session = this.sqlx<{ expires_at: number }>(
+      `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
+      tokenHash,
+    )[0];
+    if (session) return session.expires_at > now;
+    return isAccessTokenHashActive(this.ctx.storage.sql, tokenHash);
   }
 
   // ── Connected devices (user-level laptop/PC tunnel hub) ──────────────

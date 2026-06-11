@@ -7,8 +7,9 @@ import { randomToken, timingSafeEqual } from '../lib/crypto.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
-  inspectCliAuth, pollCliAuth, startCliAuth, type CliTokenIdentity,
+  inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
 } from './auth-store.js';
+import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store.js';
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedAgent, handleCreateAgentRequest } from '../user/agent-access.js';
@@ -78,15 +79,52 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const cli = await authenticateCli(request, env);
   if (cli instanceof Response) return cli;
 
+  const denied = accessTokenDenial(cli, method, path);
+  if (denied) return denied;
+
   if (path === '/me' && method === 'GET') {
     return json({
       user: { id: cli.userId, email: cli.email, displayName: cli.displayName },
       tokenHash: cli.tokenHash,
+      token: { kind: cli.kind, scopes: cli.scopes === 'all' ? 'all' : cli.scopes },
     });
   }
 
   if (path === '/logout' && method === 'POST') {
     await cli.userDO.revokeCliTokenHash(cli.tokenHash);
+    return json({ ok: true });
+  }
+
+  // ── CI access tokens — interactive-session-only management surface ──
+  if (path === '/tokens' && method === 'GET') {
+    return json({ tokens: await cli.userDO.listAccessTokens() });
+  }
+
+  if (path === '/tokens' && method === 'POST') {
+    // Minting a long-lived credential is step-up gated exactly like webhook
+    // creation: the session token itself must come from a fresh `proteus auth`.
+    if (!isFreshAuthTime(await sessionTokenMintedAt(cli))) {
+      return err(401, 'step-up auth required: run `proteus auth` again — minting access tokens needs a sign-in within the last 5 minutes');
+    }
+    const body = await safeJson<{ name?: string; scopes?: string[] }>(request);
+    if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
+      return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
+    }
+    const minted = await cli.userDO.mintAccessToken(cli.userId, body.name, body.scopes);
+    if (!minted.ok) return err(400, minted.error);
+    return json({
+      token: minted.token,
+      name: minted.record.name,
+      scopes: minted.record.scopes,
+      createdAt: minted.record.createdAt,
+    }, { status: 201, headers: { 'cache-control': 'no-store' } });
+  }
+
+  const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
+  if (tokenRevokeMatch && method === 'DELETE') {
+    const ref = decodeURIComponent(tokenRevokeMatch[1]);
+    const result = await cli.userDO.revokeAccessToken(ref);
+    if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
     return json({ ok: true });
   }
 
@@ -200,9 +238,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     // Webhook creation is step-up gated on every path. The CLI's
     // interactive-auth timestamp is its token mint time (minting requires
     // a live browser approval), so a fresh `proteus auth` satisfies it.
-    const tokens = await cli.userDO.listCliTokens();
-    const mintedAt = tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
-    if (!isFreshAuthTime(mintedAt)) {
+    if (!isFreshAuthTime(await sessionTokenMintedAt(cli))) {
       return err(401, 'step-up auth required: run `proteus auth` again — webhook creation needs a sign-in within the last 5 minutes');
     }
     const body = await safeJson<{
@@ -363,6 +399,46 @@ async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<
   const result = await claimOwnedAgent(env, cli.userId, name);
   if (!result.ok) return err(result.status, result.error);
   return result.agent;
+}
+
+/** The CLI's interactive-auth timestamp: the session token's mint time
+ *  (minting requires a live browser approval). Step-up gated routes compare
+ *  it against the fresh-auth window; access tokens never qualify. */
+async function sessionTokenMintedAt(cli: CliTokenIdentity): Promise<number | null> {
+  if (cli.kind !== 'session') return null;
+  const tokens = await cli.userDO.listCliTokens();
+  return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
+}
+
+/** Default-deny gate for scoped `pta_…` access tokens: reads need agent.read,
+ *  run-a-task surfaces need agent.exec, and everything else — webhook/timer
+ *  creation, device registration, agent creation, consent decisions, model
+ *  changes, token management — stays interactive-session-only. Routes added
+ *  in the future are interactive-only until listed here. */
+function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string): Response | null {
+  if (cli.kind !== 'access') return null;
+  if (path === '/me' && method === 'GET') return null; // identity introspection works for any valid bearer
+  const required = requiredAccessScope(method, path);
+  if (!required) {
+    return err(403, 'This operation requires an interactive CLI session token. Sign in with: proteus auth');
+  }
+  if (!tokenAllows(cli, required)) {
+    return err(403, `This access token does not have the ${required} scope.`);
+  }
+  return null;
+}
+
+function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
+  if (method === 'GET') {
+    if (path === '/agents' || path === '/models') return 'agent.read';
+    if (/^\/agents\/[^/]+\/[^/]+/.test(path)) return 'agent.read';
+    return null;
+  }
+  if (method === 'POST') {
+    if (/^\/agents\/[^/]+\/(connect-ticket|stop)$/.test(path)) return 'agent.exec';
+    if (/^\/agents\/[^/]+\/executors\/[^/]+\/exec$/.test(path)) return 'agent.exec';
+  }
+  return null;
 }
 
 function readIntParam(url: URL, key: string): number | undefined {

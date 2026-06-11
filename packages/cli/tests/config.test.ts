@@ -56,9 +56,15 @@ describe("CLI config safety", () => {
     const valid = runRequireAuth(new Date(Date.now() + 60_000).toISOString());
     expect(valid.stdout.toString().trim()).toBe("ok");
   });
+
+  test("PROTEUS_TOKEN env wins over the stored session, even an expired one", () => {
+    const ciToken = `pta_${"0".repeat(32)}_${"a".repeat(44)}`;
+    const result = runRequireAuth(new Date(Date.now() - 60_000).toISOString(), ciToken);
+    expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
+  });
 });
 
-function runRequireAuth(tokenExpiresAt: string) {
+function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
   const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-auth-"));
   tempDirs.push(proteusHome);
   writeFileSync(
@@ -68,13 +74,16 @@ function runRequireAuth(tokenExpiresAt: string) {
   );
   const script = `
     import { requireAuthConfig } from './packages/cli/src/config.ts';
-    try { requireAuthConfig(); console.log('ok'); }
+    try { const auth = requireAuthConfig(); console.log(process.env.PROTEUS_TOKEN ? 'ok ' + auth.token : 'ok'); }
     catch (err) { console.log(err instanceof Error ? err.message : String(err)); }
   `;
+  const env: Record<string, string | undefined> = { ...process.env, PROTEUS_HOME: proteusHome };
+  if (envToken) env.PROTEUS_TOKEN = envToken;
+  else delete env.PROTEUS_TOKEN;
   return Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
-    env: { ...process.env, PROTEUS_HOME: proteusHome },
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });

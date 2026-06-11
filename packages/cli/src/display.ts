@@ -267,8 +267,10 @@ export function printHelp(): void {
   console.log(`  ${ACCENT('provider')}           List or connect model/account providers`);
   console.log(`  ${ACCENT('auth')}               Sign into your Proteus account`);
   console.log(`  ${ACCENT('whoami')}             Show the signed-in account`);
+  console.log(`  ${ACCENT('tokens')}             Manage long-lived CI access tokens`);
   console.log(`  ${ACCENT('create')} [name]      Create a cloud or local agent`);
   console.log(`  ${ACCENT('run')}    <name>      Run once, open chat, or use JSON/RPC mode`);
+  console.log(`  ${ACCENT('exec')}   "task"      Headless one-shot run for scripts and CI (--json)`);
   console.log(`  ${ACCENT('chat')}   <name>      Interactive conversation`);
   console.log(`  ${ACCENT('sessions')} [agent]   List recorded CLI sessions`);
   console.log(`  ${ACCENT('alias')}  <agent>     Create an executable alias command`);

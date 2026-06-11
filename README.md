@@ -67,6 +67,27 @@ jarvis "summarize this repository"
 `proteus setup` opens the browser OAuth flow, stores the app session locally,
 and can also configure local provider keys for fully local agents.
 
+### Headless / CI
+
+`proteus exec` is the non-interactive face of the CLI: it runs one task and
+exits 0 only when the turn completed cleanly (nonzero on errors or denied
+device consents — it never prompts). Mint a scoped access token from an
+interactive session (sign in within the last 5 minutes), store it as a CI
+secret, and pipe the line-delimited JSON events wherever you need them:
+
+```bash
+proteus tokens create --name ci --scopes agent.exec,agent.read   # printed once
+# in the pipeline:
+export PROTEUS_TOKEN=pta_…                                       # from CI secrets
+proteus exec --agent jarvis --json "triage the failing tests" | tee events.jsonl
+```
+
+Access tokens are scoped, not godmode: `agent.exec` runs tasks, `agent.read`
+inspects state, and everything else (webhooks, device registration, agent
+creation, consent decisions) stays interactive-only and is enforced
+server-side. `proteus tokens list` shows last use; `proteus tokens revoke ci`
+kills one immediately.
+
 ## Documentation
 
 | Document | Description |

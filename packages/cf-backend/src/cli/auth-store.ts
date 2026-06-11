@@ -1,6 +1,7 @@
 import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from '../user/user-do.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
+import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store.js';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only
  *  this) to HTTP 429; every other failure is a real error. */
@@ -73,7 +74,15 @@ export interface CliTokenIdentity {
   email: string;
   displayName: string | null;
   tokenHash: string;
+  /** `session` = interactive `ptc_…` token from browser approval (unscoped);
+   *  `access` = long-lived `pta_…` CI token restricted to `scopes`. */
+  kind: 'session' | 'access';
+  scopes: 'all' | AccessTokenScope[];
   userDO: DurableObjectStub<UserDO>;
+}
+
+export function tokenAllows(identity: Pick<CliTokenIdentity, 'scopes'>, scope: AccessTokenScope): boolean {
+  return identity.scopes === 'all' || identity.scopes.includes(scope);
 }
 
 export type CliTokenAuth =
@@ -95,20 +104,25 @@ export function parseCliTokenUserId(token: string): string | null {
   return match?.[1] ?? null;
 }
 
-/** Authenticate a `ptc_…` CLI bearer token from the Authorization header.
- *  Routes to the UserDO embedded in the token, verifies the stored hash.
- *  Shared by the CLI HTTP API and the MCP server (external MCP clients
- *  can't do browser OAuth; the CLI token is their per-user credential). */
+/** Authenticate a CLI bearer token from the Authorization header — either an
+ *  interactive `ptc_…` session token or a scoped `pta_…` access token. Routes
+ *  to the UserDO embedded in the token, verifies the stored hash. Shared by
+ *  the CLI HTTP API and the MCP server (external MCP clients can't do browser
+ *  OAuth; the CLI token is their per-user credential). */
 export async function authenticateCliToken(
   request: Request,
   env: Pick<CliAuthEnv, 'UserDO'>,
 ): Promise<CliTokenAuth> {
   const token = readBearer(request);
   if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
-  const userId = parseCliTokenUserId(token);
+  const sessionUserId = parseCliTokenUserId(token);
+  const accessUserId = sessionUserId ? null : parseAccessTokenUserId(token);
+  const userId = sessionUserId ?? accessUserId;
   if (!userId) return { ok: false, error: 'Malformed CLI token' };
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  const verified = await userDO.verifyCliToken(token);
+  const verified = sessionUserId
+    ? await userDO.verifyCliToken(token)
+    : await userDO.verifyAccessToken(token);
   if (!verified.ok || !verified.user || !verified.tokenHash) {
     return { ok: false, error: verified.error ?? 'Invalid CLI token' };
   }
@@ -119,6 +133,8 @@ export async function authenticateCliToken(
       email: verified.user.email,
       displayName: verified.user.displayName,
       tokenHash: verified.tokenHash,
+      kind: sessionUserId ? 'session' : 'access',
+      scopes: sessionUserId ? 'all' : verified.scopes ?? [],
       userDO,
     },
   };
