@@ -1,16 +1,20 @@
 /**
- * Multi-model evaluation pipeline — replaces naive LLM self-scoring.
+ * Multi-model evaluation pipeline — the replacement for naive LLM self-scoring.
+ *
+ * STATUS: available but NOT yet wired into the production MCTS path. Branch
+ * scoring today is ExplorationAgent.evaluate (same-model self-rating on the
+ * CF backend); R1 of the SOTA roadmap routes branch evaluation through this
+ * pipeline instead. Covered by unit tests only.
  *
  * Architecture reference: final-architecture.md §5.6
  * Paper: LLM-as-Judge arXiv:2306.05685 — position/verbosity/self-enhancement bias
  *
- * Three layers:
+ * Two layers:
  * 1. Execution-based scoring (ground truth for verifiable tasks, bypasses LLM)
  * 2. Cross-model judging (different model eliminates self-enhancement bias)
- * 3. Calibration against task history (anchors scores to known reference)
  */
 
-import type { LLM, SqlExecutor, Executor } from '../types/primitives.js';
+import type { LLM, Executor } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 
 export async function evaluateWithMultiModelJudging(
@@ -19,7 +23,6 @@ export async function evaluateWithMultiModelJudging(
   executor: Executor,
   judgeModel: LLM | undefined,
   explorerModel: LLM,
-  sql: SqlExecutor,
 ): Promise<number> {
   // Layer 1: execution-based scoring (when task is verifiable)
   const execScore = await tryExecutionBasedScoring(executor, task, trajectory);
@@ -28,10 +31,7 @@ export async function evaluateWithMultiModelJudging(
   // Layer 2: cross-model judging
   const judge = judgeModel ?? explorerModel;
   const prompt = buildJudgePrompt(task, trajectory);
-  const rawScore = await scoreWithJudge(judge, prompt);
-
-  // Layer 3: calibration against task history
-  return calibrate(sql, task, rawScore);
+  return scoreWithJudge(judge, prompt);
 }
 
 async function tryExecutionBasedScoring(
@@ -95,29 +95,4 @@ async function scoreWithJudge(judge: LLM, prompt: string): Promise<number> {
   } catch {
     return 0;
   }
-}
-
-async function calibrate(
-  sql: SqlExecutor,
-  task: string,
-  rawScore: number,
-): Promise<number> {
-  const taskWords = task.toLowerCase().replace(/[^a-z ]/g, '').split(' ').slice(0, 5).join(' ');
-  // task_history is an optional table the host populates over time. On a
-  // fresh agent it doesn't exist yet — return the raw score unchanged
-  // instead of throwing on the missing-table SQL error.
-  let reference: number | null | undefined;
-  try {
-    reference = sql<{ best_score: number | null }>`
-      SELECT MAX(score) as best_score
-      FROM task_history
-      WHERE task LIKE ${'%' + taskWords + '%'}
-        AND outcome = 'success'
-        AND score IS NOT NULL
-    `[0]?.best_score;
-  } catch { return rawScore; }
-
-  if (reference == null || reference < 0.1) return rawScore;
-
-  return Math.min(1, Math.max(0, rawScore * (reference / Math.max(reference, rawScore))));
 }

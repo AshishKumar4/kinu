@@ -5,10 +5,10 @@
 // spending the full rollout cost. Math-RL literature (Lightman 2024,
 // ThinkPRM 2025, BiRM 2025) reports substantial efficiency gains.
 //
-// Proteus uses this in two places:
-//  1. MCTS engine: blend step score into the UCT backprop alongside the
-//     final-rollout score.
-//  2. Scaffold runtime: per-step quality signal for early termination.
+// STATUS: available but NOT yet wired into any production path — neither the
+// MCTS engine nor the scaffold runtime calls scoreStepWithJudge today. R1 of
+// the SOTA roadmap blends step scores into UCT backprop. Covered by unit
+// tests only.
 //
 // The judge model receives (task, accumulated trajectory so far, current
 // step's action+observation) and emits a [0..1] score with a short rationale.
