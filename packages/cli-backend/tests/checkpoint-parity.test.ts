@@ -1,0 +1,113 @@
+/**
+ * Cross-implementation store-format parity: the TS engine (cli-backend
+ * createHostCheckpoints, importing core/checkpoints/format) and the zero-dep
+ * pc-agent daemon engine (which PINS the same format as literals) must read
+ * and restore each other's snapshots from one shared store. This test is the
+ * enforcement behind both files' "same store format" comments — real git,
+ * one store directory, both engines.
+ */
+import { describe, expect, test } from 'bun:test';
+import { createRequire } from 'node:module';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHostCheckpoints } from '../src/checkpoints.js';
+
+const require = createRequire(import.meta.url);
+const daemon = require('../../pc-agent/src/index.js') as {
+  createCheckpoints: (opts?: { base?: string; keep?: number; gitBin?: string }) => {
+    ensure(hint: { agent: string; dir: string; turnId?: string; sessionId?: string }, fallbackDir?: string): string | null;
+    list(agent: string, limit?: number): Array<{ id: string; dir: string; at: number; turnId: string | null; sessionId: string | null; reason: string }>;
+    plan(agent: string, dir: string, id: string): { dir: string; id: string; files: Array<{ path: string; kind: string }> };
+    restore(agent: string, dir: string, id: string): { dir: string; id: string; preRestoreId: string | null };
+  };
+};
+
+const AGENT = 'parity-agent';
+
+function setup() {
+  const root = mkdtempSync(join(tmpdir(), 'proteus-parity-'));
+  const work = join(root, 'project');
+  mkdirSync(work, { recursive: true });
+  const base = join(root, 'shadow');
+  const host = createHostCheckpoints({ agent: AGENT, base });
+  const device = daemon.createCheckpoints({ base });
+  return { root, work, host, device, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
+  test('a host-engine snapshot is listed, planned, and restored by the daemon', async () => {
+    const { work, host, device, cleanup } = setup();
+    try {
+      writeFileSync(join(work, 'a.txt'), 'host wrote this');
+      host.beginTurn({ turnId: 'turn-ts', sessionId: 'sess-1' });
+      const id = await host.ensureCheckpoint(work);
+      expect(id).toBeTruthy();
+
+      // The daemon reads the SAME store: identical id, turn meta, and dir.
+      const listed = device.list(AGENT);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({
+        id, dir: work, turnId: 'turn-ts', sessionId: 'sess-1', reason: 'pre-mutation',
+      });
+
+      writeFileSync(join(work, 'a.txt'), 'damage');
+      writeFileSync(join(work, 'junk.txt'), 'extra');
+      const plan = device.plan(AGENT, work, id!);
+      expect(plan.files.map((f) => `${f.kind}:${f.path}`).sort())
+        .toEqual(['delete:junk.txt', 'modify:a.txt']);
+
+      const result = device.restore(AGENT, work, id!);
+      expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('host wrote this');
+      expect(existsSync(join(work, 'junk.txt'))).toBe(false);
+      // The daemon's pre-restore safety snapshot is null-turn, same as the
+      // host engine's — so /undo grouping behaves identically on both sides.
+      const preRestore = device.list(AGENT).find((e) => e.id === result.preRestoreId);
+      expect(preRestore).toMatchObject({ turnId: null, sessionId: null, reason: 'pre-restore' });
+    } finally { cleanup(); }
+  });
+
+  test('a daemon snapshot is listed, planned, and restored by the host engine', async () => {
+    const { work, host, device, cleanup } = setup();
+    try {
+      writeFileSync(join(work, 'b.txt'), 'daemon wrote this');
+      const id = device.ensure({ agent: AGENT, dir: work, turnId: 'turn-js', sessionId: 'sess-2' });
+      expect(id).toBeTruthy();
+
+      const listed = await host.list();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({
+        id, dir: work, turnId: 'turn-js', sessionId: 'sess-2', reason: 'pre-mutation',
+      });
+
+      writeFileSync(join(work, 'b.txt'), 'damage');
+      const plan = await host.plan(work, id!);
+      expect(plan.files).toEqual([{ path: 'b.txt', kind: 'modify' }]);
+
+      await host.restore(work, id!);
+      expect(readFileSync(join(work, 'b.txt'), 'utf8')).toBe('daemon wrote this');
+    } finally { cleanup(); }
+  });
+
+  test('both engines write byte-identical store scaffolding (marker + excludes)', async () => {
+    const { root, work, host, device, cleanup } = setup();
+    try {
+      // Two separate dirs so each engine inits its own store from scratch.
+      const workB = join(root, 'project-b');
+      mkdirSync(workB);
+      writeFileSync(join(work, 'x'), '1');
+      writeFileSync(join(workB, 'x'), '1');
+      host.beginTurn({ turnId: 't', sessionId: 's' });
+      await host.ensureCheckpoint(work);
+      device.ensure({ agent: AGENT, dir: workB, turnId: 't', sessionId: 's' });
+
+      const stores = (await import('node:fs')).readdirSync(join(root, 'shadow', AGENT));
+      expect(stores).toHaveLength(2);
+      const [a, b] = stores.map((name) => join(root, 'shadow', AGENT, name));
+      expect(readFileSync(join(a!, 'info', 'exclude'), 'utf8')).toBe(readFileSync(join(b!, 'info', 'exclude'), 'utf8'));
+      // Marker files differ only by the recorded target dir.
+      expect(readFileSync(join(a!, 'PROTEUS_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
+      expect(readFileSync(join(b!, 'PROTEUS_WORKDIR'), 'utf8').trim()).toMatch(/project(-b)?$/);
+    } finally { cleanup(); }
+  });
+});

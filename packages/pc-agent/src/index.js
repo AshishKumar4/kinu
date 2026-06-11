@@ -26,9 +26,11 @@ function runCommand(cmd, args) {
 
 // ── Shadow-git checkpoints ─────────────────────────────────────────────
 //
-// Mirrors cli-backend/src/checkpoints.ts byte-for-byte (same store layout,
-// ref scheme, and commit-subject encoding) so a machine's checkpoints are one
-// format regardless of which side wrote them:
+// Zero-dep mirror of the store format in core/src/checkpoints/format.ts
+// (same layout, ref scheme, and commit-subject encoding — the constants below
+// pin it; cli-backend/tests/checkpoint-parity.test.ts round-trips one store
+// through both engines) so a machine's checkpoints are one format regardless
+// of which side wrote them:
 //
 //   ~/.proteus/checkpoints/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR
 //     PROTEUS_WORKDIR                                    — the target dir

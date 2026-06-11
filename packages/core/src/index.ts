@@ -357,6 +357,12 @@ export {
   type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
 } from './checkpoints/types.js';
+// Shadow-git store format — the cross-engine contract (cli-backend imports
+// it; the zero-dep pc-agent daemon pins it, enforced by the parity test).
+export {
+  CHECKPOINT_REF_PREFIX, CHECKPOINT_WORKDIR_MARKER, CHECKPOINT_EXCLUDES,
+  checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
+} from './checkpoints/format.js';
 
 // Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
 export {

@@ -3,17 +3,13 @@
  * core FileCheckpoints seam (Hermes checkpoint_manager pattern, see
  * external/hermes-agent/tools/checkpoint_manager.py).
  *
- * Store layout (mirrored byte-for-byte by the pc-agent daemon so a machine's
- * checkpoints are one format regardless of which side wrote them):
- *
- *   ~/.proteus/checkpoints/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR
- *     PROTEUS_WORKDIR                                    — the target dir
- *     info/exclude                                       — default excludes
- *     refs/proteus/<ms13>-<seq>                          — one ref per snapshot
+ * Store format (constants + subject/ref encoding) lives in
+ * @proteus/core/checkpoints/format — the pc-agent daemon writes the same
+ * layout (zero-dep mirror, enforced by tests/checkpoint-parity.test.ts) so a
+ * machine's checkpoints are one format regardless of which side wrote them.
  *
  * Every snapshot is a parentless commit (content-addressed: unchanged blobs
- * and trees are shared across snapshots) whose subject encodes the turn:
- * `turn=<id|-> session=<id|-> <reason>`. GIT_WORK_TREE points at the target
+ * and trees are shared across snapshots). GIT_WORK_TREE points at the target
  * directory and the user's own `.git/` is excluded, so the user's repo is
  * never touched. All git config is isolated (no gpg prompts, no hooks).
  */
@@ -25,23 +21,15 @@ import { homedir, devNull } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
+  CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,
+  CHECKPOINT_EXCLUDES, checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
 } from '@proteus/core';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
-const REF_PREFIX = 'refs/proteus';
-const WORKDIR_MARKER = 'PROTEUS_WORKDIR';
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 const GIT_TIMEOUT_MS = 30_000;
-
-export const CHECKPOINT_EXCLUDES = [
-  '.git/', '.hg/', '.svn/',
-  'node_modules/', '.venv/', 'venv/', '__pycache__/', '*.pyc',
-  'dist/', 'build/', 'target/', 'out/', '.next/', '.nuxt/',
-  '.cache/', '.pytest_cache/', '.mypy_cache/', '.ruff_cache/', 'coverage/',
-  '.DS_Store', 'Thumbs.db', '*.log',
-];
 
 export interface HostCheckpointsOpts {
   agent: string;
@@ -135,21 +123,6 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     await fs.writeFile(join(gitDir, WORKDIR_MARKER), resolve(workdir) + '\n', 'utf8');
   }
 
-  function subjectFor(meta: CheckpointTurnMeta | null, reason: string): string {
-    const clean = (s: string) => s.replace(/[\n|]/g, ' ').trim() || '-';
-    return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
-  }
-
-  function parseSubject(subject: string): { turnId: string | null; sessionId: string | null; reason: string } {
-    const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
-    if (!m) return { turnId: null, sessionId: null, reason: subject };
-    return {
-      turnId: m[1] === '-' ? null : m[1]!,
-      sessionId: m[2] === '-' ? null : m[2]!,
-      reason: m[3]!,
-    };
-  }
-
   function snapshotSkipped(dir: string): boolean {
     const abs = resolve(dir);
     return abs === '/' || abs === resolve(homedir()) || !existsSync(abs) || !statSync(abs).isDirectory();
@@ -172,11 +145,6 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
    *  for read-only ref operations when the workdir vanished. */
   function workdirOrBase(workdir: string): string {
     return existsSync(workdir) ? workdir : base;
-  }
-
-  function refTimestampMs(ref: string): number {
-    const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
-    return m ? Number(m[1]) : 0;
   }
 
   /** Stage the working tree and write it as a tree object. */
@@ -208,7 +176,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (latestTree.code === 0 && latestTree.stdout.trim() === tree) return latest.id;
     }
 
-    const commit = await runGit(['commit-tree', tree, '-m', subjectFor(meta, reason)], abs, env);
+    const commit = await runGit(['commit-tree', tree, '-m', checkpointSubject(meta, reason)], abs, env);
     if (commit.code !== 0) throw new Error(`checkpoint commit failed: ${commit.stderr.trim()}`);
     const sha = commit.stdout.trim();
     const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
@@ -292,8 +260,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         if (!existsSync(join(gitDir, 'HEAD')) || !existsSync(markerPath)) continue;
         const workdir = (await fs.readFile(markerPath, 'utf8')).trim();
         for (const ref of await storeRefs(gitDir, workdir)) {
-          const meta = parseSubject(ref.subject);
-          entries.push({ id: ref.id, dir: workdir, at: refTimestampMs(ref.ref), ...meta });
+          const meta = parseCheckpointSubject(ref.subject);
+          entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
         }
       }
       entries.sort((a, b) => b.at - a.at);
