@@ -16,7 +16,8 @@
  * injection all live in @proteus/core so the CLI surface shares them verbatim.
  */
 
-import { callable } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/ws-rpc-gate.js";
 import { createProteusCompactFunction } from "./lib/compaction.js";
 import { getSandbox } from "@cloudflare/sandbox";
 import { Think, Session } from "@cloudflare/think";
@@ -325,6 +326,40 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
 
 export class OrchestratorAgent extends Think<Env> {
   override maxSteps = resolveMaxSteps();
+
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
+    // websockets, and the REST scope gate never sees websocket frames — so
+    // out-of-scope @callable requests are rejected here, ahead of the
+    // agents-SDK rpc dispatcher (installed as an own-property onMessage
+    // wrapper by the Agent constructor, hence the re-wrap instead of an
+    // onMessage override). Chat frames pass through untouched.
+    const dispatchMessage = this.onMessage;
+    this.onMessage = async (connection, message) => {
+      const rejection = rejectOutOfScopeRpc(connection.tags, message);
+      if (rejection) {
+        connection.send(rejection);
+        return;
+      }
+      return dispatchMessage.call(this, connection, message);
+    };
+  }
+
+  /** Persist the verified connect-ticket scopes (edge-set header, see
+   *  appendIdentityHeaders) as a connection tag — tags ride the WebSocket
+   *  attachment, so the rpc gate survives DO hibernation. */
+  override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
+    const tags = await super.getConnectionTags(connection, ctx);
+    const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
+    return scopeTag ? [...tags, scopeTag] : tags;
+  }
+
+  /** Scoped access-token connections may chat but never write agent state. */
+  override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
+    return super.shouldConnectionBeReadonly(connection, ctx)
+      || !!ctx.request.headers.get(CLI_SCOPES_HEADER);
+  }
 
   private _rt: CFRuntime | null = null;
   private _engine: EvolutionEngine | null = null;

@@ -9,6 +9,7 @@
 import { DEVICE_CONNECT_PATH } from '@proteus/core';
 import { readD1Bookmark, verifySession } from './d1-store.js';
 import { sha256Hex } from '../lib/crypto.js';
+import type { AccessTokenScope } from '../cli/access-token-store.js';
 
 export const SESSION_COOKIE_NAME = '__Host-proteus_session';
 
@@ -25,6 +26,10 @@ export interface AuthIdentity {
   authTime?: number;
   /** Latest D1 session bookmark for sequentially consistent replica reads. */
   d1Bookmark?: string | null;
+  /** Present only for connect-ticket identities backed by a scoped `pta_…`
+   *  access token — the agent websocket pins the connection to these scopes.
+   *  Absent for browser sessions and interactive CLI session tokens. */
+  cliScopes?: AccessTokenScope[];
 }
 
 /** Step-up (fresh-auth) window for sensitive operations — creating webhook

@@ -38,6 +38,7 @@ import {
 } from "./auth/session.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
+import { CLI_SCOPES_HEADER } from "./cli/ws-rpc-gate.js";
 import { claimOwnedAgent } from "./user/agent-access.js";
 import { err } from "./lib/http.js";
 
@@ -149,6 +150,7 @@ async function authenticateCliAgentTicketRequest(
         sub: 'cli',
         provider: 'cli',
         authTime: Date.now(),
+        ...(verified.scopes ? { cliScopes: verified.scopes } : {}),
       },
       request: new Request(url.toString(), request),
     };
@@ -160,7 +162,10 @@ async function authenticateCliAgentTicketRequest(
   }
 }
 
-const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(`^/agents/${ORCHESTRATOR_AGENT_SLUG}/([^/]+)`);
+// Anchored: a connect ticket is only valid for the agent's root websocket
+// path. Sub-paths (e.g. facet routing under the agent) would expose a child
+// agent's @callable surface to scoped sockets, so they never ticket-auth.
+const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(`^/agents/${ORCHESTRATOR_AGENT_SLUG}/([^/]+)$`);
 
 function extractOrchestratorAgentName(pathname: string): string | null {
   const match = pathname.match(ORCHESTRATOR_AGENT_PATH_RE);
@@ -273,6 +278,10 @@ function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);
   next.set('x-proteus-user-id', identity.userId);
   if (identity.authTime) next.set('x-proteus-auth-time', String(identity.authTime));
+  // Always rewritten from the verified identity so a client can never smuggle
+  // (or strip) the scope restriction the DO websocket boundary enforces.
+  next.delete(CLI_SCOPES_HEADER);
+  if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));
   return next;
 }
 

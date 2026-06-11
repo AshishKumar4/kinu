@@ -16,7 +16,7 @@
 import { Agent, callable } from "agents";
 import { parseCliTokenUserId } from "../cli/auth-store.js";
 import {
-  isAccessTokenHashActive,
+  getActiveAccessTokenScopes,
   listAccessTokens as listAccessTokenRows,
   mintAccessToken as mintAccessTokenRow,
   revokeAccessToken as revokeAccessTokenRow,
@@ -143,6 +143,10 @@ export interface CliAgentConnectTicketVerification {
   tokenHash?: string;
   expiresAt?: number;
   capabilities?: string[];
+  /** Present only when the ticket was minted by a scoped `pta_…` access
+   *  token — the websocket boundary pins the connection to these scopes.
+   *  Interactive session tickets are unscoped. */
+  scopes?: AccessTokenScope[];
   error?: string;
 }
 
@@ -440,7 +444,7 @@ export class UserDO extends Agent<Env> {
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
-    if (!this.cliBearerHashActive(input.cliTokenHash, now)) return { ok: false, error: 'invalid CLI token' };
+    if (!this.cliBearerScopes(input.cliTokenHash, now)) return { ok: false, error: 'invalid CLI token' };
 
     const capabilities = input.capabilities?.length ? input.capabilities : [CLI_AGENT_WEBSOCKET_CAPABILITY];
     if (!capabilities.includes(CLI_AGENT_WEBSOCKET_CAPABILITY)) return { ok: false, error: 'missing websocket capability' };
@@ -503,7 +507,8 @@ export class UserDO extends Agent<Env> {
 
     this.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
     if (!(await this.hasAgent(expected.agentName))) return { ok: false, error: 'agent not found' };
-    if (!this.cliBearerHashActive(row.cli_token_hash, now)) return { ok: false, error: 'invalid CLI token' };
+    const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
+    if (!bearerScopes) return { ok: false, error: 'invalid CLI token' };
     const profile = await this.getProfile();
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
@@ -512,6 +517,7 @@ export class UserDO extends Agent<Env> {
       tokenHash: row.cli_token_hash,
       expiresAt: row.expires_at,
       capabilities,
+      ...(bearerScopes === 'all' ? {} : { scopes: bearerScopes }),
     };
   }
 
@@ -522,14 +528,17 @@ export class UserDO extends Agent<Env> {
   }
 
   /** A connect ticket stays bound to the bearer that minted it: an
-   *  interactive session token (expiring) or a live access token (revocable). */
-  private cliBearerHashActive(tokenHash: string, now: number): boolean {
+   *  interactive session token (expiring, unscoped → 'all') or a live access
+   *  token (revocable, pinned to its granted scopes). Null when the bearer is
+   *  no longer valid. Scopes are resolved at verify time so a revoked access
+   *  token can never ride a pre-minted ticket. */
+  private cliBearerScopes(tokenHash: string, now: number): 'all' | AccessTokenScope[] | null {
     const session = this.sqlx<{ expires_at: number }>(
       `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
       tokenHash,
     )[0];
-    if (session) return session.expires_at > now;
-    return isAccessTokenHashActive(this.ctx.storage.sql, tokenHash);
+    if (session) return session.expires_at > now ? 'all' : null;
+    return getActiveAccessTokenScopes(this.ctx.storage.sql, tokenHash);
   }
 
   // ── Connected devices (user-level laptop/PC tunnel hub) ──────────────

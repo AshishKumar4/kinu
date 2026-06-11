@@ -5,8 +5,8 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   ACCESS_TOKEN_SCOPES,
+  getActiveAccessTokenScopes,
   initAccessTokenTable,
-  isAccessTokenHashActive,
   listAccessTokens,
   mintAccessToken,
   normalizeAccessTokenScopes,
@@ -117,7 +117,15 @@ describe('verify', () => {
     expect(revokeAccessToken(sql, minted.record.tokenHash).revoked).toBe(true);
     const afterRevoke = await verifyAccessToken(sql, minted.token);
     expect(afterRevoke.ok).toBe(false);
-    expect(isAccessTokenHashActive(sql, minted.record.tokenHash)).toBe(false);
+    expect(getActiveAccessTokenScopes(sql, minted.record.tokenHash)).toBeNull();
+  });
+
+  test('resolves live scopes by bearer hash for connect-ticket pinning', async () => {
+    const { sql } = setup();
+    const minted = await mintAccessToken(sql, USER_ID, 'ci', ['agent.read', 'agent.exec']);
+    if (!minted.ok) throw new Error(minted.error);
+    expect(getActiveAccessTokenScopes(sql, minted.record.tokenHash)).toEqual(['agent.read', 'agent.exec']);
+    expect(getActiveAccessTokenScopes(sql, 'f'.repeat(64))).toBeNull();
   });
 });
 

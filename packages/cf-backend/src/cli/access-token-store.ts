@@ -158,13 +158,18 @@ export function revokeAccessToken(sql: SqlExec, ref: string): { ok: true; revoke
   return { ok: true, revoked: true };
 }
 
-/** Whether a bearer hash belongs to a live (un-revoked) access token — used
- *  by the connect-ticket validity checks alongside session tokens. */
-export function isAccessTokenHashActive(sql: SqlExec, tokenHash: string): boolean {
-  return !!sql.exec(
-    `SELECT 1 AS x FROM user_access_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
+/** Scopes of the live (un-revoked) access token behind a bearer hash, or null
+ *  when the hash matches no active access token — used by the connect-ticket
+ *  validity checks alongside session tokens, and to pin the resulting agent
+ *  websocket to the bearer's scopes. */
+export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): AccessTokenScope[] | null {
+  const row = sql.exec(
+    `SELECT scopes FROM user_access_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
     tokenHash,
-  ).toArray()[0];
+  ).toArray()[0] as { scopes: string } | undefined;
+  if (!row) return null;
+  const scopes = parseScopeList(String(row.scopes));
+  return scopes.length > 0 ? scopes : null;
 }
 
 function parseScopeList(value: string): AccessTokenScope[] {
