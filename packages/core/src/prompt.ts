@@ -13,6 +13,8 @@ import { renderActiveSkillsSection } from './skills/render.js';
 import type { ActiveSkillSet } from './skills/types.js';
 import {
   compilePromptSurface,
+  executorIsSelectable,
+  type PromptBackend,
   type PromptExecutorInfo,
   type PromptExternalToolInfo,
   type PromptSurface,
@@ -139,7 +141,7 @@ function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   return 'available';
 }
 
-function renderExecutorLine(exec: PromptExecutorInfo): string {
+function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   const suffix = ` (${executorAvailabilityLabel(exec)})`;
   switch (exec.name) {
       case 'workspace':
@@ -149,24 +151,45 @@ function renderExecutorLine(exec: PromptExecutorInfo): string {
       case 'sandbox':
         return `- **sandbox.*** / \`runtime: "sandbox"\`${suffix}: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.`;
       case 'laptop':
-        return `- **laptop.*** / \`runtime: "laptop"\`${suffix}: the user's connected local machine through the Proteus device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment.`;
+        return backend === 'cli-local'
+          ? `- **laptop.*** / \`runtime: "laptop"\`${suffix}: the local machine the Proteus CLI is running on — direct access, no tunnel or consent prompt.`
+          : `- **laptop.*** / \`runtime: "laptop"\`${suffix}: the user's OWN PC, connected through the Proteus device tunnel. Use it when the task targets local files, local commands, or the user's desktop environment. Its first use asks the user for consent — that prompt is expected, not an error.`;
       default:
         return `- **${exec.name}.***${suffix}: available executor namespace.`;
   }
 }
 
-function renderExecutorSection(executors: readonly PromptExecutorInfo[], tools: readonly BuiltinToolName[]): string {
+/** A registered-but-offline laptop is still listed (the user can bring it
+ *  back), unlike other unavailable executors, which are omitted entirely. */
+function renderOfflineLaptopLine(): string {
+  return '- **laptop** / `runtime: "laptop"` (registered, currently OFFLINE): the user\'s own PC is registered but not connected right now. Do not call it; if the user wants it used, tell them to run `proteus connect` on their machine.';
+}
+
+function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
+  return executors.find((exec) =>
+    exec.name === 'laptop' && exec.configured === true && !executorIsSelectable(exec));
+}
+
+function renderExecutorSection(surface: PromptSurface): string {
+  const tools = surface.builtinTools;
   if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
 
-  if (executors.length === 0) return '';
+  const executors = surface.selectableExecutors;
+  const laptopOffline = offlineLaptop(surface.executors);
+  if (executors.length === 0 && !laptopOffline) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
   const devices = executors.filter((exec) => exec.name !== 'workspace');
-  const lines = [...devices, ...(workspace ? [workspace] : [])].map(renderExecutorLine);
+  const lines = [
+    ...devices.map((exec) => renderExecutorLine(exec, surface.backend)),
+    ...(laptopOffline ? [renderOfflineLaptopLine()] : []),
+    ...(workspace ? [renderExecutorLine(workspace, surface.backend)] : []),
+  ];
 
   const parts = [
     '## Execution environments',
     'Only the environments listed here are selectable in this turn. If a namespace is absent, do not mention it, call it, or assume it can be used.',
+    'This list reflects live state at the start of THIS turn — trust it over assumptions or earlier turns; it can change when the user connects or disconnects a device.',
     'Choose the runtime that matches the task; keep reads/writes in the same runtime unless you intentionally copy data between runtimes.',
     '',
     ...lines,
@@ -274,7 +297,7 @@ export function buildSystemPromptSync(
     renderRuntimeContext(opts),
     renderOperatingGuidance(surface),
     renderToolsSection(surface),
-    renderExecutorSection(surface.selectableExecutors, surface.builtinTools),
+    renderExecutorSection(surface),
     renderAgentStateSection(surface.builtinTools),
     opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '',
     renderKnowledgeSection(opts.extraKnowledge),

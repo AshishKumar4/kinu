@@ -23,7 +23,6 @@ import type {
 import {
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
-  NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
@@ -44,6 +43,7 @@ import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
+import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { agentAffinityKey } from "./providers/workers-ai.js";
 import type { UserDO } from "./user/user-do.js";
@@ -53,10 +53,6 @@ import {
   nimbusSubjectForAgent,
   nimbusTenantForUser,
 } from "./nimbus-route.js";
-
-/** How long the laptop executor's cached device-connected flag stays fresh
- *  before isConnected() kicks a background re-check against the user hub. */
-const DEVICE_CONNECTED_TTL_MS = 5_000;
 
 /**
  * The agent surface these runtime builders need. `env`/`ctx` are `protected`
@@ -86,11 +82,13 @@ function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
 }
 
 /** Extended runtime that exposes the raw SqliteFS for shell emulation, the
- *  SSH executor for tunnel socket management, and the Vectorize-backed
- *  vector store for semantic memory. */
+ *  device transport for per-turn laptop-status refreshes, and the Vectorize-
+ *  backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   sqliteFS: SqliteFS;
-  sshExecutor: ReturnType<typeof createSSHTunnelExecutor>;
+  /** The laptop runtime's hub transport. `refreshStatus()` is awaited at turn
+   *  start so the turn's context reflects the CURRENT device state. */
+  deviceTransport: DeviceTransport;
   /** Vectorize-backed semantic memory. Noop fallback when no binding. */
   vectorStore: import("@proteus/core").VectorStore;
   /** The live sandbox container handle (for /workspace backup/restore), or null
@@ -207,57 +205,17 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
 
   // Register the laptop executor. The device socket lives on the user's UserDO
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
-  // one connected device serves all of the user's agents. `isConnected()` is
-  // sync + hot (it gates per-turn tool exposure), so it serves a cached flag
-  // refreshed from the hub in the background once it goes stale — a device
-  // connecting AFTER this runtime was built becomes visible within the TTL,
-  // without a DO restart. Actual calls stay authoritative either way: the hub
-  // rejects when no device is connected, and each call's outcome re-seeds the
-  // flag.
-  let deviceConnected = false;
-  let deviceCheckedAt = 0;
-  let deviceCheck: Promise<void> | null = null;
-  const refreshDeviceConnected = (): void => {
-    if (deviceCheck || Date.now() - deviceCheckedAt < DEVICE_CONNECTED_TTL_MS) return;
-    const stub = userDOStubFor(agent);
-    if (!stub) { deviceConnected = false; deviceCheckedAt = Date.now(); return; }
-    deviceCheck = (async () => {
-      try { deviceConnected = await stub.isDeviceConnected(); }
-      catch { /* transient hub error — keep the last value */ }
-      finally { deviceCheckedAt = Date.now(); deviceCheck = null; }
-    })();
-  };
-  const deviceTransport: DeviceTransport = {
-    isConnected: () => { refreshDeviceConnected(); return deviceConnected; },
-    rpc: async (method, params) => {
-      const stub = userDOStubFor(agent);
-      if (!stub) { deviceConnected = false; deviceCheckedAt = Date.now(); throw new Error(NO_DEVICE_CONNECTED); }
-      try {
-        const cwd = typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
-          ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
-          : null;
-        const effectiveParams = method === 'exec' && cwd
-          ? [`cd ${shellQuote(cwd)} && ${String(params[0] ?? '')}`]
-          : params;
-        // Pass the agent's name so the hub can enforce per-agent consent.
-        const result = await stub.deviceRpc(method, effectiveParams, {
-          agentName: agent.name,
-        });
-        deviceConnected = true;
-        deviceCheckedAt = Date.now();
-        return result;
-      } catch (err) {
-        if (isDeviceNotConnectedError(err)) {
-          deviceConnected = false;
-          deviceCheckedAt = Date.now();
-        }
-        throw err;
-      }
-    },
-  };
-  refreshDeviceConnected();
-  const sshExecutor = createSSHTunnelExecutor(deviceTransport);
-  executionRouter.register(sshExecutor);
+  // one connected device serves all of the user's agents.
+  const deviceTransport = createHubDeviceTransport({
+    hub: () => userDOStubFor(agent),
+    agentName: agent.name,
+    cliCwd: () =>
+      typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
+        ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
+        : null,
+  });
+  void deviceTransport.refreshStatus();
+  executionRouter.register(createSSHTunnelExecutor(deviceTransport));
 
   // Vectorize-backed semantic memory. Only constructs when both
   // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
@@ -294,15 +252,12 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     executionRouter,
     shell,
     sqliteFS,
-    sshExecutor,
+    deviceTransport,
     vectorStore,
     sandboxHandle,
   };
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
 
 function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
   if (typeof env.CLI_PUBLIC_ORIGIN === "string" && env.CLI_PUBLIC_ORIGIN.length > 0) {

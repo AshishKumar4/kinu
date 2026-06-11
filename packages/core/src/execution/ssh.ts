@@ -17,7 +17,8 @@
  */
 
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
-import type { ExecutorProvider, ExecutorCapability } from './types.js';
+import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
+import type { DeviceStatus } from './device-status.js';
 import { isDeviceNotConnectedError } from './device-tunnel.js';
 import { readExecSignal } from './signal.js';
 
@@ -28,15 +29,20 @@ const NOT_CONNECTED =
 /**
  * Transport the laptop executor speaks through. The actual device socket lives
  * on the user-level hub (UserDO); the agent forwards each JSON-RPC call there,
- * so one connected device serves all of a user's agents. `isConnected()` is a
- * cheap CACHED flag (the executor's isAvailable() is sync + hot) that the
- * transport refreshes from the hub out of band — tool calls do NOT gate on it,
+ * so one connected device serves all of a user's agents. `status()` is a cheap
+ * CACHED snapshot (the executor's isAvailable()/getStatus() are sync + hot)
+ * that the transport refreshes from the hub out of band; `refreshStatus()` is
+ * the authoritative awaited check backends run at turn start so the turn's
+ * context reflects the CURRENT device state. Tool calls do NOT gate on either —
  * they go to the hub and let it answer authoritatively, so a device that
  * connected after this runtime was built works immediately.
  */
 export interface DeviceTransport {
   rpc(method: string, params: unknown[]): Promise<unknown>;
-  isConnected(): boolean;
+  /** Cached snapshot — sync and cheap; may lag the hub by the cache TTL. */
+  status(): DeviceStatus;
+  /** Authoritative hub check; resolves with the fresh snapshot. */
+  refreshStatus(): Promise<DeviceStatus>;
 }
 
 /**
@@ -44,8 +50,21 @@ export interface DeviceTransport {
  * forwards to the user's device hub; this executor just shapes the tool surface.
  */
 export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorProvider {
-  const isConnected = (): boolean => transport.isConnected();
   const rpc = (method: string, params: unknown[]): Promise<unknown> => transport.rpc(method, params);
+
+  // Three-state lifecycle from the hub snapshot: connected, registered-but-
+  // offline (the user can reconnect), or no registered device at all.
+  const getStatus = (): ExecutorStatus => {
+    const s = transport.status();
+    if (s.connected) return { configured: true, available: true, active: true, status: 'active' };
+    if (s.registered) {
+      return {
+        configured: true, available: false, active: false, status: 'disconnected',
+        reason: 'Device registered but offline — the user can reconnect it with `proteus connect`.',
+      };
+    }
+    return { configured: false, available: false, active: false, status: 'not_configured' };
+  };
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
@@ -140,7 +159,8 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
       'fs_owned', 'net_outbound', 'net_inbound',
       'process_spawn', 'process_long', 'process_signal', 'gpu',
     ]),
-    isAvailable: () => isConnected(),
+    isAvailable: () => transport.status().connected,
+    getStatus,
     connect: async () => {
       // Verify connectivity with a simple echo
       try {

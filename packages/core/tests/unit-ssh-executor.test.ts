@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { createSSHTunnelExecutor, type DeviceTransport } from '../src/execution/ssh.js';
+import type { DeviceStatus } from '../src/execution/device-status.js';
+
+function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
+  return { status: () => status, refreshStatus: async () => status, rpc };
+}
 
 function transport(resultFor: (method: string, params: unknown[]) => unknown): DeviceTransport & {
   calls: Array<{ method: string; params: unknown[] }>;
@@ -7,11 +12,10 @@ function transport(resultFor: (method: string, params: unknown[]) => unknown): D
   const calls: Array<{ method: string; params: unknown[] }> = [];
   return {
     calls,
-    isConnected: () => true,
-    async rpc(method, params) {
+    ...staticTransport({ connected: true, registered: true }, async (method, params) => {
       calls.push({ method, params });
       return resultFor(method, params);
-    },
+    }),
   };
 }
 
@@ -60,28 +64,38 @@ describe('createSSHTunnelExecutor', () => {
     expect(b).toBe('Written 2 bytes to /tmp/b');
   });
 
-  test('tools reach the hub even when the cached flag is stale-false', async () => {
+  test('tools reach the hub even when the cached snapshot is stale-false', async () => {
     // Regression: agents whose runtime predated the device connection gated
     // every call on the cached flag, so false could never flip back to true.
     const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
-    t.isConnected = () => false;
+    t.status = () => ({ connected: false, registered: true });
     const provider = createSSHTunnelExecutor(t);
 
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
     expect(t.calls).toEqual([{ method: 'exec', params: ['echo hi'] }]);
-    // isAvailable still reports the cached flag (sync badge only).
+    // isAvailable still reports the cached snapshot (sync badge only).
     expect(provider.isAvailable()).toBe(false);
   });
 
+  test('getStatus maps the hub snapshot to the three lifecycle states', () => {
+    const rpc: DeviceTransport['rpc'] = async () => 'unused';
+    const connected = createSSHTunnelExecutor(staticTransport({ connected: true, registered: true }, rpc));
+    const offline = createSSHTunnelExecutor(staticTransport({ connected: false, registered: true }, rpc));
+    const none = createSSHTunnelExecutor(staticTransport({ connected: false, registered: false }, rpc));
+
+    expect(connected.getStatus?.()).toMatchObject({ available: true, configured: true, status: 'active' });
+    expect(offline.getStatus?.()).toMatchObject({ available: false, configured: true, status: 'disconnected' });
+    expect(offline.getStatus?.()?.reason).toContain('proteus connect');
+    expect(none.getStatus?.()).toMatchObject({ available: false, configured: false, status: 'not_configured' });
+  });
+
   test('hub/tunnel disconnect errors surface the connect guidance', async () => {
-    const hubRejects: DeviceTransport = {
-      isConnected: () => false,
-      rpc: async () => { throw new Error('no device connected'); },
-    };
-    const tunnelDropped: DeviceTransport = {
-      isConnected: () => true,
-      rpc: async () => { throw new Error('device tunnel not connected'); },
-    };
+    const hubRejects = staticTransport({ connected: false, registered: true }, async () => {
+      throw new Error('no device connected');
+    });
+    const tunnelDropped = staticTransport({ connected: true, registered: true }, async () => {
+      throw new Error('device tunnel not connected');
+    });
 
     const fromHub = await createSSHTunnelExecutor(hubRejects).tools.exec.execute('ls');
     const fromTunnel = await createSSHTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
@@ -92,10 +106,9 @@ describe('createSSHTunnelExecutor', () => {
   });
 
   test('non-connection errors keep their own message', async () => {
-    const t: DeviceTransport = {
-      isConnected: () => true,
-      rpc: async () => { throw new Error('permission denied'); },
-    };
+    const t = staticTransport({ connected: true, registered: true }, async () => {
+      throw new Error('permission denied');
+    });
     expect(await createSSHTunnelExecutor(t).tools.exec.execute('ls')).toBe('exec error: permission denied');
   });
 });

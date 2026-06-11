@@ -86,7 +86,7 @@ describe('buildSystemPromptSync', () => {
     const prompt = buildSystemPromptSync(rt, {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: false, configured: true, active: false, status: 'disconnected' },
+        { name: 'laptop', kind: 'laptop', available: false, configured: false, active: false, status: 'not_configured' },
         { name: 'nimbus', kind: 'nimbus', available: true, configured: true, active: false, status: 'idle' },
         { name: 'sandbox', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
       ],
@@ -96,9 +96,59 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('ready on demand');
     expect(prompt).toContain('workspace.*');
     expect(prompt).toContain('internal Proteus state');
-    expect(prompt).not.toContain('laptop.*');
+    expect(prompt).not.toContain('laptop');
     expect(prompt).not.toContain('sandbox.*');
     expect(prompt).not.toMatch(/Showing a running app/);
+  });
+
+  test('a registered-but-offline laptop stays visible with the reconnect instruction', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+        { name: 'laptop', kind: 'laptop', available: false, configured: true, active: false, status: 'disconnected' },
+      ],
+    });
+
+    expect(prompt).toContain('currently OFFLINE');
+    expect(prompt).toContain('proteus connect');
+    expect(prompt).toContain('Do not call it');
+    // Offline ≠ selectable: no laptop.* namespace advertised for calls.
+    expect(prompt).not.toContain('laptop.***');
+  });
+
+  test('a connected laptop teaches that first use asks for consent (tunnel backends)', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+
+    expect(prompt).toContain('laptop.*');
+    expect(prompt).toContain('(connected)');
+    expect(prompt).toContain("the user's OWN PC");
+    expect(prompt).toContain('consent');
+    expect(prompt).toContain('expected, not an error');
+    // The live-state framing replaces "assume absent forever".
+    expect(prompt).toContain('live state at the start of THIS turn');
+  });
+
+  test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cli-local',
+      executors: [
+        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+
+    expect(prompt).toContain('laptop.*');
+    expect(prompt).toContain('the local machine the Proteus CLI is running on');
+    expect(prompt).toContain('no tunnel or consent prompt');
+    expect(prompt).not.toContain('device tunnel');
   });
 
   test('omits executor section when no executors registered', () => {

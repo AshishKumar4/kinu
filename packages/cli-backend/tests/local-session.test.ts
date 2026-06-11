@@ -165,6 +165,24 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
   });
 
+  test('the system prompt advertises the laptop as the direct CLI host machine', async () => {
+    // Local agents run ON the user's machine — the laptop executor is always
+    // available and direct, so the prompt must not borrow the cloud wording
+    // (device tunnel, consent prompt, offline/reconnect states).
+    let observed: ModelMessage[] = [];
+    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
+    await session.send('hi');
+
+    const system = observed.find((m) => m.role === 'system');
+    expect(system).toBeDefined();
+    const text = String(system!.content);
+    expect(text).toContain('laptop.*');
+    expect(text).toContain('the local machine the Proteus CLI is running on');
+    expect(text).not.toContain('device tunnel');
+    expect(text).not.toContain('asks the user for consent');
+    expect(text).not.toContain('OFFLINE');
+  });
+
   test('head-inherited context drops file-part data URLs, keeps the reference', () => {
     const serialized = serializeContentForHeads([
       { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'square.png' },

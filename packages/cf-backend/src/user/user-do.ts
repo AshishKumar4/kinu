@@ -636,12 +636,6 @@ export class UserDO extends Agent<Env> {
     return tunnel.rpc(method, params);
   }
 
-  /** Whether any (or a specific) device is live — drives the laptop executor's
-   *  availability cache + the UI badge. */
-  async isDeviceConnected(deviceId?: string): Promise<boolean> {
-    return this._devices.connectedDeviceId(deviceId) != null;
-  }
-
   // ── Device consent (ask-once-then-remember) ──────────────────────────
 
   private getDeviceConsentPolicy(agentName: string, deviceId: string): { policy: 'allow' | 'deny'; scope: DeviceConsentScope } | null {

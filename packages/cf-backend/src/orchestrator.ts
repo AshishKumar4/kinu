@@ -81,6 +81,8 @@ import {
   type RunEvent, type RunEventQuery,
   // agent_facts world model
   initFactsTable, createFactsStore, renderFactsBlock, type FactsStore,
+  // Per-turn device awareness (laptop runtime presence + change notice)
+  observeDevicePresence,
   // Typed agent_config store
   createAgentConfigStore,
   // Voyager curriculum + Absolute Zero learnability proposer
@@ -903,12 +905,12 @@ export class OrchestratorAgent extends Think<Env> {
       base = this._cachedSystemPrompt;
       this.logActivity("getsystemprompt_end", "cache hit");
     } else {
-      // Always build the BASE prompt here — no turn-scoped skills section.
-      // Active skills are layered on by `beforeTurn` via TurnConfig.system,
-      // which is the authoritative path. Mixing them in here would poison
-      // the cache (Think calls getSystemPrompt() BEFORE beforeTurn(); a
-      // stale `_turnActiveSkills` from the prior turn would otherwise leak
-      // into _cachedSystemPrompt and be re-served on every later turn).
+      // Always build the BASE prompt here — no turn-scoped state. The
+      // authoritative per-turn prompt (skills, MCP tools, fresh device
+      // status, change notice) is assembled in `beforeTurn` and ALWAYS
+      // returned via TurnConfig.system, which overrides this one for chat
+      // turns (Think calls getSystemPrompt() BEFORE beforeTurn()). Mixing
+      // turn state in here would poison the cache across turns.
       base = buildSystemPromptSync(this.rt, {
         executors: execs,
         availableTools: ACTIVE_TOOLS,
@@ -1265,7 +1267,6 @@ export class OrchestratorAgent extends Think<Env> {
     this._turnActiveSkills = null;
     const activeTools: BuiltinToolName[] = [...ACTIVE_TOOLS];
     let activeSetForPrompt: ActiveSkillSet | undefined;
-    let systemOverride: string | undefined;
     try {
       const lastUserText = extractLastUserText(ctx.messages);
       const explicit = extractExplicitInvocations(lastUserText);
@@ -1329,23 +1330,39 @@ export class OrchestratorAgent extends Think<Env> {
       ? [...activeTools, ...mcpToolNames]
       : activeTools;
     const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
-    if (activeSetForPrompt || mcpToolNames.length > 0) {
-      const execs = this.rt.executionRouter?.listExecutors() ?? [];
-      const modelId = this.getStoredModelId();
-      systemOverride = buildSystemPromptSync(this.rt, {
-        executors: execs,
-        availableTools: activeTools,
-        ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
-        externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
-        backend: 'cf',
-        model: { id: modelId ?? undefined },
-      });
-      // Same recent-facts tail getSystemPrompt appends (single source).
-      systemOverride = systemOverride + this.factsTail();
+
+    // ── Per-turn device awareness ────────────────────────────────
+    // One authoritative hub check (a cheap DO-to-DO RPC) so the executor list
+    // below reflects the CURRENT device state — the transport's TTL-cached
+    // snapshot can lag a mid-session `proteus connect` by a turn. The persisted
+    // watermark is only a diff anchor for the one-turn change notice; the hub
+    // stays the single source of truth.
+    let deviceNotice: string | null = null;
+    try {
+      const status = await this.rt.deviceTransport.refreshStatus();
+      deviceNotice = observeDevicePresence(this.config, status).notice;
+    } catch (err) {
+      console.warn('[proteus] device status refresh failed:', (err as Error).message);
     }
 
-    const cfg: TurnConfig = { activeTools: effectiveActiveTools };
-    if (systemOverride) cfg.system = systemOverride;
+    // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
+    // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
+    // this path can reflect the device status refreshed above plus the turn's
+    // active skills and MCP tools. The device change notice rides at the very
+    // end, after the facts tail (latest position in the context).
+    const execs = this.rt.executionRouter?.listExecutors() ?? [];
+    const modelId = this.getStoredModelId();
+    let systemOverride = buildSystemPromptSync(this.rt, {
+      executors: execs,
+      availableTools: activeTools,
+      ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
+      externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
+      backend: 'cf',
+      model: { id: modelId ?? undefined },
+    }) + this.factsTail();
+    if (deviceNotice) systemOverride += `\n\n${deviceNotice}`;
+
+    const cfg: TurnConfig = { activeTools: effectiveActiveTools, system: systemOverride };
     if (this._cliCwd) cfg.messages = withCliCwdContext(ctx.messages, this._cliCwd);
     if (effectiveTools) cfg.tools = effectiveTools;
     return cfg;
