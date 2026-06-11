@@ -476,6 +476,7 @@ export {
   discoverSkills, skillPath, BUILTIN_SKILLS,
   resolveActiveSkills, extractExplicitInvocations,
   renderActiveSkillsSection, unionAllowedTools, toolAllowedBySkills,
+  ACTIVE_SKILLS_MAX_CHARS,
   runSkillsAction, SkillError, SKILLS_DIR,
 } from './skills/index.js';
 export type {

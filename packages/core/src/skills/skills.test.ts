@@ -19,6 +19,7 @@ import {
   discoverSkills, BUILTIN_SKILLS,
   resolveActiveSkills, extractExplicitInvocations,
   renderActiveSkillsSection, unionAllowedTools, toolAllowedBySkills,
+  ACTIVE_SKILLS_MAX_CHARS,
   runSkillsAction,
   SkillError, SKILLS_DIR,
   type SkillsVfs, type ParsedSkill,
@@ -462,6 +463,50 @@ describe('renderActiveSkillsSection + tool gating', () => {
     expect(toolAllowedBySkills('workspace.readFile', ['workspace.*'])).toBe(true);
     expect(toolAllowedBySkills('workspace.readFile', ['workspace'])).toBe(true);
     expect(toolAllowedBySkills('sandbox.exec', ['workspace.*'])).toBe(false);
+  });
+
+  test('caps total skill-body chars: oversized body truncates with a read pointer', () => {
+    const big = fakeSkill('giant', { body: 'x'.repeat(ACTIVE_SKILLS_MAX_CHARS + 5_000) });
+    const out = renderActiveSkillsSection({
+      active: [big],
+      reasons: [{ name: 'giant', reason: { kind: 'explicit', matched_token: 'giant' } }],
+    });
+    expect(out.length).toBeLessThan(ACTIVE_SKILLS_MAX_CHARS + 1_000); // body capped + framing
+    expect(out).toContain('### giant');
+    expect(out).toMatch(/\[truncated: 5000 more chars — read the full body with skills\(\{action:"read", name:"giant"\}\)\]/);
+  });
+
+  test('budget spends in activation order: earlier skills keep their bodies', () => {
+    const first = fakeSkill('first', { body: 'FIRST-BODY '.repeat(40) });
+    const hog = fakeSkill('hog', { body: 'y'.repeat(50_000) });
+    const last = fakeSkill('last', { body: 'LAST-BODY', allowed_tools: ['memory'] });
+    const out = renderActiveSkillsSection({
+      active: [first, hog, last],
+      reasons: [
+        { name: 'first', reason: { kind: 'always_active', via: 'config' } },
+        { name: 'hog', reason: { kind: 'keyword', matched_keyword: 'hog' } },
+        { name: 'last', reason: { kind: 'keyword', matched_keyword: 'last' } },
+      ],
+    });
+    // First skill intact; the hog absorbs the truncation; the last skill keeps
+    // its header + read pointer (and its tool restriction still announces).
+    expect(out).toContain('FIRST-BODY');
+    expect(out).toContain('[truncated:');
+    expect(out).not.toContain('LAST-BODY');
+    expect(out).toContain('### last (keyword "last")');
+    expect(out).toContain('(body omitted by the size cap — read the full body with skills({action:"read", name:"last"}))');
+    expect(out).toContain('restricted to: memory');
+  });
+
+  test('small bodies render unchanged under the cap', () => {
+    const a = fakeSkill('a', { body: 'short body' });
+    const out = renderActiveSkillsSection({
+      active: [a],
+      reasons: [{ name: 'a', reason: { kind: 'explicit', matched_token: 'a' } }],
+    });
+    expect(out).toContain('short body');
+    expect(out).not.toContain('[truncated:');
+    expect(out).not.toContain('omitted by the size cap');
   });
 });
 

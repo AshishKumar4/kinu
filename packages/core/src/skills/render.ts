@@ -24,7 +24,20 @@
 
 import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types.js';
 
-export function renderActiveSkillsSection(activeSet: ActiveSkillSet): string {
+/** Char cap shared by all active skill bodies in one prompt. Skill bodies are
+ *  agent-authored and uncapped at the store, so without this a single big
+ *  SKILL.md could dominate the context (same budget pattern as AGENTS.md —
+ *  see prompting/agents-md.ts). */
+export const ACTIVE_SKILLS_MAX_CHARS = 16_000;
+
+/** Minimum budget worth spending on a truncated body — below this the body is
+ *  omitted with a read pointer instead of contributing a useless fragment. */
+const MIN_TRUNCATED_CHARS = 500;
+
+export function renderActiveSkillsSection(
+  activeSet: ActiveSkillSet,
+  maxChars = ACTIVE_SKILLS_MAX_CHARS,
+): string {
   if (activeSet.active.length === 0) return '';
 
   const restriction = unionAllowedTools(activeSet.active);
@@ -35,9 +48,25 @@ export function renderActiveSkillsSection(activeSet: ActiveSkillSet): string {
   const reasonByName = new Map<string, ActivationReason>();
   for (const r of activeSet.reasons) reasonByName.set(r.name, r.reason);
 
+  // Spend the budget in activation order (the resolver's precedence order),
+  // so earlier-activated skills can never be crowded out by a later giant one.
+  // A cut body keeps its header + tool restriction and points at skills read.
+  let remaining = Math.max(0, maxChars);
   const blocks = activeSet.active.map((s) => {
     const r = reasonByName.get(s.name);
-    return `### ${s.name} (${describeReason(r)})\n\n${s.body.trimEnd()}`;
+    const header = `### ${s.name} (${describeReason(r)})`;
+    const body = s.body.trimEnd();
+    const readPointer = `read the full body with skills({action:"read", name:"${s.name}"})`;
+    if (body.length <= remaining) {
+      remaining -= body.length;
+      return `${header}\n\n${body}`;
+    }
+    if (remaining >= MIN_TRUNCATED_CHARS) {
+      const head = body.slice(0, remaining);
+      remaining = 0;
+      return `${header}\n\n${head}\n… [truncated: ${body.length - head.length} more chars — ${readPointer}]`;
+    }
+    return `${header}\n\n(body omitted by the size cap — ${readPointer})`;
   });
 
   return [

@@ -27,6 +27,7 @@ export {
   renderActiveSkillsSection,
   unionAllowedTools,
   toolAllowedBySkills,
+  ACTIVE_SKILLS_MAX_CHARS,
 } from './render.js';
 export {
   runSkillsAction,
