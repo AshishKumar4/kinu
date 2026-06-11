@@ -259,7 +259,9 @@ export class HeadController {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-async function raceWithTimeout(h: SpawnedHead, timeoutMs: number): Promise<HeadReport> {
+/** Race a spawned head against its wall-clock budget, aborting on timeout.
+ *  Shared with the Steer-as-Branch single-head runner (steer-branch.ts). */
+export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number): Promise<HeadReport> {
   if (timeoutMs <= 0) {
     await h.abort('wall-clock budget already exhausted at spawn time');
     throw new Error('wall-clock budget already exhausted');

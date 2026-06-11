@@ -20,6 +20,11 @@ import { nowMs } from '../utils/date.js';
  *  alternatives are a meaningful choice; ten are noise. */
 const MAX_TAKE_CANDIDATES = 4;
 
+/** Where a take set came from: near-tied MCTS convergence rivals, or a
+ *  mid-turn Steer-as-Branch redirect run as a parallel head. ONE pipeline —
+ *  the comparison + pick→ledger flow is identical for both. */
+export type AlternateTakeSource = 'mcts' | 'branch';
+
 export interface AlternateTakeCandidate {
   nodeId: string;
   /** The branch's proposal text (search_nodes.observation). */
@@ -28,6 +33,10 @@ export interface AlternateTakeCandidate {
   score: number;
   visits: number;
   depth: number;
+  /** Branch-sourced sets only: which side of the split this candidate is —
+   *  the live turn's answer or the branched redirect's. MCTS candidates carry
+   *  real node scores instead. */
+  origin?: 'live' | 'branch';
 }
 
 export interface AlternateTakeSet {
@@ -36,6 +45,7 @@ export interface AlternateTakeSet {
   turnId: string | null;
   sessionId: string | null;
   task: string;
+  source: AlternateTakeSource;
   /** The node currently serving as the converged answer (re-pointed on pick). */
   winnerNodeId: string;
   chosenNodeId: string | null;
@@ -66,12 +76,16 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     turn_id TEXT,
     session_id TEXT,
     task TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'mcts',
     winner_node_id TEXT NOT NULL,
     chosen_node_id TEXT,
     candidates TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     picked_at INTEGER
   )`);
+  // Tables created before Steer-as-Branch lack the source column.
+  try { execRaw(`ALTER TABLE alternate_takes ADD COLUMN source TEXT NOT NULL DEFAULT 'mcts'`); }
+  catch { /* column already exists */ }
 }
 
 /** Node ids on the path from `node` up to the root (inclusive of `node`). */
@@ -126,12 +140,49 @@ export function captureAlternateTakes(
   });
   const id = `take-${nanoid()}`;
   sql`INSERT INTO alternate_takes
-        (id, turn_id, session_id, task, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
+        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
       VALUES
-        (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${winner.id}, ${null},
+        (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'mcts'}, ${winner.id}, ${null},
          ${JSON.stringify([toCandidate(winner), ...rivals.map(toCandidate)])},
          ${input.now ?? nowMs()}, ${null})`;
   return id;
+}
+
+/**
+ * Persist a Steer-as-Branch pair as an alternate-takes set, already claimed
+ * against the live turn: candidate A is the answer the live turn gave (the
+ * winner until the user says otherwise), candidate B the branched redirect's
+ * answer. The synthetic node ids never touch search_nodes — recordTakePick
+ * skips the convergence re-point for branch-sourced sets. Returns null when
+ * the two answers are textually identical (no real choice to offer).
+ */
+export function recordBranchTakeSet(
+  sql: SqlExecutor,
+  input: {
+    task: string; turnId: string; sessionId: string;
+    liveText: string; branchText: string; now?: number;
+  },
+): AlternateTakeSet | null {
+  const liveText = input.liveText.trim();
+  const branchText = input.branchText.trim();
+  if (!liveText || !branchText || liveText === branchText) return null;
+
+  const id = `take-${nanoid()}`;
+  const candidates: AlternateTakeCandidate[] = [
+    { nodeId: `${id}-live`, text: liveText, score: 0.5, visits: 1, depth: 0, origin: 'live' },
+    { nodeId: `${id}-branch`, text: branchText, score: 0.5, visits: 1, depth: 0, origin: 'branch' },
+  ];
+  const now = input.now ?? nowMs();
+  sql`INSERT INTO alternate_takes
+        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
+      VALUES
+        (${id}, ${input.turnId}, ${input.sessionId}, ${input.task.slice(0, 500)}, ${'branch'},
+         ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)}, ${now}, ${null})`;
+  return {
+    id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
+    source: 'branch', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
+    candidates, createdAt: now, pickedAt: null,
+  };
 }
 
 /** Attach the take sets captured during the just-finished turn (MCTS runs
@@ -152,6 +203,7 @@ export function claimAlternateTakesForTurn(
 
 interface RawTakeRow {
   id: string; turn_id: string | null; session_id: string | null; task: string;
+  source: string | null;
   winner_node_id: string; chosen_node_id: string | null; candidates: string;
   created_at: number; picked_at: number | null;
 }
@@ -164,6 +216,7 @@ function toTakeSet(r: RawTakeRow): AlternateTakeSet {
   } catch { /* malformed row — surface an empty set rather than crash reads */ }
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
+    source: r.source === 'branch' ? 'branch' : 'mcts',
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
     candidates, createdAt: r.created_at, pickedAt: r.picked_at,
   };
@@ -207,7 +260,9 @@ export function recordTakePick(
 
   const now = input.now ?? nowMs();
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
-  if (changedAnswer) {
+  // Branch-sourced candidates are synthetic (live answer vs head answer) —
+  // there is no convergence record in search_nodes to re-point.
+  if (changedAnswer && set.source === 'mcts') {
     sql`UPDATE search_nodes SET status = 'pruned' WHERE id = ${set.winnerNodeId}`;
     sql`UPDATE search_nodes SET status = 'terminal' WHERE id = ${chosen.nodeId}`;
   }
@@ -258,9 +313,13 @@ export function recordTakePick(
 /** The gentle programmatic turn asking the agent to continue with the chosen
  *  approach — single source for both backends' continuation enqueue. */
 export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: AlternateTakeCandidate): string {
+  const framing = set.source === 'branch'
+    ? `While you answered, the user redirected with "${set.task.slice(0, 200)}" and that redirect ran ` +
+      `as a parallel branch. Comparing both answers, the user picked the branch's:`
+    : `While exploring "${set.task.slice(0, 200)}" you surfaced several near-tied approaches, ` +
+      `and the user compared them and picked a different take than the one you answered with:`;
   return (
-    `While exploring "${set.task.slice(0, 200)}" you surfaced several near-tied approaches, ` +
-    `and the user compared them and picked a different take than the one you answered with:\n\n` +
+    `${framing}\n\n` +
     `${chosen.text.slice(0, 2000)}\n\n` +
     `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
   );

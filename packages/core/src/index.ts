@@ -236,10 +236,17 @@ export { estimateCost } from './mcts/cost.js';
 export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
-  buildTakeContinuationPrompt,
-  type AlternateTakeCandidate, type AlternateTakeSet,
+  recordBranchTakeSet, buildTakeContinuationPrompt,
+  type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes.js';
+// Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
+// into the Alternate Takes pipeline against the live turn's answer.
+export {
+  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId,
+  startBranchHead, settleBranchIntoTakes,
+  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchSettleOutcome,
+} from './steer-branch.js';
 
 // Schemas
 export { initSearchTables } from './mcts/schemas.js';
