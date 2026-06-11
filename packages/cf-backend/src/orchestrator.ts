@@ -90,7 +90,7 @@ import {
   // Per-turn device awareness (laptop runtime presence + change notice)
   observeDevicePresence,
   // Typed agent_config store
-  createAgentConfigStore, DEFAULT_CONFIG,
+  createAgentConfigStore, DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
   // Voyager curriculum + Absolute Zero learnability proposer
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
@@ -4641,6 +4641,22 @@ export class OrchestratorAgent extends Think<Env> {
   private maybeRunAutoGepa(): void {
     const everyN = this.config.getAutoGepaEveryNTurns();
     if (everyN <= 0) return;
+    // One-time honesty note: before autonomy defaults flipped ON, a disable
+    // DELETED this key — an absent row is indistinguishable from
+    // never-configured, so the autonomous default supersedes both. Pin the
+    // default explicitly and record the activation in the evolution stream
+    // so the override is documented, never silent.
+    if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
+      this.config.setAutoGepaEveryNTurns(everyN);
+      try {
+        this.sql`INSERT INTO evolution_events (type, message, created_at)
+          VALUES ('reflection', ${
+            `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
+            `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
+            `superseded by this default — run setAutoGepa(0) to disable again.`
+          }, ${Date.now()})`;
+      } catch { /* event log is best-effort */ }
+    }
     this._turnsSinceGepa += 1;
     if (this._turnsSinceGepa < everyN) return;
     if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
