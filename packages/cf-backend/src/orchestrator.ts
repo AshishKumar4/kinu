@@ -128,6 +128,9 @@ import {
   claimAlternateTakesForTurn, listAlternateTakeSets, latestAlternateTakeSet,
   recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
+  // Steer-as-Branch — a mid-turn redirect run as a parallel head
+  initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
+  type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
@@ -419,6 +422,11 @@ export class OrchestratorAgent extends Think<Env> {
   // heads strategy drives it, injecting inheritedContext + an onPhase event
   // sink via defaultOptions().
   private _headController: HeadController | null = null;
+
+  // Steer-as-Branch redirects launched against the in-flight turn — each runs
+  // as one budgeted head (ExplorationAgent Facet) and settles into Alternate
+  // Takes when the turn completes (onChatResponse).
+  private _pendingBranches: PendingBranch[] = [];
 
   // The orchestrator's view of head activity (journal + runs + steps). Shared by
   // getHeadController (write path) and getHeadRuns (read path).
@@ -1544,7 +1552,11 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       console.warn('[proteus] event emit failed at onChatResponse:', err);
     }
-    if (result.status !== "completed") return;
+    if (result.status !== "completed") {
+      // An aborted/errored live turn leaves nothing to compare a branch against.
+      this.settlePendingBranches(null, '');
+      return;
+    }
 
     const userMessages = this.messages.filter(m => m.role === "user");
     const lastUserMsg = userMessages[userMessages.length - 1];
@@ -1606,6 +1618,10 @@ export class OrchestratorAgent extends Think<Env> {
                    tool_names = excluded.tool_names, created_at = excluded.created_at`;
       }
     }
+
+    // Steer-as-Branch redirects launched during this turn settle against its
+    // answer — detached, so a slow branch never blocks the TurnQueue.
+    this.settlePendingBranches(msgId ?? null, assistantText);
 
     const turn: CompletedTurn = {
       userMessage: userText,
@@ -2529,6 +2545,60 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async latestAlternateTakes(): Promise<AlternateTakeSet | null> {
     return latestAlternateTakeSet(this.boundSql);
+  }
+
+  /**
+   * Steer-as-Branch: run a mid-turn redirect as ONE budgeted head against the
+   * live turn's input conversation (the same snapshot heads inherit), in
+   * parallel — the live turn is never interrupted. When both finish the pair
+   * settles into Alternate Takes claimed on this turn (onChatResponse);
+   * progress streams as 'branch_status' broadcasts.
+   */
+  @callable()
+  async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
+    const task = typeof text === 'string' ? text.trim() : '';
+    if (!task) throw new Error('branchTurn requires the redirect text');
+    if (!this._inFlight) {
+      return { accepted: false, reason: 'No turn is running — send it as a normal message instead.' };
+    }
+    const runtime = this.getCFHeadRuntime();
+    if (!runtime) {
+      return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
+    }
+    initAlternateTakesTable(this.rt.storage.execRaw);
+    const id = newBranchId();
+    this._pendingBranches.push({
+      id, task,
+      handle: startBranchHead(runtime, this.headJournal, {
+        id, task, inheritedContext: this.readInheritedContext(),
+      }),
+    });
+    this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
+    this.logActivity('branch_start', task.slice(0, 120));
+    return { accepted: true, branchId: id };
+  }
+
+  private broadcastBranchStatus(event: BranchStatusEvent): void {
+    try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ }
+    if (event.status !== 'running') {
+      this.logActivity('branch_settle', event.status === 'settled'
+        ? `takes ${event.takeSetId}`
+        : `error: ${event.message}`);
+    }
+  }
+
+  /** Settle every branch launched during the just-finished turn (detached —
+   *  the shared core settle persists the takes set + broadcasts progress). */
+  private settlePendingBranches(turnId: string | null, liveText: string): void {
+    if (this._pendingBranches.length === 0) return;
+    const deps = {
+      sql: this.boundSql,
+      sessionId: 'default',
+      broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
+    };
+    for (const entry of this._pendingBranches.splice(0)) {
+      void settlePendingBranch(deps, entry, turnId, liveText);
+    }
   }
 
   /** Record the user's pick between the explored takes — the explicit

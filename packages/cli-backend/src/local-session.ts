@@ -45,8 +45,8 @@ import {
   claimAlternateTakesForTurn, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
-  initAlternateTakesTable, startBranchHead, settleBranchIntoTakes, newBranchId,
-  type SteerBranchHandle, type BranchStatusEvent,
+  initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
+  type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
@@ -226,7 +226,7 @@ export class LocalAgentSession implements BackendHost {
   private pendingSteers: Array<{ text: string; files?: ReadonlyArray<PromptFile> }> = [];
   /** Steer-as-Branch redirects launched against the in-flight turn — each runs
    *  as one budgeted head and settles into Alternate Takes at turn end. */
-  private pendingBranches: Array<{ id: string; task: string; handle: Promise<SteerBranchHandle> }> = [];
+  private pendingBranches: PendingBranch[] = [];
 
   constructor(opts: LocalAgentSessionOpts) {
     this.rt = opts.rt;
@@ -959,46 +959,17 @@ export class LocalAgentSession implements BackendHost {
     this.emit({ type: 'turn-end', turn });
   }
 
+  /** Settle every branch launched during the just-finished turn (detached —
+   *  the shared core settle persists the takes set + broadcasts progress). */
   private settlePendingBranches(turnId: string | null, liveText: string): void {
     if (this.pendingBranches.length === 0) return;
+    const deps = {
+      sql: this.rt.storage.sql,
+      sessionId: this.sessionId,
+      broadcast: (event: BranchStatusEvent) => this.broadcast(event),
+    };
     for (const entry of this.pendingBranches.splice(0)) {
-      void this.settleBranch(entry, turnId, liveText);
-    }
-  }
-
-  /** Await both sides (the branch head + the already-finished live turn) and
-   *  settle honestly: a takes set on success, an error broadcast otherwise. */
-  private async settleBranch(
-    entry: { id: string; task: string; handle: Promise<SteerBranchHandle> },
-    turnId: string | null,
-    liveText: string,
-  ): Promise<void> {
-    const fail = (message: string) => this.broadcast({
-      type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
-    } satisfies BranchStatusEvent);
-    let handle: SteerBranchHandle;
-    try {
-      handle = await entry.handle;
-    } catch (err) {
-      fail(err instanceof Error ? err.message : String(err));
-      return;
-    }
-    if (!turnId || !liveText.trim()) {
-      await handle.abort('the live turn did not complete').catch(() => {});
-      fail('the live turn did not complete, so there is nothing to compare against');
-      return;
-    }
-    const report = await handle.result;
-    const outcome = settleBranchIntoTakes(this.rt.storage.sql, {
-      task: entry.task, report, turnId, sessionId: this.sessionId, liveText,
-    });
-    if (outcome.ok) {
-      this.broadcast({
-        type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
-        takeSetId: outcome.set.id, turnId,
-      } satisfies BranchStatusEvent);
-    } else {
-      fail(outcome.reason);
+      void settlePendingBranch(deps, entry, turnId, liveText);
     }
   }
 

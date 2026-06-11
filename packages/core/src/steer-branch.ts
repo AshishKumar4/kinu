@@ -118,6 +118,58 @@ export type BranchSettleOutcome =
   | { ok: true; set: AlternateTakeSet }
   | { ok: false; reason: string };
 
+/** A branch launched against an in-flight turn, awaiting that turn's end. */
+export interface PendingBranch {
+  readonly id: string;
+  readonly task: string;
+  readonly handle: Promise<SteerBranchHandle>;
+}
+
+/**
+ * The shared both-sides settle both backends run (detached) at turn end:
+ * await the branch head, compare against the finished live turn, persist the
+ * takes set, and broadcast the terminal branch_status. A dead live turn
+ * (`turnId` null / empty answer) aborts the branch instead. Never throws.
+ */
+export async function settlePendingBranch(
+  deps: {
+    sql: SqlExecutor;
+    sessionId: string;
+    broadcast: (event: BranchStatusEvent) => void;
+  },
+  entry: PendingBranch,
+  turnId: string | null,
+  liveText: string,
+): Promise<void> {
+  const fail = (message: string) => deps.broadcast({
+    type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
+  });
+  let handle: SteerBranchHandle;
+  try {
+    handle = await entry.handle;
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (!turnId || !liveText.trim()) {
+    await handle.abort('the live turn did not complete').catch(() => {});
+    fail('the live turn did not complete, so there is nothing to compare against');
+    return;
+  }
+  const report = await handle.result;
+  const outcome = settleBranchIntoTakes(deps.sql, {
+    task: entry.task, report, turnId, sessionId: deps.sessionId, liveText,
+  });
+  if (outcome.ok) {
+    deps.broadcast({
+      type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
+      takeSetId: outcome.set.id, turnId,
+    });
+  } else {
+    fail(outcome.reason);
+  }
+}
+
 /**
  * Settle a finished branch against the finished live turn: persist the pair
  * as a branch-sourced AlternateTakeSet claimed on the live turn's assistant

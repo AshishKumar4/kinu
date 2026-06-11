@@ -244,8 +244,9 @@ export {
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId,
-  startBranchHead, settleBranchIntoTakes,
-  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchSettleOutcome,
+  startBranchHead, settleBranchIntoTakes, settlePendingBranch,
+  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
+  type BranchSettleOutcome, type PendingBranch,
 } from './steer-branch.js';
 
 // Schemas
