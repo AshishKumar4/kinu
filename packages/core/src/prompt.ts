@@ -231,6 +231,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '## Memory and facts',
       '- Use `fact` for keyed state the agent should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
       '- Use `memory` for longer prose notes or lessons that are useful across turns.',
+      '- Use `memory` action="sessions" to search your past session transcripts before re-deriving prior context: `query` searches, `around_message_id` scrolls around a hit, neither browses recent sessions.',
       '- Your failures are recorded as lessons in memory — search before retrying similar work.',
       '- Prefer updating stale facts over adding contradictory new ones.',
     ].join('\n'));

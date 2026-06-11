@@ -94,6 +94,13 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('Memory and facts');
   });
 
+  test('teaches transcript recall: search past sessions before re-deriving context', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toContain('action="sessions"');
+    expect(prompt).toMatch(/past session transcripts before re-deriving/);
+  });
+
   test('renders executor section when registeredExecutors supplied', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {

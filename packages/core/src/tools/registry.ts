@@ -87,10 +87,10 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   },
   memory: {
     name: 'memory',
-    summary: 'Save or search durable prose memory.',
-    whenToUse: 'Use for compact, durable lessons or notes that should survive future turns.',
+    summary: 'Save or search durable prose memory, or recall past session transcripts (action=sessions: query searches, around_message_id scrolls, neither browses recent sessions).',
+    whenToUse: 'Use for compact, durable lessons or notes that should survive future turns, and to search what past sessions actually said before re-deriving context.',
     whenNotToUse: 'Do not store keyed state, temporary task progress, stale logs, or facts that should be updated by name.',
-    result: 'Returns save status or search hits.',
+    result: 'Returns save status, search hits, or session transcript slices.',
   },
   fact: {
     name: 'fact',

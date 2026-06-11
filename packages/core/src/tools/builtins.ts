@@ -37,6 +37,7 @@ import { filterByEffectiveScore } from '../craft/ema.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
+import { SessionSearchStore } from '../memory/session-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
 import type {
@@ -458,22 +459,83 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`)
       .join('\n\n');
   };
+  // `sessions` action — zero-LLM FTS5 transcript recall over the canonical
+  // messages table (one store, both backends). Mode inferred Hermes-style:
+  // around_message_id → scroll, query → search, neither → browse.
+  const sessionSearch = new SessionSearchStore(rt.storage.sql);
+  const runSessionsAction = (args: {
+    query?: string; around_message_id?: string; window?: number; limit?: number;
+  }): unknown => {
+    try {
+      if (args.around_message_id) {
+        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5);
+        if (!view) return { error: `no message with id ${args.around_message_id}` };
+        return { mode: 'scroll', ...view };
+      }
+      if (args.query?.trim()) {
+        const hits = sessionSearch.search(args.query, args.limit ?? 5);
+        return {
+          mode: 'search', query: args.query, hits,
+          hint: hits.length > 0
+            ? 'Pass a hit\'s messageId as around_message_id to read the surrounding window.'
+            : 'No matches. Multi-word queries require all terms; try fewer or different keywords.',
+        };
+      }
+      return { mode: 'browse', sessions: sessionSearch.browse(args.limit ?? 10) };
+    } catch (err) {
+      return { error: `session search unavailable: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  };
   tools.memory = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.memory,
-    inputSchema: jsonSchema<{ action: 'save' | 'search'; content?: string; query?: string }>({
+    inputSchema: jsonSchema<{
+      action: 'save' | 'search' | 'sessions';
+      content?: string;
+      query?: string;
+      around_message_id?: string;
+      window?: number;
+      limit?: number;
+    }>({
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['save', 'search'], description: 'save a note, or search memory' },
+        action: {
+          type: 'string',
+          enum: ['save', 'search', 'sessions'],
+          description: 'save a note, search memory notes, or recall past session transcripts (sessions)',
+        },
         content: { type: 'string', description: 'For action=save: the note text.' },
-        query: { type: 'string', description: 'For action=search: the search query.' },
+        query: {
+          type: 'string',
+          description: 'For action=search: the search query. For action=sessions: full-text query over past session messages (all terms must match; omit to browse recent sessions).',
+        },
+        around_message_id: {
+          type: 'string',
+          description: 'For action=sessions: scroll — return the messages around this message id (from a prior search hit or scroll window) instead of searching.',
+        },
+        window: {
+          type: 'number',
+          description: 'For action=sessions scroll: messages on each side of the anchor (default 5, max 20).',
+        },
+        limit: {
+          type: 'number',
+          description: 'For action=sessions: max search hits (default 5, max 10) or browsed sessions (default 10, max 20).',
+        },
       },
       required: ['action'],
     }),
-    execute: async (args: { action: 'save' | 'search'; content?: string; query?: string }) => {
+    execute: async (args: {
+      action: 'save' | 'search' | 'sessions';
+      content?: string;
+      query?: string;
+      around_message_id?: string;
+      window?: number;
+      limit?: number;
+    }) => {
       if (args.action === 'save') {
         if (!args.content) return 'memory.save requires `content`.';
         return appendMemoryNote(memory, args.content);
       }
+      if (args.action === 'sessions') return runSessionsAction(args);
       if (!args.query) return 'memory.search requires `query`.';
       return searchMemory(args.query);
     },
