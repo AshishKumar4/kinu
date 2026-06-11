@@ -35,6 +35,34 @@
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { Executor } from '../types/primitives.js';
 
+/**
+ * The d.ts the scaffold sandbox sees for the `host` bridge — the ONLY way a
+ * scaffold reaches the host (the live runtime object cannot cross the
+ * codemode sandbox boundary). Exported so the scaffold-proposal prompt
+ * (evolution/engine.ts) documents exactly this contract and cannot drift.
+ */
+export const SCAFFOLD_HOST_TYPES = `declare namespace host {
+  /** Emit an event back to the chat client. Events: text_delta, tool_call, tool_result, step_finish, done, error, ui_chunk. */
+  function emit(event: { type: string; [k: string]: unknown }): Promise<string>;
+  /** Invoke a tool from the parent's ToolSet by name with JSON args. */
+  function callTool(name: string, args: object): Promise<unknown>;
+  /** Stream an LLM completion. Returns the concatenated text; chunks are emitted as text_delta events.
+   *  Pass tool NAMES (from the agent's tool surface) in \`tools\`; the host wires the executables. */
+  function llmStream(opts: {
+    system: string;
+    messages: Array<{ role: string; content: string }>;
+    tools?: string[];
+    maxSteps?: number;
+  }): Promise<string>;
+  /** Run the agent's standard inference (full tools + multi-step) and stream its
+   *  output to the user. Delegate here to reuse the default loop. */
+  function defaultInference(): Promise<string>;
+  /** Read a memory file (e.g. "memory/MEMORY.md"). Returns "" if absent. */
+  function readMemory(path: string): Promise<string>;
+  /** Append content to a memory file. */
+  function appendMemory(path: string, content: string): Promise<string>;
+}`;
+
 /** What scaffold execution emits back to the caller. */
 export type ScaffoldEvent =
   | { type: 'text_delta'; text: string }
@@ -201,29 +229,7 @@ function buildHostProvider(opts: {
     },
   };
 
-  const types = `declare namespace host {
-  /** Emit an event back to the chat client. Events: text_delta, tool_call, tool_result, step_finish, done, error, ui_chunk. */
-  function emit(event: { type: string; [k: string]: unknown }): Promise<string>;
-  /** Invoke a tool from the parent's ToolSet by name with JSON args. */
-  function callTool(name: string, args: object): Promise<unknown>;
-  /** Stream an LLM completion. Returns the concatenated text; chunks are emitted as text_delta events.
-   *  Pass tool NAMES (from the agent's tool surface) in \`tools\`; the host wires the executables. */
-  function llmStream(opts: {
-    system: string;
-    messages: Array<{ role: string; content: string }>;
-    tools?: string[];
-    maxSteps?: number;
-  }): Promise<string>;
-  /** Run the agent's standard inference (full tools + multi-step) and stream its
-   *  output to the user. Delegate here to reuse the default loop. */
-  function defaultInference(): Promise<string>;
-  /** Read a memory file (e.g. "memory/MEMORY.md"). Returns "" if absent. */
-  function readMemory(path: string): Promise<string>;
-  /** Append content to a memory file. */
-  function appendMemory(path: string, content: string): Promise<string>;
-}`;
-
-  return { name: 'host', fns, types };
+  return { name: 'host', fns, types: SCAFFOLD_HOST_TYPES };
 }
 
 /**

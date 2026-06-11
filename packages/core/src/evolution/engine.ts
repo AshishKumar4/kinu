@@ -40,6 +40,8 @@ import { readSoul, summarizeSoul } from '../identity/soul.js';
  */
 import { BUILTIN_TOOL_NAMES as BUILT_IN_TOOL_NAMES } from '../tools/registry.js';
 import { modifyScaffold } from '../scaffold/modify.js';
+import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
+import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
 import { runMCTS } from '../mcts/engine.js';
 
 /** Single source for the explicit-feedback → turn-quality mapping. Used by
@@ -47,6 +49,33 @@ import { runMCTS } from '../mcts/engine.js';
  *  (cf-backend), so the 0.9/0.2 constants can't drift between them. */
 export function feedbackToQuality(feedback: 'positive' | 'negative'): number {
   return feedback === 'positive' ? 0.9 : 0.2;
+}
+
+/**
+ * The scaffold-proposal prompt — documents the REAL sandbox contract
+ * (scaffold/executor.ts): the host runtime never crosses the sandbox
+ * boundary, so all host interaction goes through the `host.*` bridge, and
+ * both `run(rt, task)` parameters receive the task string. Exported so
+ * tests can assert a proposal written against these instructions survives
+ * the executor's smoke path.
+ */
+export function buildScaffoldProposalPrompt(currentScaffold: string, reflection: string): string {
+  return (
+    `Current agent scaffold (your agentic loop — it runs inside a sandboxed worker):\n` +
+    `\`\`\`js\n${currentScaffold}\n\`\`\`\n\n` +
+    `Based on these session patterns:\n${reflection.slice(0, 500)}\n\n` +
+    `Propose an improved scaffold. The scaffold MUST:\n` +
+    `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
+    `sandbox — BOTH parameters receive the task STRING; read the task from either.\n` +
+    `2. Reach the host ONLY through the global \`host\` bridge:\n` +
+    `\`\`\`ts\n${SCAFFOLD_HOST_TYPES}\n\`\`\`\n` +
+    `\`await host.defaultInference()\` runs the standard inference loop — build on it or replace it ` +
+    `with your own strategy via host.llmStream / host.callTool.\n` +
+    `3. Stream text to the user by yielding { type: 'chunk', data: '<text>' }.\n` +
+    `4. NOT use ${SCAFFOLD_FORBIDDEN_DESCRIPTION}.\n` +
+    `5. Be a self-contained agentic loop.\n\n` +
+    `Return ONLY the JavaScript code, no explanation.`
+  );
 }
 
 export class EvolutionEngine {
@@ -229,14 +258,7 @@ export class EvolutionEngine {
       if (!currentScaffold || currentScaffold.length < 50) return;
 
       const proposed = await this.rt.llm.complete(
-        `Current agent scaffold (the agentic loop):\n\`\`\`js\n${currentScaffold}\n\`\`\`\n\n` +
-        `Based on these session patterns:\n${reflection.slice(0, 500)}\n\n` +
-        `Propose an improved scaffold. The scaffold MUST:\n` +
-        `1. Export an async generator function: async function* run(rt, task)\n` +
-        `2. Use only rt.* methods (rt.llm, rt.memory, rt.executor, rt.schedule)\n` +
-        `3. NOT use import, require, eval, Function, globalThis\n` +
-        `4. Be a self-contained agentic loop\n\n` +
-        `Return ONLY the JavaScript code, no explanation.`,
+        buildScaffoldProposalPrompt(currentScaffold, reflection),
       );
 
       // Only attempt mutation if the LLM produced something that looks like a scaffold
