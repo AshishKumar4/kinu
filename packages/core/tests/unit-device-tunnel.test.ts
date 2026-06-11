@@ -25,6 +25,18 @@ describe('DeviceTunnel', () => {
     expect(await p).toEqual({ stdout: 'a.ts', exitCode: 0 });
   });
 
+  test('extra frame fields (the checkpoint hint) ride next to id/method/params', async () => {
+    const sock = fakeSocket();
+    const t = new DeviceTunnel(sock);
+    const hint = { agent: 'a1', turnId: 't1', sessionId: 'default', dir: '/home/u/proj' };
+    const p = t.rpc('exec', ['make'], { checkpoint: hint });
+    const frame = sock.sent[0] as { id: string; method: string; params: unknown[]; checkpoint?: unknown };
+    expect(frame.method).toBe('exec');
+    expect(frame.checkpoint).toEqual(hint);
+    t.handleMessage(JSON.stringify({ id: frame.id, result: 'ok' }));
+    expect(await p).toBe('ok');
+  });
+
   test('an {id,error} response rejects', async () => {
     const sock = fakeSocket();
     const t = new DeviceTunnel(sock);

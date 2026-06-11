@@ -12,7 +12,7 @@
  */
 import {
   NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-  type DeviceStatus, type DeviceTransport,
+  type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport,
 } from '@proteus/core';
 import { shellQuote } from './cli/install-command.js';
 
@@ -23,7 +23,11 @@ const DEVICE_STATUS_TTL_MS = 5_000;
 /** The UserDO surface the device transport needs (a DO-to-DO RPC stub view). */
 export interface DeviceHubClient {
   listDevices(): Promise<Array<{ connected: boolean }>>;
-  deviceRpc(method: string, params: unknown[], opts?: { agentName?: string }): Promise<unknown>;
+  deviceRpc(
+    method: string,
+    params: unknown[],
+    opts?: { agentName?: string; checkpoint?: DeviceCheckpointHint },
+  ): Promise<unknown>;
 }
 
 export interface HubDeviceTransportOpts {
@@ -33,6 +37,9 @@ export interface HubDeviceTransportOpts {
   agentName: string;
   /** CLI-forwarded working directory for laptop exec calls, when present. */
   cliCwd(): string | null;
+  /** Current turn identity for the daemon's pre-mutation shadow-git snapshot
+   *  (deduped daemon-side per turn). Null outside turns / when unwired. */
+  checkpointMeta?: () => { turnId: string; sessionId: string } | null;
   now?: () => number;
 }
 
@@ -78,7 +85,16 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         const effectiveParams = method === 'exec' && cwd
           ? [`cd ${shellQuote(cwd)} && ${String(params[0] ?? '')}`]
           : params;
-        const result = await hub.deviceRpc(method, effectiveParams, { agentName: opts.agentName });
+        // Mutating methods carry the pre-mutation snapshot hint; the daemon
+        // checkpoints the target dir before executing (invisible, per-turn).
+        const meta = (method === 'exec' || method === 'writeFile') ? opts.checkpointMeta?.() ?? null : null;
+        const checkpoint: DeviceCheckpointHint | undefined = meta ? {
+          agent: opts.agentName,
+          turnId: meta.turnId,
+          sessionId: meta.sessionId,
+          dir: method === 'exec' ? cwd : null,
+        } : undefined;
+        const result = await hub.deviceRpc(method, effectiveParams, { agentName: opts.agentName, checkpoint });
         snapshot = { connected: true, registered: true };
         checkedAt = now();
         return result;

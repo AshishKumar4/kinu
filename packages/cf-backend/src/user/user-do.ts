@@ -52,6 +52,7 @@ import {
   tokensToCredential,
   CODEX_DEVICE_PORTAL,
   type DeviceCodeStart,
+  type DeviceCheckpointHint,
 } from '@proteus/core';
 import { initUserTables } from './schema.js';
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
@@ -675,7 +676,11 @@ export class UserDO extends Agent<Env> {
    *  chokepoint. Every agent call passes its name, so we can enforce the
    *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
    *  the agent to raise a consent card and await the user's decision. */
-  async deviceRpc(method: string, params: unknown[], opts?: { deviceId?: string; agentName?: string }): Promise<unknown> {
+  async deviceRpc(
+    method: string,
+    params: unknown[],
+    opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint },
+  ): Promise<unknown> {
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) throw new Error(NO_DEVICE_CONNECTED);
     if (opts?.agentName) {
@@ -684,7 +689,7 @@ export class UserDO extends Agent<Env> {
     }
     const tunnel = this._devices.tunnel(deviceId);
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
-    return tunnel.rpc(method, params);
+    return tunnel.rpc(method, params, opts?.checkpoint ? { checkpoint: opts.checkpoint } : undefined);
   }
 
   // ── Device consent (ask-once-then-remember) ──────────────────────────

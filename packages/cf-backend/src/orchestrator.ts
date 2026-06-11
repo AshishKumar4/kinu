@@ -124,6 +124,9 @@ import {
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
+  // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
+  isDeviceNotConnectedError,
+  type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
 } from "@proteus/core";
 import { combineAbortSignals } from "@proteus/agent-utils";
 import { createCodeTool } from "@cloudflare/codemode/ai";
@@ -629,6 +632,10 @@ export class OrchestratorAgent extends Think<Env> {
   // evolution is fire-and-forget and does not extend the busy window).
   private _inFlight = false;
   private _cliCwd: string | null = null;
+  // Current turn identity for the device daemon's pre-mutation shadow-git
+  // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
+  // turn so background tool continuations keep tagging their originating turn.
+  private _turnCheckpoint: { turnId: string; sessionId: string } | null = null;
 
   // The fully-prepared streamText opts of the LAST live chat inference
   // (stashed by runStreamText, the single production chat path). The shadow
@@ -644,6 +651,10 @@ export class OrchestratorAgent extends Think<Env> {
 
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
+  }
+
+  getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
+    return this._turnCheckpoint;
   }
 
   // ── Bound SQL executor ────────────────────────────────────────────────
@@ -1273,6 +1284,13 @@ export class OrchestratorAgent extends Think<Env> {
     // (Supervise altitude) can show what kicked each run off. This is the chat
     // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
     this._currentRunId = `run-${nanoid()}`;
+    // Tag this turn for device-side file checkpoints: the user message id is
+    // what the web turn card holds, so restore-by-turn resolves directly.
+    {
+      const userMessages = this.messages.filter((m) => m.role === 'user');
+      const lastUserId = userMessages[userMessages.length - 1]?.id;
+      this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
+    }
     try {
       this.eventRecorder.emit(this._currentRunId, {
         type: 'run_start',
@@ -2700,6 +2718,47 @@ export class OrchestratorAgent extends Think<Env> {
   @callable()
   async getAlwaysActiveSkills(): Promise<{ names: string[] }> {
     return { names: this.config.getAlwaysActiveSkills() };
+  }
+
+  // ── File checkpoints (device shadow-git) ─────────────────────────────
+  // The store lives on the user's machine; these forward to the daemon via
+  // the user hub. Restore is owner-invoked (web turn card / CLI /undo), so
+  // it bypasses the per-agent consent gate — pure added reversibility.
+
+  @callable()
+  async checkpointStatus(): Promise<CheckpointAvailability> {
+    const hub = this.getOwnerUserDO();
+    if (!hub) return { available: false, reason: 'agent has no owner user yet' };
+    try {
+      return await hub.deviceRpc('checkpointStatus', []) as CheckpointAvailability;
+    } catch (err) {
+      if (isDeviceNotConnectedError(err)) {
+        return { available: false, reason: 'no device connected — connect one with `proteus connect`' };
+      }
+      throw err;
+    }
+  }
+
+  @callable()
+  async listFileCheckpoints(limit = 50): Promise<FileCheckpointEntry[]> {
+    const hub = this.getOwnerUserDO();
+    if (!hub) return [];
+    try {
+      return await hub.deviceRpc('checkpointList', [this.name, Math.max(1, Math.min(500, limit))]) as FileCheckpointEntry[];
+    } catch (err) {
+      if (isDeviceNotConnectedError(err)) return [];
+      throw err;
+    }
+  }
+
+  @callable()
+  async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
+    return await this.requireOwnerUserDO().deviceRpc('checkpointPlan', [this.name, dir, id]) as FileRestorePlan;
+  }
+
+  @callable()
+  async restoreFileCheckpoints(dir: string, id: string): Promise<FileRestoreResult> {
+    return await this.requireOwnerUserDO().deviceRpc('checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
   }
 
   /**

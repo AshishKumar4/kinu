@@ -7,10 +7,12 @@ import {
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
+  ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
-import { MAX_INLINE_ATTACHMENT_BYTES } from "@proteus/core";
+import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
+import type { FileCheckpointEntry, FileRestorePlan } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { cloudflareReconnectPath, touchAgent, listAvailableModels, type ModelMenuEntry } from "@/lib/user-api";
@@ -248,13 +250,16 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
 const MessageView = memo(function MessageView({
-  message, isLast, isStreaming, onFork, onFeedback, feedback,
+  message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles,
 }: {
   message: UIMessage;
   isLast: boolean;
   isStreaming: boolean;
   /** Called with the message id when user clicks "Fork from here". */
   onFork?: (messageId: string) => void;
+  /** Restore device files to the shadow-git checkpoint taken before this
+   *  turn (user messages only — the turn's checkpoint is keyed on them). */
+  onRestoreFiles?: (messageId: string) => void;
   /** Called with the message id + new feedback when user clicks 👍 / 👎.
    *  Pass null to clear. Rejects on RPC failure. */
   onFeedback?: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
@@ -293,6 +298,15 @@ const MessageView = memo(function MessageView({
               title="Fork from here"
             >
               <GitBranchIcon size={12} />
+            </button>
+          )}
+          {!isLive && onRestoreFiles && message.id && (
+            <button
+              onClick={() => onRestoreFiles(message.id)}
+              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+              title="Restore files to before this turn"
+            >
+              <ClockCounterClockwiseIcon size={12} />
             </button>
           )}
         </div>
@@ -715,6 +729,46 @@ export default function WorkspacePage() {
       .then(setFeedbackByMessage)
       .catch(() => {});
   }, [state.connectionStatus, state.rpc]);
+  // Shadow-git restore — the files half of walk-back. The store lives on the
+  // user's device daemon; the DO forwards. Shows the plan (paths + counts)
+  // before applying; the restore itself is preceded by a safety snapshot.
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+  const onRestoreFiles = useCallback(async (mid: string) => {
+    setRestoreNotice(null);
+    try {
+      const entries = await state.rpc<FileCheckpointEntry[]>('listFileCheckpoints', [200]);
+      const matches = entries.filter((e) => e.turnId === mid);
+      if (matches.length === 0) {
+        setRestoreNotice('No file checkpoint for this turn — it changed no device files.');
+        return;
+      }
+      const plans: FileRestorePlan[] = [];
+      for (const entry of matches) {
+        plans.push(await state.rpc<FileRestorePlan>('planFileRestore', [entry.dir, entry.id]));
+      }
+      const files = plans.flatMap((p) => p.files);
+      if (files.length === 0) {
+        setRestoreNotice('Files already match the state before this turn — nothing to restore.');
+        return;
+      }
+      const { modified, created, deleted } = summarizeRestorePlan(files);
+      const counts = [
+        modified ? `${modified} modified` : null,
+        created ? `${created} recreated` : null,
+        deleted ? `${deleted} removed` : null,
+      ].filter(Boolean).join(', ');
+      const preview = files.slice(0, 12).map((f) => `  ${f.kind === 'modify' ? '~' : f.kind === 'create' ? '+' : '-'} ${f.path}`).join('\n');
+      const more = files.length > 12 ? `\n  … ${files.length - 12} more` : '';
+      if (!confirm(`Restore ${plans.map((p) => p.dir).join(', ')} to before this turn?\n${counts}\n${preview}${more}`)) return;
+      for (const entry of matches) {
+        await state.rpc('restoreFileCheckpoints', [entry.dir, entry.id]);
+      }
+      setRestoreNotice(`Restored ${files.length} file(s) to before this turn. Restoring again undoes the undo.`);
+    } catch (err) {
+      setRestoreNotice(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [state.rpc]);
+
   const onMessageFeedback = useCallback(async (mid: string, fb: 'positive' | 'negative' | null) => {
     await state.rpc('setTurnFeedback', [mid, fb]);
     setFeedbackByMessage((prev) => {
@@ -837,6 +891,7 @@ export default function WorkspacePage() {
                   onFork={onForkMessage}
                   onFeedback={onMessageFeedback}
                   feedback={feedbackByMessage[msg.id] ?? null}
+                  onRestoreFiles={onRestoreFiles}
                 />
               ))}
             </div>
@@ -857,6 +912,12 @@ export default function WorkspacePage() {
               onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
               {state.error && <div className="mb-2 text-xs text-red-400 p-card rounded-lg px-3 py-1.5">{state.error}</div>}
               {attachError && <div className="mb-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">{attachError}</div>}
+              {restoreNotice && (
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs p-text-2 p-card rounded-lg px-3 py-1.5">
+                  <span className="flex items-center gap-1.5 min-w-0"><ClockCounterClockwiseIcon size={12} className="shrink-0" /><span className="truncate">{restoreNotice}</span></span>
+                  <button onClick={() => setRestoreNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
+                </div>
+              )}
               {pendingAttachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {pendingAttachments.map((p, i) => (

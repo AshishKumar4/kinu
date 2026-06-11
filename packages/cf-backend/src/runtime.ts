@@ -211,6 +211,10 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
       typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
         ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
         : null,
+    checkpointMeta: () => {
+      const host = agent as unknown as { getCheckpointMetaForDevice?: () => { turnId: string; sessionId: string } | null };
+      return typeof host.getCheckpointMetaForDevice === 'function' ? host.getCheckpointMetaForDevice() : null;
+    },
   });
   void deviceTransport.refreshStatus();
   executionRouter.register(createSSHTunnelExecutor(deviceTransport));
