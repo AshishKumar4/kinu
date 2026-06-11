@@ -41,6 +41,7 @@ import {
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
+import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { createLocalAgentSelfProvider } from './agent-self.js';
@@ -140,6 +141,9 @@ export interface LocalAgentSessionOpts {
   persistMessages?: boolean;
   /** Number of recent messages to restore into LLM context. Default: 40. */
   historyLimit?: number;
+  /** Working directory for AGENTS.md discovery + the prompt's runtime context.
+   *  Default: process.cwd(). */
+  cwd?: string;
 }
 
 interface QueueItem {
@@ -186,6 +190,7 @@ export class LocalAgentSession implements BackendHost {
   private headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
   private readonly sessionId: string;
+  private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
 
@@ -211,6 +216,7 @@ export class LocalAgentSession implements BackendHost {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
     this.sessionId = opts.sessionId ?? 'default';
+    this.cwd = opts.cwd ?? process.cwd();
     this.persistMessagesEnabled = opts.persistMessages !== false;
     this.fallbackModel = opts.model;
     this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
@@ -643,6 +649,9 @@ export class LocalAgentSession implements BackendHost {
       name,
       source: name.startsWith('tool_') ? 'mcp' as const : 'external' as const,
     }));
+    // Nearest-file-wins AGENTS.md chain, re-read each turn so edits land
+    // immediately (a handful of stat calls — negligible next to the LLM call).
+    const agentsMd = discoverAgentsMd(this.cwd);
     const systemPrompt = buildSystemPromptSync(this.rt, {
       extraKnowledge: knowledge || undefined,
       executors,
@@ -651,6 +660,8 @@ export class LocalAgentSession implements BackendHost {
       backend: 'cli-local',
       mode: promptModeForTurn(item),
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      cwd: this.cwd,
+      ...(agentsMd.length > 0 ? { agentsMd } : {}),
       ...(activeSkills ? { activeSkills } : {}),
     }) + this.factsTail();
 

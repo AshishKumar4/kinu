@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
-import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session.js';
+import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import type { LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
 import { createLocalAgentSelfProvider } from '../src/agent-self.js';
@@ -72,7 +72,22 @@ function historyCapturingModel(answer: string, sink: (messages: ModelMessage[]) 
   } as unknown as LanguageModel;
 }
 
-function setup(answer = 'hello there', model?: LanguageModel) {
+/** Captures the system prompt the SDK hands to doStream (the first
+ *  role:'system' entry of the LanguageModelV2 prompt). */
+function systemCapturingModel(answer: string, sink: (system: string) => void): LanguageModel {
+  const base = fakeModel(answer) as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+  const inner = base.doStream.bind(base);
+  return {
+    ...base,
+    doStream: async (options: { prompt?: Array<{ role: string; content: unknown }> }) => {
+      const system = (options.prompt ?? []).find((m) => m.role === 'system');
+      sink(typeof system?.content === 'string' ? system.content : '');
+      return inner(options);
+    },
+  } as unknown as LanguageModel;
+}
+
+function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
   const db = new Database(':memory:');
   // The agent DB carries a messages table in production (created on `proteus
   // create`); the runtime factory doesn't, so provision it for the test.
@@ -84,6 +99,7 @@ function setup(answer = 'hello there', model?: LanguageModel) {
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
     rt, db, model: model ?? fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
+    ...extra,
   });
   return { db, rt, session, events };
 }
@@ -545,5 +561,75 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     const row = db.query(`SELECT outcome, source FROM turn_outcomes`).get() as { outcome: string; source: string } | null;
     expect(row).toEqual({ outcome: 'abandoned', source: 'session_end' });
+  });
+});
+
+describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
+  test('injects the cwd AGENTS.md chain into the turn system prompt', async () => {
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const root = mkdtempSync(join(tmpdir(), 'proteus-ls-agentsmd-'));
+    try {
+      const nested = join(root, 'app');
+      mkdirSync(nested);
+      writeFileSync(join(root, 'AGENTS.md'), 'Root: prefer bun.');
+      writeFileSync(join(nested, 'AGENTS.md'), 'App: run lint before commit.');
+
+      let system = '';
+      const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: nested });
+      await session.send('hello');
+
+      expect(system).toContain('## Project instructions (AGENTS.md)');
+      expect(system).toContain('Root: prefer bun.');
+      expect(system).toContain('App: run lint before commit.');
+      // Nearest renders last (it wins on conflict).
+      expect(system.indexOf('Root: prefer bun.')).toBeLessThan(system.indexOf('App: run lint before commit.'));
+      expect(system).toContain(`Working directory: ${nested}`);
+      await session.end();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('omits the AGENTS.md block when no file exists up the tree', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { discoverAgentsMd } = await import('../src/agents-md.js');
+    const root = mkdtempSync(join(tmpdir(), 'proteus-ls-noagents-'));
+    try {
+      // Ancestors of the tmpdir could theoretically carry an AGENTS.md on a
+      // developer machine — only assert omission when the chain is truly empty.
+      if (discoverAgentsMd(root).length > 0) return;
+      let system = '';
+      const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: root });
+      await session.send('hello');
+      expect(system.length).toBeGreaterThan(0);
+      expect(system).not.toContain('Project instructions (AGENTS.md)');
+      await session.end();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('persisted turns are searchable through the session-search seam', async () => {
+    const { SessionSearchStore } = await import('@proteus/core');
+    const { rt, session } = setup('the staging deploy used wrangler version three');
+    await session.send('how did we deploy to staging?');
+
+    // Same seam the memory tool's `sessions` action uses: rt.storage.sql.
+    const store = new SessionSearchStore(rt.storage.sql);
+    const hits = store.search('wrangler staging');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]!.sessionId).toBe('default');
+
+    const view = store.scroll(hits[0]!.messageId, 2)!;
+    expect(view.messages.some((m) => m.content.includes('how did we deploy'))).toBe(true);
+
+    const sessions = store.browse();
+    expect(sessions[0]!.sessionId).toBe('default');
+    expect(sessions[0]!.preview).toContain('how did we deploy');
+    await session.end();
   });
 });

@@ -8,6 +8,7 @@ export { createSandboxedExecutor, createNodeExecutor } from './executor.js';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';
 export { createBranchSpawner } from './branch-process.js';
 export { createNodeCraftedExecute } from './craft-executor.js';
+export { discoverAgentsMd } from './agents-md.js';
 export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory.js';
 export {
   LocalAgentSession, resolveChatModel,
