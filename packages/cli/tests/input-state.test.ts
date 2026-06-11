@@ -155,3 +155,33 @@ describe('queue ordering', () => {
     expect(drained.effects).toEqual([{ kind: 'send-queued', text: 'after both' }]);
   });
 });
+
+describe('Ctrl+B steer-as-branch', () => {
+  test('branch while a turn runs sends the draft as a branch and clears the input', () => {
+    const busy = run(initialInputState, { type: 'turn-start' });
+    const branched = reduceInput(busy.state, { type: 'branch', draft: 'try the other approach' });
+    expect(branched.effects).toEqual([
+      { kind: 'send-branch', text: 'try the other approach' },
+      { kind: 'clear-input' },
+    ]);
+    // Branching never queues and never interrupts — the machine state is untouched.
+    expect(branched.state).toEqual(busy.state);
+  });
+
+  test('branch while idle just sends — there is no live turn to branch from', () => {
+    const idle = reduceInput(initialInputState, { type: 'branch', draft: 'hello' });
+    expect(idle.effects).toEqual([
+      { kind: 'send-queued', text: 'hello' },
+      { kind: 'clear-input' },
+    ]);
+  });
+
+  test('branch with an empty draft hints while busy, no-ops while idle', () => {
+    const busy = run(initialInputState, { type: 'turn-start' });
+    const hinted = reduceInput(busy.state, { type: 'branch', draft: '   ' });
+    expect(hinted.effects).toEqual([
+      { kind: 'hint', text: 'Type the redirect first — Ctrl+B runs it as a parallel branch.' },
+    ]);
+    expect(reduceInput(initialInputState, { type: 'branch', draft: '' }).effects).toEqual([]);
+  });
+});

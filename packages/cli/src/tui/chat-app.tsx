@@ -9,9 +9,10 @@
  *
  * Input is driven by ONE state machine (tui/input-state.ts): Enter while a
  * turn runs STEERS it (client.steer), Tab queues the draft for after the turn,
- * Esc interrupts, and Esc-Esc opens the walk-back picker that forks the
- * conversation before an earlier user message (client.fork) with that message
- * pre-filled for editing.
+ * Ctrl+B runs the draft as a parallel BRANCH (client.branch — settles into
+ * Alternate Takes), Esc interrupts, and Esc-Esc opens the walk-back picker
+ * that forks the conversation before an earlier user message (client.fork)
+ * with that message pre-filled for editing.
  */
 
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
@@ -32,9 +33,11 @@ import {
 } from '../agent-client.js';
 import {
   commandsForClient,
+  describeBranchStatus,
   describeTakePick,
   executeSlashCommand,
   filterCommands,
+  isBranchStatusEvent,
   performUndo,
   resolveCommandDraft,
   type SlashOutcome,
@@ -90,6 +93,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
   const [inputState, setInputState] = useState(initialInputState);
+  /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
+  const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
 
   const msgIdRef = useRef(0);
   const inputRef = useRef<TextareaRenderable | null>(null);
@@ -146,6 +151,19 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
     }
   }, [addMessage, client]);
+
+  /** Run the draft as a parallel branch of the live turn — never interrupts
+   *  it; progress lands in the status bar and settles into /takes. Falls back
+   *  to a normal send when the turn just finished. */
+  const performBranch = useCallback(async (input: string) => {
+    const text = input.trim();
+    if (!text) return;
+    if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
+      addMessage({ role: 'user', content: text, branched: true });
+      return;
+    }
+    await sendPrompt(text);
+  }, [addMessage, client, sendPrompt]);
 
   /** Fork before the picked user message, truncate the rendered transcript to
    *  match, and put the message back in the input for editing. */
@@ -348,9 +366,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         case 'send-queued':
           void sendPrompt(effect.text);
           break;
+        case 'send-branch':
+          void performBranch(effect.text);
+          break;
       }
     }
-  }, [addMessage, client, onExit, sendPrompt, setInputText]);
+  }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
@@ -374,6 +395,11 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         if (outcome.kind === 'queue') {
           if (outcome.text) runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
           else addMessage({ role: 'system', content: 'Usage: /queue <text> — it sends after the running turn (or immediately when idle).' });
+          return;
+        }
+        if (outcome.kind === 'branch') {
+          if (outcome.text) await performBranch(outcome.text);
+          else addMessage({ role: 'system', content: 'Usage: /branch <text> (or Ctrl+B on a draft) — runs the redirect as a parallel branch of the running turn.' });
           return;
         }
         if (outcome.kind === 'fork') {
@@ -413,7 +439,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       return;
     }
     await sendPrompt(submitted);
-  }, [addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
+  }, [addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
 
   const handleClientEvent = useCallback((event: AgentClientEvent) => {
     switch (event.type) {
@@ -469,8 +495,20 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         }
         break;
       }
-      case 'broadcast':
+      case 'broadcast': {
+        if (!isBranchStatusEvent(event.event)) break;
+        const status = event.event;
+        setBranchTasks((prev) => {
+          const next = { ...prev };
+          if (status.status === 'running') next[status.branchId] = status.task;
+          else delete next[status.branchId];
+          return next;
+        });
+        // The settle/error line IS the takes affordance (the running state
+        // lives in the status bar).
+        if (status.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(status) });
         break;
+      }
     }
   }, [addMessage, client, dispatchInput, runInputEffects, stream]);
 
@@ -574,6 +612,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       }
     }
     const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+    if (key.name === 'b' && key.ctrl) {
+      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
     if (key.name === 'tab') {
       if (!overlayOpen) runInputEffects(dispatchInput({ type: 'tab', draft: inputRef.current?.plainText ?? '' }));
       return;
@@ -628,6 +670,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         autoEvolve={status?.autoEvolve}
         contextTokens={contextTokens}
         contextWindow={contextWindow}
+        branchCount={Object.keys(branchTasks).length}
       />
 
       <scrollbox
@@ -676,12 +719,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
           focused={ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues for after)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues · Ctrl+B branches)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },

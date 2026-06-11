@@ -427,3 +427,83 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 });
+
+describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
+  test('branch mid-turn fires the branchTurn rpc; branch_status broadcasts surface as broadcast events', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('start the deploy');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+
+    expect(client.branch('what if we used blue-green instead?')).toBe(true);
+    const rpc = await waitFor(
+      () => mock.frames.find((f) => f.type === 'rpc' && f.method === 'branchTurn'),
+      'branchTurn rpc frame',
+    );
+    expect(rpc.args).toEqual(['what if we used blue-green instead?']);
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { accepted: true, branchId: 'branch-ab12cd34' } });
+
+    // The DO fans branch progress to every ws client — forwarded as broadcasts.
+    mock.reply({ type: 'branch_status', status: 'running', branchId: 'branch-ab12cd34', task: 'what if we used blue-green instead?' });
+    mock.reply({ type: 'branch_status', status: 'settled', branchId: 'branch-ab12cd34', task: 'what if we used blue-green instead?', takeSetId: 'take-1', turnId: 'm2' });
+    await waitFor(() => {
+      const broadcasts = events.filter((e) => e.type === 'broadcast');
+      return broadcasts.length >= 2 ? broadcasts : undefined;
+    }, 'branch broadcasts');
+
+    const statuses = events
+      .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+      .map((e) => e.event);
+    expect(statuses[0]).toMatchObject({ type: 'branch_status', status: 'running', branchId: 'branch-ab12cd34' });
+    expect(statuses[1]).toMatchObject({ type: 'branch_status', status: 'settled', takeSetId: 'take-1', turnId: 'm2' });
+
+    // The live turn streams to completion untouched.
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'deploying' }, true));
+    await expect(turn).resolves.toMatchObject({ text: 'deploying', hadError: false });
+    await client.close();
+  });
+
+  test('a rejected branch surfaces an honest error status, never a takes set', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('work');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+    expect(client.branch('redirect')).toBe(true);
+    const rpc = await waitFor(
+      () => mock.frames.find((f) => f.type === 'rpc' && f.method === 'branchTurn'),
+      'branchTurn rpc frame',
+    );
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { accepted: false, reason: 'Branching needs an agent owner.' } });
+
+    const errorStatus = await waitFor(() => events
+      .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+      .map((e) => e.event)
+      .find((e) => e.type === 'branch_status' && e.status === 'error'), 'error status');
+    expect(errorStatus).toMatchObject({ status: 'error', message: 'Branching needs an agent owner.' });
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'done' }, true));
+    await turn;
+    await client.close();
+  });
+
+  test('branch with no active turn returns false and sends nothing', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    expect(client.branch('nothing running')).toBe(false);
+    expect(client.branch('   ')).toBe(false);
+    expect(mock.frames).toHaveLength(0);
+    await client.close();
+  });
+});

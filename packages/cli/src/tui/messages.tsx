@@ -16,9 +16,11 @@ export interface DisplayMessage {
   attachments?: string[];
   /** User message injected into a running turn (mid-turn steer). */
   steered?: boolean;
+  /** User redirect run as a parallel branch (Steer-as-Branch). */
+  branched?: boolean;
 }
 
-function UserMessage({ content, attachments, steered }: { content: string; attachments?: string[]; steered?: boolean }) {
+function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
   return (
     <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box
@@ -28,7 +30,7 @@ function UserMessage({ content, attachments, steered }: { content: string; attac
           backgroundColor: tuiColors.bubbleBg,
           border: true,
           borderStyle: 'single',
-          borderColor: steered ? tuiColors.amberDeep : tuiColors.bubbleBorder,
+          borderColor: steered || branched ? tuiColors.amberDeep : tuiColors.bubbleBorder,
           paddingLeft: 1,
           paddingRight: 1,
           paddingTop: 0,
@@ -38,6 +40,7 @@ function UserMessage({ content, attachments, steered }: { content: string; attac
         <text>
           <strong fg={tuiColors.blue}>You</strong>
           {steered ? <span fg={tuiColors.amber}> ↪ steering</span> : null}
+          {branched ? <span fg={tuiColors.amber}> ⎇ branching</span> : null}
         </text>
         <text><span fg={tuiColors.textBright}>{content}</span></text>
         {attachments?.map((label, i) => (
@@ -160,7 +163,7 @@ export function MessageList({ messages, streamingText }: Props) {
       {messages.map((msg) => {
         switch (msg.role) {
           case 'user':
-            return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} steered={msg.steered} />;
+            return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} steered={msg.steered} branched={msg.branched} />;
           case 'assistant':
             return <AssistantMessage key={msg.id} content={msg.content} />;
           case 'tool_call':

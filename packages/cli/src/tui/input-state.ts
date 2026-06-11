@@ -1,7 +1,7 @@
 /**
  * The ONE input state machine for the TUI chat surface: turn lifecycle
  * (paired turn-start/turn-end events), Esc / Esc-Esc (interrupt → walk-back
- * picker), the Tab queue, and queued-draft editing. A pure reducer — the
+ * picker), the Tab queue, Ctrl+B steer-as-branch, and queued-draft editing. A pure reducer — the
  * keyboard handler and the client event stream both dispatch through it, so
  * no parallel keypress handlers fight over state, and the transitions are
  * directly testable.
@@ -35,6 +35,7 @@ export type InputMachineEvent =
   | { type: 'tab'; draft: string }
   | { type: 'backspace'; draft: string }
   | { type: 'queue'; text: string }
+  | { type: 'branch'; draft: string }
   | { type: 'open-walkback' }
   | { type: 'walkback-closed' };
 
@@ -44,7 +45,8 @@ export type InputEffect =
   | { kind: 'clear-input' }
   | { kind: 'set-input'; text: string }
   | { kind: 'hint'; text: string }
-  | { kind: 'send-queued'; text: string };
+  | { kind: 'send-queued'; text: string }
+  | { kind: 'send-branch'; text: string };
 
 export interface InputTransition {
   state: InputState;
@@ -122,6 +124,20 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       }
       // Nothing running — a queued message just sends.
       return { state, effects: [{ kind: 'send-queued', text }] };
+    }
+
+    case 'branch': {
+      const text = event.draft.trim();
+      if (!text) {
+        return state.activeTurns > 0
+          ? { state, effects: [{ kind: 'hint', text: 'Type the redirect first — Ctrl+B runs it as a parallel branch.' }] }
+          : { state, effects: [] };
+      }
+      if (state.activeTurns > 0) {
+        return { state, effects: [{ kind: 'send-branch', text }, { kind: 'clear-input' }] };
+      }
+      // Nothing running — there is no live turn to branch from; just send.
+      return { state, effects: [{ kind: 'send-queued', text }, { kind: 'clear-input' }] };
     }
 
     case 'backspace': {

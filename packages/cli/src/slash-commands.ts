@@ -333,8 +333,11 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
 }
 
 /** One-line score evidence for a take candidate — shared by the TUI overlay
- *  and the classic listing. */
+ *  and the classic listing. Branch-sourced candidates have no node scores;
+ *  their evidence is which side of the split they are. */
 export function formatTakeEvidence(candidate: AlternateTakeCandidate): string {
+  if (candidate.origin === 'live') return "the live turn's answer";
+  if (candidate.origin === 'branch') return "the branched redirect's answer";
   return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
 }
 
