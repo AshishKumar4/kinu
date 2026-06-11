@@ -70,7 +70,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventsToUIStream, type ScaffoldRunResult,
+  runScaffold, scaffoldEventsToUIStream, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
   // Auto-judge shadow eval — sampled per-turn shadow rollout closure
@@ -2456,6 +2456,28 @@ export class OrchestratorAgent extends Think<Env> {
       scaffoldCodeOverride: codeOverride,
       timeoutMs: opts?.timeoutMs,
     });
+  }
+
+  /**
+   * `agent.proposeScaffold` host method — the agent proposes a new version of
+   * its own agentic loop from inside execute_tools. Routes through the
+   * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
+   * status='pending' and is scored by the sampled shadow eval + promotion
+   * gate (runShadowEvalSampled) like any other proposal — no new safety
+   * surface.
+   */
+  @callable()
+  async proposeScaffold(rationale: string, code: string) {
+    const result = await modifyScaffold(this.rt, rationale, code);
+    if (result.ok) {
+      try {
+        this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+          VALUES (${nanoid()}, 'scaffold_proposed',
+                  ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
+                  ${null}, ${Date.now()})`;
+      } catch { /* evolution_events may not exist yet */ }
+    }
+    return result;
   }
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */

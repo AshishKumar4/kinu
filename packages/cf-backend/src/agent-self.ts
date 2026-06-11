@@ -22,6 +22,7 @@ export interface AgentSelfHost {
   proposeCurriculumTasks(count?: number): Promise<unknown>;
   listCurriculumTasks(status?: CurriculumStatus): Promise<unknown>;
   setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<unknown>;
+  proposeScaffold(rationale: string, code: string): Promise<unknown>;
   createTimerTrigger(opts: {
     cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown>;
   }): { id: string; kind: string; nextFireAt: number | null };
@@ -37,6 +38,14 @@ const TYPES = `export declare const agent: {
   listCurriculum(status?: 'pending' | 'accepted' | 'rejected' | 'completed'): Promise<unknown>;
   /** Accept a proposed task by id (it becomes runnable). */
   acceptCurriculumTask(id: string): Promise<unknown>;
+  /** Propose a new version of your own scaffold (the agentic loop). Routed
+   *  through the existing 4-gate validation; an accepted proposal becomes the
+   *  pending version, is scored by shadow evaluation against the live
+   *  scaffold, and only goes live after winning the promotion gate. The code
+   *  must export \`async function* run(rt, task)\` and reach the host only via
+   *  the \`host.*\` bridge; rationale must be ≥ 50 chars. */
+  proposeScaffold(rationale: string, code: string):
+    Promise<{ ok: boolean; version?: number; error?: string; stage?: number }>;
   /** Schedule a future autonomous turn. Pass { cron } for recurring OR
    *  { atMs } (epoch ms) for one-shot; optional label + payload. The reactor
    *  wakes you when it fires. */
@@ -82,6 +91,16 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           if (typeof id !== 'string' || !id) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
           try { return await host.setCurriculumTaskStatus(id, 'accepted'); }
           catch (err) { return { error: `agent.acceptCurriculumTask: ${(err as Error).message}` }; }
+        },
+      },
+      proposeScaffold: {
+        description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + shadow evaluation; only goes live after winning the promotion gate. rationale ≥ 50 chars; code must export async function* run(rt, task) and use the host.* bridge.',
+        execute: async (...args: unknown[]) => {
+          const [rationale, code] = args;
+          if (typeof rationale !== 'string' || !rationale) return { error: 'agent.proposeScaffold: rationale must be a non-empty string' };
+          if (typeof code !== 'string' || !code) return { error: 'agent.proposeScaffold: code must be a non-empty string' };
+          try { return await host.proposeScaffold(rationale, code); }
+          catch (err) { return { error: `agent.proposeScaffold: ${(err as Error).message}` }; }
         },
       },
       schedule: {
