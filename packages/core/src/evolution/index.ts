@@ -25,3 +25,10 @@ export {
   DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './replay.js';
+export {
+  buildChangelog, countUnseenChangelog, renderChangelogText,
+  executeChangelogRevert, revertChangelogEntryById,
+  type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
+  type ChangelogRevertAction, type ChangelogRevertType,
+  type ChangelogRevertContext, type ChangelogRevertResult,
+} from './changelog.js';

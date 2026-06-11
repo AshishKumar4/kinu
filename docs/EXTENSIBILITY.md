@@ -233,5 +233,6 @@ tests under `packages/core/tests/`.
 - **Sleep-time compute** — `core/memory/sleep-time-compute.ts`. Background
   memory-compression: rewrite agent_facts (upsert new + decay stale),
   compress recent turn into `scratch` block, update `working_set`. Fires
-  fire-and-forget from `onChatResponse` when
-  `agent_config.sleep_time_compute = 'true'`.
+  fire-and-forget from `onChatResponse`; ON by default
+  (`agent_config.sleep_time_compute`, set `'false'` to disable). Fact
+  upserts surface in the Evolution Changelog and are revertable there.

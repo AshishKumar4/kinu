@@ -61,6 +61,10 @@ export interface WorkSurfaceProps {
   backgroundJobs: BackgroundJob[];
   runningTaskCount?: number;
   onRefreshTasks: () => void;
+  // Evolution Changelog: unseen self-changes badge the Brain tab; viewing
+  // the digest (inside Brain) zeroes it.
+  changelogUnseen?: number;
+  onChangelogSeen?: () => void;
   rpc: Rpc;
 }
 
@@ -72,8 +76,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
         {SURFACES.map((s) => {
           const Icon = SURFACE_ICON[s];
           const badge = (s === "Output" || s === "Devices") ? props.pinnedPorts.length
-            : s === "Tasks" ? (props.runningTaskCount ?? 0) : 0;
-          const badgeTone = s === "Tasks" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300";
+            : s === "Tasks" ? (props.runningTaskCount ?? 0)
+            : s === "Brain" ? (props.changelogUnseen ?? 0) : 0;
+          const badgeTone = s === "Tasks" ? "bg-amber-500/20 text-amber-300"
+            : s === "Brain" ? "bg-violet-500/20 text-violet-300"
+            : "bg-emerald-500/20 text-emerald-300";
           return (
             <button key={s} onClick={() => onSurface(s)}
               className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px flex items-center gap-1.5 ${
@@ -96,6 +103,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               agentStatus={props.agentStatus} tools={props.tools}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} rpc={props.rpc}
+              onChangelogSeen={props.onChangelogSeen}
             />
           )}
           {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} rpc={props.rpc} />}

@@ -6,7 +6,7 @@
  */
 
 import { summarizeRestorePlan, type FileCheckpointEntry } from '@proteus/core';
-import type { AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
+import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
 
 export interface SlashCommandInfo {
   name: string;
@@ -23,6 +23,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/model', description: 'Open model picker or set a model', usage: '/model [spec]' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
+  { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
   { name: '/tree', description: 'Show MCTS search tree' },
   { name: '/resume', description: 'Resume a recorded CLI session', usage: '/resume [number/id]' },
   { name: '/sessions', description: 'List recorded CLI sessions' },
@@ -73,6 +74,8 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 export type SlashOutcome =
   | { kind: 'text'; text: string }
   | { kind: 'status'; status: AgentClientStatus }
+  /** The Evolution Changelog digest — TUI renders an overlay, classic prints. */
+  | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'exit' }
   | { kind: 'model-picker' }
   | { kind: 'model-set'; spec: string }
@@ -114,6 +117,28 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/memory': {
       const content = await client.readMemory();
       return { kind: 'text', text: content ? `Memory:\n${content.slice(0, 1500)}` : 'Memory is empty.' };
+    }
+    case '/changelog': {
+      if (rest[0] === 'revert') {
+        const n = Number.parseInt(rest[1] ?? '', 10);
+        if (!Number.isInteger(n) || n < 1) {
+          return { kind: 'text', text: 'Usage: /changelog revert <n> — n is the index from the /changelog listing.' };
+        }
+        // Re-fetch so the index resolves against the same ordering the
+        // listing showed; the revert itself is id-addressed.
+        const view = await client.changelog();
+        const entry = view.entries[n - 1];
+        if (!entry) return { kind: 'text', text: `No changelog entry ${n} — /changelog lists ${view.entries.length}.` };
+        if (!entry.revert) return { kind: 'text', text: `Entry ${n} is informational (${entry.kind}) — nothing to revert.` };
+        const result = await client.revertChangelogEntry(entry.id);
+        return {
+          kind: 'text',
+          text: result.ok
+            ? `Reverted ${n}. ${entry.summary}\n  → ${result.detail ?? 'done'}`
+            : `Revert failed: ${result.error ?? 'unknown error'}`,
+        };
+      }
+      return { kind: 'changelog', view: await client.changelog() };
     }
     case '/model': {
       if (!arg) return { kind: 'model-picker' };

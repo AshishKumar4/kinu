@@ -26,12 +26,14 @@ import {
 } from './session.js';
 import { recordAgentClientEvent } from './session-recorder.js';
 import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
+import type { ChangelogEntry, ChangelogRevertResult } from '@proteus/core';
 import {
   asRecord,
   createUserUiMessage,
   findForkPivot,
   promptFiles,
   promptText,
+  type AgentChangelogView,
   type AgentClient,
   type AgentClientEvent,
   type AgentClientSendOptions,
@@ -296,6 +298,24 @@ export class CloudAgentClient implements AgentClient {
 
   async readMemory(): Promise<string> {
     return (await getCloudMemoryContent(this.origin, this.token, this.cloudName)).content;
+  }
+
+  async changelog(limit?: number): Promise<AgentChangelogView> {
+    const result = await this.callRpc('getEvolutionChangelog', [{ limit: limit ?? 50 }]) as {
+      entries?: ChangelogEntry[]; unseenCount?: number;
+    } | null;
+    const view: AgentChangelogView = {
+      entries: Array.isArray(result?.entries) ? result.entries : [],
+      unseenCount: typeof result?.unseenCount === 'number' ? result.unseenCount : 0,
+    };
+    // Viewing is the acknowledgement — best effort, the digest still renders.
+    await this.callRpc('markChangelogSeen', []).catch(() => {});
+    return view;
+  }
+
+  async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
+    const result = await this.callRpc('revertChangelogEntry', [id]) as ChangelogRevertResult | null;
+    return result ?? { ok: false, error: 'cloud revert returned no result' };
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {

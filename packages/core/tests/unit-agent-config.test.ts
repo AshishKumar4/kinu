@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
+  DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
 } from '../src/index.ts';
 import { createTestSql } from '@proteus/test-utils';
 
@@ -69,16 +70,27 @@ describe('AgentConfigStore — workspace backup handle', () => {
 });
 
 describe('AgentConfigStore — auto-GEPA cadence', () => {
-  test('round-trips a positive cadence; 0/negative disables', () => {
+  test('unset defaults to the autonomous cadence; explicit values stick', () => {
     const c = setup();
-    expect(c.getAutoGepaEveryNTurns()).toBe(0); // default off
-    c.setAutoGepaEveryNTurns(25);
-    expect(c.getAutoGepaEveryNTurns()).toBe(25);
+    expect(c.getAutoGepaEveryNTurns()).toBe(DEFAULT_AUTO_GEPA_EVERY_N_TURNS); // default ON
+    c.setAutoGepaEveryNTurns(40);
+    expect(c.getAutoGepaEveryNTurns()).toBe(40);
+  });
+
+  test('explicit disable (0/negative) persists and beats the default', () => {
+    const c = setup();
     c.setAutoGepaEveryNTurns(0);
-    expect(c.getAutoGepaEveryNTurns()).toBe(0);
+    expect(c.getAutoGepaEveryNTurns()).toBe(0); // stored '0', not unset
+    expect(c.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns)).toBe('0');
     c.setAutoGepaEveryNTurns(20);
     c.setAutoGepaEveryNTurns(-5); // disables
     expect(c.getAutoGepaEveryNTurns()).toBe(0);
+  });
+
+  test('an agent that explicitly configured a cadence keeps it', () => {
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, '7'); // pre-flip explicit config
+    expect(c.getAutoGepaEveryNTurns()).toBe(7);
   });
 });
 
@@ -111,20 +123,31 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalMode()).toBe('strict');
   });
 
-  test('sleepTimeCompute: boolean coerces "true" / "false" strings', () => {
+  test('sleepTimeCompute: defaults ON; explicit false sticks', () => {
     const c = setup();
-    expect(c.getSleepTimeComputeEnabled()).toBe(false);
+    expect(c.getSleepTimeComputeEnabled()).toBe(true); // autonomy default ON
+    c.setSleepTimeComputeEnabled(false);
+    expect(c.getSleepTimeComputeEnabled()).toBe(false); // explicit opt-out wins
     c.setSleepTimeComputeEnabled(true);
     expect(c.getSleepTimeComputeEnabled()).toBe(true);
-    c.setSleepTimeComputeEnabled(false);
-    expect(c.getSleepTimeComputeEnabled()).toBe(false);
   });
 
-  test('autoPromoteScaffold: boolean from "true"/"false"', () => {
+  test('autoPromoteScaffold: defaults ON; explicit false sticks', () => {
     const c = setup();
-    expect(c.getAutoPromoteScaffold()).toBe(false);
+    expect(c.getAutoPromoteScaffold()).toBe(true); // autonomy default ON
+    c.set(AGENT_CONFIG_KEYS.autoPromoteScaffold, 'false');
+    expect(c.getAutoPromoteScaffold()).toBe(false); // explicit opt-out wins
     c.set(AGENT_CONFIG_KEYS.autoPromoteScaffold, 'true');
     expect(c.getAutoPromoteScaffold()).toBe(true);
+  });
+
+  test('changelogSeenAt: 0 until marked, then sticks', () => {
+    const c = setup();
+    expect(c.getChangelogSeenAt()).toBe(0);
+    c.setChangelogSeenAt(1_750_000_000_000);
+    expect(c.getChangelogSeenAt()).toBe(1_750_000_000_000);
+    c.setChangelogSeenAt(Number.NaN); // ignored
+    expect(c.getChangelogSeenAt()).toBe(1_750_000_000_000);
   });
 
   test('shadowSampleRate: defaults 0.25, parses + clamps', () => {

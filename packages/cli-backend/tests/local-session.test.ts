@@ -833,3 +833,49 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.end();
   });
 });
+
+describe('LocalAgentSession — Evolution Changelog parity', () => {
+  test('digest assembles from the real local ledgers; viewing zeroes unseen', async () => {
+    const { rt, session } = setup('quiet');
+    rt.craftStore.create({
+      name: 'local_helper', description: 'a locally crafted helper',
+      code: 'async () => 1', scope: 'local',
+    });
+    rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+                   VALUES ('editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
+
+    const view = session.getEvolutionChangelog();
+    const summaries = view.entries.map((e) => e.summary);
+    expect(summaries.some((s) => s.includes('Crafted tool local_helper'))).toBe(true);
+    expect(summaries.some((s) => s.includes('Learned fact editor = helix'))).toBe(true);
+    expect(view.unseenCount).toBe(2);
+
+    session.markChangelogSeen();
+    expect(session.getEvolutionChangelog().unseenCount).toBe(0);
+    await session.end();
+  });
+
+  test('revert by id retires the crafted tool and forgets the fact for real', async () => {
+    const { rt, session } = setup('quiet');
+    rt.craftStore.create({
+      name: 'doomed_tool', description: 'soon retired', code: 'async () => 2', scope: 'local',
+    });
+    rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+                   VALUES ('stale', '"value"', 1.0, NULL, ${Date.now()})`;
+
+    const view = session.getEvolutionChangelog();
+    const tool = view.entries.find((e) => e.kind === 'tool')!;
+    const fact = view.entries.find((e) => e.kind === 'fact')!;
+
+    expect((await session.revertChangelogEntry(tool.id)).ok).toBe(true);
+    expect(rt.craftStore.get('doomed_tool')).toBeFalsy();
+    expect((await session.revertChangelogEntry(fact.id)).ok).toBe(true);
+    expect(rt.storage.sql`SELECT * FROM agent_facts WHERE key = 'stale'`).toHaveLength(0);
+
+    // Both rows are gone from the next digest, and re-reverting refuses.
+    expect(session.getEvolutionChangelog().entries.filter((e) => e.revert)).toHaveLength(0);
+    const again = await session.revertChangelogEntry(tool.id);
+    expect(again.ok).toBe(false);
+    await session.end();
+  });
+});

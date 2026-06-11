@@ -96,6 +96,9 @@ export function useProteus(agentId?: string) {
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
+  // Evolution Changelog unseen count — badges the Brain tab from any surface;
+  // viewing the digest (BrainSurface) marks seen server-side and zeroes it.
+  const [changelogUnseen, setChangelogUnseen] = useState(0);
 
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -315,6 +318,9 @@ export function useProteus(agentId?: string) {
     rpc<ExecutorInfo[]>("getExecutors", []).then(setExecutors).catch(() => {});
     refreshBackgroundJobs();
     refreshExposedPorts();
+    // Unseen self-changes for the Brain-tab badge.
+    rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
+      .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
     // Re-hydrate any consent cards still pending after a reload.
     rpc<PendingConsent[]>("listPendingConsents", []).then(setPendingConsents).catch(() => {});
   }
@@ -338,6 +344,8 @@ export function useProteus(agentId?: string) {
         for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
         setExecutorOutputs(outputs);
         refreshExposedPorts();
+        rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
+          .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
       })
       .catch((err) => {
         fetched.current = false;
@@ -477,6 +485,10 @@ export function useProteus(agentId?: string) {
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,
+    /** Unseen Evolution Changelog entries (Brain-tab badge) + the local clear
+     *  (BrainSurface marks seen server-side, then calls this). */
+    changelogUnseen,
+    clearChangelogUnseen: () => setChangelogUnseen(0),
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',

@@ -18,9 +18,11 @@
  *   scaffold_evaluations         — one row per shadow turn
  *   scaffold_versions.status     — 'current' | 'pending' | 'rolled_back' | 'historical'
  *
- * Auto-promotion is off by default — agent shows the evaluation results in
- * memory + UI and the user manually promotes via the RPC. To enable
- * autopilot, set AgentConfig.scaffold.autoPromote = true.
+ * Auto-promotion is ON by default at the agent level (agent_config
+ * auto_promote_scaffold, config/store.ts): the misevolution gate + shadow
+ * veto + archive are the safety net, and every promotion lands in the
+ * Evolution Changelog where the operator can revert it. Set the key to
+ * 'false' to require manual promotion via the RPC instead.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

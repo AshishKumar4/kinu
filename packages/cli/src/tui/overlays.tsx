@@ -1,9 +1,9 @@
 import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
-import { formatContextWindow } from '@proteus/core';
+import { formatContextWindow, type ChangelogEntry } from '@proteus/core';
 import type { SlashCommandInfo } from '../slash-commands.js';
 import type { AgentModelEntry } from '../model-catalog.js';
-import type { ForkPoint } from '../agent-client.js';
+import type { AgentChangelogView, ForkPoint } from '../agent-client.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
 import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
@@ -191,6 +191,83 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
       />
     </PaletteFrame>
   );
+}
+
+interface ChangelogOverlayProps {
+  view: AgentChangelogView;
+  terminal: OverlayGeometry;
+  /** Enter on an entry — surfaces revert revertables and explain the rest. */
+  onSelect: (entry: ChangelogEntry) => void;
+}
+
+const CHANGELOG_GLYPH: Record<ChangelogEntry['kind'], string> = {
+  scaffold: '⟳', tool: '⚒', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
+};
+
+/** The Evolution Changelog digest (/changelog): every self-change with its
+ *  evidence number; Enter reverts the selected line through the real
+ *  rollback paths. Keeping is the default — closing the overlay keeps all. */
+export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayProps) {
+  const paletteWidth = boundedPaletteWidth(terminal, 0.62, 60, 100);
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const options: SelectOption[] = view.entries.map((entry, index) => ({
+    name: clipText(
+      `${String(index + 1).padStart(2)}. ${CHANGELOG_GLYPH[entry.kind]} ${entry.summary.replace(/\s+/g, ' ')}`,
+      innerWidth,
+    ),
+    description: clipText(`${entry.evidence}${entry.revert ? ' · Enter reverts' : ' · informational'}`, innerWidth),
+    value: entry,
+  }));
+  const paletteHeight = Math.min(Math.max(options.length * 2 + 6, 11), Math.max(11, terminal.height - 6), 24);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  return (
+    <PaletteFrame
+      title={`Evolution changelog${view.unseenCount > 0 ? ` · ${view.unseenCount} new` : ''}`}
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text="↑/↓ move · Enter reverts the line · Esc keeps everything" width={innerWidth} color={tuiColors.muted} />
+      {options.length === 0 ? (
+        <PaletteLine text="No self-changes recorded yet." width={innerWidth} color={tuiColors.muted} />
+      ) : (
+        <select
+          focused={true}
+          options={options}
+          selectedIndex={0}
+          showDescription={true}
+          showScrollIndicator={true}
+          wrapSelection={true}
+          onSelect={(_index, option) => {
+            const selected = option?.value;
+            if (isChangelogEntry(selected)) onSelect(selected);
+          }}
+          style={{
+            flexGrow: 1,
+            height: Math.max(3, paletteHeight - 5),
+            backgroundColor: tuiColors.panel,
+            textColor: tuiColors.text,
+            focusedBackgroundColor: tuiColors.panel,
+            focusedTextColor: tuiColors.text,
+            selectedBackgroundColor: tuiColors.selection,
+            selectedTextColor: tuiColors.textStrong,
+            descriptionColor: tuiColors.muted,
+            selectedDescriptionColor: tuiColors.accentStrong,
+          }}
+        />
+      )}
+    </PaletteFrame>
+  );
+}
+
+function isChangelogEntry(value: unknown): value is ChangelogEntry {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as ChangelogEntry).id === 'string'
+    && typeof (value as ChangelogEntry).summary === 'string'
+    && typeof (value as ChangelogEntry).kind === 'string';
 }
 
 function isForkPoint(value: unknown): value is ForkPoint {

@@ -13,6 +13,7 @@
  */
 
 import * as readline from 'node:readline';
+import { renderChangelogText } from '@proteus/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
 import { executeSlashCommand, performUndo, renderStatusLines, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
@@ -387,6 +388,13 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'status':
       console.log('');
       for (const line of renderStatusLines(outcome.status)) console.log(`  ${DIM(line)}`);
+      console.log('');
+      return 'ok';
+    case 'changelog':
+      console.log(`\n${MUTED(renderChangelogText(outcome.view.entries, { unseenCount: outcome.view.unseenCount }))}`);
+      if (outcome.view.entries.some((entry) => entry.revert)) {
+        console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default — no action needed.'));
+      }
       console.log('');
       return 'ok';
     case 'model-picker': {

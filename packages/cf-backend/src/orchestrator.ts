@@ -119,6 +119,9 @@ import {
   // Turn-outcome signal + replay-eval loss curve (audit R3)
   buildOutcomeEvalSplit, listReplayEvals,
   type OutcomeEvalExpectation, type ReplayEvalSummary,
+  // Evolution Changelog — the self-change digest + revert dispatch
+  buildChangelog, countUnseenChangelog, revertChangelogEntryById,
+  type ChangelogEntry, type ChangelogRevertResult,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
@@ -1563,13 +1566,15 @@ export class OrchestratorAgent extends Think<Env> {
     // Auto-judge shadow evaluation. When a pending scaffold exists,
     // sample-and-run (default 25%) the pending against this turn's task,
     // ask a judge LLM to compare, record. When minTrials is reached AND
-    // agent_config.auto_promote_scaffold='true', auto-apply the decision.
+    // agent_config.auto_promote_scaffold allows it (default ON; the
+    // changelog makes the decision visible and revertable), auto-apply.
     void this.runShadowEvalSampled(userText, assistantText);
 
     // Sleep-time compute — between-turn background memory compression.
     // Reads recent turn, asks a judge to upsert/decay the agent_facts world
     // model. Letta-style; ~50% test-time token reduction reported. Gated by
-    // agent_config.sleep_time_compute='true' (default off).
+    // agent_config.sleep_time_compute (default ON; fact upserts land in the
+    // Evolution Changelog and are revertable).
     void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
     // On the first turn, replace the creation-time slug with a concise
@@ -2384,6 +2389,49 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async getEvolutionEvents(limit: number = 50) {
     return this.sql`SELECT id, type, message, data, created_at
       FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
+  }
+
+  // ── Evolution Changelog — the self-change digest + revert (core builder) ──
+
+  /** The "what I changed about myself" digest, assembled on demand from the
+   *  durable ledgers (core buildChangelog — no second event system). */
+  @callable()
+  async getEvolutionChangelog(opts?: { limit?: number }): Promise<{
+    entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
+  }> {
+    const seenAt = this.config.getChangelogSeenAt();
+    return {
+      entries: buildChangelog(this.boundSql, { limit: opts?.limit ?? 50 }),
+      unseenCount: countUnseenChangelog(this.boundSql, seenAt),
+      seenAt,
+    };
+  }
+
+  /** The operator viewed the changelog — zero the unseen badge. */
+  @callable()
+  async markChangelogSeen(): Promise<{ ok: true; seenAt: number }> {
+    const seenAt = Date.now();
+    this.config.setChangelogSeenAt(seenAt);
+    return { ok: true, seenAt };
+  }
+
+  /** Revert one changelog entry through the REAL machinery (scaffold
+   *  rollback / craft retire / fact forget). Id-addressed against a fresh
+   *  digest so a shifted list can never revert the wrong row. */
+  @callable()
+  async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.facts }, id);
+    if (result.ok) {
+      // Crafted-tool retirement must drop the cached tool surface, exactly
+      // like the consolidation path.
+      this._cachedTools = null;
+      this._cachedToolsKey = '';
+      try {
+        this.sql`INSERT INTO evolution_events (type, message, created_at)
+          VALUES ('reflection', ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
+      } catch { /* event log is best-effort */ }
+    }
+    return result;
   }
 
   /**

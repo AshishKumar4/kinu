@@ -53,6 +53,15 @@ export {
   initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay.js';
+// Evolution Changelog — the "what I changed about myself" digest over the
+// durable ledgers, with real revert dispatch (the autonomy-flip transparency).
+export {
+  buildChangelog, countUnseenChangelog, renderChangelogText,
+  executeChangelogRevert, revertChangelogEntryById,
+  type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
+  type ChangelogRevertAction, type ChangelogRevertType,
+  type ChangelogRevertContext, type ChangelogRevertResult,
+} from './evolution/changelog.js';
 // Canonical `buildBuiltinTools` is exported below; the older `buildAgentTools`
 // surface is no longer exported.
 
@@ -64,7 +73,7 @@ export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } 
 // raw-SQL sites into a deep module with known-key getters/setters.
 export {
   createAgentConfigStore, initAgentConfigTable,
-  AGENT_CONFIG_KEYS,
+  AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   type AgentConfigStore, type AgentConfigKey, type MctsOverrides, type ShellApprovalMode,
 } from './config/index.js';
 

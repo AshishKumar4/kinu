@@ -45,7 +45,10 @@ export type StructuredJudgeFn = (prompt: string, schema: typeof JudgeOutputSchem
 export interface AutoJudgeConfig {
   /** Fraction of turns to evaluate (0..1). Default 0.25. */
   sampleRate: number;
-  /** Auto-apply promotion/rollback when decision is conclusive. Default false. */
+  /** Auto-apply promotion/rollback when decision is conclusive. The engine
+   *  default is false (a bare runAutoShadowEval never mutates state); both
+   *  backends pass the agent-level switch, which defaults ON
+   *  (agent_config auto_promote_scaffold, config/store.ts). */
   autoApply: boolean;
   /** Forwarded to decidePromotion. Default DEFAULT_SHADOW_CONFIG. */
   shadowConfig: ShadowConfig;
@@ -80,8 +83,8 @@ export interface RunAutoShadowEvalOpts {
    * Side-effect note: enabling this lets the pending mutate VFS / SQL
    * the same way the live did this turn (e.g., both append to memory).
    * The pending's writes will appear in the agent's state. This is the
-   * accepted cost of accurate evaluation; autoApply stays off by default
-   * so the operator still gates promotion.
+   * accepted cost of accurate evaluation; every applied decision is
+   * visible and revertable in the Evolution Changelog.
    */
   callTool?: Parameters<typeof runScaffold>[0]['callTool'];
   /** Default-inference bridge for the pending scaffold (host.defaultInference).
@@ -155,8 +158,8 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       // runs against the same tool surface the live turn did. When omitted,
       // runScaffold's own capability guard returns an unavailable-runtime
       // error; no second stub is needed here. Side-effect note: the pending's
-      // tool calls hit the live env; autoApply stays off by default so
-      // promotion is still gated.
+      // tool calls hit the live env; promotion stays gated by decidePromotion
+      // and every applied decision is revertable from the changelog.
       callTool: opts.callTool,
       defaultInference: opts.defaultInference,
       scaffoldCodeOverride: pendingCode,

@@ -18,9 +18,11 @@ import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
+import type { ChangelogEntry } from '@proteus/core';
 import {
   findForkPivot,
   forkCandidates,
+  type AgentChangelogView,
   type AgentClient,
   type AgentClientEvent,
   type AgentClientStatus,
@@ -43,7 +45,7 @@ import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { StatusView } from './help-view.js';
-import { CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, WalkbackOverlay } from './overlays.js';
+import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, WalkbackOverlay } from './overlays.js';
 import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { estimateContextTokens } from './context-status.js';
 import { useStreamingBuffer } from './streaming-buffer.js';
@@ -81,6 +83,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ models: AgentModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [changelogView, setChangelogView] = useState<AgentChangelogView | null>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
   const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
@@ -213,10 +216,35 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     }
   }, [addMessage, client]);
 
+  /** Enter on a changelog line: revert revertables through the real paths,
+   *  explain informational lines; the overlay refreshes with the new digest. */
+  const revertChangelogEntry = useCallback(async (entry: ChangelogEntry) => {
+    if (!entry.revert) {
+      addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}) — nothing to revert.` });
+      return;
+    }
+    setChangelogView(null);
+    try {
+      const result = await client.revertChangelogEntry(entry.id);
+      addMessage({
+        role: 'system',
+        content: result.ok
+          ? `Reverted: ${entry.summary}\n→ ${result.detail ?? 'done'}`
+          : `Revert failed: ${result.error ?? 'unknown error'}`,
+      });
+      if (result.ok) setChangelogView(await client.changelog());
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
       case 'text':
         addMessage({ role: 'system', content: outcome.text });
+        return;
+      case 'changelog':
+        setChangelogView(outcome.view);
         return;
       case 'model-set':
         setModelSpec(outcome.spec);
@@ -259,6 +287,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         if (modelPicker) {
           setModelPicker(null);
           addMessage({ role: 'system', content: 'Model selection cancelled.' });
+        } else if (changelogView) {
+          setChangelogView(null);
+          addMessage({ role: 'system', content: 'Changelog closed — everything kept.' });
         } else if (sessionPicker) {
           setSessionPicker(null);
           addMessage({ role: 'system', content: 'Resume cancelled.' });
@@ -270,7 +301,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         addMessage({ role: 'system', content: `Unknown command: ${outcome.command}. Type /help` });
         return;
     }
-  }, [addMessage, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker]);
+  }, [addMessage, changelogView, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
     for (const effect of effects) {
@@ -509,7 +540,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         return;
       }
     }
-    const overlayOpen = Boolean(modelPicker || sessionPicker || inputState.walkbackOpen);
+    const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || inputState.walkbackOpen);
     if (key.name === 'tab') {
       if (!overlayOpen) runInputEffects(dispatchInput({ type: 'tab', draft: inputRef.current?.plainText ?? '' }));
       return;
@@ -521,6 +552,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     if (key.name !== 'escape') return;
     if (modelPicker) {
       setModelPicker(null);
+      return;
+    }
+    if (changelogView) {
+      setChangelogView(null); // keep everything — the default
       return;
     }
     runInputEffects(dispatchInput({
@@ -539,7 +574,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
-  const commandHints = !modelPicker && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
+  const commandHints = !modelPicker && !changelogView && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
   const contextTokens = estimateContextTokens(messages, streamingText);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
@@ -604,12 +639,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Esc interrupts' : modelPicker ? 'Model picker' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
-          focused={ready && !modelPicker && !deviceConnect.state && !inputState.walkbackOpen}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues for after)' : modelPicker ? 'Select a model or Esc' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          focused={ready && !modelPicker && !changelogView && !deviceConnect.state && !inputState.walkbackOpen}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues for after)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },
@@ -630,6 +665,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           loading={modelPicker.loading}
           error={modelPicker.error}
           onSelect={(model) => { void selectModel(model); }}
+        />
+      ) : changelogView ? (
+        <ChangelogOverlay
+          view={changelogView}
+          terminal={{ width, height }}
+          onSelect={(entry) => { void revertChangelogEntry(entry); }}
         />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay

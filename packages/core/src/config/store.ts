@@ -37,8 +37,12 @@ export const AGENT_CONFIG_KEYS = {
   /** Epoch ms of the last successful /workspace backup (backup debounce). */
   workspaceBackupAt: 'workspace_backup_at',
   /** Run GEPA self-optimization after this many turns of new execution traces
-   *  (0 = off). Trace-driven, not clock-driven. */
+   *  (0 = off; unset = the autonomous default cadence). Trace-driven, not
+   *  clock-driven. */
   autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
+  /** Epoch ms of the operator's last Evolution Changelog view — entries newer
+   *  than this drive the unseen badge. */
+  changelogSeenAt: 'changelog_seen_at',
   /** Total outcome-labeled instances a GEPA run draws into its train/val
    *  split (buildOutcomeEvalSplit). Default 8, clamped 2..20. */
   gepaEvalBudget: 'gepa_eval_budget',
@@ -95,10 +99,14 @@ export interface AgentConfigStore {
   setWorkspaceBackup(backup: DirectoryBackup): void;
   /** Epoch ms of the last successful /workspace backup, or 0. */
   getWorkspaceBackupAt(): number;
-  /** Turns-of-new-traces between auto-GEPA passes (0 = disabled). */
+  /** Turns-of-new-traces between auto-GEPA passes (0 = disabled; unset
+   *  defaults to DEFAULT_AUTO_GEPA_EVERY_N_TURNS). */
   getAutoGepaEveryNTurns(): number;
-  /** Set the auto-GEPA cadence (turns). 0 / negative disables. */
+  /** Set the auto-GEPA cadence (turns). 0 / negative explicitly disables. */
   setAutoGepaEveryNTurns(n: number): void;
+  /** Epoch ms of the last changelog view (0 = never seen). */
+  getChangelogSeenAt(): number;
+  setChangelogSeenAt(ms: number): void;
   /** GEPA eval budget — labeled instances per run (default 8, clamp 2..20). */
   getGepaEvalBudget(): number;
   /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
@@ -118,6 +126,12 @@ export interface MctsOverrides {
   /** Per-branch evaluation LLM-call budget (assertions + judge samples). */
   maxEvalLLMCalls?: number;
 }
+
+/** Default auto-GEPA cadence when the agent has no explicit setting: one
+ *  pass per 25 turns of new traces. Frequent enough to keep learning from
+ *  fresh outcome labels, sparse enough that each pass sees a genuinely new
+ *  eval split (the trace-driven counter pauses it on idle agents anyway). */
+export const DEFAULT_AUTO_GEPA_EVERY_N_TURNS = 25;
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
@@ -160,14 +174,18 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
     setShellApprovalMode(mode) { set(AGENT_CONFIG_KEYS.shellApprovalMode, mode); },
+    // Autonomy switches default ON (the "unleash, don't cap" flip): the
+    // Evolution Changelog makes every self-change visible and revertable,
+    // and the misevolution gate + shadow veto + archive are the safety net.
+    // Only an explicit 'false' opts out — stored values always win.
     getSleepTimeComputeEnabled() {
-      return get(AGENT_CONFIG_KEYS.sleepTimeCompute) === 'true';
+      return get(AGENT_CONFIG_KEYS.sleepTimeCompute) !== 'false';
     },
     setSleepTimeComputeEnabled(enabled) {
       set(AGENT_CONFIG_KEYS.sleepTimeCompute, enabled ? 'true' : 'false');
     },
     getAutoPromoteScaffold() {
-      return get(AGENT_CONFIG_KEYS.autoPromoteScaffold) === 'true';
+      return get(AGENT_CONFIG_KEYS.autoPromoteScaffold) !== 'false';
     },
     getShadowSampleRate() {
       const v = get(AGENT_CONFIG_KEYS.shadowSampleRate);
@@ -221,16 +239,27 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return Number.isFinite(n) ? n : 0;
     },
     getAutoGepaEveryNTurns() {
-      const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns)));
+      const raw = get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns);
+      if (raw == null) return DEFAULT_AUTO_GEPA_EVERY_N_TURNS;
+      const n = Math.floor(Number(raw));
       return Number.isFinite(n) && n > 0 ? n : 0;
     },
     setAutoGepaEveryNTurns(n) {
-      if (Number.isFinite(n) && n > 0) set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(Math.floor(n)));
-      else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.autoGepaEveryNTurns}`;
+      // Persist 0 explicitly — unset now means "autonomous default", so a
+      // deliberate disable must stick as a stored value.
+      const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+      set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));
     },
     getGepaEvalBudget() {
       const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.gepaEvalBudget)));
       return Number.isFinite(n) && n >= 2 ? Math.min(n, 20) : 8;
+    },
+    getChangelogSeenAt() {
+      const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    setChangelogSeenAt(ms) {
+      if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
     },
     getMctsOverrides() {
       const positive = (key: string): number | undefined => {

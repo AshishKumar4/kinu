@@ -72,8 +72,8 @@ const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
   },
   {
     id: 'rollout-config-tamper',
-    pattern: /\bauto_promote_scaffold\b|\bshadow_sample_rate\b|\bscaffold_explore_share\b|\bauto_gepa_every_n_turns\b/,
-    reason: 'references the shadow-rollout knobs — evolved code must not change its own promotion gates',
+    pattern: /\bauto_promote_scaffold\b|\bshadow_sample_rate\b|\bscaffold_explore_share\b|\bauto_gepa_every_n_turns\b|\bchangelog_seen_at\b/,
+    reason: 'references the shadow-rollout knobs or the changelog seen-marker — evolved code must not change its own promotion gates or hide its changes from the operator',
   },
   {
     id: 'self-modification-reentry',

@@ -108,7 +108,7 @@ function setup(model: LanguageModel) {
     noAutoEvolve: true,
     sessionOptions: { sessionDir: join(home, 'sessions') },
   });
-  return { client, home };
+  return { client, home, rt };
 }
 
 describe('LocalAgentClient', () => {
@@ -273,6 +273,46 @@ describe('LocalAgentClient', () => {
     expect(status.toolCount).toBeGreaterThan(0);
     const tools = await client.describeTools();
     expect(tools.builtIn.length).toBeGreaterThan(0);
+    await client.close();
+  });
+});
+
+describe('/changelog — the Evolution Changelog over a real local client', () => {
+  test('lists self-changes, marks seen on view, and reverts by index', async () => {
+    const { client, rt } = setup(fakeModel('ok'));
+    await client.connect();
+    const { executeSlashCommand } = await import('../src/slash-commands.js');
+
+    // Seed real ledgers: one crafted tool + one learned fact.
+    rt.craftStore.create({ name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
+    rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+                   VALUES ('favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
+
+    const listed = await executeSlashCommand(client, '/changelog');
+    if (listed.kind !== 'changelog') throw new Error(`expected changelog outcome, got ${listed.kind}`);
+    expect(listed.view.unseenCount).toBe(2);
+    const summaries = listed.view.entries.map((entry) => entry.summary);
+    expect(summaries.some((s) => s.includes('Crafted tool csv_summarizer'))).toBe(true);
+    expect(summaries.some((s) => s.includes('Learned fact favorite_shell = fish'))).toBe(true);
+
+    // Viewing IS the acknowledgement — the next fetch shows nothing unseen.
+    const second = await executeSlashCommand(client, '/changelog');
+    if (second.kind !== 'changelog') throw new Error('expected changelog outcome');
+    expect(second.view.unseenCount).toBe(0);
+
+    // Revert by index (1 = newest = the crafted tool) retires it for real.
+    const reverted = await executeSlashCommand(client, '/changelog revert 1');
+    if (reverted.kind !== 'text') throw new Error('expected text outcome');
+    expect(reverted.text).toContain('Reverted 1');
+    expect(rt.craftStore.get('csv_summarizer')).toBeFalsy();
+
+    // Out-of-range and bad indices answer with usage, never throw.
+    const missing = await executeSlashCommand(client, '/changelog revert 99');
+    if (missing.kind !== 'text') throw new Error('expected text outcome');
+    expect(missing.text).toContain('No changelog entry 99');
+    const usage = await executeSlashCommand(client, '/changelog revert x');
+    if (usage.kind !== 'text') throw new Error('expected text outcome');
+    expect(usage.text).toContain('Usage');
     await client.close();
   });
 });

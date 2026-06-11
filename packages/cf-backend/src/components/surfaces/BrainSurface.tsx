@@ -13,6 +13,7 @@ import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
+import { EvolutionChangelog } from "./EvolutionChangelog";
 
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
@@ -23,9 +24,11 @@ export interface BrainSurfaceProps {
   memoryContent: string;
   onSearchMemory: (q: string) => void;
   rpc: Rpc;
+  /** The changelog was viewed — zero the unseen tab badge. */
+  onChangelogSeen?: () => void;
 }
 
-export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc }: BrainSurfaceProps) {
+export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc, onChangelogSeen }: BrainSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
   useEffect(() => { rpc<Fact[]>("getFacts", [100]).then(setFacts).catch(() => {}); }, [rpc]);
@@ -62,6 +65,10 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
           </div>
         </section>
       ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>}
+
+      {/* Evolution Changelog — what the agent changed about itself, with
+          evidence + per-line keep/revert/diff. Viewing marks entries seen. */}
+      <EvolutionChangelog rpc={rpc} onSeen={onChangelogSeen} />
 
       {/* Scaffold evolution — the moat: lineage + diff + shadow verdict + promote/rollback. */}
       {as && <ScaffoldLineage rpc={rpc} currentVersion={as.scaffoldVersion} />}

@@ -39,6 +39,8 @@ import {
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
+  buildChangelog, countUnseenChangelog, revertChangelogEntryById,
+  type ChangelogEntry, type ChangelogRevertResult,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
@@ -490,6 +492,34 @@ export class LocalAgentSession implements BackendHost {
   /** The persisted replay-eval loss curve, newest first (read-only). */
   async getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]> {
     return listReplayEvals(this.rt.storage.sql, limit);
+  }
+
+  // ── Evolution Changelog (parity with the DO's RPCs) ───────────────
+
+  /** The self-change digest over the durable ledgers (core buildChangelog). */
+  getEvolutionChangelog(limit = 50): { entries: ChangelogEntry[]; unseenCount: number; seenAt: number } {
+    const seenAt = this.config.getChangelogSeenAt();
+    return {
+      entries: buildChangelog(this.rt.storage.sql, { limit }),
+      unseenCount: countUnseenChangelog(this.rt.storage.sql, seenAt),
+      seenAt,
+    };
+  }
+
+  /** The operator viewed the changelog — zero the unseen badge. */
+  markChangelogSeen(): { ok: true; seenAt: number } {
+    const seenAt = Date.now();
+    this.config.setChangelogSeenAt(seenAt);
+    return { ok: true, seenAt };
+  }
+
+  /** Revert one changelog entry through the real machinery (scaffold
+   *  rollback / craft retire / fact forget). Invalidates the model-bound
+   *  state so a retired crafted tool disappears from the next turn. */
+  async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore }, id);
+    if (result.ok) this.invalidateModelState();
+    return result;
   }
 
   async proposeCurriculumTasks(count?: number) {

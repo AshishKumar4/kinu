@@ -986,6 +986,8 @@ export default function WorkspacePage() {
             backgroundJobs={state.backgroundJobs}
             runningTaskCount={state.runningTaskCount}
             onRefreshTasks={state.refreshBackgroundJobs}
+            changelogUnseen={state.changelogUnseen}
+            onChangelogSeen={state.clearChangelogUnseen}
             rpc={state.rpc}
           />
         </Panel>

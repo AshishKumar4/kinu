@@ -49,6 +49,7 @@ import {
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
+import { buildChangelog } from './changelog.js';
 
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
@@ -401,6 +402,31 @@ export class EvolutionEngine {
     if (this.conversationCount % this.config.lifetimeEvolutionInterval === 0) {
       await this.onLifetimeEvolution();
     }
+
+    // The session-end changelog digest: assemble what the window changed
+    // (including anything the reflection/evolution above just landed) and
+    // emit it through the normal event stream — the CLI prints it live, the
+    // web timeline carries it. Pure read over the ledgers; never blocks.
+    this.emitChangelogDigest(session.startedAt);
+  }
+
+  /** Emit one "what I changed about myself" line for the closed window. */
+  private emitChangelogDigest(since: number): void {
+    let entries;
+    try {
+      entries = buildChangelog(this.rt.storage.sql, { since, limit: 20 });
+    } catch {
+      return; // the digest is best-effort
+    }
+    if (entries.length === 0) return;
+    const counts = new Map<string, number>();
+    for (const e of entries) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
+    const parts = [...counts].map(([kind, n]) => `${n} ${kind}`).join(' · ');
+    this.emit({
+      type: 'changelog_digest',
+      message: `Self-change digest: ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} this session (${parts}) — every line is revertable in the changelog`,
+      data: { since, counts: Object.fromEntries(counts) },
+    });
   }
 
   /** Real signal that something in the window went wrong: an error, a

@@ -36,6 +36,7 @@ import {
   promptText,
 } from './agent-client.js';
 import type {
+  AgentChangelogView,
   AgentClient,
   AgentClientEvent,
   AgentClientSendOptions,
@@ -308,6 +309,16 @@ export class LocalAgentClient implements AgentClient {
         description: tool.description,
       })),
     };
+  }
+
+  async changelog(limit?: number): Promise<AgentChangelogView> {
+    const view = this.session.getEvolutionChangelog(limit);
+    this.session.markChangelogSeen();
+    return { entries: view.entries, unseenCount: view.unseenCount };
+  }
+
+  async revertChangelogEntry(id: string) {
+    return this.session.revertChangelogEntry(id);
   }
 
   async readMemory(): Promise<string> {
