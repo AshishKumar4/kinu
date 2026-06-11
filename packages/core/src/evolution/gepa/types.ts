@@ -128,6 +128,11 @@ export interface GepaConfig<I = unknown, E = unknown> {
   seed: string;
   /** Held-out eval set. Required. Empty array is rejected. */
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
+  /** Upstream GEPA's trainset: the instances reflection minibatches are
+   *  sampled from. Pass the outcome-labeled NEGATIVE set (corrected/
+   *  frustrated turns) so mutation proposals focus on what must be fixed
+   *  while `evalSet` scoring guards regressions. Defaults to evalSet. */
+  trainSet?: ReadonlyArray<EvalInstance<I, E>>;
   /** Per-instance scorer. */
   metric: GepaMetric<I, E>;
   /** Reflection LM — receives a prompt, returns a new candidate string. */

@@ -35,6 +35,9 @@ const SCAFFOLD_MAX_BYTES = 15 * 1024;
 export interface RunScaffoldGepaOpts<I = unknown, E = unknown> {
   rt: AgentRuntime;
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
+  /** Reflection-minibatch source (the outcome-labeled negatives to fix).
+   *  Defaults to evalSet — see GepaConfig.trainSet. */
+  trainSet?: ReadonlyArray<EvalInstance<I, E>>;
   metric: GepaMetric<I, E>;
   reflectionLm: ReflectionLM;
   /** Defaults to the current scaffold's source. */
@@ -81,6 +84,7 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
   const gepa = await runGepa({
     seed,
     evalSet: opts.evalSet,
+    trainSet: opts.trainSet,
     metric: opts.metric,
     reflectionLm: opts.reflectionLm,
     budget: opts.budget,

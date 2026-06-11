@@ -39,6 +39,9 @@ export const AGENT_CONFIG_KEYS = {
   /** Run GEPA self-optimization after this many turns of new execution traces
    *  (0 = off). Trace-driven, not clock-driven. */
   autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
+  /** Total outcome-labeled instances a GEPA run draws into its train/val
+   *  split (buildOutcomeEvalSplit). Default 8, clamped 2..20. */
+  gepaEvalBudget: 'gepa_eval_budget',
   /** Operator-tuned MCTS knobs (Settings UI / setMctsConfig). Unset = engine
    *  defaults (DEFAULT_CONFIG.mcts) at the call site. */
   mctsExplorationWeight: 'mcts_c',
@@ -96,6 +99,8 @@ export interface AgentConfigStore {
   getAutoGepaEveryNTurns(): number;
   /** Set the auto-GEPA cadence (turns). 0 / negative disables. */
   setAutoGepaEveryNTurns(n: number): void;
+  /** GEPA eval budget — labeled instances per run (default 8, clamp 2..20). */
+  getGepaEvalBudget(): number;
   /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
    *  into runMCTS call sites so unset knobs keep engine defaults. */
   getMctsOverrides(): MctsOverrides;
@@ -222,6 +227,10 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setAutoGepaEveryNTurns(n) {
       if (Number.isFinite(n) && n > 0) set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(Math.floor(n)));
       else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.autoGepaEveryNTurns}`;
+    },
+    getGepaEvalBudget() {
+      const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.gepaEvalBudget)));
+      return Number.isFinite(n) && n >= 2 ? Math.min(n, 20) : 8;
     },
     getMctsOverrides() {
       const positive = (key: string): number | undefined => {

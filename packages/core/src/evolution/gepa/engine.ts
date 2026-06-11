@@ -50,6 +50,11 @@ export async function runGepa<I = unknown, E = unknown>(
       `runGepa: minibatchSize must be in (0, evalSet.length=${config.evalSet.length}]; got ${budget.minibatchSize}`,
     );
   }
+  // Reflection minibatches come from the train set (upstream GEPA's trainset
+  // discipline); scoring/Pareto always runs on the full evalSet. The
+  // minibatch size is capped by whichever set it samples from.
+  const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
+  const minibatchSize = Math.min(budget.minibatchSize, trainSet.length);
   const random = config.random ?? Math.random;
   const instanceIds = config.evalSet.map(i => i.id);
 
@@ -77,7 +82,7 @@ export async function runGepa<I = unknown, E = unknown>(
       config.parentSelection === 'best-aggregate'
         ? bestAggregate(pool)
         : sampleParentByWeight(pool, instanceIds, random);
-    const minibatch = sampleWithoutReplacement(config.evalSet, budget.minibatchSize, random);
+    const minibatch = sampleWithoutReplacement(trainSet, minibatchSize, random);
     try {
       const m = await proposeMutation(
         { parent, minibatch, metric: config.metric, reflectionLm: config.reflectionLm },
@@ -132,7 +137,7 @@ export async function runGepa<I = unknown, E = unknown>(
   for (let iter = 0; iter < budget.maxIterations; iter++) {
     // Worst-case cost of this iteration: minibatchSize (rollout) + evalSet (score).
     // Merge costs 0 for rollout, so worst-case still applies for Mutate.
-    if (budgetLeft() < budget.minibatchSize + config.evalSet.length) {
+    if (budgetLeft() < minibatchSize + config.evalSet.length) {
       stopReason = 'metric_budget_exhausted';
       break;
     }

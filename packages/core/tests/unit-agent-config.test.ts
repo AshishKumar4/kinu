@@ -178,3 +178,18 @@ describe('AgentConfigStore — MCTS overrides', () => {
     expect(c.getMctsOverrides()).toEqual({});
   });
 });
+
+describe('AgentConfigStore — GEPA eval budget', () => {
+  test('defaults to 8, reads stored values, clamps to 2..20, ignores garbage', () => {
+    const c = setup();
+    expect(c.getGepaEvalBudget()).toBe(8);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '12');
+    expect(c.getGepaEvalBudget()).toBe(12);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '500');
+    expect(c.getGepaEvalBudget()).toBe(20);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '1');
+    expect(c.getGepaEvalBudget()).toBe(8);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, 'many');
+    expect(c.getGepaEvalBudget()).toBe(8);
+  });
+});

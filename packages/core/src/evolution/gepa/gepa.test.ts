@@ -340,3 +340,51 @@ describe('runGepa', () => {
     })).rejects.toThrow(/minibatchSize/);
   });
 });
+
+// ── train/val split discipline ───────────────────────────────────
+
+describe('runGepa — trainSet (upstream train/val discipline)', () => {
+  test('reflection minibatches sample ONLY from trainSet; scoring runs on the full evalSet', async () => {
+    const train = [mkInstance('neg1', 'failed task A'), mkInstance('neg2', 'failed task B')];
+    const evalSet = [...train, mkInstance('pos1', 'accepted task C'), mkInstance('pos2', 'accepted task D')];
+
+    // Track which instances each phase touches. Rollouts happen on candidates
+    // already in the pool (the parent); eval-set scoring covers every id.
+    const rolledOut = new Set<string>();
+    let scored = 0;
+    const metric = async (candidate: string, instance: EvalInstance<string>): Promise<MetricOutcome> => {
+      if (candidate === 'seed' && scored >= evalSet.length) rolledOut.add(instance.id);
+      scored++;
+      return { score: candidate === 'improved' ? 0.9 : 0.4, feedback: 'fb' };
+    };
+
+    const result = await runGepa({
+      seed: 'seed',
+      evalSet,
+      trainSet: train,
+      metric,
+      reflectionLm: async () => 'improved',
+      budget: { maxIterations: 2, maxMetricCalls: 100, minibatchSize: 2 },
+      random: seededRng(7),
+    });
+
+    expect(result.winner.source).toBe('improved');
+    expect(rolledOut.size).toBeGreaterThan(0);
+    for (const id of rolledOut) expect(['neg1', 'neg2']).toContain(id);
+    // The winner was still scored on every val instance (regression guard).
+    expect([...result.winner.scores.keys()].sort()).toEqual(['neg1', 'neg2', 'pos1', 'pos2']);
+  });
+
+  test('minibatch size larger than the trainSet clamps instead of throwing', async () => {
+    const result = await runGepa({
+      seed: 'seed',
+      evalSet: [mkInstance('a', 'x'), mkInstance('b', 'y'), mkInstance('c', 'z')],
+      trainSet: [mkInstance('a', 'x')],
+      metric: async (c) => ({ score: c === 'better' ? 1 : 0.2, feedback: 'fb' }),
+      reflectionLm: async () => 'better',
+      budget: { maxIterations: 1, maxMetricCalls: 100, minibatchSize: 3 },
+      random: seededRng(3),
+    });
+    expect(result.winner.source).toBe('better');
+  });
+});
