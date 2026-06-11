@@ -16,7 +16,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderDeps, AuthResolution } from '@proteus/core';
-import { asFetchFunction, authCacheKey, listModelsDevProviderModels } from '@proteus/core';
+import { asFetchFunction, authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@proteus/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '../lib/cloudflare-oauth.js';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
@@ -62,9 +62,9 @@ export function createMyGatewayProvider(): ModelProvider {
       if (!auth?.baseURL) return [];
       const cacheKey = authCacheKey(auth);
       const cached = catalogCache.get(cacheKey);
-      if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.models;
+      if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cloneModelInfos(cached.models);
 
-      const slugs = await servableProviderSlugs(auth, deps);
+      const slugs = await servableProviderSlugs(auth.baseURL, auth.headers, deps);
       const models: ModelInfo[] = [];
       for (const slug of slugs) {
         const catalogId = GATEWAY_SLUG_TO_CATALOG[slug];
@@ -74,7 +74,7 @@ export function createMyGatewayProvider(): ModelProvider {
         }
       }
       catalogCache.set(cacheKey, { at: Date.now(), models });
-      return models;
+      return cloneModelInfos(models);
     },
 
     createModel(modelId, deps): LanguageModel {
@@ -121,12 +121,16 @@ export function createMyGatewayProvider(): ModelProvider {
  *  provider keys, plus the Unified-Billing set when the account has credits.
  *  Both reads are best-effort — a denied management call (e.g. a credential
  *  predating the aig.read scope) just narrows the menu, never throws. */
-async function servableProviderSlugs(auth: AuthResolution, deps: ProviderDeps): Promise<string[]> {
-  const account = cloudflareAccountAPIRoot(auth.baseURL!);
-  const gatewayId = auth.headers['cf-aig-gateway-id'];
+async function servableProviderSlugs(
+  baseURL: string,
+  authHeaders: Record<string, string>,
+  deps: ProviderDeps,
+): Promise<string[]> {
+  const account = cloudflareAccountAPIRoot(baseURL);
+  const gatewayId = authHeaders['cf-aig-gateway-id'];
   if (!account || !gatewayId) return [];
   const fetchImpl = deps.fetch ?? fetch;
-  const headers = { ...auth.headers, accept: 'application/json' };
+  const headers = { ...authHeaders, accept: 'application/json' };
   const slugs = new Set<string>();
 
   try {
@@ -170,6 +174,9 @@ async function mapGatewayError(res: Response, modelId: string, gatewayId: string
     friendly = `${gateway} cannot route "${modelId}" — the unified endpoint only accepts "{provider}/{model}" ids for providers it supports (got provider "${author}").`;
   } else if (code === 2021 || /invalid user credentials/i.test(message ?? '') || /insufficient.*(credit|balance)/i.test(message ?? '')) {
     friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
+  } else if (res.status === 401) {
+    // Still 401 AFTER the forced-refresh retry → the Cloudflare login is dead.
+    friendly = 'Your Cloudflare login is no longer valid — reconnect Cloudflare in User settings.';
   }
   if (!friendly) {
     // Unknown failure — keep the original payload intact for the caller.

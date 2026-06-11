@@ -264,6 +264,11 @@ describe('my-gateway error mapping', () => {
     expect(message).toMatch(/Unified Billing/);
     expect(message).toContain('minimax');
   });
+
+  test('a 401 that survives the refresh retry → reconnect Cloudflare', async () => {
+    const message = await failWith({ errors: [{ code: 10000, message: 'Authentication error' }] }, 401);
+    expect(message).toMatch(/reconnect Cloudflare/i);
+  });
 });
 
 describe('my-gateway registry precedence', () => {
