@@ -605,7 +605,9 @@ export class LocalAgentSession implements BackendHost {
     this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
-    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
+    // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections
+    // (prompt.ts documents extraKnowledge as "a bounded memory/MEMORY.md tail").
+    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
     const activeSkills = await this.resolveTurnSkills(item.text);
     // Skill-filtered built-ins + the connected MCP tools (always available).

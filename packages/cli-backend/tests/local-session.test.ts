@@ -165,6 +165,24 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
   });
 
+  test('the knowledge block carries the TAIL of MEMORY.md (newest lessons)', async () => {
+    // Regression: slice(0, 2000) injected the OLDEST bytes of the append-only
+    // MEMORY.md, so the newest lessons never reached the prompt.
+    let observed: ModelMessage[] = [];
+    const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
+    await rt.memory.write(
+      'memory/MEMORY.md',
+      `### Lesson OLD-STALE-MARKER\n${'x'.repeat(2500)}\n### Lesson NEW-LESSON-MARKER recorded last\n`,
+    );
+    await session.send('hi');
+
+    const system = observed.find((m) => m.role === 'system');
+    expect(system).toBeDefined();
+    const text = String(system!.content);
+    expect(text).toContain('NEW-LESSON-MARKER');
+    expect(text).not.toContain('OLD-STALE-MARKER');
+  });
+
   test('the system prompt advertises the laptop as the direct CLI host machine', async () => {
     // Local agents run ON the user's machine — the laptop executor is always
     // available and direct, so the prompt must not borrow the cloud wording
