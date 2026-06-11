@@ -32,11 +32,15 @@ export function normalizeModelEntries(rows: unknown[]): AgentModelEntry[] {
   });
 }
 
-/** Collapse duplicate specs (union capabilities) and sort the platform default
- *  first — used by the cloud catalog, which merges several provider feeds. */
+/** Collapse duplicate specs (union capabilities), keep models grouped by
+ *  provider in feed order (= the backend's connection-preference order), and
+ *  pin the platform default first — used by the cloud catalog, which merges
+ *  many provider feeds now that the full models.dev catalog is exposed. */
 export function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
   const bySpec = new Map<string, AgentModelEntry>();
+  const providerOrder = new Map<string, number>();
   for (const row of rows) {
+    if (!providerOrder.has(row.provider)) providerOrder.set(row.provider, providerOrder.size);
     const existing = bySpec.get(row.spec);
     if (!existing) {
       bySpec.set(row.spec, row);
@@ -47,7 +51,10 @@ export function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
       capabilities: [...new Set([...(existing.capabilities ?? []), ...(row.capabilities ?? [])])],
     });
   }
-  return [...bySpec.values()].sort((a, b) => modelRank(a) - modelRank(b) || a.label.localeCompare(b.label));
+  return [...bySpec.values()].sort((a, b) =>
+    modelRank(a) - modelRank(b)
+    || (providerOrder.get(a.provider) ?? 0) - (providerOrder.get(b.provider) ?? 0)
+    || a.label.localeCompare(b.label));
 }
 
 export function contextWindowForSpec(models: readonly AgentModelEntry[], spec: string | null | undefined): number | undefined {

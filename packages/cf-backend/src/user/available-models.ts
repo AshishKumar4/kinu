@@ -1,7 +1,13 @@
 /**
- * Union of models available to a user. The provider registry is the source of
- * truth; this module only shapes registry output for HTTP clients.
+ * Union of models available to a user, plus the connectable-provider catalog.
+ * The provider registry is the source of truth for models; models.dev is the
+ * source of truth for which providers a BYO API key can connect. This module
+ * only shapes that data for HTTP clients.
  */
+import {
+  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
+  type ModelsDevProviderInfo,
+} from '@proteus/core';
 import type { UserDO } from './user-do.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
 
@@ -49,4 +55,56 @@ export async function listAvailableModels(env: Env, userId: string): Promise<Mod
     }
   }
   return out;
+}
+
+/** One connectable provider for the credential UX (BYO API key). */
+export interface ProviderCatalogEntry {
+  /** Provider id — also the model-spec prefix (`<id>/<modelId>`). */
+  id: string;
+  /** Credential key the API key is stored under. */
+  credKey: string;
+  name: string;
+  doc?: string;
+  /** Conventional env var name for the key (models.dev metadata). */
+  envVar?: string;
+  connected: boolean;
+}
+
+/** All providers a stored API key can connect: every models.dev provider the
+ *  openai-compat path can drive, plus catalog providers a bespoke static
+ *  provider serves under the same id/credKey (openai, anthropic, openrouter).
+ *  OAuth-connected providers (workers-ai, codex) have their own flows. */
+export function buildProviderCatalog(
+  providers: readonly ModelsDevProviderInfo[],
+  staticIds: ReadonlySet<string>,
+  storedKeys: ReadonlySet<string>,
+): ProviderCatalogEntry[] {
+  return providers
+    .filter((p) => modelsDevCompatBaseURL(p) !== null || staticIds.has(p.id))
+    .map((p): ProviderCatalogEntry => {
+      const credKey = catalogCredKey(p.id);
+      return {
+        id: p.id,
+        credKey,
+        name: p.name,
+        doc: p.doc,
+        envVar: p.env[0],
+        connected: storedKeys.has(credKey),
+      };
+    })
+    .sort((a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name));
+}
+
+export async function listProviderCatalog(env: Env, userId: string): Promise<ProviderCatalogEntry[]> {
+  const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  const { registry } = createAgentProviderRegistry({ env, userDOStub: stub, fetch });
+  const [providers, creds] = await Promise.all([
+    listModelsDevProviders({ fetch }),
+    stub.listCredentials(),
+  ]);
+  return buildProviderCatalog(
+    providers,
+    new Set(registry.list().map((p) => p.id)),
+    new Set(creds.map((c) => c.key)),
+  );
 }

@@ -4,14 +4,27 @@ import { cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './ut
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 5 * 60_000;
 
-export type ModelsDevProviderId =
-  | 'anthropic'
-  | 'cloudflare-workers-ai'
-  | 'openai';
+/** Provider-level models.dev metadata (everything except the model map). */
+export interface ModelsDevProviderInfo {
+  id: string;
+  name: string;
+  /** Documentation URL. */
+  doc?: string;
+  /** Conventional API-key env var names (first is primary). */
+  env: string[];
+  /** AI-SDK package the provider officially ships with. */
+  npm?: string;
+  /** Base URL for providers reachable without a bespoke SDK. */
+  api?: string;
+}
 
 interface ModelsDevProvider {
   id?: string;
   name?: string;
+  doc?: string;
+  env?: string[];
+  npm?: string;
+  api?: string;
   models?: Record<string, ModelsDevModel>;
 }
 
@@ -47,7 +60,7 @@ export interface ModelsDevListOptions {
 }
 
 export async function listModelsDevProviderModels(
-  providerId: ModelsDevProviderId,
+  providerId: string,
   deps: Pick<ProviderDeps, 'fetch'>,
   opts: ModelsDevListOptions = {},
 ): Promise<ModelInfo[]> {
@@ -69,6 +82,67 @@ export async function listModelsDevProviderModels(
   }
 }
 
+/** Provider-level metadata for one models.dev provider, or null when the id
+ *  is unknown or the catalog is unreachable. */
+export async function getModelsDevProvider(
+  providerId: string,
+  deps: Pick<ProviderDeps, 'fetch'>,
+  ttlMs: number = DEFAULT_TTL_MS,
+): Promise<ModelsDevProviderInfo | null> {
+  try {
+    const data = await getModelsDevCatalog(deps.fetch, ttlMs);
+    const provider = data[providerId];
+    return provider ? providerInfoFromModelsDev(providerId, provider) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Provider-level metadata for every models.dev provider (empty on fetch failure). */
+export async function listModelsDevProviders(
+  deps: Pick<ProviderDeps, 'fetch'>,
+  ttlMs: number = DEFAULT_TTL_MS,
+): Promise<ModelsDevProviderInfo[]> {
+  try {
+    const data = await getModelsDevCatalog(deps.fetch, ttlMs);
+    return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * models.dev omits `api` for providers whose npm SDK embeds the endpoint
+ * (`@ai-sdk/groq`, `@ai-sdk/mistral`, …) — SDKs a Worker cannot load. These
+ * providers all publish a stable, documented OpenAI-compatible endpoint, so
+ * the major ones are pinned here. Only consulted when the catalog itself
+ * offers no usable `api`; keys must exist in models.dev to take effect.
+ */
+const COMPAT_ENDPOINT_SUPPLEMENT: Record<string, string> = {
+  google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  groq: 'https://api.groq.com/openai/v1',
+  mistral: 'https://api.mistral.ai/v1',
+  xai: 'https://api.x.ai/v1',
+  togetherai: 'https://api.together.xyz/v1',
+  deepinfra: 'https://api.deepinfra.com/v1/openai',
+  cerebras: 'https://api.cerebras.ai/v1',
+  perplexity: 'https://api.perplexity.ai',
+  cohere: 'https://api.cohere.ai/compatibility/v1',
+};
+
+/**
+ * The base URL Proteus can drive with a plain API key through the
+ * openai-compat path, or null when the provider needs a bespoke SDK
+ * (`npm` is not an OpenAI-surface package) or an endpoint Proteus cannot
+ * construct (no `api`, or an `api` with `${…}` account placeholders).
+ */
+export function modelsDevCompatBaseURL(provider: ModelsDevProviderInfo): string | null {
+  const catalogEligible = provider.api && !provider.api.includes('${')
+    && (provider.npm === '@ai-sdk/openai-compatible' || provider.npm === '@ai-sdk/openai');
+  if (catalogEligible) return provider.api ?? null;
+  return COMPAT_ENDPOINT_SUPPLEMENT[provider.id] ?? null;
+}
+
 async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): Promise<Record<string, ModelsDevProvider>> {
   const fetchImpl = fetchFn ?? fetch;
   if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return cache.data;
@@ -81,6 +155,17 @@ async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: num
   const data = body as Record<string, ModelsDevProvider>;
   cache = { at: Date.now(), fetchFn: fetchImpl, data };
   return data;
+}
+
+function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): ModelsDevProviderInfo {
+  return {
+    id,
+    name: nonEmptyString(provider.name) ?? id,
+    doc: nonEmptyString(provider.doc),
+    env: Array.isArray(provider.env) ? provider.env.filter((v): v is string => typeof v === 'string' && v.length > 0) : [],
+    npm: nonEmptyString(provider.npm),
+    api: nonEmptyString(provider.api),
+  };
 }
 
 function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly: boolean): ModelInfo | null {
@@ -110,4 +195,3 @@ function orderModels(models: ModelInfo[], preferredIds: readonly string[] | unde
     return (a.label ?? a.id).localeCompare(b.label ?? b.id);
   });
 }
-

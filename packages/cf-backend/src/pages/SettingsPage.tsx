@@ -13,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { useProteus } from "@/hooks/use-proteus";
 import { listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
+import { ModelPicker } from "@/components/ModelPicker";
 
 const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
   + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
@@ -170,12 +171,13 @@ export default function SettingsPage() {
               No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in user settings.
             </p>
           ) : (
-            <select value={currentSpec} onChange={(e) => setCurrentSpec(e.target.value)} className={inputCls}>
-              <option value="">(default)</option>
-              {models.map((m) => (
-                <option key={m.spec} value={m.spec}>{m.label}</option>
-              ))}
-            </select>
+            <ModelPicker
+              models={models}
+              value={currentSpec}
+              onChange={setCurrentSpec}
+              clearable
+              placeholder="(default)"
+            />
           )}
           <p className="text-[11px] p-text-3">
             Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.

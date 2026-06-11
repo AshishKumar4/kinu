@@ -70,6 +70,11 @@ export interface ProviderDeps {
   /** Synchronous-friendly "is there a credential for this key" check used by
    *  isAvailable(). Implementations can be cached for cheap repeated reads. */
   hasCredential: (key: string) => Promise<boolean>;
+  /** Enumerate stored credential keys (no secret material). Lets the dynamic
+   *  catalog source discover connected providers in one call instead of
+   *  probing hasCredential per catalog entry. Optional — without it the
+   *  dynamic source lists nothing (resolution still works). */
+  listCredentialKeys?: () => Promise<string[]>;
   fetch?: typeof fetch;
 }
 

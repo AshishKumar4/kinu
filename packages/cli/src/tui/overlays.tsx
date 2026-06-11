@@ -1,5 +1,6 @@
 import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
+import { formatContextWindow } from '@proteus/core';
 import type { SlashCommandInfo } from '../slash-commands.js';
 import type { AgentModelEntry } from '../model-catalog.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
@@ -69,17 +70,21 @@ interface ModelPickerProps {
 export function ModelPickerOverlay({ models, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 56, 84);
   const innerWidth = Math.max(1, paletteWidth - 4);
-  const options: SelectOption[] = models.map((model) => ({
-    name: clipText([
-      model.spec === currentSpec ? '✓' : ' ',
-      model.label,
-      model.provider,
-      model.spec,
-      model.capabilities?.length ? model.capabilities.join(', ') : '',
-    ].filter(Boolean).join(' · '), innerWidth),
-    description: '',
-    value: model,
-  }));
+  const options: SelectOption[] = models.map((model) => {
+    const context = formatContextWindow(model.contextWindow);
+    return {
+      name: clipText([
+        model.spec === currentSpec ? '✓' : ' ',
+        model.label,
+        model.provider,
+        model.spec,
+        context ? `${context} ctx` : '',
+        model.capabilities?.length ? model.capabilities.join(', ') : '',
+      ].filter(Boolean).join(' · '), innerWidth),
+      description: '',
+      value: model,
+    };
+  });
   const paletteHeight = Math.min(Math.max(options.length + 6, 11), Math.max(11, terminal.height - 6), 22);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const selectedIndex = Math.max(0, models.findIndex((model) => model.spec === currentSpec));

@@ -57,9 +57,12 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
-  test('normalizeSpecSync — throws on unknown provider id', () => {
+  test('normalizeSpecSync — catalog-shaped ids pass through, malformed ids throw', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
-    expect(() => reg.normalizeSpecSync('nonsense/model')).toThrow(/Unknown provider/);
+    // models.dev-shaped ids are accepted optimistically (the catalog cannot be
+    // consulted synchronously); membership is enforced at request time.
+    expect(reg.normalizeSpecSync('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');
+    expect(() => reg.normalizeSpecSync('Not A Provider/model')).toThrow(/Unknown provider/);
   });
 
   test('async resolveSpec — picks workers-ai when Cloudflare OAuth has an account base URL', async () => {

@@ -6,9 +6,12 @@
 //       ai-gateway env vars)
 //   2. Runtime-agnostic providers from @proteus/core
 //      (codex, openai, openrouter, openai-compat, anthropic)
+//   3. The models.dev dynamic catalog source — any other catalog provider
+//      with a stored `<id>.bearer` key resolves through the openai-compat
+//      wire path. Static providers stay authoritative for their ids.
 //
 // Ordering is also the preference order for `defaultSpec()`:
-//   workers-ai → ai-gateway → codex → openai → anthropic → openrouter → openai-compat
+//   workers-ai → ai-gateway → codex → openai → anthropic → openrouter → openai-compat → catalog
 //
 // Auth flows through the UserDO stub passed in opts.userDOStub — getAuth /
 // hasCredential are thin wrappers over its RPCs. No credential material ever
@@ -16,6 +19,7 @@
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
+  createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
@@ -62,6 +66,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     appTitle: opts.appTitle,
   }));
   registry.register(createOpenAICompatProvider());
+  // models.dev id `cloudflare-workers-ai` aliases the bespoke workers-ai
+  // provider (and its endpoint needs an account-id template anyway) — exclude
+  // it so workers-ai never grows a second resolution path.
+  registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
   // Auth resolver — proxies to UserDO. The DO event loop serializes
   // concurrent refreshes for the same credential, so we don't need to
@@ -86,6 +94,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     env: opts.env,
     getAuth,
     hasCredential,
+    listCredentialKeys: async () => {
+      if (!stub) return [];
+      return (await stub.listCredentials()).map((c) => c.key);
+    },
     fetch: opts.fetch,
   };
 
@@ -124,7 +136,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
       if (s.includes('/')) {
         const first = s.slice(0, s.indexOf('/'));
-        if (registry.get(first)) return s;
+        // canResolve is optimistic for catalog-shaped ids — a typo'd provider
+        // surfaces a clear models.dev error at request time instead of here
+        // (the catalog cannot be consulted synchronously).
+        if (registry.canResolve(first)) return s;
         if (first === 'workers-ai') return s;   // canonical form pre-existed
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }
@@ -143,7 +158,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
       if (s.includes('/')) {
         const first = s.slice(0, s.indexOf('/'));
-        if (registry.get(first)) return s;
+        if (registry.canResolve(first)) return s;
         if (first === 'workers-ai') return s;
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }

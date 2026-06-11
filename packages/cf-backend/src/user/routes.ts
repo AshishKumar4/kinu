@@ -22,6 +22,7 @@
  *   PUT    /api/user/config/:key                   — set default
  *   GET    /api/user/models                        — union of available models
  *   GET    /api/user/providers                     — connected provider summary
+ *   GET    /api/user/providers/catalog             — connectable providers (BYO key)
  *   GET    /api/user/mcp/servers                   — list configured MCP servers
  *   POST   /api/user/mcp/servers                   — add a new MCP server
  *   DELETE /api/user/mcp/servers/:id               — remove an MCP server
@@ -31,7 +32,7 @@
 import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
-import { listAvailableModels } from './available-models.js';
+import { listAvailableModels, listProviderCatalog } from './available-models.js';
 import { handleCreateAgentRequest, notifyAgentsCredentialsChanged } from './agent-access.js';
 import { err, json, safeJson } from '../lib/http.js';
 
@@ -172,6 +173,9 @@ export async function handleUserRequest(
   // ── Models + providers ─────────────────────────────────────────────
   if (path === '/providers' && method === 'GET') {
     return json(await stub.listConnectedProviders());
+  }
+  if (path === '/providers/catalog' && method === 'GET') {
+    return json(await listProviderCatalog(env, identity.userId));
   }
   if (path === '/models' && method === 'GET') {
     return json(await listAvailableModels(env, identity.userId));

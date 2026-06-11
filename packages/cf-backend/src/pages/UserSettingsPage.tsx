@@ -6,24 +6,25 @@
  *   1. Profile (email read-only, displayName editable)
  *   2. Connections
  *      - ChatGPT Codex via device-code flow
- *      - BYO API keys: OpenAI / Anthropic / OpenRouter / openai-compat
+ *      - BYO API keys for any models.dev catalog provider / openai-compat
  *   3. Defaults
  *      - default model new agents inherit
  */
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Combobox, Loader } from "@cloudflare/kumo";
 import {
   PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
 } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
+import { ModelPicker } from "@/components/ModelPicker";
 import {
   getProfile, listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
-  listAvailableModels, getConfig, setConfig, getCliSetup,
+  listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
   type UserProfile, type CredentialSummary, type CodexStatus,
-  type ModelMenuEntry, type DeviceFlowStart, type CliSetup,
+  type ModelMenuEntry, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
 } from "../lib/user-api";
 
 const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
@@ -52,6 +53,7 @@ export default function UserSettingsPage() {
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [codex, setCodex] = useState<CodexStatus | null>(null);
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
+  const [catalog, setCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [defaults, setDefaults] = useState<{ model: string | null }>({ model: null });
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,11 +62,12 @@ export default function UserSettingsPage() {
   const refresh = useCallback(async () => {
     try {
       setErr(null);
-      const [p, c, k, m, defaultModel, cli] = await Promise.all([
+      const [p, c, k, m, cat, defaultModel, cli] = await Promise.all([
         getProfile().catch(() => null),
         listCredentials().catch(() => []),
         codexStatus().catch(() => null),
         listAvailableModels().catch(() => []),
+        listProviderCatalog().catch(() => []),
         getConfig('default_model').catch(() => ({ key: 'default_model', value: null })),
         getCliSetup().catch(() => null),
       ]);
@@ -72,6 +75,7 @@ export default function UserSettingsPage() {
       setCreds(c ?? []);
       setCodex(k);
       setModels(m ?? []);
+      setCatalog(cat ?? []);
       setDefaults({ model: defaultModel?.value ?? null });
       setCliSetup(cli);
     } catch (e) {
@@ -146,7 +150,7 @@ export default function UserSettingsPage() {
 
         {/* BYO API keys */}
         <Card title="API keys" icon={KeyIcon}>
-          <ApiKeyManager creds={creds} onChanged={refresh} />
+          <ApiKeyManager creds={creds} catalog={catalog} onChanged={refresh} />
         </Card>
 
         {/* MCP servers */}
@@ -168,20 +172,16 @@ export default function UserSettingsPage() {
         <Card title="Defaults" icon={GearSixIcon}>
           <div className="space-y-2">
             <div className="text-xs p-text-2">Default model for new agents</div>
-            <select
+            <ModelPicker
+              models={models}
               value={defaults.model ?? ''}
-              onChange={async (e) => {
-                const v = e.target.value;
-                setDefaults({ model: v });
-                try { await setConfig('default_model', v); } catch (err) { alert((err as Error).message); }
+              onChange={async (spec) => {
+                setDefaults({ model: spec });
+                try { await setConfig('default_model', spec); } catch (err) { alert((err as Error).message); }
               }}
-              className={inputCls}
-            >
-              <option value="">(use system default)</option>
-              {models.map((m) => (
-                <option key={m.spec} value={m.spec}>{m.label}</option>
-              ))}
-            </select>
+              clearable
+              placeholder="(use system default)"
+            />
             <p className="text-[11px] p-text-3">
               New agents pick this up at creation. Existing agents keep their own choice (change per-agent under "Agent settings").
             </p>
@@ -324,44 +324,39 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
 // ── BYO API keys ────────────────────────────────────────────────────
 
-interface ProviderKeySpec {
-  key: string;
-  label: string;
-  inputPlaceholder: string;
-  acceptsBaseURL?: boolean;
-}
-
-const KNOWN_PROVIDERS: ProviderKeySpec[] = [
-  { key: 'openai.bearer',      label: 'OpenAI',     inputPlaceholder: 'sk-...' },
-  { key: 'anthropic.bearer',   label: 'Anthropic',  inputPlaceholder: 'sk-ant-...' },
-  { key: 'openrouter.bearer',  label: 'OpenRouter', inputPlaceholder: 'sk-or-...' },
-];
-
-function ApiKeyManager({ creds, onChanged }: { creds: CredentialSummary[]; onChanged: () => void }) {
+function ApiKeyManager({ creds, catalog, onChanged }: {
+  creds: CredentialSummary[];
+  catalog: ProviderCatalogEntry[];
+  onChanged: () => void;
+}) {
   const [savingKey, setSavingKey] = useState<string | null>(null);
-  const [inputs, setInputs] = useState<Record<string, string>>({});
 
-  const stored = new Set(creds.map((c) => c.key));
+  const remove = useCallback(async (key: string, name: string) => {
+    if (!confirm(`Remove the saved API key for "${name}"?`)) return;
+    try { await deleteCredential(key); onChanged(); } catch (e) { alert((e as Error).message); }
+  }, [onChanged]);
 
-  const save = useCallback(async (key: string) => {
-    const value = inputs[key];
-    if (!value || !value.trim()) return;
-    setSavingKey(key);
+  // Connect-a-provider form — any models.dev catalog provider, searchable.
+  const byCredKey = new Map(catalog.map((p) => [p.credKey, p]));
+  const storedKeys = creds
+    .filter((c) => /^[a-z0-9][a-z0-9._-]*\.bearer$/.test(c.key))
+    .map((c) => ({ key: c.key, provider: byCredKey.get(c.key) }));
+  const [selected, setSelected] = useState<ProviderCatalogEntry | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const saveSelected = useCallback(async () => {
+    if (!selected || !apiKey.trim()) return;
+    setSavingKey(selected.credKey);
     try {
-      await setCredential(key, { kind: 'bearer', token: value.trim() });
-      setInputs((prev) => ({ ...prev, [key]: '' }));
+      await setCredential(selected.credKey, { kind: 'bearer', token: apiKey.trim() });
+      setSelected(null);
+      setApiKey('');
       onChanged();
     } catch (e) {
       alert((e as Error).message);
     } finally {
       setSavingKey(null);
     }
-  }, [inputs, onChanged]);
-
-  const remove = useCallback(async (key: string) => {
-    if (!confirm(`Remove the saved API key for "${key}"?`)) return;
-    try { await deleteCredential(key); onChanged(); } catch (e) { alert((e as Error).message); }
-  }, [onChanged]);
+  }, [selected, apiKey, onChanged]);
 
   // openai-compat — user-chosen key suffix.
   const [compatName, setCompatName] = useState('');
@@ -388,32 +383,83 @@ function ApiKeyManager({ creds, onChanged }: { creds: CredentialSummary[]; onCha
 
   return (
     <div className="space-y-4">
-      {KNOWN_PROVIDERS.map((p) => (
-        <div key={p.key} className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-medium">{p.label}</span>
-            {stored.has(p.key) && (
-              <button onClick={() => remove(p.key)} className="flex items-center gap-1 p-text-3 hover:p-danger">
-                <TrashIcon size={11} /> Remove
-              </button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={inputs[p.key] ?? ''}
-              onChange={(e) => setInputs((prev) => ({ ...prev, [p.key]: e.target.value }))}
-              placeholder={stored.has(p.key) ? '••••••• (stored — paste to replace)' : p.inputPlaceholder}
-              className={inputCls}
-            />
-            <button
-              onClick={() => save(p.key)}
-              disabled={savingKey === p.key || !inputs[p.key]?.trim()}
-              className="px-3 py-1.5 rounded-md p-card hover:p-card-hover disabled:opacity-50 text-xs"
-            >{savingKey === p.key ? '...' : (stored.has(p.key) ? 'Replace' : 'Save')}</button>
-          </div>
+      {/* Stored keys */}
+      {storedKeys.length > 0 && (
+        <div className="space-y-1.5">
+          {storedKeys.map(({ key, provider }) => (
+            <div key={key} className="flex items-center gap-2 text-xs px-2 py-1.5 p-card rounded">
+              <CheckIcon size={13} className="p-success shrink-0" />
+              <span className="font-medium">{provider?.name ?? key}</span>
+              {provider?.doc && (
+                <a href={provider.doc} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-accent" title="Provider docs">
+                  <ArrowSquareOutIcon size={12} />
+                </a>
+              )}
+              <span className="p-text-3 font-mono truncate">{key}</span>
+              <button
+                onClick={() => remove(key, provider?.name ?? key)}
+                className="ml-auto flex items-center gap-1 p-text-3 hover:p-danger shrink-0"
+              ><TrashIcon size={11} /> Remove</button>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
+
+      {/* Connect any catalog provider */}
+      <div className="space-y-2">
+        <div className="text-xs font-medium">Connect a provider</div>
+        <p className="text-[11px] p-text-3">
+          Paste an API key for any of the {catalog.length} supported providers — every agent you own can use its models.
+        </p>
+        <Combobox
+          items={catalog}
+          value={selected}
+          onValueChange={(next: unknown) => setSelected(next as ProviderCatalogEntry | null)}
+          itemToStringLabel={(p: unknown) => (p as ProviderCatalogEntry).name}
+          itemToStringValue={(p: unknown) => (p as ProviderCatalogEntry).id}
+        >
+          <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
+          <Combobox.Content>
+            <Combobox.Empty>No matching provider — add it below as an OpenAI-compatible endpoint.</Combobox.Empty>
+            <Combobox.List>
+              {(item: ProviderCatalogEntry) => (
+                <Combobox.Item key={item.id} value={item}>
+                  <span className="flex w-full items-center gap-2">
+                    <span>{item.name}</span>
+                    {item.connected && <CheckIcon size={12} className="p-success ml-auto" />}
+                  </span>
+                </Combobox.Item>
+              )}
+            </Combobox.List>
+          </Combobox.Content>
+        </Combobox>
+        {selected && (
+          <div className="space-y-2">
+            <p className="text-[11px] p-text-3">
+              {selected.envVar && <>Usually stored as <code className="p-card px-1">{selected.envVar}</code>. </>}
+              {selected.doc && (
+                <a href={selected.doc} target="_blank" rel="noopener noreferrer" className="p-accent underline">
+                  {selected.name} docs <ArrowSquareOutIcon size={10} className="inline" />
+                </a>
+              )}
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={selected.connected ? '••••••• (stored — paste to replace)' : `${selected.name} API key`}
+                className={inputCls}
+              />
+              <button
+                onClick={saveSelected}
+                disabled={savingKey !== null || !apiKey.trim()}
+                className="px-3 py-1.5 rounded-md p-card hover:p-card-hover disabled:opacity-50 text-xs shrink-0"
+              >{savingKey === selected.credKey ? '...' : (selected.connected ? 'Replace' : 'Save')}</button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* OpenAI-compat slot */}
       <div className="pt-3 border-t p-border space-y-2">
@@ -450,7 +496,7 @@ function ApiKeyManager({ creds, onChanged }: { creds: CredentialSummary[]; onCha
         {creds.filter((c) => c.key.startsWith('openai-compat.')).map((c) => (
           <div key={c.key} className="flex items-center justify-between text-xs px-2 py-1.5 p-card rounded">
             <span className="font-mono">{c.key}</span>
-            <button onClick={() => remove(c.key)} className="flex items-center gap-1 p-text-3 hover:p-danger">
+            <button onClick={() => remove(c.key, c.key)} className="flex items-center gap-1 p-text-3 hover:p-danger">
               <TrashIcon size={11} /> Remove
             </button>
           </div>

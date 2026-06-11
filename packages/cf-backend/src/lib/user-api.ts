@@ -147,6 +147,18 @@ export function invalidateModelsCache(): void { _modelsCache = null; }
 export const listConnectedProviders = () =>
   api<Array<{ id: string; label: string; credentialKeys: string[] }>>('GET', '/providers');
 
+/** One connectable provider (BYO API key) from the models.dev catalog. */
+export interface ProviderCatalogEntry {
+  id: string;
+  credKey: string;
+  name: string;
+  doc?: string;
+  envVar?: string;
+  connected: boolean;
+}
+export const listProviderCatalog = () =>
+  api<ProviderCatalogEntry[]>('GET', '/providers/catalog');
+
 export function cloudflareReconnectPath(returnTo: string): string {
   const params = new URLSearchParams({
     return_to: returnTo || '/',

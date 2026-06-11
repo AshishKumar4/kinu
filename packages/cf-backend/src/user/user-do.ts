@@ -1482,11 +1482,15 @@ export class UserDO extends Agent<Env> {
     // here — UserDO only knows about credential-gated ones.
     if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
     if (byKey.has(CODEX_CRED_KEY)) out.push({ id: 'codex', label: 'ChatGPT Codex', credentialKeys: [CODEX_CRED_KEY] });
-    if (byKey.has('openai.bearer')) out.push({ id: 'openai', label: 'OpenAI', credentialKeys: ['openai.bearer'] });
-    if (byKey.has('anthropic.bearer')) out.push({ id: 'anthropic', label: 'Anthropic', credentialKeys: ['anthropic.bearer'] });
-    if (byKey.has('openrouter.bearer')) out.push({ id: 'openrouter', label: 'OpenRouter', credentialKeys: ['openrouter.bearer'] });
-    // openai-compat is keyed by user-chosen suffix: 'openai-compat.<name>'
     for (const c of creds) {
+      // `<providerId>.bearer` — BYO API keys (bespoke trio + any models.dev
+      // catalog provider). Display names come from the catalog client-side.
+      const bearer = /^([a-z0-9][a-z0-9._-]*)\.bearer$/.exec(c.key);
+      if (bearer) {
+        out.push({ id: bearer[1], label: bearer[1], credentialKeys: [c.key] });
+        continue;
+      }
+      // openai-compat is keyed by user-chosen suffix: 'openai-compat.<name>'
       if (c.key.startsWith('openai-compat.')) {
         const name = c.key.slice('openai-compat.'.length);
         out.push({ id: `openai-compat:${name}`, label: `OpenAI-compatible (${name})`, credentialKeys: [c.key] });

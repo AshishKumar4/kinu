@@ -13,7 +13,8 @@ import type { UIMessage, FileUIPart } from "ai";
 import { MAX_INLINE_ATTACHMENT_BYTES } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
-import { cloudflareReconnectPath, touchAgent, listAvailableModels } from "@/lib/user-api";
+import { cloudflareReconnectPath, touchAgent, listAvailableModels, type ModelMenuEntry } from "@/lib/user-api";
+import { ModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { PreviewFrame } from "@/components/PreviewFrame";
@@ -514,11 +515,11 @@ function ModelSelector({ current, onChange }: { current: string; onChange: (id: 
   // [] = the fetch succeeded and genuinely no provider is connected. Only the
   // last one earns the amber reconnect CTA — flashing it during load or on a
   // flaky request sent connected users through a full OAuth prompt=login.
-  const [models, setModels] = useState<Array<{ spec: string; label: string }> | null | "error">(null);
+  const [models, setModels] = useState<ModelMenuEntry[] | null | "error">(null);
   const fetchModels = useCallback(() => {
     setModels(null);
     listAvailableModels()
-      .then((m) => setModels(m.map((x) => ({ spec: x.spec, label: x.label }))))
+      .then(setModels)
       .catch(() => setModels("error"));
   }, []);
   useEffect(() => { fetchModels(); }, [fetchModels]);
@@ -555,10 +556,13 @@ function ModelSelector({ current, onChange }: { current: string; onChange: (id: 
     );
   }
   return (
-    <select value={current} onChange={e => onChange(e.target.value)}
-      className="text-[11px] p-elevated border p-border rounded-md px-1.5 py-1 p-text focus:outline-none">
-      {models.map(m => <option key={m.spec} value={m.spec}>{m.label}</option>)}
-    </select>
+    <ModelPicker
+      models={models}
+      value={current}
+      onChange={onChange}
+      size="xs"
+      className="w-52"
+    />
   );
 }
 
