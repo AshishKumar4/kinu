@@ -160,6 +160,18 @@ describe('createHostCheckpoints', () => {
     } finally { cleanup(); }
   });
 
+  test('a vanished workdir fails the operation without flipping into git-not-found mode', async () => {
+    const { work, engine, cleanup } = setup();
+    try {
+      writeFileSync(join(work, 'a.txt'), 'x');
+      engine.beginTurn({ turnId: 't', sessionId: 's' });
+      const id = await engine.ensureCheckpoint(work);
+      rmSync(work, { recursive: true, force: true });
+      expect(engine.plan(work, id!)).rejects.toThrow('working directory');
+      expect(await engine.status()).toEqual({ available: true }); // git is still here
+    } finally { cleanup(); }
+  });
+
   test('workdirForPath resolves the nearest project marker dir', async () => {
     const { work, engine, cleanup } = setup();
     try {

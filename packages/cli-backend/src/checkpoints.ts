@@ -88,6 +88,12 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
   }
 
   function runGit(args: string[], cwd: string, env: Record<string, string>): Promise<GitResult> {
+    // A missing cwd makes spawn fail with the same ENOENT a missing binary
+    // produces — check it here so a vanished workdir can never flip the
+    // engine into the sticky "git not found" degraded mode.
+    if (!existsSync(cwd)) {
+      return Promise.resolve({ code: 1, stdout: '', stderr: `working directory not found: ${cwd}` });
+    }
     return new Promise((resolveRun, rejectRun) => {
       execFile(gitBin, args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {

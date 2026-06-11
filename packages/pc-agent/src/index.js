@@ -81,6 +81,9 @@ function createCheckpoints(opts = {}) {
 
   /** Run git; returns stdout. Throws on non-zero exit or missing binary. */
   const git = (args, cwd, env) => {
+    // A missing cwd would fail spawn with the same ENOENT a missing binary
+    // produces — never let a vanished workdir flip the degraded-mode probe.
+    if (!fs.existsSync(cwd)) throw new Error(`working directory not found: ${cwd}`);
     try {
       const out = execFileSync(gitBin, args, {
         cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
