@@ -78,6 +78,23 @@ export type ScaffoldEvent =
 /** Callback the host provides — every scaffold emit is forwarded through here. */
 export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
 
+/**
+ * Extract the user-visible text carried by a scaffold event: a direct
+ * text_delta, or the text-delta inside a ui_chunk emitted by
+ * host.defaultInference. Shared by the auto-judge shadow eval and the GEPA
+ * metric rollout so a DELEGATING scaffold's output is captured everywhere —
+ * collecting only text_delta silently scored host.defaultInference users as
+ * empty output.
+ */
+export function scaffoldEventText(event: ScaffoldEvent): string | null {
+  if (event.type === 'text_delta') return event.text;
+  if (event.type === 'ui_chunk') {
+    const c = event.chunk as { type?: string; delta?: string } | undefined;
+    if (c?.type === 'text-delta' && typeof c.delta === 'string') return c.delta;
+  }
+  return null;
+}
+
 /** Result of a single scaffold turn execution. */
 export interface ScaffoldRunResult {
   ok: boolean;

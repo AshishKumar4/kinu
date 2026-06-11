@@ -22,7 +22,7 @@ import {
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow.js';
-import { runScaffold, type ScaffoldRunResult } from './executor.js';
+import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor.js';
 
 /** Structured judge output — compares current vs pending scaffold on the
  *  same task. Valibot schema; AI SDK's generateObject accepts it via the
@@ -136,8 +136,10 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const pendingCode = await readScaffoldVersion(opts.rt, pending.version);
   if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };
 
-  // Run the pending scaffold against the same task. Capture all events;
-  // the FINAL text we'll compare is the concatenation of text_delta payloads.
+  // Run the pending scaffold against the same task. Capture all events; the
+  // FINAL text we'll compare concatenates text_delta payloads AND the
+  // text-deltas inside ui_chunks, so a pending that delegates to
+  // host.defaultInference is judged on its real output, not an empty string.
   const pendingEvents: string[] = [];
   let pendingResult: ScaffoldRunResult;
   try {
@@ -145,7 +147,8 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       rt: opts.rt,
       task: opts.task,
       emit: (event) => {
-        if (event.type === 'text_delta') pendingEvents.push(event.text);
+        const text = scaffoldEventText(event);
+        if (text !== null) pendingEvents.push(text);
       },
       llmStream: opts.llmStream,
       // Pass the caller's dispatcher straight through so the pending scaffold

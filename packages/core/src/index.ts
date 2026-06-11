@@ -194,6 +194,7 @@ export {
 // scaffold execution + shadow-mode rollout
 export {
   runScaffold,
+  scaffoldEventText,
   type ScaffoldRunOptions,
   type ScaffoldRunResult,
   type ScaffoldEvent,

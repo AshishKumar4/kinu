@@ -70,7 +70,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventsToUIStream, modifyScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldEventsToUIStream, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
@@ -624,6 +624,18 @@ export class OrchestratorAgent extends Think<Env> {
   // evolution is fire-and-forget and does not extend the busy window).
   private _inFlight = false;
   private _cliCwd: string | null = null;
+
+  // The fully-prepared streamText opts of the LAST live chat inference
+  // (stashed by runStreamText, the single production chat path). The shadow
+  // eval replays these for the pending scaffold's host.defaultInference so
+  // the A/B measures the scaffold delta, not a context handicap: the live
+  // answer saw the whole conversation while the shadow's reconstruction used
+  // to see only the task text — structurally tie-prone. In-memory only:
+  // turns are serialized on the TurnQueue and the shadow eval captures the
+  // reference synchronously in the same onChatResponse, so it cannot be
+  // overwritten by a later turn; after a DO restart the shadow falls back to
+  // the task-only reconstruction.
+  private _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
 
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
@@ -1555,6 +1567,9 @@ export class OrchestratorAgent extends Think<Env> {
    * so the user can toggle without redeploys.
    */
   private async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
+    // Captured synchronously (before any await) so a later turn's stash can
+    // never bleed into this turn's shadow run.
+    const liveOpts = this._lastTurnOpts;
     try {
       const sampleRate = this.config.getShadowSampleRate();
       const autoApply = this.config.getAutoPromoteScaffold();
@@ -1580,10 +1595,14 @@ export class OrchestratorAgent extends Think<Env> {
         // pending scaffold runs with the real tool surface, not the disabled
         // tool-call fallback that would penalize any tool-using pending.
         callTool: this.makeScaffoldCallTool(),
-        // host.defaultInference for the pending: run the standard inference for
-        // the shadow task so a pending that delegates to the default loop is
-        // judged fairly (its output ≈ current's, → tie, → not promoted).
-        defaultInference: () => streamText({
+        // host.defaultInference for the pending: replay the EXACT streamText
+        // opts the live answer ran with (full conversational context, system
+        // prompt, tool surface) so a pending that delegates to the default
+        // loop is judged on the scaffold delta alone. Costs one extra
+        // full-context inference — that IS the shadow run, already sampled.
+        // Fallback (DO restarted between the live turn and this eval): the
+        // old task-only reconstruction.
+        defaultInference: () => streamText(liveOpts ?? {
           model: this.getModel(),
           messages: [{ role: 'user', content: judgeTask }],
           tools: this.getRawTools(),
@@ -3146,13 +3165,7 @@ export class OrchestratorAgent extends Think<Env> {
       rt: this.rt,
       task,
       scaffoldCodeOverride: candidateCode,
-      emit: (ev) => {
-        if (ev.type === 'text_delta') text += ev.text;
-        else if (ev.type === 'ui_chunk') {
-          const c = ev.chunk as { type?: string; delta?: string } | undefined;
-          if (c?.type === 'text-delta' && typeof c.delta === 'string') text += c.delta;
-        }
-      },
+      emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
       defaultInference: () => streamText({
@@ -3784,6 +3797,7 @@ export class OrchestratorAgent extends Think<Env> {
   protected runStreamText(
     opts: Parameters<typeof streamText>[0],
   ): StreamableResult {
+    this._lastTurnOpts = opts; // shadow-eval context parity (see field doc)
     let version = 0;
     try {
       version = this.sql<{ v: number }>`
