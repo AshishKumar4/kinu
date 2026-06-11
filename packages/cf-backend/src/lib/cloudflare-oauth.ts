@@ -1,10 +1,18 @@
 import type { OAuthCredential } from '@proteus/core';
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
+/** DERIVED credential key — never stored. UserDO serves it from the same
+ *  `cloudflare.oauth` row, but the header bundle targets the user's OWN
+ *  selected AI Gateway (`cf-aig-gateway-id`). Resolves to null until a
+ *  gateway is selected, which is what gates the `my-gateway` provider. */
+export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 // `offline_access` is what makes dash.cloudflare.com issue a refresh token
 // (the OAuth client must also have the Refresh Token grant enabled). Without
 // it the credential dies at access-token expiry and Workers AI "disconnects".
-export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.run offline_access';
+// `aig.read` (AI Gateway Read) powers gateway discovery + BYOK provider-key
+// listing for the my-gateway provider; `aig.run` covers inference. Users who
+// connected before a scope was added need one re-login to grant it.
+export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.read aig.run offline_access';
 export const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
@@ -154,6 +162,63 @@ export async function refreshCloudflareCredential(
 export function cloudflareWorkersAIBaseURL(accountId: string): string | null {
   if (!isCloudflareAccountId(accountId)) return null;
   return `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai/v1`;
+}
+
+/** Account-scoped management API root recovered from the `/ai/v1` inference
+ *  base URL. Lets the my-gateway provider reach the AI Gateway management
+ *  endpoints (gateway config, BYOK provider keys, credit balance) with the
+ *  same AuthResolution it already holds — no extra plumbing for account ids. */
+export function cloudflareAccountAPIRoot(workersAIBaseURL: string): string | null {
+  const match = /^(https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[^/]+)\/ai\/v1\/?$/.exec(workersAIBaseURL);
+  return match?.[1] ?? null;
+}
+
+export interface CloudflareAIGatewaySummary {
+  id: string;
+  /** Whether the gateway requires authenticated requests. Informational —
+   *  our requests always carry the user's bearer token either way. */
+  authenticated: boolean;
+  createdAt: string | null;
+}
+
+export function isCloudflareAIGatewayId(value: string): boolean {
+  return /^[a-zA-Z0-9._-]{1,64}$/.test(value);
+}
+
+/** List the account's AI Gateways (GET /accounts/{id}/ai-gateway/gateways).
+ *  Requires the `aig.read` OAuth scope — a 401/403 here usually means the
+ *  credential predates that scope and the user must reconnect Cloudflare. */
+export async function fetchCloudflareAIGateways(
+  accountId: string,
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CloudflareAIGatewaySummary[]> {
+  const response = await fetchImpl(
+    `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai-gateway/gateways?per_page=50`,
+    { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}` } },
+  );
+  const payload = await readJsonObject(response, 'Cloudflare AI Gateway list endpoint');
+  if (!response.ok) {
+    const reason = firstCloudflareError(payload) ?? `HTTP ${response.status}`;
+    const hint = response.status === 401 || response.status === 403
+      ? ' Reconnect Cloudflare to grant AI Gateway access.'
+      : '';
+    throw new Error(`Cloudflare AI Gateway listing failed: ${reason}.${hint}`);
+  }
+  const result = Array.isArray(payload.result) ? payload.result : [];
+  return result
+    .map((item): CloudflareAIGatewaySummary | null => {
+      if (!item || typeof item !== 'object') return null;
+      const row = item as Record<string, unknown>;
+      const id = typeof row.id === 'string' ? row.id : '';
+      if (!isCloudflareAIGatewayId(id)) return null;
+      return {
+        id,
+        authenticated: row.authentication === true,
+        createdAt: typeof row.created_at === 'string' ? row.created_at : null,
+      };
+    })
+    .filter((item): item is CloudflareAIGatewaySummary => item !== null);
 }
 
 export function cloudflareAIGatewayId(env: Pick<CloudflareOAuthEnv, 'CLOUDFLARE_AI_GATEWAY_ID'>): string {

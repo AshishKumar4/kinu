@@ -67,14 +67,18 @@ import {
   type SerializableToolDescriptor,
 } from './mcp.js';
 import {
+  CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
   CloudflareOAuthTokenError,
   accountIdFromCloudflareCredential,
   cloudflareAIGatewayId,
   cloudflareWorkersAIBaseURL,
+  fetchCloudflareAIGateways,
+  isCloudflareAIGatewayId,
   isCloudflareCredentialExpiring,
   isCloudflareCredentialUsable,
   refreshCloudflareCredential,
+  type CloudflareAIGatewaySummary,
 } from '../lib/cloudflare-oauth.js';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
@@ -915,6 +919,9 @@ export class UserDO extends Agent<Env> {
   @callable()
   async setCredential(key: string, credentialJson: unknown): Promise<void> {
     validateCredentialKey(key);
+    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+      throw new Error(`${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
+    }
     const cred = validateCredential(credentialJson);
     if (key === CODEX_CRED_KEY && cred.kind === 'oauth' && !cred.refreshToken) {
       throw new Error('codex.oauth requires an OAuth refresh token.');
@@ -925,6 +932,10 @@ export class UserDO extends Agent<Env> {
        ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value, updated_at = excluded.updated_at`,
       key, cred.kind, JSON.stringify(cred), now, now,
     );
+    // Cloudflare login just landed → discover the account's AI Gateways now
+    // (single-gateway auto-select lives in listAIGateways), so my-gateway
+    // works without a settings visit. listAIGateways never throws.
+    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways();
   }
 
   @callable()
@@ -947,9 +958,12 @@ export class UserDO extends Agent<Env> {
   @callable()
   async getCredentialBaseURL(key: string): Promise<string | null> {
     validateCredentialKey(key);
-    const cred = this.getCredentialRow(key);
+    // The my-gateway view rides the same account-scoped /ai/v1 endpoint as
+    // Workers AI — only the cf-aig-gateway-id header differs.
+    const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+    const cred = this.getCredentialRow(storedKey);
     if (cred?.kind === 'openai-compat') return cred.baseURL;
-    if (key === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
+    if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
       if (!isCloudflareCredentialUsable(cred)) return null;
       const accountId = accountIdFromCloudflareCredential(cred);
       return accountId ? cloudflareWorkersAIBaseURL(accountId) : null;
@@ -962,14 +976,18 @@ export class UserDO extends Agent<Env> {
   @callable()
   async getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
     validateCredentialKey(key);
-    const stored = this.getCredentialRow(key);
+    // `cloudflare.ai-gateway` is a DERIVED view of the Cloudflare login: same
+    // bearer + refresh path, but cf-aig-gateway-id names the user's own
+    // selected gateway (null until one is selected — that gates my-gateway).
+    const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+    const stored = this.getCredentialRow(storedKey);
     if (!stored) return null;
     // Explicitly-typed non-null so the conditional refresh-reassignment below
     // doesn't re-widen back to `Credential | null`.
     let cred: Credential = stored;
 
     // Codex OAuth — auto-refresh if expiring or forced.
-    if (key === CODEX_CRED_KEY && cred.kind === 'oauth') {
+    if (storedKey === CODEX_CRED_KEY && cred.kind === 'oauth') {
       const refreshToken = cred.refreshToken;
       if (!refreshToken) return null;
       const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
@@ -981,7 +999,7 @@ export class UserDO extends Agent<Env> {
         // signal that re-auth is needed.
       }
     }
-    if (key === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
+    if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
       const needRefresh = opts?.forceRefresh || isCloudflareCredentialExpiring(cred);
       if (needRefresh) {
         if (!cred.refreshToken) return null;
@@ -992,13 +1010,83 @@ export class UserDO extends Agent<Env> {
     }
 
     try {
-      const headers = credentialToHeaders(key, cred);
-      if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
-        headers['cf-aig-gateway-id'] = cloudflareAIGatewayId(this.env);
+      const headers = credentialToHeaders(storedKey, cred);
+      if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+        const gatewayId = this.selectedAIGatewayId();
+        if (!gatewayId) return null;
+        headers['cf-aig-gateway-id'] = gatewayId;
+      } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
+        // Workers AI traffic routes through the user's selected gateway when
+        // they picked one (their caching/logging/limits apply), otherwise the
+        // platform's configured default.
+        headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
       }
       return headers;
     }
     catch { return null; }
+  }
+
+  // ── Cloudflare AI Gateway (the user's own gateway) ───────────────────
+
+  private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
+
+  private selectedAIGatewayId(): string | null {
+    const row = this.sqlx<{ value: string }>(
+      `SELECT value FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY,
+    )[0];
+    return row && isCloudflareAIGatewayId(row.value) ? row.value : null;
+  }
+
+  /** Fresh (refreshed-if-expiring) access token + account id for management
+   *  API calls. Null when no usable Cloudflare credential is stored. */
+  private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
+    const stored = this.getCredentialRow(CLOUDFLARE_OAUTH_CRED_KEY);
+    if (stored?.kind !== 'oauth' || !isCloudflareCredentialUsable(stored)) return null;
+    let cred = stored;
+    if (isCloudflareCredentialExpiring(cred)) {
+      const refreshed = await this.refreshCloudflareInternal(cred);
+      if (refreshed === 'revoked' || !refreshed) return null;
+      cred = refreshed;
+    }
+    const accountId = accountIdFromCloudflareCredential(cred);
+    return accountId ? { accessToken: cred.accessToken, accountId } : null;
+  }
+
+  /** The user's AI Gateways + current selection. Zero-friction rule: exactly
+   *  one gateway and nothing selected → select it (persisted). Never throws —
+   *  discovery failures surface in `error` so login can call this inline. */
+  @callable()
+  async listAIGateways(): Promise<{
+    connected: boolean;
+    selectedId: string | null;
+    gateways: CloudflareAIGatewaySummary[];
+    error: string | null;
+  }> {
+    this.ensureInit();
+    let selectedId = this.selectedAIGatewayId();
+    const api = await this.cloudflareAPICredential();
+    if (!api) return { connected: false, selectedId, gateways: [], error: null };
+    try {
+      const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
+      if (!selectedId && gateways.length === 1) {
+        await this.selectAIGateway(gateways[0].id);
+        selectedId = gateways[0].id;
+      }
+      return { connected: true, selectedId, gateways, error: null };
+    } catch (err) {
+      return { connected: true, selectedId, gateways: [], error: (err as Error).message };
+    }
+  }
+
+  @callable()
+  async selectAIGateway(gatewayId: string | null): Promise<void> {
+    this.ensureInit();
+    if (gatewayId === null) {
+      this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
+      return;
+    }
+    if (!isCloudflareAIGatewayId(gatewayId)) throw new Error('Invalid AI Gateway id.');
+    await this.setConfig(UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
 
   /** Returns the rotated credential, `'revoked'` when Cloudflare rejected
@@ -1494,7 +1582,12 @@ export class UserDO extends Agent<Env> {
     const out: ConnectedProvider[] = [];
     // Built-in providers without credentials are listed by the server, not
     // here — UserDO only knows about credential-gated ones.
-    if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
+    if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) {
+      out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
+      if (this.selectedAIGatewayId()) {
+        out.push({ id: 'my-gateway', label: 'Your AI Gateway', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
+      }
+    }
     if (byKey.has(CODEX_CRED_KEY)) out.push({ id: 'codex', label: 'ChatGPT Codex', credentialKeys: [CODEX_CRED_KEY] });
     for (const c of creds) {
       // `<providerId>.bearer` — BYO API keys (bespoke trio + any models.dev
