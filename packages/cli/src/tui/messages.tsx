@@ -18,7 +18,7 @@ export interface DisplayMessage {
 
 function UserMessage({ content, attachments }: { content: string; attachments?: string[] }) {
   return (
-    <box flexDirection="row" justifyContent="flex-end" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box
         flexDirection="column"
         style={{
