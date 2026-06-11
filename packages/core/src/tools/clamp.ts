@@ -55,9 +55,14 @@ export async function clampToolResult(
   const headLen = Math.floor(maxChars * HEAD_FRACTION);
   const tailLen = maxChars - headLen;
   const omitted = text.length - headLen - tailLen;
+  // The advertised remedy must hold on every backend: the run tool's
+  // "workspace" runtime is the VFS shell on CF but the HOST shell locally
+  // (where this offload file does not exist), so the marker only promises
+  // workspace.readFile — execute_tools reads it over the same VFS on both
+  // backends, and the model can filter inside the sandbox arrow.
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
-      'read it with workspace file tools (e.g. run `grep`/`sed -n` on it with runtime "workspace", or workspace.readFile) or rerun with a filter]'
+      'read or filter it with workspace.readFile inside execute_tools, or rerun with a filter]'
     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]`;
   return `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
 }
