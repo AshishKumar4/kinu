@@ -28,6 +28,7 @@
 
 import type { AgentRuntime } from '../../types/agent-runtime.js';
 import { SCAFFOLD_FORBIDDEN_PATTERNS } from '../../scaffold/safety-patterns.js';
+import { checkMisevolution, recordMisevolutionVeto } from '../../scaffold/misevolution.js';
 import { runGepa } from './engine.js';
 import type {
   EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM,
@@ -67,7 +68,9 @@ export interface RunCraftedToolGepaResult<I = unknown, E = unknown> {
   promotedAt: number | null;
   /** If promoted, the backup path that holds the prior body. */
   backupPath: string | null;
-  skipReason?: 'dry_run' | 'tool_not_found' | 'winner_equals_seed';
+  skipReason?: 'dry_run' | 'tool_not_found' | 'winner_equals_seed' | 'misevolution_veto';
+  /** Set when skipReason='misevolution_veto'. */
+  vetoReason?: string;
 }
 
 export async function runCraftedToolGepa<I = unknown, E = unknown>(
@@ -114,6 +117,21 @@ export async function runCraftedToolGepa<I = unknown, E = unknown>(
 
   if (gepa.winner.source === seed) {
     return { gepa, promoted: false, promotedAt: null, backupPath: null, skipReason: 'winner_equals_seed' };
+  }
+
+  // Misevolution gate — GEPA candidates are accepted only if they pass the
+  // fixed safety criteria; a veto leaves the live tool body untouched.
+  const misevolution = checkMisevolution(gepa.winner.source);
+  if (!misevolution.ok) {
+    recordMisevolutionVeto(opts.rt.storage.sql, {
+      surface: 'gepa', violation: misevolution,
+      detail: `GEPA winner for crafted tool "${opts.toolName}" rejected`,
+    });
+    return {
+      gepa, promoted: false, promotedAt: null, backupPath: null,
+      skipReason: 'misevolution_veto',
+      vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`,
+    };
   }
 
   // Back up the prior body before swapping.

@@ -201,8 +201,13 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   let applied: 'promote' | 'rollback' | null = null;
   if (config.autoApply && decision !== 'continue' && fresh) {
     try {
-      await applyPromotionDecision(opts.rt, fresh, decision);
-      applied = decision;
+      // Report the action ACTUALLY applied — the promotion-time misevolution
+      // recheck can convert a 'promote' into a 'rollback'.
+      const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
+      applied = outcome.action;
+      if (outcome.vetoReason) {
+        console.warn('[auto-judge] promotion vetoed:', outcome.vetoReason);
+      }
     } catch (err) {
       console.warn('[auto-judge] applyPromotionDecision failed:', err instanceof Error ? err.message : err);
     }

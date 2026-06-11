@@ -75,7 +75,10 @@ export function buildScaffoldProposalPrompt(currentScaffold: string, reflection:
     `\`await host.defaultInference()\` runs the standard inference loop — build on it or replace it ` +
     `with your own strategy via host.llmStream / host.callTool.\n` +
     `3. Stream text to the user by yielding { type: 'chunk', data: '<text>' }.\n` +
-    `4. NOT use ${SCAFFOLD_FORBIDDEN_DESCRIPTION}.\n` +
+    `4. NOT use ${SCAFFOLD_FORBIDDEN_DESCRIPTION}. Also never reference raw network globals ` +
+    `(fetch/WebSocket — use host.callTool for I/O), the scaffold version files/tables, ` +
+    `promotion/rollout config keys, or shell-approval/consent settings — any of these is a hard ` +
+    `misevolution veto.\n` +
     `5. Be a self-contained agentic loop.\n\n` +
     `Return ONLY the JavaScript code, no explanation.`
   );
@@ -410,12 +413,13 @@ export class EvolutionEngine {
       const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string; params?: unknown };
       if (!parsed.name || !parsed.code || parsed.code.startsWith('//')) return;
 
-      await upsertCraftedTool(this.rt, {
+      const acceptance = await upsertCraftedTool(this.rt, {
         name: parsed.name,
         description: parsed.description ?? '',
         code: parsed.code,
         score: quality,
       });
+      if (!acceptance.accepted) return; // misevolution veto — reason already recorded
 
       this.emit({
         type: 'craft_discovered',

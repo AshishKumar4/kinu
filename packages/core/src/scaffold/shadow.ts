@@ -27,6 +27,7 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { nowMs } from '../utils/date.js';
 import { nanoid } from '../utils/nanoid.js';
+import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
 
 export type ScaffoldStatus = 'current' | 'pending' | 'rolled_back' | 'historical';
 
@@ -329,13 +330,17 @@ export function decidePromotion(
  * removed from disk and marked rolled_back; the agent's scaffold/agent.js
  * is restored from the version before the pending was written.
  *
- * Returns the new current version number.
+ * Returns the new current version and the action ACTUALLY applied: a
+ * 'promote' request is converted to 'rollback' (with `vetoReason` set) when
+ * the on-disk pending code fails the fixed misevolution criteria — the
+ * version file lives in the agent-writable VFS, so promotion must re-check
+ * what acceptance checked. Callers must report `action`, not their request.
  */
 export async function applyPromotionDecision(
   rt: AgentRuntime,
   pending: PendingScaffold,
   decision: 'promote' | 'rollback',
-): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback' }> {
+): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   const sql = rt.storage.sql;
   if (decision === 'promote') {
     // Copy the pending version's code (versioned file written by
@@ -345,6 +350,15 @@ export async function applyPromotionDecision(
     const pendingCode = await readScaffoldVersion(rt, pending.version);
     if (pendingCode == null) {
       throw new Error(`promote failed: no scaffold code found for v${pending.version}`);
+    }
+    const misevolution = checkMisevolution(pendingCode);
+    if (!misevolution.ok) {
+      recordMisevolutionVeto(sql, {
+        surface: 'scaffold', violation: misevolution,
+        detail: `promotion of v${pending.version} vetoed; rolled back instead`,
+      });
+      const result = await applyPromotionDecision(rt, pending, 'rollback');
+      return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
     await rt.identity.scaffold.write(pendingCode);
     sql`UPDATE scaffold_versions SET status = 'historical'

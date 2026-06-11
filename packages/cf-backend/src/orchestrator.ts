@@ -2514,11 +2514,13 @@ export class OrchestratorAgent extends Think<Env> {
     const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
     const result = await applyPromotionDecision(this.rt, pending, decision);
     // Emit the promotion/rollback into the durable event log so SSE
-    // subscribers + MCP `list_run_events` see the decision in-band.
+    // subscribers + MCP `list_run_events` see the decision in-band. Uses the
+    // action ACTUALLY applied — the misevolution recheck can convert a
+    // requested promote into a rollback (result.vetoReason says why).
     try {
       const runId = this._currentRunId || `scaffold-${nanoid()}`;
       this.eventRecorder.emit(runId, {
-        type: decision === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+        type: result.action === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
         fromVersion,
         toVersion: result.newCurrentVersion,
       });

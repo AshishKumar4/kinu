@@ -13,6 +13,7 @@ import {
   SCAFFOLD_FORBIDDEN_PATTERNS as FORBIDDEN_PATTERNS,
   SCAFFOLD_REQUIRED_SIGNATURE as REQUIRED_SIGNATURE,
 } from './safety-patterns.js';
+import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
 
 interface ModifyResult {
   ok: boolean;
@@ -39,6 +40,17 @@ export async function modifyScaffold(
   }
   if (!REQUIRED_SIGNATURE.test(code)) {
     return { ok: false, stage: 1, error: 'Must export async function* run(rt, task)' };
+  }
+  // Misevolution gate (fixed criteria, hardcoded in core): a proposal that
+  // touches the safety machinery, opens raw egress, or weakens consent paths
+  // is a hard veto with a recorded reason. Re-checked at promotion time in
+  // applyPromotionDecision against the on-disk pending file.
+  const misevolution = checkMisevolution(code);
+  if (!misevolution.ok) {
+    recordMisevolutionVeto(rt.storage.sql, {
+      surface: 'scaffold', violation: misevolution, detail: rationale,
+    });
+    return { ok: false, stage: 1, error: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
   }
 
   // Gate 2: parse check

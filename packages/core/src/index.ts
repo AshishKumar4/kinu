@@ -176,6 +176,12 @@ export { initCraftScoreTables } from './craft/schemas.js';
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap.js';
 export { modifyScaffold } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
+// Misevolution gate — fixed safety criteria over every evolution surface
+// (scaffold acceptance + promotion, extracted tools, GEPA candidates).
+export {
+  checkMisevolution, recordMisevolutionVeto,
+  type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
+} from './scaffold/misevolution.js';
 // scaffold execution + shadow-mode rollout
 export {
   runScaffold,
