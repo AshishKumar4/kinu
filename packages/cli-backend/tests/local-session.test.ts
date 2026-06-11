@@ -982,3 +982,169 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     await session.end();
   });
 });
+
+describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redirect)', () => {
+  /** Dual-path model: doStream serves the LIVE turn (one delta, then holds the
+   *  turn open until release() — the branching window); doGenerate serves the
+   *  branch HEAD's inference (createCLIHeadRuntime drives generateText). */
+  function branchableModel(liveAnswer: string, branchAnswer: () => string) {
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const streamPrompts: Array<Array<{ role: string; content: unknown }>> = [];
+    const model = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async ({ prompt, abortSignal }: { prompt: Array<{ role: string; content: unknown }>; abortSignal?: AbortSignal }) => {
+        streamPrompts.push(prompt);
+        return {
+          stream: new ReadableStream({
+            async start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: liveAnswer });
+              abortSignal?.addEventListener('abort', () => {
+                controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              }, { once: true });
+              await gate;
+              if (abortSignal?.aborted) return;
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+      doGenerate: async () => ({
+        content: [{ type: 'text', text: branchAnswer() }],
+        finishReason: 'stop',
+        usage,
+        warnings: [],
+      }),
+    } as unknown as LanguageModel;
+    return { model, release, streamPrompts };
+  }
+
+  type BranchStatus = { type: 'branch_status'; status: string; branchId: string; task: string; message?: string; takeSetId?: string; turnId?: string };
+  const branchEvents = (events: SessionEvent[]): BranchStatus[] =>
+    events
+      .filter((e): e is Extract<SessionEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+      .map((e) => e.event)
+      .filter((e): e is BranchStatus => e.type === 'branch_status');
+
+  test('branch while running settles into a claimed two-candidate takes set; the live turn is never touched', async () => {
+    const { model, release, streamPrompts } = branchableModel('the live answer', () => 'the branch answer');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('original question');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.branch('what about the other approach?')).toBe(true);
+    expect(branchEvents(events)).toMatchObject([{ status: 'running', task: 'what about the other approach?' }]);
+
+    release();
+    await turn;
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+
+    // The live turn ran untouched: one turn, the full answer, no injections.
+    expect(turnStarts(events)).toHaveLength(1);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    expect(turnEnd.turn.assistantResponse).toBe('the live answer');
+    expect(streamPrompts).toHaveLength(1);
+
+    // The settled pair: A = live answer (winner), B = branch answer, claimed
+    // against the live turn's assistant message — the ONE takes pipeline.
+    const set = session.latestAlternateTakes()!;
+    expect(set.source).toBe('branch');
+    expect(set.candidates.map((c) => c.text)).toEqual(['the live answer', 'the branch answer']);
+    expect(set.candidates.map((c) => c.origin)).toEqual(['live', 'branch']);
+    expect(set.winnerNodeId).toBe(set.candidates[0]!.nodeId);
+    const assistantId = (db.query(`SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`).get() as { id: string }).id;
+    expect(set.turnId).toBe(assistantId);
+    const settled = branchEvents(events).find((e) => e.status === 'settled')!;
+    expect(settled).toMatchObject({ takeSetId: set.id, turnId: assistantId });
+    await session.end();
+  });
+
+  test('picking the branch records corrected + queues the continuation turn', async () => {
+    const { model, release } = branchableModel('the live answer', () => 'the branch answer');
+    const { rt, session, events } = setup('unused', model);
+
+    const turn = session.send('original question');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    session.branch('try it the other way');
+    release();
+    await turn;
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'settled'), 5000);
+
+    const set = session.latestAlternateTakes()!;
+    const branchCandidate = set.candidates.find((c) => c.origin === 'branch')!;
+    const result = await session.pickAlternateTake(set.id, branchCandidate.nodeId);
+    expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
+
+    const ledger = rt.storage.sql<{ outcome: string; source: string; followup: string | null }>`
+      SELECT outcome, source, followup FROM turn_outcomes`[0]!;
+    expect(ledger).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'the branch answer' });
+
+    await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'), 5000);
+    expect(turnStarts(events).find((s) => s.event === 'take_pick')!.text).toContain('the branch answer');
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2, 5000);
+    await session.end();
+  });
+
+  test('a failing branch head yields NO takes set and an honest error broadcast', async () => {
+    const { model, release } = branchableModel('the live answer', () => { throw new Error('head model exploded'); });
+    const { session, events } = setup('unused', model);
+
+    const turn = session.send('original question');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.branch('redirect')).toBe(true);
+    release();
+    await turn;
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'error'), 5000);
+
+    expect(branchEvents(events).find((e) => e.status === 'error')!.message).toContain('head model exploded');
+    expect(session.latestAlternateTakes()).toBeNull();
+    // The live turn still completed normally.
+    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    expect(turnEnd.turn.assistantResponse).toBe('the live answer');
+    await session.end();
+  });
+
+  test('an interrupted live turn discards the branch — no takes set', async () => {
+    let releaseBranch!: () => void;
+    const branchGate = new Promise<void>((resolve) => { releaseBranch = resolve; });
+    const { model } = branchableModel('never finishes', () => 'unused');
+    (model as unknown as { doGenerate: () => Promise<unknown> }).doGenerate = async () => {
+      await branchGate;
+      return {
+        content: [{ type: 'text', text: 'late branch answer' }],
+        finishReason: 'stop',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      };
+    };
+    const { session, events } = setup('unused', model);
+
+    const turn = session.send('long task');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.branch('redirect')).toBe(true);
+    session.interrupt();
+    await turn;
+    await waitFor(() => branchEvents(events).some((e) => e.status === 'error'), 5000);
+    releaseBranch();
+
+    expect(branchEvents(events).find((e) => e.status === 'error')!.message).toContain('did not complete');
+    expect(session.latestAlternateTakes()).toBeNull();
+    await session.end();
+  });
+
+  test('branch with no active turn returns false', () => {
+    const { session } = setup('idle');
+    expect(session.branch('nothing running')).toBe(false);
+    expect(session.branch('   ')).toBe(false);
+  });
+});

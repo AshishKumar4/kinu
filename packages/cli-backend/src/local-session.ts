@@ -45,6 +45,8 @@ import {
   claimAlternateTakesForTurn, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
+  initAlternateTakesTable, startBranchHead, settleBranchIntoTakes, newBranchId,
+  type SteerBranchHandle, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
@@ -222,6 +224,9 @@ export class LocalAgentSession implements BackendHost {
    *  everything pending merges into ONE user message per drain, injected after
    *  the latest tool results so role alternation stays provider-safe). */
   private pendingSteers: Array<{ text: string; files?: ReadonlyArray<PromptFile> }> = [];
+  /** Steer-as-Branch redirects launched against the in-flight turn — each runs
+   *  as one budgeted head and settles into Alternate Takes at turn end. */
+  private pendingBranches: Array<{ id: string; task: string; handle: Promise<SteerBranchHandle> }> = [];
 
   constructor(opts: LocalAgentSessionOpts) {
     this.rt = opts.rt;
@@ -628,6 +633,29 @@ export class LocalAgentSession implements BackendHost {
     return true;
   }
 
+  /**
+   * Run a mid-turn redirect as a parallel BRANCH: one budgeted head over the
+   * live turn's input conversation (this.history already holds it), never
+   * touching the live turn. When both finish, the pair settles into the
+   * Alternate Takes pipeline claimed on this turn (core steer-branch.ts);
+   * progress streams as 'branch_status' broadcasts. Returns false when no
+   * turn is in flight — callers should send() instead.
+   */
+  branch(text: string): boolean {
+    if (!this.pumping) return false;
+    const task = text.trim();
+    if (!task) return false;
+    this.ensureModelState();
+    initAlternateTakesTable(this.rt.storage.execRaw);
+    const id = newBranchId();
+    const handle = startBranchHead(this._headRuntime, new HeadJournal(this.rt.storage.sql), {
+      id, task, inheritedContext: this.readInheritedContext(),
+    });
+    this.pendingBranches.push({ id, task, handle });
+    this.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
+    return true;
+  }
+
   /** Abort the in-flight turn (Ctrl+C / Esc). Pending steers are dropped —
    *  an interrupt means "stop", not "stop and do what I typed". */
   interrupt(): void {
@@ -910,6 +938,10 @@ export class LocalAgentSession implements BackendHost {
       } catch { /* no takes table yet — the first MCTS run creates it */ }
     }
 
+    // Steer-as-Branch redirects launched during this turn settle against its
+    // answer — detached, so a slow branch never delays turn-end.
+    this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
+
     const turn: CompletedTurn = {
       userMessage: item.text,
       assistantResponse: fullText,
@@ -925,6 +957,49 @@ export class LocalAgentSession implements BackendHost {
     // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
     await this.orch.completeTurn(turn);
     this.emit({ type: 'turn-end', turn });
+  }
+
+  private settlePendingBranches(turnId: string | null, liveText: string): void {
+    if (this.pendingBranches.length === 0) return;
+    for (const entry of this.pendingBranches.splice(0)) {
+      void this.settleBranch(entry, turnId, liveText);
+    }
+  }
+
+  /** Await both sides (the branch head + the already-finished live turn) and
+   *  settle honestly: a takes set on success, an error broadcast otherwise. */
+  private async settleBranch(
+    entry: { id: string; task: string; handle: Promise<SteerBranchHandle> },
+    turnId: string | null,
+    liveText: string,
+  ): Promise<void> {
+    const fail = (message: string) => this.broadcast({
+      type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
+    } satisfies BranchStatusEvent);
+    let handle: SteerBranchHandle;
+    try {
+      handle = await entry.handle;
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (!turnId || !liveText.trim()) {
+      await handle.abort('the live turn did not complete').catch(() => {});
+      fail('the live turn did not complete, so there is nothing to compare against');
+      return;
+    }
+    const report = await handle.result;
+    const outcome = settleBranchIntoTakes(this.rt.storage.sql, {
+      task: entry.task, report, turnId, sessionId: this.sessionId, liveText,
+    });
+    if (outcome.ok) {
+      this.broadcast({
+        type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
+        takeSetId: outcome.set.id, turnId,
+      } satisfies BranchStatusEvent);
+    } else {
+      fail(outcome.reason);
+    }
   }
 
   /** Passthrough SkillsVfs shim over rt.storage.vfs (mirrors the DO). */
