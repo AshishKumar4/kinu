@@ -257,6 +257,19 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
     }
   });
 
+  test('gated run commands return an error the MODEL can act on', async () => {
+    // Regression: the gate message used to tell the model to call
+    // setShellApprovalMode('allow_all') — a backend RPC the model cannot
+    // reach. The actionable path is asking the user.
+    const { rt } = createTestRuntime();
+    const t = tools(rt);
+    const tool = t.run as { execute: (args: { command: string }) => Promise<string> };
+    const result = await tool.execute({ command: 'sudo whoami' });
+    expect(result).toContain('Requires user approval (mode=strict)');
+    expect(result).toContain('Ask the user');
+    expect(result).not.toContain('setShellApprovalMode');
+  });
+
   test('execute_tools exposes workspace and codemode globals', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);

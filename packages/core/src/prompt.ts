@@ -241,7 +241,8 @@ function renderAgentStateSection(surface: PromptSurface): string {
 
   parts.push([
     '## Persistence',
-    'You are NOT stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage when the backend supports them.',
+    'You are NOT stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage.',
+    'Your context window is automatically compacted as it approaches its limit; do not stop or wrap up tasks early due to token-budget concerns. Save durable progress to facts/memory as you go.',
     'Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line-by-line — evolve freely and report honestly; nothing you change about yourself is hidden or permanent.',
   ].join('\n'));
 

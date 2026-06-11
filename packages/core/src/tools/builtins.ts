@@ -341,8 +341,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         if (mode === 'allow_all') {
           console.warn(`[proteus] approval-gate gate→allow (allow_all mode): ${formatApproval(review)}`);
         } else {
-          return `Requires user approval (mode=${mode}). To allow, call ` +
-                 `setShellApprovalMode('allow_all') on the agent.\n${formatApproval(review)}`;
+          // Actionable for the MODEL: setShellApprovalMode is a backend RPC
+          // it cannot call — the user changes the mode in agent settings.
+          return `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
+                 `or change the shell approval mode in agent settings.\n${formatApproval(review)}`;
         }
       }
       if (review.decision === 'warn') {

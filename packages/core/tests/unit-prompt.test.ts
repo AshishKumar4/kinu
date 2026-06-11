@@ -351,6 +351,16 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/Current date: .*\d:\d/);
   });
 
+  test('persistence is stated plainly and teaches compaction awareness', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    // Gating is structural — no hedging about backend support.
+    expect(prompt).not.toContain('when the backend supports them');
+    // The model must not wrap up early because of token-budget fears.
+    expect(prompt).toContain('Your context window is automatically compacted as it approaches its limit');
+    expect(prompt).toContain('do not stop or wrap up tasks early due to token-budget concerns');
+  });
+
   test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: the `think` tool description previously claimed support for
     // strategies that don't exist. Build the prompt and check it advertises
