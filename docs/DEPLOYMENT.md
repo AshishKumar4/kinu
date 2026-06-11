@@ -139,13 +139,19 @@ OAuth. Proteus requests these scopes so user-owned Cloudflare billing can power
 Workers AI and AI Gateway calls:
 
 ```text
-user-details.read account-settings.read ai.write aig.run offline_access
+user-details.read account-settings.read ai.write aig.read aig.run offline_access
 ```
 
 `offline_access` is required: `dash.cloudflare.com/oauth2/token` only returns
 a `refresh_token` when the authorization request asked for it (and the client
 has the Refresh Token grant enabled). Without it the stored credential dies at
 access-token expiry and every visit demands a Workers AI reconnect.
+
+`aig.read` (AI Gateway Read) powers the `my-gateway` provider: listing the
+user's AI Gateways, their stored BYOK provider keys, and the Unified Billing
+credit balance. The OAuth client must have the scope enabled in its dashboard
+configuration, and users who connected before it was added need one re-login
+to grant it.
 
 Set:
 
@@ -163,7 +169,10 @@ The production client id and token auth method are non-secret vars in
 
 Web agents run chat models through the **logged-in user's own Cloudflare
 account**: the Cloudflare OAuth credential (scopes above) powers Workers AI
-calls billed to that user. The platform-level AI Gateway
+calls billed to that user, and the `my-gateway` provider routes third-party
+models (`my-gateway/<provider>/<model>`) through the user's own AI Gateway —
+paid by the gateway's stored BYOK provider keys or the account's Unified
+Billing credits. The platform-level AI Gateway
 (`AI_GATEWAY_URL` + `AI_GATEWAY_AUTH`) is the env-configured fallback
 provider, and the `AI` binding serves platform-side embeddings. Users can
 also attach their own OpenAI / Anthropic / OpenRouter / ChatGPT-Codex
