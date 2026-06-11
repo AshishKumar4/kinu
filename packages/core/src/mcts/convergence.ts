@@ -58,9 +58,6 @@ export async function converge(
     ? session.getHistory(winner.msg_id)
     : [];
 
-  // Compact: store non-destructive overlay so future branches start from compressed prior
-  await session.compact();
-
   const summary = await rt.llm.complete(
     `Task: ${winner.task}\nResult: ${winner.observation.slice(0, 400)}\nScore: ${winner.value.toFixed(2)}\n\n` +
     `Summarize in ≤3 bullet points what approach worked:`,

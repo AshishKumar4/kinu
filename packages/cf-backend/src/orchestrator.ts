@@ -4409,7 +4409,6 @@ export class OrchestratorAgent extends Think<Env> {
         }
         return result;
       },
-      async compact(): Promise<void> {},
     };
   }
 }

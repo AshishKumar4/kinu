@@ -282,6 +282,5 @@ export function createMockSession(): import('../src/mcts/record-node.js').Sessio
       }
       return result;
     },
-    async compact() { /* no-op in tests */ },
   };
 }

@@ -26,7 +26,6 @@ export interface SessionMessage {
 export interface SessionWriter {
   appendMessage(message: SessionMessage, parentId?: string | null): Promise<void>;
   getHistory(leafId?: string | null): Array<{ role: string; content: string }>;
-  compact(): Promise<void>;
 }
 
 export interface RecordNodeOpts {

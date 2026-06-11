@@ -340,7 +340,6 @@ export class EvolutionEngine {
         }
         return result;
       },
-      async compact() {},
     };
   }
 

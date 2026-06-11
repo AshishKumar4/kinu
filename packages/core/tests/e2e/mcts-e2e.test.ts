@@ -110,7 +110,6 @@ function createE2ESession(): SessionWriter {
       }
       return result;
     },
-    async compact() {},
   };
 }
 

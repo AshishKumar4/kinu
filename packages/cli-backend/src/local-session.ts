@@ -852,7 +852,6 @@ export class LocalAgentSession implements BackendHost {
         }
         return result;
       },
-      async compact(): Promise<void> {},
     };
   }
 

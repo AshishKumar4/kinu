@@ -105,6 +105,5 @@ function createEvolveSession(rt: AgentRuntime): SessionWriter {
       }
       return result;
     },
-    async compact() {},
   };
 }
