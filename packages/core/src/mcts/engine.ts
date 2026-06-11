@@ -13,6 +13,7 @@ import type { SessionWriter } from './record-node.js';
 import type { BranchScore } from './pruning.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { initSearchTables } from './schemas.js';
+import { initAlternateTakesTable } from './takes.js';
 import { selectNode } from './uct.js';
 import { backpropagate } from './backpropagation.js';
 import { recordNode } from './record-node.js';
@@ -39,6 +40,7 @@ export async function runMCTS(
   const maxCostUSD = config.maxCostUSD ?? defaults.maxCostUSD;
   const judgeSamples = config.judgeSamples ?? defaults.judgeSamples;
   const maxEvalLLMCalls = config.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
+  const takesEpsilon = config.takesEpsilon ?? defaults.takesEpsilon;
   const reflectionThreshold = defaults.reflectionThreshold;
   const craftExtractionThreshold = defaults.craftExtractionThreshold;
 
@@ -51,6 +53,7 @@ export async function runMCTS(
   }
 
   initSearchTables(rt.storage.execRaw);
+  initAlternateTakesTable(rt.storage.execRaw);
 
   const rootId = nanoid();
   const rootMsgId = await recordNode(session, rt.storage.sql, {
@@ -211,7 +214,7 @@ export async function runMCTS(
       config.onIterationComplete?.(phase.iteration, phase.budget);
     }
 
-    return converge(rt, session, minAcceptableScore);
+    return converge(rt, session, minAcceptableScore, takesEpsilon);
   });
 }
 

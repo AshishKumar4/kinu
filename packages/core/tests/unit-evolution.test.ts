@@ -180,6 +180,25 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(llmCalls).toBe(0);
   });
 
+  test('an Alternate Takes pick beats the classifier and its ledger row survives the review', async () => {
+    let llmCalls = 0;
+    const { rt } = createTestRuntime();
+    const engine = new EvolutionEngine(rt);
+    rt.llm.complete = async () => { llmCalls++; return 'unused'; };
+    // recordTakePick already wrote the turn's explicit preference row.
+    rt.storage.sql`INSERT INTO turn_outcomes
+        (id, turn_id, session_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
+      VALUES ('outc-pick', 'msg-1', 'default', 'corrected', 1, 'take_pick', 'q', 'a', 'the chosen take', 1)`;
+
+    const turn = makeTurn();
+    await engine.reviewTurn(turn, 'follow-up that would have classified as accepted');
+    expect(turn.feedback).toBe('negative');
+    const rows = listTurnOutcomes(rt.storage.sql);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: 'outc-pick', source: 'take_pick', outcome: 'corrected' });
+    expect(llmCalls).toBe(1); // the corrected outcome still warrants the reflection call
+  });
+
   test('programmatic turn without errors: no outcome row, no evolution side effects', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);

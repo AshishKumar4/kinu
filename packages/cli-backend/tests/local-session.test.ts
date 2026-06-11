@@ -8,6 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
+import { initSearchTables, initAlternateTakesTable, captureAlternateTakes } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import type { LocalModelResolver } from '../src/model-resolver.js';
@@ -876,6 +877,67 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     expect(session.getEvolutionChangelog().entries.filter((e) => e.revert)).toHaveLength(0);
     const again = await session.revertChangelogEntry(tool.id);
     expect(again.ok).toBe(false);
+    await session.end();
+  });
+});
+
+describe('LocalAgentSession — Alternate Takes parity', () => {
+  function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
+    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
+        VALUES ('win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
+        VALUES ('alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
+    captureAlternateTakes(rt.storage.sql, { task: 'pick a strategy', winnerId: 'win', epsilon: 0.1 });
+    // Mirror converge()'s close: winner terminal, the near-tied rival pruned.
+    rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
+    rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
+  }
+
+  test('takes captured mid-turn are claimed for the turn at turn end', async () => {
+    const { session, rt } = setup('answered with A');
+    seedTakes(rt);
+    await session.send('solve it');
+    const turnId = rt.storage.sql<{ id: string }>`
+      SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
+    expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default', chosenNodeId: null });
+    await session.end();
+  });
+
+  test('picking a sibling writes the take_pick ledger row, re-points, and queues the continuation', async () => {
+    const { session, rt, events } = setup('answered with A');
+    seedTakes(rt);
+    await session.send('solve it');
+    const set = session.latestAlternateTakes()!;
+
+    const result = await session.pickAlternateTake(set.id, 'alt');
+    expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
+
+    const row = rt.storage.sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
+      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0]!;
+    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
+    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!.status).toBe('terminal');
+    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!.status).toBe('pruned');
+
+    // The gentle continuation runs as a programmatic turn with the chosen take.
+    await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
+    const continuation = turnStarts(events).find((s) => s.event === 'take_pick')!;
+    expect(continuation.text).toContain('go with approach B');
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+    await session.end();
+  });
+
+  test('confirming the answered winner records acceptance and queues nothing', async () => {
+    const { session, rt, events } = setup('answered with A');
+    seedTakes(rt);
+    await session.send('solve it');
+    const set = session.latestAlternateTakes()!;
+
+    const result = await session.pickAlternateTake(set.id, 'win');
+    expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false, continuationQueued: false });
+    expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_outcomes`[0]!.source).toBe('take_pick');
+    expect(turnStarts(events).every((s) => s.kind === 'user')).toBe(true);
     await session.end();
   });
 });

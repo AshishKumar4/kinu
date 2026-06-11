@@ -16,7 +16,7 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initTurnOutcomeTables(execRaw);
+  initTurnOutcomeTables(execRaw, sql);
   initReplayTables(execRaw);
   return { sql, execRaw };
 }

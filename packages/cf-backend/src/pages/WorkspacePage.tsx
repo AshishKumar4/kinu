@@ -12,7 +12,7 @@ import {
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
-import type { FileCheckpointEntry, FileRestorePlan } from "@proteus/core";
+import type { AlternateTakeSet, FileCheckpointEntry, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { cloudflareReconnectPath, touchAgent, listAvailableModels, type ModelMenuEntry } from "@/lib/user-api";
@@ -22,6 +22,8 @@ import { ConnectionIndicator } from "@/components/connection-indicator";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
+import { TakesChip } from "@/components/AlternateTakes";
+import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
@@ -250,7 +252,7 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
 const MessageView = memo(function MessageView({
-  message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles,
+  message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles, takes, onPickTake,
 }: {
   message: UIMessage;
   isLast: boolean;
@@ -265,6 +267,10 @@ const MessageView = memo(function MessageView({
   onFeedback?: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
   /** Server-recorded feedback for this message (hydrated on load). */
   feedback?: 'positive' | 'negative' | null;
+  /** Near-tied takes the turn's think convergence weighed for this answer. */
+  takes?: AlternateTakeSet;
+  /** Records a take pick (the explicit preference signal). */
+  onPickTake?: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
 }) {
   const isUser = message.role === "user";
   const isLive = isLast && isStreaming && !isUser;
@@ -391,6 +397,9 @@ const MessageView = memo(function MessageView({
       {!isLive && (
         <div className="flex items-center gap-2">
           <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />
+          {!isUser && hasComparableTakes(takes) && onPickTake && (
+            <TakesChip set={takes} onPick={onPickTake} />
+          )}
           {!isUser && message.id && onFeedback && (
             <MessageFeedback
               messageId={message.id}
@@ -729,6 +738,24 @@ export default function WorkspacePage() {
       .then(setFeedbackByMessage)
       .catch(() => {});
   }, [state.connectionStatus, state.rpc]);
+
+  // Alternate Takes chips, keyed by assistant message id — hydrated on load
+  // and refreshed when a turn settles (a think convergence may have produced
+  // a fresh near-tied set for the answer that just streamed in).
+  const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
+  useEffect(() => {
+    if (state.connectionStatus !== "connected" || state.isStreaming) return;
+    state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes')
+      .then(setTakesByTurn)
+      .catch(() => {});
+  }, [state.connectionStatus, state.isStreaming, state.rpc]);
+
+  const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
+    const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
+    const turnId = result.set.turnId;
+    if (turnId) setTakesByTurn((prev) => ({ ...prev, [turnId]: result.set }));
+    return result;
+  }, [state.rpc]);
   // Shadow-git restore — the files half of walk-back. The store lives on the
   // user's device daemon; the DO forwards. Shows the plan (paths + counts)
   // before applying; the restore itself is preceded by a safety snapshot.
@@ -892,6 +919,8 @@ export default function WorkspacePage() {
                   onFeedback={onMessageFeedback}
                   feedback={feedbackByMessage[msg.id] ?? null}
                   onRestoreFiles={onRestoreFiles}
+                  takes={takesByTurn[msg.id]}
+                  onPickTake={onPickTake}
                 />
               ))}
             </div>

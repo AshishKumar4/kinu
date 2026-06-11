@@ -10,6 +10,7 @@
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
+  AlternateTakeSet, TakePickOutcome,
 } from '@proteus/core';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelEntry } from './model-catalog.js';
@@ -257,6 +258,13 @@ export interface AgentClient {
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
   listJobs(limit?: number): Promise<AgentJobSummary[]>;
+  /** The newest Alternate Takes set (near-tied MCTS candidates from the last
+   *  think-mcts convergence), or null when none exist yet. */
+  latestTakes(): Promise<AlternateTakeSet | null>;
+  /** Pick one take: records the explicit preference into the outcome ledger,
+   *  re-points the convergence record on a sibling pick, and (when the pick
+   *  changes the answer) queues the continuation turn. */
+  pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome>;
   getModelSpec(): Promise<string | null>;
   /** Set the agent's model. Local: the session/agent_config spec; cloud: the
    *  durable agent model (same semantics as the web UI). */

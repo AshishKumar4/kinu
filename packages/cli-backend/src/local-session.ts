@@ -41,6 +41,9 @@ import {
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
+  claimAlternateTakesForTurn, latestAlternateTakeSet, recordTakePick,
+  buildTakeContinuationPrompt, getCurrentScaffoldVersion,
+  type AlternateTakeSet, type TakePickOutcome,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
@@ -522,6 +525,33 @@ export class LocalAgentSession implements BackendHost {
     return result;
   }
 
+  // ── Alternate Takes (parity with the DO's RPCs) ───────────────────
+
+  /** The newest take set, picked or not — the surfaces' comparison source. */
+  latestAlternateTakes(): AlternateTakeSet | null {
+    return latestAlternateTakeSet(this.rt.storage.sql);
+  }
+
+  /** Record the user's pick (the explicit preference signal) and, when the
+   *  pick differs from the answered take, queue a gentle programmatic turn
+   *  asking the agent to continue with the chosen approach. */
+  async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
+    const record = recordTakePick(this.rt.storage.sql, {
+      takeId, nodeId,
+      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
+    });
+    await this.engine.applyTakePick(record.set.turnId, record.outcome);
+    let continuationQueued = false;
+    if (record.changedAnswer) {
+      void this.enqueueTurn({
+        text: buildTakeContinuationPrompt(record.set, record.chosen),
+        metadata: { proteusEvent: 'take_pick' },
+      });
+      continuationQueued = true;
+    }
+    return { ...record, continuationQueued };
+  }
+
   async proposeCurriculumTasks(count?: number) {
     return proposeNextTasks({
       rt: this.rt,
@@ -857,6 +887,14 @@ export class LocalAgentSession implements BackendHost {
     }
 
     const assistantMsgId = this.persist(item.text, injections.map((injection) => injection.text), fullText);
+
+    // Alternate Takes captured during this turn's think-mcts runs get the
+    // turn id they competed for, so a pick can credit the right turn.
+    if (assistantMsgId) {
+      try {
+        claimAlternateTakesForTurn(this.rt.storage.sql, { turnId: assistantMsgId, sessionId: this.sessionId });
+      } catch { /* no takes table yet — the first MCTS run creates it */ }
+    }
 
     const turn: CompletedTurn = {
       userMessage: item.text,

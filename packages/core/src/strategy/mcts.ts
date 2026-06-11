@@ -25,6 +25,7 @@ interface MCTSStrategyOptions {
   maxCostUSD?: number;
   judgeSamples?: number;
   maxEvalLLMCalls?: number;
+  takesEpsilon?: number;
   /** SessionWriter for trajectory recording. Required (provided by caller). */
   session: SessionWriter;
 }
@@ -55,6 +56,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
         maxCostUSD: o.maxCostUSD ?? defaults.maxCostUSD,
         judgeSamples: o.judgeSamples ?? defaults.judgeSamples,
         maxEvalLLMCalls: o.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls,
+        takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
         signal: ctx.signal,
       });
       // The winner's trajectory is the agent-readable answer.

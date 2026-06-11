@@ -7,6 +7,7 @@ import { createTestRuntime, createMockSession } from './helpers.js';
 import { converge } from '../src/mcts/convergence.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
+import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes.js';
 
 describe('Convergence', () => {
   test('throws when no nodes exist', async () => {
@@ -70,6 +71,45 @@ describe('Convergence', () => {
     const other = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'other'`[0]!;
     expect(best.status).toBe('terminal');
     expect(other.status).toBe('pruned');
+  });
+
+  test('captures near-tied rivals as Alternate Takes before pruning them', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
+    const session = createMockSession();
+
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation)
+        VALUES ('best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation)
+        VALUES ('rival', 'test', 0.85, 6, 1, 'open', 'near-tied plan')`;
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation)
+        VALUES ('weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
+
+    await converge(rt, session);
+
+    // The set snapshots the choice the close erased: the rival is now pruned…
+    const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'rival'`[0]!;
+    expect(rival.status).toBe('pruned');
+    // …but lives on as a comparable take next to the winner.
+    const set = latestAlternateTakeSet(rt.storage.sql)!;
+    expect(set.winnerNodeId).toBe('best');
+    expect(set.candidates.map((c) => c.nodeId)).toEqual(['best', 'rival']);
+  });
+
+  test('a clear winner converges without leaving a take set', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
+    const session = createMockSession();
+
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation)
+        VALUES ('best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation)
+        VALUES ('weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
+
+    await converge(rt, session);
+    expect(listAlternateTakeSets(rt.storage.sql)).toHaveLength(0);
   });
 
   test('records the task outcome into task_history when the table exists', async () => {

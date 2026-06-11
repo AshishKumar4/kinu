@@ -27,6 +27,9 @@ export interface MCTSDefaults {
   /** Per-branch evaluation LLM-call budget (assertion generation + judge
    *  samples) — the operator's spend dial for grounded scoring. */
   maxEvalLLMCalls: number;
+  /** Score gap within which a rival branch counts as a near-tied Alternate
+   *  Take at convergence (see mcts/takes.ts). */
+  takesEpsilon: number;
 }
 
 /** CraftStore quality management parameters */
@@ -88,6 +91,7 @@ export const DEFAULT_CONFIG: AgentConfig = {
     craftExtractionThreshold: 0.8,
     judgeSamples: 3,
     maxEvalLLMCalls: 4,
+    takesEpsilon: 0.1,
   },
   craftStore: {
     emaAlpha: 0.3,

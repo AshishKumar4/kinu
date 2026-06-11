@@ -11,7 +11,7 @@ export {
 export {
   feedbackToQuality, outcomeToFeedback, outcomeQuality,
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
-  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
+  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   buildOutcomeEvalSplit,
   recordLesson, listLessons, corroborateLessonsForTurn,

@@ -15,7 +15,7 @@
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@proteus/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
-import { executeSlashCommand, performUndo, renderStatusLines, type SlashOutcome } from './slash-commands.js';
+import { executeSlashCommand, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
 import { watchTerminalConsents } from './consent-watch.js';
 import {
@@ -396,6 +396,9 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
         console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default — no action needed.'));
       }
       console.log('');
+      return 'ok';
+    case 'takes':
+      console.log(`\n${MUTED(renderTakesText(outcome.set))}\n`);
       return 'ok';
     case 'model-picker': {
       const current = await client.getModelSpec();

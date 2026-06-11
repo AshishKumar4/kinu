@@ -40,7 +40,7 @@ export {
 // every evolution surface reads (audit R3: the measurable loss).
 export {
   outcomeToFeedback, outcomeQuality, isTrivialTurn,
-  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes,
+  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   recordLesson, listLessons, corroborateLessonsForTurn,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
@@ -206,6 +206,14 @@ export {
   type StepScore, type StepScoreInput,
 } from './mcts/step-prm.js';
 export { estimateCost } from './mcts/cost.js';
+// Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
+export {
+  initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
+  listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
+  buildTakeContinuationPrompt,
+  type AlternateTakeCandidate, type AlternateTakeSet,
+  type TakePickRecord, type TakePickOutcome,
+} from './mcts/takes.js';
 
 // Schemas
 export { initSearchTables } from './mcts/schemas.js';
@@ -241,6 +249,7 @@ export { scaffoldEventsToUIStream } from './scaffold/ui-stream.js';
 export {
   initShadowTables,
   getPendingScaffold,
+  getCurrentScaffoldVersion,
   readScaffoldVersion,
   readShadowVerdict,
   recordShadowEvaluation,

@@ -123,6 +123,10 @@ import {
   // Evolution Changelog — the self-change digest + revert dispatch
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
+  // Alternate Takes — near-tied convergence candidates + the pick signal
+  claimAlternateTakesForTurn, listAlternateTakeSets, latestAlternateTakeSet,
+  recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
+  type AlternateTakeSet, type TakePickOutcome,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
@@ -1521,6 +1525,11 @@ export class OrchestratorAgent extends Think<Env> {
     // arrives) populates it from explicit thumbs or the follow-up classifier.
     const msgId = (result.message as { id?: string } | null | undefined)?.id;
     if (msgId) {
+      // Alternate Takes captured during this turn's think-mcts runs get the
+      // turn id they competed for, so a pick can credit the right turn.
+      try {
+        claimAlternateTakesForTurn(this.boundSql, { turnId: msgId, sessionId: 'default' });
+      } catch { /* no takes table yet — the first MCTS run creates it */ }
       const craftNames = this.acc.toolCalls
         .map(tc => tc.name)
         .filter(name => !BUILTIN_TOOL_NAMES.has(name));
@@ -2434,6 +2443,57 @@ export class OrchestratorAgent extends Think<Env> {
       } catch { /* event log is best-effort */ }
     }
     return result;
+  }
+
+  // ── Alternate Takes — near-tied convergence candidates + the pick ──
+
+  /** Claimed take sets keyed by their turn's assistant message id — one
+   *  round-trip so the chat hydrates its "Take 1 of N" chips on load. */
+  @callable()
+  async listAlternateTakes(): Promise<Record<string, AlternateTakeSet>> {
+    const byTurn: Record<string, AlternateTakeSet> = {};
+    // Newest-first listing: keep the first (latest) set seen per turn.
+    for (const set of listAlternateTakeSets(this.boundSql, { limit: 100 })) {
+      if (set.turnId && !byTurn[set.turnId]) byTurn[set.turnId] = set;
+    }
+    return byTurn;
+  }
+
+  /** The newest take set, picked or not — the TUI's /takes comparison source. */
+  @callable()
+  async latestAlternateTakes(): Promise<AlternateTakeSet | null> {
+    return latestAlternateTakeSet(this.boundSql);
+  }
+
+  /** Record the user's pick between the explored takes — the explicit
+   *  preference signal (turn_outcomes source 'take_pick' + convergence
+   *  repoint via core recordTakePick). A pick that differs from the answered
+   *  take queues a gentle programmatic continuation through the BackendHost
+   *  seam (same machinery as the reactor / background-job wake). */
+  @callable()
+  async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
+    if (typeof takeId !== 'string' || !takeId || typeof nodeId !== 'string' || !nodeId) {
+      throw new Error('pickAlternateTake requires takeId and nodeId');
+    }
+    const record = recordTakePick(this.boundSql, {
+      takeId, nodeId,
+      scaffoldVersion: getCurrentScaffoldVersion(this.boundSql),
+    });
+    try {
+      await this.engine.applyTakePick(record.set.turnId, record.outcome);
+    } catch (err) {
+      console.warn('[proteus] applyTakePick lesson corroboration failed:', err instanceof Error ? err.message : err);
+    }
+    let continuationQueued = false;
+    if (record.changedAnswer) {
+      void this.host.enqueueTurn({
+        text: buildTakeContinuationPrompt(record.set, record.chosen),
+        metadata: { proteusEvent: 'take_pick' },
+      }).catch((err) => console.warn('[proteus] take_pick continuation enqueue failed:', err));
+      continuationQueued = true;
+    }
+    this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
+    return { ...record, continuationQueued };
   }
 
   /**

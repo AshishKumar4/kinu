@@ -14,6 +14,7 @@ import type { SearchNode } from '../types/mcts.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
+import { captureAlternateTakes } from './takes.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { isoDate } from '../utils/date.js';
 
@@ -21,6 +22,7 @@ export async function converge(
   rt: AgentRuntime,
   session: SessionWriter,
   minAcceptable: number = DEFAULT_CONFIG.mcts.minAcceptableScore,
+  takesEpsilon: number = DEFAULT_CONFIG.mcts.takesEpsilon,
 ): Promise<ConvergenceResult> {
   const winner = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
@@ -79,6 +81,16 @@ export async function converge(
     } catch {
       // Craft extraction failure is non-fatal
     }
+  }
+
+  // Alternate Takes: capture the winner's near-tied rivals BEFORE the close
+  // below prunes them — afterwards they are indistinguishable from mid-search
+  // prunes. The host claims the set for the turn at turn end; the user's pick
+  // becomes the explicit preference signal in turn_outcomes.
+  try {
+    captureAlternateTakes(rt.storage.sql, { task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
+  } catch {
+    // alternate_takes may not exist in minimal test runtimes — non-fatal.
   }
 
   // Close the tree: the winner becomes terminal and every other open node is

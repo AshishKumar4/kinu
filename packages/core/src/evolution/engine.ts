@@ -44,7 +44,7 @@ import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
   initTurnOutcomeTables, isTrivialTurn, classifyTurnOutcome,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
-  recordTurnOutcome, hasNegativeOutcome,
+  recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
@@ -151,7 +151,7 @@ export class EvolutionEngine {
 
     // The engine owns the outcome + lessons + replay ledgers — created here so
     // both backends (and tests) get them without per-backend schema wiring.
-    initTurnOutcomeTables(rt.storage.execRaw);
+    initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
     initReplayTables(rt.storage.execRaw);
 
     // Load conversation count from DB to resume lifetime tracking
@@ -197,11 +197,20 @@ export class EvolutionEngine {
     let source: TurnOutcomeSource = 'classifier';
     let confidence = 1;
     let evidence = '';
+    // An Alternate Takes pick already wrote this turn's ledger row — adopt it
+    // for the downstream evolution (EMA, lessons, patterns) without letting
+    // the classifier overwrite the explicit preference.
+    let preRecorded = false;
 
     const explicit = this.readExplicitFeedback(turn.turnId);
+    const pickedOutcome = explicit ? null : takePickOutcome(this.rt.storage.sql, turn.turnId);
     if (explicit) {
       outcome = explicit === 'positive' ? 'accepted' : 'corrected';
       source = 'explicit';
+    } else if (pickedOutcome) {
+      outcome = pickedOutcome;
+      source = 'take_pick';
+      preRecorded = true;
     } else if (isTrivialTurn(turn)) {
       return; // pre-filter: nothing to accept or correct, no LLM call
     } else if (followup !== null) {
@@ -221,15 +230,17 @@ export class EvolutionEngine {
     // else: programmatic turn with no follow-up — no user signal exists.
 
     if (outcome) {
-      recordTurnOutcome(this.rt.storage.sql, {
-        turnId: turn.turnId ?? null,
-        sessionId: turn.sessionId ?? 'default',
-        outcome, confidence, source,
-        userMessage: turn.userMessage,
-        assistantResponse: turn.assistantResponse,
-        followup,
-        scaffoldVersion: this.currentScaffoldVersion(),
-      });
+      if (!preRecorded) {
+        recordTurnOutcome(this.rt.storage.sql, {
+          turnId: turn.turnId ?? null,
+          sessionId: turn.sessionId ?? 'default',
+          outcome, confidence, source,
+          userMessage: turn.userMessage,
+          assistantResponse: turn.assistantResponse,
+          followup,
+          scaffoldVersion: this.currentScaffoldVersion(),
+        });
+      }
       turn.feedback = outcomeToFeedback(outcome);
     }
 
@@ -339,6 +350,13 @@ export class EvolutionEngine {
       scaffoldVersion: this.currentScaffoldVersion(),
     });
     if (feedback === 'negative') await this.corroborateLessons(messageId);
+  }
+
+  /** An Alternate Takes pick landed (the ledger row is already written by
+   *  recordTakePick) — a correction corroborates provisional lessons exactly
+   *  like an explicit thumbs-down. */
+  async applyTakePick(turnId: string | null, outcome: 'accepted' | 'corrected'): Promise<void> {
+    if (outcome === 'corrected' && turnId) await this.corroborateLessons(turnId);
   }
 
   /** Explicit thumbs recorded for this turn's message, if any. The

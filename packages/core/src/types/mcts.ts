@@ -49,6 +49,8 @@ export interface MCTSConfig {
   judgeSamples?: number;
   /** Per-branch evaluation LLM-call budget (assertions + judge samples). */
   maxEvalLLMCalls?: number;
+  /** Near-tie gap for Alternate Takes capture at convergence. */
+  takesEpsilon?: number;
   signal?: AbortSignal;
   /** Called after each MCTS iteration completes — use for real-time UI updates. */
   onIterationComplete?: (iteration: number, remainingBudget: number) => void;

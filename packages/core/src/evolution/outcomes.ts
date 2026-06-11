@@ -26,8 +26,9 @@ import { nowMs } from '../utils/date.js';
 export type TurnOutcome = 'accepted' | 'corrected' | 'frustrated' | 'abandoned';
 
 /** Where an outcome row came from: the user's explicit thumbs, the LLM
- *  follow-up classifier, or the session-end (abandoned) rule. */
-export type TurnOutcomeSource = 'explicit' | 'classifier' | 'session_end';
+ *  follow-up classifier, the session-end (abandoned) rule, or an Alternate
+ *  Takes pick (mcts/takes.ts — explicit preference between explored takes). */
+export type TurnOutcomeSource = 'explicit' | 'classifier' | 'session_end' | 'take_pick';
 
 /** Single source for the explicit-feedback → turn-quality mapping. Used by
  *  the outcome pipeline AND the async setTurnFeedback re-scoring path
@@ -134,20 +135,37 @@ export async function classifyTurnOutcome(
 
 // ── The durable outcome ledger ───────────────────────────────────
 
-export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes (
+const TURN_OUTCOMES_DDL = `(
     id TEXT PRIMARY KEY,
     turn_id TEXT,
     session_id TEXT NOT NULL DEFAULT 'default',
     outcome TEXT NOT NULL CHECK (outcome IN ('accepted','corrected','frustrated','abandoned')),
     confidence REAL NOT NULL,
-    source TEXT NOT NULL CHECK (source IN ('explicit','classifier','session_end')),
+    source TEXT NOT NULL CHECK (source IN ('explicit','classifier','session_end','take_pick')),
     user_message TEXT NOT NULL,
     assistant_response TEXT NOT NULL,
     followup TEXT,
     scaffold_version INTEGER,
     created_at INTEGER NOT NULL
-  )`);
+  )`;
+
+export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
+  // Tables created before the 'take_pick' source carry a narrower CHECK that
+  // SQLite cannot ALTER — rebuild them in place (same columns, data kept).
+  try {
+    const ddl = sql<{ sql: string }>`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turn_outcomes'`[0]?.sql ?? '';
+    if (!ddl.includes('take_pick')) {
+      execRaw(`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_legacy`);
+      execRaw(`CREATE TABLE turn_outcomes ${TURN_OUTCOMES_DDL}`);
+      execRaw(`INSERT INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
+      execRaw(`DROP TABLE turn_outcomes_legacy`);
+    }
+  } catch {
+    // sqlite_master unavailable in exotic executors — the fresh CREATE above
+    // already carries the full union.
+  }
   // Lessons ledger — reflection prose with provenance. Self-scored lessons
   // (no real user signal behind them) stay 'provisional' and OUT of
   // MEMORY.md until a real negative outcome on one of their turns
@@ -237,6 +255,20 @@ export function listTurnOutcomes(
     return filtered.slice(0, limit).map(toOutcomeRow);
   } catch {
     return [];
+  }
+}
+
+/** The outcome an Alternate Takes pick already recorded for this turn, if
+ *  any — the follow-up classifier must not overwrite that explicit signal. */
+export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefined): TurnOutcome | null {
+  if (!turnId) return null;
+  try {
+    const rows = sql<{ outcome: TurnOutcome }>`
+      SELECT outcome FROM turn_outcomes
+      WHERE turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
+    return rows[0]?.outcome ?? null;
+  } catch {
+    return null;
   }
 }
 

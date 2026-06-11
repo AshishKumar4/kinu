@@ -35,7 +35,7 @@ function setup(): { rt: AgentRuntime; facts: ReturnType<typeof createFactsStore>
   const execRaw = rt.storage.execRaw;
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
-  initTurnOutcomeTables(execRaw);
+  initTurnOutcomeTables(execRaw, rt.storage.sql);
   initReplayTables(execRaw);
   initCraftScoreTables(execRaw);
   initFactsTable(execRaw);

@@ -321,6 +321,14 @@ export class LocalAgentClient implements AgentClient {
     return this.session.revertChangelogEntry(id);
   }
 
+  async latestTakes() {
+    return this.session.latestAlternateTakes();
+  }
+
+  async pickTake(takeId: string, nodeId: string) {
+    return this.session.pickAlternateTake(takeId, nodeId);
+  }
+
   async readMemory(): Promise<string> {
     return await this.deps.rt.memory.read('memory/MEMORY.md') ?? '';
   }

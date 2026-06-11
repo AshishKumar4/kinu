@@ -316,3 +316,63 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     await client.close();
   });
 });
+
+describe('/takes — Alternate Takes over a real local client', () => {
+  test('latestTakes/pickTake round-trip: ledger write, repoint, and the /takes command surface', async () => {
+    const { client, rt } = setup(fakeModel('answered with A'));
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    await client.connect();
+    const { executeSlashCommand } = await import('../src/slash-commands.js');
+    const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@proteus/core');
+
+    // No takes yet — the command explains instead of opening a comparison.
+    const empty = await executeSlashCommand(client, '/takes');
+    if (empty.kind !== 'text') throw new Error(`expected text outcome, got ${empty.kind}`);
+    expect(empty.text).toContain('No alternate takes yet');
+
+    // Seed a near-tied convergence (what think-mcts captures mid-turn), then
+    // run a turn so the session claims it.
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
+    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
+        VALUES ('win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
+        VALUES ('alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
+    captureAlternateTakes(rt.storage.sql, { task: 'choose a plan', winnerId: 'win', epsilon: 0.1 });
+    await client.send('solve it');
+
+    const set = await client.latestTakes();
+    expect(set).not.toBeNull();
+    expect(set!.turnId).toBeTruthy();
+    expect(set!.candidates.map((c) => c.nodeId)).toEqual(['win', 'alt']);
+
+    const listing = await executeSlashCommand(client, '/takes');
+    if (listing.kind !== 'takes') throw new Error(`expected takes outcome, got ${listing.kind}`);
+    expect(listing.set.id).toBe(set!.id);
+
+    // Pick by number through the shared command path (take 2 = the sibling).
+    const picked = await executeSlashCommand(client, '/takes 2');
+    if (picked.kind !== 'text') throw new Error(`expected text outcome, got ${picked.kind}`);
+    expect(picked.text).toContain('Take 2 picked');
+    const row = rt.storage.sql<{ outcome: string; source: string; turn_id: string }>`
+      SELECT outcome, source, turn_id FROM turn_outcomes`[0]!;
+    expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set!.turnId });
+    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!.status).toBe('terminal');
+
+    // The pick queued a take_pick continuation turn — let it stream through
+    // the same event seam before closing.
+    const deadline = Date.now() + 2000;
+    while (!events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'take_pick')
+        || events.filter((e) => e.type === 'turn-end').length < 2) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for the take_pick continuation turn');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    // Out-of-range picks answer with usage, never throw.
+    const missing = await executeSlashCommand(client, '/takes 9');
+    if (missing.kind !== 'text') throw new Error('expected text outcome');
+    expect(missing.text).toContain('No take "9"');
+    await client.close();
+  });
+});

@@ -17,7 +17,7 @@ import type { ScaffoldArchiveEntry } from '../src/scaffold/archive.js';
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db));
+  initTurnOutcomeTables(makeExecRaw(db), sql);
   return { db, sql };
 }
 

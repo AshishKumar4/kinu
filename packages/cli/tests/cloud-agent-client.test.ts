@@ -366,6 +366,47 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
+  test('latestTakes and pickTake ride the rpc frames (Alternate Takes capability)', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+
+    // Open the socket via a quick completed turn (rpc rides the same ws).
+    const warmup = client.send('hello');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'warmup request',
+    );
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
+    await warmup;
+
+    const set = {
+      id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan',
+      winnerNodeId: 'win', chosenNodeId: null, createdAt: 1, pickedAt: null,
+      candidates: [
+        { nodeId: 'win', text: 'plan A', score: 0.9, visits: 3, depth: 1 },
+        { nodeId: 'alt', text: 'plan B', score: 0.85, visits: 2, depth: 1 },
+      ],
+    };
+    const latest = client.latestTakes();
+    const latestRpc = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'latestAlternateTakes'), 'latest rpc');
+    expect(latestRpc.args).toEqual([]);
+    mock.reply({ type: 'rpc', id: latestRpc.id, success: true, done: true, result: set });
+    await expect(latest).resolves.toMatchObject({ id: 'take-1', turnId: 'm2' });
+
+    const pick = client.pickTake('take-1', 'alt');
+    const pickRpc = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'pickAlternateTake'), 'pick rpc');
+    expect(pickRpc.args).toEqual(['take-1', 'alt']);
+    mock.reply({
+      type: 'rpc', id: pickRpc.id, success: true, done: true,
+      result: {
+        outcome: 'corrected', changedAnswer: true, continuationQueued: true,
+        chosen: set.candidates[1], set: { ...set, chosenNodeId: 'alt', winnerNodeId: 'alt', pickedAt: 2 },
+      },
+    });
+    await expect(pick).resolves.toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
+    await client.close();
+  });
+
   test('connection close mid-turn settles the in-flight send with hadError', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

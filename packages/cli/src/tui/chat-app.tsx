@@ -18,7 +18,7 @@ import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import type { ChangelogEntry } from '@proteus/core';
+import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@proteus/core';
 import {
   findForkPivot,
   forkCandidates,
@@ -32,6 +32,7 @@ import {
 } from '../agent-client.js';
 import {
   commandsForClient,
+  describeTakePick,
   executeSlashCommand,
   filterCommands,
   performUndo,
@@ -45,7 +46,7 @@ import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { StatusView } from './help-view.js';
-import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, WalkbackOverlay } from './overlays.js';
+import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, TakesOverlay, WalkbackOverlay } from './overlays.js';
 import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { estimateContextTokens } from './context-status.js';
 import { useStreamingBuffer } from './streaming-buffer.js';
@@ -84,6 +85,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
   const [modelPicker, setModelPicker] = useState<{ models: AgentModelEntry[]; loading: boolean; error: string | null } | null>(null);
   const [changelogView, setChangelogView] = useState<AgentChangelogView | null>(null);
+  const [takesView, setTakesView] = useState<AlternateTakeSet | null>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
   const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
@@ -95,6 +97,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
   const skipHydrationRef = useRef(false);
+  /** Take sets already hinted at, so a turn without a new convergence is quiet. */
+  const hintedTakesRef = useRef<string | null>(null);
   const stream = useStreamingBuffer(setStreamingText);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
@@ -238,6 +242,19 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     }
   }, [addMessage, client]);
 
+  /** Enter on a take: record the pick (ledger + repoint); a changed answer
+   *  streams its continuation as the next programmatic turn. */
+  const pickTake = useCallback(async (set: AlternateTakeSet, candidate: AlternateTakeCandidate) => {
+    setTakesView(null);
+    try {
+      const index = set.candidates.findIndex((c) => c.nodeId === candidate.nodeId) + 1;
+      const result = await client.pickTake(set.id, candidate.nodeId);
+      addMessage({ role: 'system', content: describeTakePick(result, index) });
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
       case 'text':
@@ -245,6 +262,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         return;
       case 'changelog':
         setChangelogView(outcome.view);
+        return;
+      case 'takes':
+        setTakesView(outcome.set);
         return;
       case 'model-set':
         setModelSpec(outcome.spec);
@@ -290,6 +310,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         } else if (changelogView) {
           setChangelogView(null);
           addMessage({ role: 'system', content: 'Changelog closed — everything kept.' });
+        } else if (takesView) {
+          setTakesView(null);
+          addMessage({ role: 'system', content: 'Takes closed — the answered take stays.' });
         } else if (sessionPicker) {
           setSessionPicker(null);
           addMessage({ role: 'system', content: 'Resume cancelled.' });
@@ -301,7 +324,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         addMessage({ role: 'system', content: `Unknown command: ${outcome.command}. Type /help` });
         return;
     }
-  }, [addMessage, changelogView, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker]);
+  }, [addMessage, changelogView, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker, takesView]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
     for (const effect of effects) {
@@ -434,12 +457,22 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         }
         runInputEffects(dispatchInput({ type: 'turn-settled' }));
         if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+        // A think run may have converged on near-tied approaches — hint once
+        // per new take set so the comparison is one /takes away.
+        if (event.turn.toolCalls.some((call) => call.name === 'think')) {
+          void client.latestTakes().then((set) => {
+            if (!set || set.candidates.length < 2 || set.chosenNodeId) return;
+            if (hintedTakesRef.current === set.id) return;
+            hintedTakesRef.current = set.id;
+            addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
+          }).catch(() => {});
+        }
         break;
       }
       case 'broadcast':
         break;
     }
-  }, [addMessage, dispatchInput, runInputEffects, stream]);
+  }, [addMessage, client, dispatchInput, runInputEffects, stream]);
 
   // Connect once per client: event subscription, startup resources, initial
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.
@@ -540,7 +573,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         return;
       }
     }
-    const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || inputState.walkbackOpen);
+    const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
     if (key.name === 'tab') {
       if (!overlayOpen) runInputEffects(dispatchInput({ type: 'tab', draft: inputRef.current?.plainText ?? '' }));
       return;
@@ -556,6 +589,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     }
     if (changelogView) {
       setChangelogView(null); // keep everything — the default
+      return;
+    }
+    if (takesView) {
+      setTakesView(null); // keep the answered take — the default
       return;
     }
     runInputEffects(dispatchInput({
@@ -574,7 +611,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
-  const commandHints = !modelPicker && !changelogView && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
+  const commandHints = !modelPicker && !changelogView && !takesView && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
   const contextTokens = estimateContextTokens(messages, streamingText);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
@@ -639,12 +676,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
-          focused={ready && !modelPicker && !changelogView && !deviceConnect.state && !inputState.walkbackOpen}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues for after)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          focused={ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues for after)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },
@@ -671,6 +708,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           view={changelogView}
           terminal={{ width, height }}
           onSelect={(entry) => { void revertChangelogEntry(entry); }}
+        />
+      ) : takesView ? (
+        <TakesOverlay
+          set={takesView}
+          terminal={{ width, height }}
+          onSelect={(candidate) => { void pickTake(takesView, candidate); }}
         />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay

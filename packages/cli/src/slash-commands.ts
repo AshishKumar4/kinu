@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { summarizeRestorePlan, type FileCheckpointEntry } from '@proteus/core';
+import { summarizeRestorePlan, type AlternateTakeCandidate, type AlternateTakeSet, type FileCheckpointEntry, type TakePickOutcome } from '@proteus/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
 
 export interface SlashCommandInfo {
@@ -24,6 +24,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
+  { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]' },
   { name: '/tree', description: 'Show MCTS search tree' },
   { name: '/resume', description: 'Resume a recorded CLI session', usage: '/resume [number/id]' },
   { name: '/sessions', description: 'List recorded CLI sessions' },
@@ -76,6 +77,8 @@ export type SlashOutcome =
   | { kind: 'status'; status: AgentClientStatus }
   /** The Evolution Changelog digest — TUI renders an overlay, classic prints. */
   | { kind: 'changelog'; view: AgentChangelogView }
+  /** Alternate Takes comparison — TUI renders an overlay, classic prints. */
+  | { kind: 'takes'; set: AlternateTakeSet }
   | { kind: 'exit' }
   | { kind: 'model-picker' }
   | { kind: 'model-set'; spec: string }
@@ -139,6 +142,19 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         };
       }
       return { kind: 'changelog', view: await client.changelog() };
+    }
+    case '/takes': {
+      const set = await client.latestTakes();
+      if (!set || set.candidates.length < 2) {
+        return { kind: 'text', text: 'No alternate takes yet — they appear when think(strategy=mcts) converges on near-tied approaches.' };
+      }
+      if (!arg) return { kind: 'takes', set };
+      const n = Number.parseInt(arg, 10);
+      const candidate = Number.isInteger(n) ? set.candidates[n - 1] : undefined;
+      if (!candidate) {
+        return { kind: 'text', text: `No take "${arg}" — /takes lists ${set.candidates.length}.` };
+      }
+      return { kind: 'text', text: describeTakePick(await client.pickTake(set.id, candidate.nodeId), n) };
     }
     case '/model': {
       if (!arg) return { kind: 'model-picker' };
@@ -308,6 +324,33 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
     lines.push(`✓ ${plan.files.length} file(s) restored.${result.preRestoreId ? ` Undo this with /undo 1.` : ''}`);
   }
   return { text: lines.join('\n'), restored };
+}
+
+/** One-line score evidence for a take candidate — shared by the TUI overlay
+ *  and the classic listing. */
+export function formatTakeEvidence(candidate: AlternateTakeCandidate): string {
+  return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
+}
+
+/** The classic-REPL takes listing (`/takes` without a pick). */
+export function renderTakesText(set: AlternateTakeSet): string {
+  const lines = [`Alternate takes for: ${set.task.replace(/\s+/g, ' ').slice(0, 100)}`];
+  set.candidates.forEach((candidate, i) => {
+    const marker = candidate.nodeId === (set.chosenNodeId ?? set.winnerNodeId) ? '★' : ' ';
+    lines.push(`  ${i + 1}. ${marker} [${formatTakeEvidence(candidate)}]`);
+    lines.push(`       ${candidate.text.replace(/\s+/g, ' ').slice(0, 160)}`);
+  });
+  lines.push('Pick with /takes <n> — your pick becomes a real preference signal.');
+  return lines.join('\n');
+}
+
+/** What a pick did, for the surfaces' confirmation line. */
+export function describeTakePick(result: TakePickOutcome, n: number): string {
+  if (!result.changedAnswer) {
+    return `Take ${n} confirmed — the answered approach stays, recorded as an explicit preference.`;
+  }
+  return `Take ${n} picked — preference recorded, convergence re-pointed` +
+    (result.continuationQueued ? ', and the agent will continue with this approach.' : '.');
 }
 
 export function renderSearchTree(nodes: readonly AgentSearchNode[]): string {

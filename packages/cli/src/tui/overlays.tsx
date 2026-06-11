@@ -1,7 +1,7 @@
 import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
-import { formatContextWindow, type ChangelogEntry } from '@proteus/core';
-import type { SlashCommandInfo } from '../slash-commands.js';
+import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@proteus/core';
+import { formatTakeEvidence, type SlashCommandInfo } from '../slash-commands.js';
 import type { AgentModelEntry } from '../model-catalog.js';
 import type { AgentChangelogView, ForkPoint } from '../agent-client.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
@@ -260,6 +260,80 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
       )}
     </PaletteFrame>
   );
+}
+
+interface TakesOverlayProps {
+  set: AlternateTakeSet;
+  terminal: OverlayGeometry;
+  /** Enter on a take — the surface records the pick (ledger + repoint). */
+  onSelect: (candidate: AlternateTakeCandidate) => void;
+}
+
+/** The Alternate Takes comparison (/takes): the near-tied approaches the last
+ *  think-mcts convergence weighed, current answer starred. Enter picks one —
+ *  the pick is a real preference signal, not just a view. */
+export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
+  const paletteWidth = boundedPaletteWidth(terminal, 0.62, 60, 100);
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const current = set.chosenNodeId ?? set.winnerNodeId;
+  const options: SelectOption[] = set.candidates.map((candidate, index) => ({
+    name: clipText(
+      `${index + 1}. ${candidate.nodeId === current ? '★' : ' '} ${candidate.text.replace(/\s+/g, ' ')}`,
+      innerWidth,
+    ),
+    description: clipText(
+      `${formatTakeEvidence(candidate)}${candidate.nodeId === current ? ' · current answer' : ' · Enter uses this take'}`,
+      innerWidth,
+    ),
+    value: candidate,
+  }));
+  const paletteHeight = Math.min(Math.max(options.length * 2 + 7, 12), Math.max(12, terminal.height - 6), 22);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  return (
+    <PaletteFrame
+      title={`Alternate takes · ${set.candidates.length} explored`}
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text={clipText(`Task: ${set.task.replace(/\s+/g, ' ')}`, innerWidth)} width={innerWidth} color={tuiColors.muted} />
+      <PaletteLine text="↑/↓ compare · Enter uses that take (recorded as preference) · Esc keep" width={innerWidth} color={tuiColors.muted} />
+      <select
+        focused={true}
+        options={options}
+        selectedIndex={0}
+        showDescription={true}
+        showScrollIndicator={true}
+        wrapSelection={true}
+        onSelect={(_index, option) => {
+          const selected = option?.value;
+          if (isTakeCandidate(selected)) onSelect(selected);
+        }}
+        style={{
+          flexGrow: 1,
+          height: Math.max(3, paletteHeight - 6),
+          backgroundColor: tuiColors.panel,
+          textColor: tuiColors.text,
+          focusedBackgroundColor: tuiColors.panel,
+          focusedTextColor: tuiColors.text,
+          selectedBackgroundColor: tuiColors.selection,
+          selectedTextColor: tuiColors.textStrong,
+          descriptionColor: tuiColors.muted,
+          selectedDescriptionColor: tuiColors.accentStrong,
+        }}
+      />
+    </PaletteFrame>
+  );
+}
+
+function isTakeCandidate(value: unknown): value is AlternateTakeCandidate {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as AlternateTakeCandidate).nodeId === 'string'
+    && typeof (value as AlternateTakeCandidate).text === 'string'
+    && typeof (value as AlternateTakeCandidate).score === 'number';
 }
 
 function isChangelogEntry(value: unknown): value is ChangelogEntry {

@@ -26,7 +26,7 @@ import {
 } from './session.js';
 import { recordAgentClientEvent } from './session-recorder.js';
 import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
-import type { ChangelogEntry, ChangelogRevertResult } from '@proteus/core';
+import type { AlternateTakeSet, ChangelogEntry, ChangelogRevertResult, TakePickOutcome } from '@proteus/core';
 import {
   asRecord,
   createUserUiMessage,
@@ -316,6 +316,16 @@ export class CloudAgentClient implements AgentClient {
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
     const result = await this.callRpc('revertChangelogEntry', [id]) as ChangelogRevertResult | null;
     return result ?? { ok: false, error: 'cloud revert returned no result' };
+  }
+
+  async latestTakes(): Promise<AlternateTakeSet | null> {
+    return await this.callRpc('latestAlternateTakes', []) as AlternateTakeSet | null;
+  }
+
+  async pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
+    const result = await this.callRpc('pickAlternateTake', [takeId, nodeId]) as TakePickOutcome | null;
+    if (!result) throw new Error('cloud pick returned no result');
+    return result;
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
