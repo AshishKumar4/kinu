@@ -101,13 +101,10 @@ function renderOperatingGuidance(surface: PromptSurface): string {
   return `## Operating guidance\n${lines.join('\n')}`;
 }
 
+// The when-to-use doctrine lives in the JSON-schema tool descriptions
+// (registry.ts renderToolSchemaDescription) — the prompt only indexes names.
 function renderBuiltinToolLine(name: BuiltinToolName): string {
-  const spec = BUILTIN_TOOL_SPECS[name];
-  return [
-    `- **${name}** — ${spec.summary}`,
-    `  Use: ${spec.whenToUse}`,
-    `  Avoid: ${spec.whenNotToUse}`,
-  ].join('\n');
+  return `- **${name}** — ${BUILTIN_TOOL_SPECS[name].summary}`;
 }
 
 function renderExternalToolLine(tool: PromptExternalToolInfo): string {
@@ -117,16 +114,25 @@ function renderExternalToolLine(tool: PromptExternalToolInfo): string {
 }
 
 function renderToolsSection(surface: PromptSurface): string {
+  // Single family gate (Moonshot guidance): kimi-family models self-select
+  // tools best from the schema alone — prompt prose about tool usage
+  // interferes — so they get a bare name index; other families keep one
+  // summary line per tool.
+  const bareIndex = surface.model.family === 'kimi';
   const builtins = surface.builtinTools.length === 0
     ? '(none)'
-    : surface.builtinTools.map(renderBuiltinToolLine).join('\n');
+    : surface.builtinTools
+        .map((name) => (bareIndex ? `- ${name}` : renderBuiltinToolLine(name)))
+        .join('\n');
   const external = surface.externalTools.length === 0
     ? ''
     : [
         '',
         '### External tools',
         'These tools are exposed by connected external providers for this turn. Use them when their names/descriptions match the task.',
-        surface.externalTools.map(renderExternalToolLine).join('\n'),
+        surface.externalTools
+          .map((tool) => (bareIndex ? `- ${tool.name}` : renderExternalToolLine(tool)))
+          .join('\n'),
       ].join('\n');
   return [
     '## Tools available this turn',
@@ -236,7 +242,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '## Memory and facts',
       '- Use `fact` for keyed state the agent should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
       '- Use `memory` for longer prose notes or lessons that are useful across turns.',
-      '- Use `memory` action="sessions" to search your past session transcripts before re-deriving prior context: `query` searches, `around_message_id` scrolls around a hit, neither browses recent sessions.',
+      '- Use `memory` action="sessions" to search your past session transcripts before re-deriving prior context.',
       '- Your failures are recorded as lessons in memory — search before retrying similar work.',
       '- Prefer updating stale facts over adding contradictory new ones.',
     ].join('\n'));

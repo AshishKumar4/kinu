@@ -129,6 +129,7 @@ export {
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
+  renderToolSchemaDescription,
   type BuiltinToolName,
   type BuiltinToolSpec,
 } from './tools/registry.js';

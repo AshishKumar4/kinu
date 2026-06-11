@@ -6,6 +6,8 @@ import {
   assertToolsSupportedByModel,
   buildSystemPromptSync,
   BUILTIN_TOOLS,
+  BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_SPECS,
   compilePromptSurface,
   modelSupportsTools,
 } from '../src/index.ts';
@@ -34,10 +36,63 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('teaches the honest strategy doctrine: mcts branches cannot run tools, code runs at scoring', () => {
+    // The doctrine lives in the think tool's JSON-schema description (what
+    // providers weight for tool selection) — not in prompt prose.
+    expect(BUILTIN_TOOL_DESCRIPTIONS.think).toMatch(/cannot run tools/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.think).toMatch(/code is executed when scored/);
+  });
+
+  test('tool when-to-use doctrine is schema-only: descriptions carry it, prompt prose does not', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/cannot run tools/);
-    expect(prompt).toMatch(/code is executed when scored/);
+    for (const name of BUILTIN_TOOLS) {
+      const spec = BUILTIN_TOOL_SPECS[name];
+      // Schema description = summary + Use when / Avoid when / Returns.
+      const description = BUILTIN_TOOL_DESCRIPTIONS[name];
+      expect(description.startsWith(spec.summary)).toBe(true);
+      expect(description).toContain(`Use when: ${spec.whenToUse}`);
+      expect(description).toContain(`Avoid when: ${spec.whenNotToUse}`);
+      expect(description).toContain(`Returns: ${spec.result}`);
+      // Prompt prose carries ONLY the summary — no duplicated doctrine.
+      expect(prompt).not.toContain(spec.whenToUse);
+      expect(prompt).not.toContain(spec.whenNotToUse);
+    }
+    expect(prompt).not.toContain('Use when:');
+    expect(prompt).not.toContain('Avoid when:');
+  });
+
+  test('kimi-family models get a bare tool name index; other families get summaries', () => {
+    const { rt } = createTestRuntime();
+    const opts = {
+      availableTools: ['run', 'memory'] as const,
+      externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
+      registeredExecutors: [] as string[],
+    };
+    const kimi = buildSystemPromptSync(rt, { ...opts, model: { id: '@cf/moonshotai/kimi-k2.6' } });
+    const anthropic = buildSystemPromptSync(rt, { ...opts, model: { id: 'anthropic/claude-sonnet-4.5' } });
+
+    // Kimi (Moonshot guidance): names only — no per-tool prose, schema carries it.
+    expect(kimi).toContain('\n- run\n');
+    expect(kimi).toContain('\n- memory');
+    expect(kimi).toContain('\n- tool_docs_search');
+    expect(kimi).not.toContain('**run**');
+    expect(kimi).not.toContain(BUILTIN_TOOL_SPECS.run.summary);
+    expect(kimi).not.toContain('Search docs.');
+    // The guard line is family-independent.
+    expect(kimi).toContain('Only call tools listed here');
+
+    // Anthropic/OpenAI families: one summary line per tool.
+    expect(anthropic).toContain(`- **run** — ${BUILTIN_TOOL_SPECS.run.summary}`);
+    expect(anthropic).toContain(`- **memory** — ${BUILTIN_TOOL_SPECS.memory.summary}`);
+    expect(anthropic).toContain('**tool_docs_search** (MCP) — Search docs.');
+  });
+
+  test('memory sessions scroll contract is schema-only', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    // The mode contract (query searches, around_message_id scrolls, neither
+    // browses) lives in the memory tool's input-schema property descriptions.
+    expect(prompt).not.toContain('around_message_id');
   });
 
   test('teaches craft-on-repeat, search-before-solve, and the lessons loop', () => {

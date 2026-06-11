@@ -13,6 +13,7 @@
 // infra without clobbering it.
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
+import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry.js';
 import type { StrategyRegistry, StrategyContext } from './types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LanguageModel } from 'ai';
@@ -68,20 +69,14 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
   // below still resolves any registered id (eval harnesses use the baseline).
   const advertised = deps.registry.list().filter(s => s.advertised !== false);
   const strategies = advertised.map(s => s.id);
-  const descriptions = advertised
-    .map(s => `  - **${s.id}** — ${s.description ?? s.label ?? s.id}`)
-    .join('\n');
-  const hasHeads = strategies.includes('heads');
 
   return tool({
+    // Single source: the registry's think spec carries the strategy doctrine;
+    // only the live advertised-strategy id list is appended here. Parameter
+    // contracts (heads specs, merge_strategy) live in the input schema.
     description:
-      'Run an exploration strategy over the task and return the best candidate.\n' +
-      'Strategies available:\n' + descriptions + '\n\n' +
-      'Use only when the task genuinely needs it — not for linear work you can simply do directly.' +
-      (hasHeads
-        ? '\n\nFor strategy=heads, pass `heads` (2–6 specs, each {task, rationale, model?}) ' +
-          'and optionally `merge_strategy` (synthesize | best_of | consensus).'
-        : ''),
+      BUILTIN_TOOL_DESCRIPTIONS.think +
+      (strategies.length > 0 ? `\nStrategies available this turn: ${strategies.join(', ')}.` : ''),
     inputSchema: jsonSchema<ThinkInput>({
       type: 'object',
       required: ['strategy', 'task'],

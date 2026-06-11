@@ -4,6 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createStrategyRegistry, createSingleShotStrategy, createThinkTool,
+  BUILTIN_TOOL_DESCRIPTIONS,
   type StrategyContext,
 } from '../src/index.ts';
 import { createTestRuntime, createTestStrategy } from '@proteus/test-utils';
@@ -147,6 +148,18 @@ describe('createThinkTool — strategy dispatch', () => {
     );
     expect(observedBudget?.maxIterations).toBe(42);
     expect(observedBudget?.wallClockMs).toBe(999);
+  });
+
+  test('docstring is single-sourced from the registry think spec + live strategy ids', () => {
+    const reg = createStrategyRegistry();
+    reg.register(createTestStrategy({ id: 'heads' }));
+    reg.register(createTestStrategy({ id: 'mcts' }));
+    const { rt } = createTestRuntime();
+    const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
+    // The strategy doctrine comes verbatim from the canonical tool registry —
+    // no parallel description assembly.
+    expect(tool.description!.startsWith(BUILTIN_TOOL_DESCRIPTIONS.think)).toBe(true);
+    expect(tool.description).toContain('Strategies available this turn: heads, mcts.');
   });
 
   test('inputSchema enum lists only ADVERTISED strategies', () => {

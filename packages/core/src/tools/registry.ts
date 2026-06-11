@@ -74,8 +74,8 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result: 'Returns skill metadata, skill content, or mutation status.',
   },
   // The think spec below is the SINGLE SOURCE of strategy doctrine — the
-  // system prompt and the UI render from it; the think tool's own docstring
-  // derives from the registered strategies' descriptions.
+  // system prompt, the UI, and the think tool's own docstring all render
+  // from it (the docstring appends only the live advertised-strategy ids).
   think: {
     name: 'think',
     summary: 'Run a deeper reasoning strategy: heads (parallel sub-agents) or mcts (approach search).',
@@ -87,7 +87,9 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   },
   memory: {
     name: 'memory',
-    summary: 'Save or search durable prose memory, or recall past session transcripts (action=sessions: query searches, around_message_id scrolls, neither browses recent sessions).',
+    // The sessions mode contract (query searches, around_message_id scrolls,
+    // neither browses) lives ONLY in the input-schema property descriptions.
+    summary: 'Save or search durable prose memory, or recall past session transcripts (action=sessions).',
     whenToUse: 'Use for compact, durable lessons or notes that should survive future turns, and to search what past sessions actually said before re-deriving context.',
     whenNotToUse: 'Do not store keyed state, temporary task progress, stale logs, or facts that should be updated by name.',
     result: 'Returns save status, search hits, or session transcript slices.',
@@ -108,5 +110,19 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   },
 };
 
+/** Render a spec into the JSON-schema tool docstring. Providers weight the
+ *  schema `description` most for tool selection, so the when-to-use doctrine
+ *  ships here — the system prompt carries only the one-line summary. */
+export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
+  return [
+    spec.summary,
+    `Use when: ${spec.whenToUse}`,
+    `Avoid when: ${spec.whenNotToUse}`,
+    `Returns: ${spec.result}`,
+  ].join('\n');
+}
+
 export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> =
-  Object.fromEntries(BUILTIN_TOOLS.map((name) => [name, BUILTIN_TOOL_SPECS[name].summary])) as Record<BuiltinToolName, string>;
+  Object.fromEntries(
+    BUILTIN_TOOLS.map((name) => [name, renderToolSchemaDescription(BUILTIN_TOOL_SPECS[name])]),
+  ) as Record<BuiltinToolName, string>;
