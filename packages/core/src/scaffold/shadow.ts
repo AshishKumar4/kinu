@@ -151,6 +151,22 @@ export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
   }
 }
 
+/**
+ * The LIVE scaffold version — the highest status='current' row. Derived from
+ * status, never from arithmetic on the pending version: after rollback
+ * cycles the numbering is non-contiguous (e.g. current=v2 while pending=v5),
+ * so `pending - 1` points at a rolled_back/historical row.
+ */
+export function getCurrentScaffoldVersion(sql: SqlExecutor): number | null {
+  try {
+    const rows = sql<{ version: number }>`
+      SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
+    return rows[0]?.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ShadowVerdictTrial {
   id: string;
   task: string;
@@ -339,12 +355,8 @@ export async function applyPromotionDecision(
   }
   // Rollback: the live `scaffold/agent.js` already holds the current version's
   // code (modifyScaffold no longer overwrites it on proposal), so flipping the
-  // pending to rolled_back reverts the user-visible behaviour. Derive the
-  // version to keep from the status='current' row — robust to non-contiguous
-  // numbering (after rollback cycles the pending is NOT necessarily current+1).
-  const currentRows = sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
-  const currentVersion = currentRows[0]?.version ?? (pending.version - 1);
+  // pending to rolled_back reverts the user-visible behaviour.
+  const currentVersion = getCurrentScaffoldVersion(sql) ?? (pending.version - 1);
   // Re-write the live file from the current version defensively, in case it
   // was tampered with mid-trial.
   const currentCode = await readScaffoldVersion(rt, currentVersion);

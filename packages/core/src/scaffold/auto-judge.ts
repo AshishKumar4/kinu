@@ -19,8 +19,8 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn,
-  DEFAULT_SHADOW_CONFIG, getPendingScaffold, recordShadowEvaluation,
-  decidePromotion, applyPromotionDecision, readScaffoldVersion,
+  DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
+  recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow.js';
 import { runScaffold, type ScaffoldRunResult } from './executor.js';
 
@@ -182,7 +182,9 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   }
 
   recordShadowEvaluation(opts.rt.storage.sql, {
-    currentVersion: pending.version - 1,
+    // Derived from status — after rollback cycles the live version is NOT
+    // pending - 1 (the numbering is non-contiguous).
+    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql) ?? pending.version - 1,
     pendingVersion: pending.version,
     task: opts.task.slice(0, 1000),
     currentOutput: opts.currentOutput.slice(0, 4000),

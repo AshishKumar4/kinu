@@ -159,6 +159,36 @@ describe('runAutoShadowEval', () => {
     expect(map.get(1)).toBe('rolled_back');  // bad pending discarded
   });
 
+  test('records the STATUS-derived current version after rollback cycles', async () => {
+    // Regression: the eval row hardcoded currentVersion = pending - 1. After
+    // a rollback cycle the numbering is non-contiguous (live=v0 while the new
+    // pending is v3), so pending-1 pointed at a rolled_back row.
+    const rt = await setup();
+    rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
+    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+      VALUES (2, ${Date.now()}, 'second attempt', 'rolled_back')`;
+    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+      VALUES (3, ${Date.now()}, 'third attempt', 'pending')`;
+    await rt.storage.vfs.writeFile(
+      'scaffold/agent.js.v3',
+      'async function* run(rt, task) { yield { type: "chunk", data: "v3: " + task }; }',
+    );
+
+    const result = await runAutoShadowEval({
+      rt, task: 't', currentOutput: 'c',
+      judge: makeJudge('pending'),
+      llmStream: noOpLlmStream,
+      config: { sampleRate: 1.0 },
+      random: () => 0,
+    });
+    expect(result.skipped).toBe(false);
+
+    const row = rt.storage.sql<{ current_version: number; pending_version: number }>`
+      SELECT current_version, pending_version FROM scaffold_evaluations`[0]!;
+    expect(row.pending_version).toBe(3);
+    expect(row.current_version).toBe(0); // the live status='current' row, NOT 2
+  });
+
   test('skips gracefully when pending file unreadable', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
