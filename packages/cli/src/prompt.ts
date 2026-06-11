@@ -1,16 +1,22 @@
 /**
- * Interactive prompt input that survives `curl | bash` and piped stdin.
+ * Interactive prompt input built on canonical-mode terminal reads.
  *
- * Prompts read from stdin when it is a real terminal, otherwise they reopen
- * the controlling terminal (/dev/tty) — readline on a pipe either swallows
- * stray bytes as the "answer" or hits EOF and never resolves, which is how
- * the installer's sign-in question used to freeze. When no terminal exists
- * at all, prompting raises NonInteractiveError so callers can print
- * instructions instead of hanging.
+ * No readline and no raw mode, ever: readline (terminal mode) flips the TTY
+ * into raw mode (ECHO and ISIG off) and then relies on the event loop to
+ * deliver key bytes. On macOS, kqueue cannot poll the /dev/tty device, so
+ * under the installer (`proteus setup </dev/tty`) Bun never delivered a
+ * single key: frozen question, no echo, and a dead Ctrl+C. Instead, prompts
+ * do a blocking read(2) on the terminal fd in the driver's canonical mode —
+ * the kernel handles echo, line editing, and keeps ISIG so Ctrl+C always
+ * interrupts. Secrets wrap the same canonical read in `stty -echo` inside a
+ * `sh` child whose trap restores echo even when Ctrl+C kills the CLI.
+ *
+ * Prompts prefer /dev/tty (always a fresh blocking fd) and fall back to a
+ * TTY stdin. When no terminal exists at all, prompting raises
+ * NonInteractiveError so callers can print instructions instead of hanging.
  */
-import { closeSync, openSync } from 'node:fs';
-import * as readline from 'node:readline';
-import * as tty from 'node:tty';
+import { spawnSync } from 'node:child_process';
+import { closeSync, openSync, readSync } from 'node:fs';
 import { ACCENT, DIM } from './display.js';
 
 export class NonInteractiveError extends Error {
@@ -20,32 +26,26 @@ export class NonInteractiveError extends Error {
   }
 }
 
-interface PromptInput {
-  stream: tty.ReadStream | (typeof process.stdin);
-  release: () => void;
+interface TerminalInput {
+  fd: number;
+  close: () => void;
 }
 
-function openPromptInput(): PromptInput | null {
-  if (process.stdin.isTTY) {
-    return { stream: process.stdin, release: () => {} };
-  }
+function openTerminal(): TerminalInput | null {
   try {
-    const stream = new tty.ReadStream(openSync('/dev/tty', 'r'));
-    return { stream, release: () => stream.destroy() };
+    const fd = openSync('/dev/tty', 'r');
+    return { fd, close: () => closeSync(fd) };
   } catch {
-    return null;
+    return process.stdin.isTTY ? { fd: 0, close: () => {} } : null;
   }
 }
 
-/** True when a prompt can actually reach a terminal (stdin TTY or /dev/tty). */
+/** True when a prompt can actually reach a terminal (/dev/tty or TTY stdin). */
 export function canPrompt(): boolean {
-  if (process.stdin.isTTY) return true;
-  try {
-    closeSync(openSync('/dev/tty', 'r'));
-    return true;
-  } catch {
-    return false;
-  }
+  const tty = openTerminal();
+  if (!tty) return false;
+  tty.close();
+  return true;
 }
 
 /** The opentui TUI drives stdin/stdout directly and cannot reopen /dev/tty —
@@ -55,19 +55,34 @@ export function requireInteractiveTerminal(): void {
   throw new Error('The Proteus TUI needs an interactive terminal. Re-run from a terminal, or use proteus run/exec (or chat --classic) for non-interactive use.');
 }
 
+/** Blocking canonical-mode line read: each read(2) returns at most one line,
+ *  so accumulate until newline or EOF (null when EOF arrives with no input). */
+function readLineFromTerminal(fd: number): string | null {
+  const buf = Buffer.alloc(1024);
+  const chunks: Buffer[] = [];
+  for (;;) {
+    const n = readSync(fd, buf, 0, buf.length, null);
+    if (n === 0) {
+      if (chunks.length === 0) return null;
+      break;
+    }
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+    if (buf[n - 1] === 0x0a) break;
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function ask(label: string, fallback = ''): Promise<string> {
-  const input = openPromptInput();
-  if (!input) throw new NonInteractiveError();
-  const rl = readline.createInterface({ input: input.stream, output: process.stdout });
+  const tty = openTerminal();
+  if (!tty) throw new NonInteractiveError();
   try {
     const suffix = fallback ? ` ${DIM(`[${fallback}]`)}` : '';
-    const answer = await new Promise<string>((resolve) => {
-      rl.question(`${DIM(label)}${suffix} ${ACCENT('›')} `, resolve);
-    });
-    return answer.trim() || fallback;
+    process.stdout.write(`${DIM(label)}${suffix} ${ACCENT('›')} `);
+    const line = readLineFromTerminal(tty.fd);
+    if (line === null) process.stdout.write('\n');
+    return (line ?? '').trim() || fallback;
   } finally {
-    rl.close();
-    input.release();
+    tty.close();
   }
 }
 
@@ -78,50 +93,20 @@ export async function confirm(label: string, fallback: boolean): Promise<boolean
   return fallback;
 }
 
-export async function askSecret(label: string, fallback = ''): Promise<string> {
-  const input = openPromptInput();
-  if (!input) throw new NonInteractiveError();
-  const stream = input.stream;
-  if (typeof stream.setRawMode !== 'function' || !process.stdout.isTTY) {
-    input.release();
-    return ask(label, fallback);
-  }
+/** Canonical read with echo disabled by a `sh` child: its EXIT trap restores
+ *  echo even when Ctrl+C (still live — ISIG stays on) kills the whole group. */
+const SECRET_READ = `stty -echo 2>/dev/null; trap 'stty echo 2>/dev/null' EXIT; IFS= read -r line; printf %s "$line"`;
 
-  process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);
-  stream.setRawMode(true);
-  stream.resume();
-  stream.setEncoding('utf8');
-  let value = '';
-  return new Promise<string>((resolve) => {
-    const finish = (result?: string) => {
-      stream.setRawMode(false);
-      stream.off('data', onData);
-      input.release();
-      process.stdout.write('\n');
-      if (result === undefined) process.exit(130);
-      resolve(result);
-    };
-    const onData = (chunk: string) => {
-      for (const ch of chunk) {
-        if (ch === '\u0003') {
-          finish();
-          return;
-        }
-        if (ch === '\r' || ch === '\n') {
-          finish(value.trim() || fallback);
-          return;
-        }
-        if (ch === '\u007f' || ch === '\b') {
-          if (value.length > 0) {
-            value = value.slice(0, -1);
-            process.stdout.write('\b \b');
-          }
-          continue;
-        }
-        value += ch;
-        process.stdout.write('*');
-      }
-    };
-    stream.on('data', onData);
-  });
+export async function askSecret(label: string, fallback = ''): Promise<string> {
+  const tty = openTerminal();
+  if (!tty) throw new NonInteractiveError();
+  try {
+    process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);
+    const read = spawnSync('/bin/sh', ['-c', SECRET_READ], { stdio: [tty.fd, 'pipe', 'ignore'] });
+    process.stdout.write('\n');
+    if (read.error) throw read.error;
+    return (read.stdout?.toString('utf8') ?? '').trim() || fallback;
+  } finally {
+    tty.close();
+  }
 }
