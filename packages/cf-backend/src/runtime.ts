@@ -541,10 +541,10 @@ function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<voi
 /**
  * Inline branch fallback — used when Facets are unavailable.
  *
- * Formal spec: DistributedModel.lean requires StorageIsolation (branch storageIds
- * disjoint from orchestrator storageId). The inline branch enforces this
- * STRUCTURALLY by capturing only the LLM config, never the agent reference
- * or its storage. The closure has no path to agent.sql or agent.ctx.storage.
+ * Storage isolation (lean/Proteus/MCTS/StorageIsolation.lean: branch storage
+ * disjoint from the orchestrator's) is enforced STRUCTURALLY by capturing only
+ * the LLM config, never the agent reference or its storage. The closure has
+ * no path to agent.sql or agent.ctx.storage.
  */
 function createInlineBranch(agent: AgentHost): BranchHandle {
   // Capture only env (not agent.sql / agent.ctx.storage) so the branch
