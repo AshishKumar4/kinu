@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { summarizeRestorePlan, type AlternateTakeCandidate, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type TakePickOutcome } from '@proteus/core';
+import { summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type TakePickOutcome } from '@proteus/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
 
 export interface SlashCommandInfo {
@@ -150,7 +150,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/takes': {
       const set = await client.latestTakes();
       if (!set || set.candidates.length < 2) {
-        return { kind: 'text', text: 'No alternate takes yet — they appear when think(strategy=mcts) converges on near-tied approaches.' };
+        return { kind: 'text', text: 'No alternate takes yet — they appear when think(strategy=mcts) converges on near-tied approaches, or when a /branch redirect settles against the live turn.' };
       }
       if (!arg) return { kind: 'takes', set };
       const n = Number.parseInt(arg, 10);
@@ -338,21 +338,12 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   return { text: lines.join('\n'), restored };
 }
 
-/** One-line score evidence for a take candidate — shared by the TUI overlay
- *  and the classic listing. Branch-sourced candidates have no node scores;
- *  their evidence is which side of the split they are. */
-export function formatTakeEvidence(candidate: AlternateTakeCandidate): string {
-  if (candidate.origin === 'live') return "the live turn's answer";
-  if (candidate.origin === 'branch') return "the branched redirect's answer";
-  return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
-}
-
 /** The classic-REPL takes listing (`/takes` without a pick). */
 export function renderTakesText(set: AlternateTakeSet): string {
   const lines = [`Alternate takes for: ${set.task.replace(/\s+/g, ' ').slice(0, 100)}`];
   set.candidates.forEach((candidate, i) => {
     const marker = candidate.nodeId === (set.chosenNodeId ?? set.winnerNodeId) ? '★' : ' ';
-    lines.push(`  ${i + 1}. ${marker} [${formatTakeEvidence(candidate)}]`);
+    lines.push(`  ${i + 1}. ${marker} [${takeEvidence(candidate)}]`);
     lines.push(`       ${candidate.text.replace(/\s+/g, ' ').slice(0, 160)}`);
   });
   lines.push('Pick with /takes <n> — your pick becomes a real preference signal.');

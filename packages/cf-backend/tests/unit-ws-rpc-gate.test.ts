@@ -84,7 +84,7 @@ describe('rpc gate on scoped connections', () => {
   test('mutating @callables are rejected with a typed rpc error frame', () => {
     for (const method of [
       'resolveDeviceConsent', 'setShellApprovalMode', 'setAgentConfig',
-      'forkAgent', 'revertChangelogEntry', 'restoreFileCheckpoints',
+      'forkAgent', 'revertChangelogEntry', 'restoreFileCheckpoint',
       'pickAlternateTake', 'branchTurn', 'setModel', 'setDisplayName',
       'markChangelogSeen', 'createTimerTrigger',
     ]) {

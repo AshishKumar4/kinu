@@ -4,7 +4,7 @@
  * LocalAgentClient over LocalAgentSession and CloudAgentClient over the
  * OrchestratorAgent DO websocket. UIs never branch on backend; anything only
  * one backend supports is exposed through the capability surfaces below
- * (`consents`, `localControls`) and is null elsewhere.
+ * (`consents`, `localControls`, `checkpoints`) and is null elsewhere.
  */
 
 import type {
@@ -270,8 +270,9 @@ export interface AgentClient {
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
   listJobs(limit?: number): Promise<AgentJobSummary[]>;
-  /** The newest Alternate Takes set (near-tied MCTS candidates from the last
-   *  think-mcts convergence), or null when none exist yet. */
+  /** The newest Alternate Takes set — near-tied MCTS candidates from the
+   *  last think-mcts convergence, or the live/branch pair from a settled
+   *  /branch redirect (AlternateTakeSource) — or null when none exist yet. */
   latestTakes(): Promise<AlternateTakeSet | null>;
   /** Pick one take: records the explicit preference into the outcome ledger,
    *  re-points the convergence record on a sibling pick, and (when the pick

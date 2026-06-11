@@ -1,7 +1,8 @@
 import type { SelectOption } from '@opentui/core';
 import type { ReactNode } from 'react';
 import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@proteus/core';
-import { formatTakeEvidence, type SlashCommandInfo } from '../slash-commands.js';
+import { takeEvidence } from '@proteus/core';
+import type { SlashCommandInfo } from '../slash-commands.js';
 import type { AgentModelEntry } from '../model-catalog.js';
 import type { AgentChangelogView, ForkPoint } from '../agent-client.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
@@ -282,7 +283,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
       innerWidth,
     ),
     description: clipText(
-      `${formatTakeEvidence(candidate)}${candidate.nodeId === current ? ' · current answer' : ' · Enter uses this take'}`,
+      `${takeEvidence(candidate)}${candidate.nodeId === current ? ' · current answer' : ' · Enter uses this take'}`,
       innerWidth,
     ),
     value: candidate,

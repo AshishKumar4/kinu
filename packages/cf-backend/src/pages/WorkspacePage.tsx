@@ -805,7 +805,7 @@ export default function WorkspacePage() {
       const more = files.length > 12 ? `\n  … ${files.length - 12} more` : '';
       if (!confirm(`Restore ${plans.map((p) => p.dir).join(', ')} to before this turn?\n${counts}\n${preview}${more}`)) return;
       for (const entry of matches) {
-        await state.rpc('restoreFileCheckpoints', [entry.dir, entry.id]);
+        await state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]);
       }
       setRestoreNotice(`Restored ${files.length} file(s) to before this turn. Restoring again undoes the undo.`);
     } catch (err) {

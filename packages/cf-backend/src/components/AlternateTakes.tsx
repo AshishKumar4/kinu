@@ -9,11 +9,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, CheckCircleIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import type { AlternateTakeSet, TakePickOutcome } from "@proteus/core";
+import { takeEvidence } from "@proteus/core";
 import type { BranchRun } from "@/hooks/use-proteus";
 import { Modal } from "@/components/ui/Modal";
 import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";
-import { currentTakeIndex, cycleTakeIndex, takeChipLabel, takeEvidence } from "./alternate-takes-logic";
+import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "./alternate-takes-logic";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;

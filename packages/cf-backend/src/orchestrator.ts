@@ -3070,7 +3070,7 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable()
-  async restoreFileCheckpoints(dir: string, id: string): Promise<FileRestoreResult> {
+  async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
     return await this.requireOwnerUserDO().deviceRpc('checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
   }
 

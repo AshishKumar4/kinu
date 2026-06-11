@@ -3,7 +3,7 @@
  * comparison (AlternateTakes.tsx renders it). Kept separate so the cycling,
  * labeling, and evidence formatting are unit-testable without a DOM.
  */
-import type { AlternateTakeCandidate, AlternateTakeSet } from '@proteus/core';
+import type { AlternateTakeSet } from '@proteus/core';
 
 /** The candidate currently serving as the answer: the user's pick when one
  *  exists, else the convergence winner. */
@@ -22,14 +22,6 @@ export function takeChipLabel(set: AlternateTakeSet): string {
 export function cycleTakeIndex(current: number, delta: number, count: number): number {
   if (count <= 0) return 0;
   return ((current + delta) % count + count) % count;
-}
-
-/** One-line score evidence under the take text. Branch-sourced candidates
- *  have no node scores — their evidence is which side of the split they are. */
-export function takeEvidence(candidate: AlternateTakeCandidate): string {
-  if (candidate.origin === 'live') return "the live turn's answer";
-  if (candidate.origin === 'branch') return "the branched redirect's answer";
-  return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
 }
 
 /** A set is comparable when there is a genuine choice to make. */

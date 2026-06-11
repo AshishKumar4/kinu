@@ -111,7 +111,7 @@ export class CloudAgentClient implements AgentClient {
     this.checkpoints = {
       list: async (limit) => await this.callRpc('listFileCheckpoints', [limit ?? 50]) as FileCheckpointEntry[],
       plan: async (dir, id) => await this.callRpc('planFileRestore', [dir, id]) as FileRestorePlan,
-      restore: async (dir, id) => await this.callRpc('restoreFileCheckpoints', [dir, id]) as FileRestoreResult,
+      restore: async (dir, id) => await this.callRpc('restoreFileCheckpoint', [dir, id]) as FileRestoreResult,
       status: async () => await this.callRpc('checkpointStatus', []) as CheckpointAvailability,
     };
   }
@@ -465,9 +465,11 @@ export class CloudAgentClient implements AgentClient {
     }
 
     // Branch progress broadcasts (the DO fans them to every ws client) feed
-    // the TUI's branch segment + settle hint.
+    // the TUI's branch segment + settle hint. Narrowed field-by-field like
+    // every other frame in this handler — no wholesale re-typing.
     if (payload.type === 'branch_status') {
-      this.emit({ type: 'broadcast', event: payload as unknown as BranchStatusEvent });
+      const event = parseBranchStatusEvent(payload);
+      if (event) this.emit({ type: 'broadcast', event });
       return;
     }
 
@@ -547,6 +549,24 @@ export class CloudAgentClient implements AgentClient {
     const rpcs = [...this.pendingRpcs.values()];
     this.pendingRpcs.clear();
     for (const rpc of rpcs) rpc.reject(error);
+  }
+}
+
+/** Narrow a branch_status frame to the fields its consumers rely on
+ *  (describeBranchStatus switches on status; the TUI keys on branchId). */
+function parseBranchStatusEvent(payload: Record<string, unknown>): BranchStatusEvent | null {
+  if (typeof payload.branchId !== 'string' || typeof payload.task !== 'string') return null;
+  const base = { type: 'branch_status' as const, branchId: payload.branchId, task: payload.task };
+  switch (payload.status) {
+    case 'running':
+      return { ...base, status: 'running' };
+    case 'settled':
+      if (typeof payload.takeSetId !== 'string' || typeof payload.turnId !== 'string') return null;
+      return { ...base, status: 'settled', takeSetId: payload.takeSetId, turnId: payload.turnId };
+    case 'error':
+      return { ...base, status: 'error', message: typeof payload.message === 'string' ? payload.message : 'branch failed' };
+    default:
+      return null;
   }
 }
 

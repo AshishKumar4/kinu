@@ -321,6 +321,16 @@ export function recordTakePick(
   };
 }
 
+/** One-line score evidence under a take's text — the shared presentation
+ *  helper for every surface (web chip, TUI overlay, classic listing).
+ *  Branch-sourced candidates have no node scores; their evidence is which
+ *  side of the split they are. */
+export function takeEvidence(candidate: AlternateTakeCandidate): string {
+  if (candidate.origin === 'live') return "the live turn's answer";
+  if (candidate.origin === 'branch') return "the branched redirect's answer";
+  return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
+}
+
 /** The gentle programmatic turn asking the agent to continue with the chosen
  *  approach — single source for both backends' continuation enqueue. */
 export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: AlternateTakeCandidate): string {
