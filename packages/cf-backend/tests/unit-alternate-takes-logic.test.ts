@@ -1,6 +1,8 @@
 // Alternate Takes view logic — the pure half of the chat's takes chip +
 // comparison (cycling, labels, evidence) used by AlternateTakes.tsx.
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { AlternateTakeSet } from '@proteus/core';
 import {
   currentTakeIndex, cycleTakeIndex, hasComparableTakes, takeChipLabel, takeEvidence,
@@ -56,5 +58,17 @@ describe('alternate-takes view logic', () => {
     expect(hasComparableTakes(makeSet({ candidates: makeSet().candidates.slice(0, 1) }))).toBe(false);
     expect(hasComparableTakes(undefined)).toBe(false);
     expect(hasComparableTakes(null)).toBe(false);
+  });
+});
+
+describe('take-pick schema ordering (lazy-engine hole)', () => {
+  test('ensureSchema inits the outcome ledger before any pick RPC can run', () => {
+    // Regression: the take_pick CHECK-widening rebuild lived only in the lazy
+    // EvolutionEngine constructor, so a freshly-woken DO whose first action
+    // was pickAlternateTake hit the legacy CHECK and lost the preference.
+    const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+    const ensureSchema = orchestrator.slice(orchestrator.indexOf('private ensureSchema()'));
+    const body = ensureSchema.slice(0, ensureSchema.indexOf('async onStart()'));
+    expect(body).toContain('initTurnOutcomeTables(execRaw, this.boundSql)');
   });
 });

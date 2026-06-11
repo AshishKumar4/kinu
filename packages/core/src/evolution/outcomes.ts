@@ -150,21 +150,40 @@ const TURN_OUTCOMES_DDL = `(
   )`;
 
 export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  // Only the sqlite_master probe may fail silently (exotic executors without
+  // it skip the migration probes); a failed rebuild below throws loudly and
+  // is finished by the resume branch on the next init.
+  const tableDdl = (name: string): string | null => {
+    try {
+      return sql<{ sql: string }>`
+        SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${name}`[0]?.sql ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  // Resume an interrupted CHECK-widening rebuild: a crash mid-sequence leaves
+  // rows stranded in turn_outcomes_legacy while a bare CREATE IF NOT EXISTS
+  // would silently start an empty ledger. Finish the copy first. INSERT OR
+  // IGNORE (PK ids) makes the resume idempotent at every crash point.
+  if (tableDdl('turn_outcomes_legacy') !== null) {
+    execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
+    execRaw(`INSERT OR IGNORE INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
+    execRaw(`DROP TABLE turn_outcomes_legacy`);
+  }
+
   execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
   // Tables created before the 'take_pick' source carry a narrower CHECK that
   // SQLite cannot ALTER — rebuild them in place (same columns, data kept).
-  try {
-    const ddl = sql<{ sql: string }>`
-      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turn_outcomes'`[0]?.sql ?? '';
-    if (!ddl.includes('take_pick')) {
-      execRaw(`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_legacy`);
-      execRaw(`CREATE TABLE turn_outcomes ${TURN_OUTCOMES_DDL}`);
-      execRaw(`INSERT INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
-      execRaw(`DROP TABLE turn_outcomes_legacy`);
-    }
-  } catch {
-    // sqlite_master unavailable in exotic executors — the fresh CREATE above
-    // already carries the full union.
+  // No explicit BEGIN/COMMIT: DO SQLite forbids explicit transaction
+  // statements, so crash-safety comes from the resume branch above instead —
+  // every intermediate state of this sequence is recoverable from it.
+  const ddl = tableDdl('turn_outcomes');
+  if (ddl !== null && !ddl.includes('take_pick')) {
+    execRaw(`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_legacy`);
+    execRaw(`CREATE TABLE turn_outcomes ${TURN_OUTCOMES_DDL}`);
+    execRaw(`INSERT OR IGNORE INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);
+    execRaw(`DROP TABLE turn_outcomes_legacy`);
   }
   // Lessons ledger — reflection prose with provenance. Self-scored lessons
   // (no real user signal behind them) stay 'provisional' and OUT of

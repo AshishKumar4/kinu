@@ -82,6 +82,8 @@ import {
   type StructuredJudgeFn, type JudgeOutput,
   // Durable run-event log
   initRunEventTables, RunEventRecorder,
+  // R3 outcome ledger (schema + take_pick CHECK rebuild) — eager in ensureSchema
+  initTurnOutcomeTables,
   type RunEvent, type RunEventQuery,
   // agent_facts world model
   initFactsTable, createFactsStore, renderFactsBlock, type FactsStore,
@@ -2143,6 +2145,11 @@ export class OrchestratorAgent extends Think<Env> {
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);
+    // R3 outcome ledger (+ its take_pick CHECK-widening rebuild). MUST run
+    // here, not only in the lazy EvolutionEngine constructor: a freshly-woken
+    // DO can serve pickAlternateTake → recordTurnOutcome before any turn
+    // constructs the engine, and the legacy CHECK would reject the insert.
+    initTurnOutcomeTables(execRaw, this.boundSql);
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
     // + reactor_budget_log + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
     initEventsHubTables(this.ctx.storage.sql);
