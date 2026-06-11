@@ -104,6 +104,8 @@ export interface ProteusConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** "Don't ask again" for the chat device-connect prompt. */
   deviceConnectPromptDismissed?: boolean;
+  /** Shadow-git file checkpoints kept per working directory (default 50). */
+  checkpointKeep?: number;
 }
 
 export function ensureAgentHome(): void {

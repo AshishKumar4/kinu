@@ -1,5 +1,8 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import type {
+  CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
+} from '@proteus/core';
 import {
   createCloudAgentConnectTicket,
   getCloudAgentMessages,
@@ -41,6 +44,7 @@ import {
   type AgentTranscriptMessage,
   type AgentTurnResult,
   type DeviceConsentSurface,
+  type FileCheckpointSurface,
   type ForkPoint,
 } from './agent-client.js';
 
@@ -76,6 +80,7 @@ export class CloudAgentClient implements AgentClient {
   readonly agentName: string;
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
+  readonly checkpoints: FileCheckpointSurface;
 
   private readonly origin: string;
   private readonly token: string;
@@ -99,6 +104,13 @@ export class CloudAgentClient implements AgentClient {
     this.consents = {
       listPending: () => listCloudPendingConsents(this.origin, this.token, this.cloudName),
       resolve: (consentId, decision) => resolveCloudDeviceConsent(this.origin, this.token, this.cloudName, consentId, decision),
+    };
+    // Checkpoints live on the user's device daemon; the DO forwards.
+    this.checkpoints = {
+      list: async (limit) => await this.callRpc('listFileCheckpoints', [limit ?? 50]) as FileCheckpointEntry[],
+      plan: async (dir, id) => await this.callRpc('planFileRestore', [dir, id]) as FileRestorePlan,
+      restore: async (dir, id) => await this.callRpc('restoreFileCheckpoints', [dir, id]) as FileRestoreResult,
+      status: async () => await this.callRpc('checkpointStatus', []) as CheckpointAvailability,
     };
   }
 

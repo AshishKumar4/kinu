@@ -5,6 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
+import { summarizeRestorePlan, type FileCheckpointEntry } from '@proteus/core';
 import type { AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
 
 export interface SlashCommandInfo {
@@ -12,7 +13,7 @@ export interface SlashCommandInfo {
   description: string;
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents';
+  requires?: 'localControls' | 'consents' | 'checkpoints';
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
@@ -30,17 +31,18 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/stop', description: 'Stop the active turn' },
   { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>' },
   { name: '/fork', description: 'Walk back: fork the conversation before an earlier message', usage: '/fork [number]' },
+  { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
   { name: '/exit', description: 'Exit chat' },
 ];
 
-export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents'>): SlashCommandInfo[] {
+export function commandsForClient(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): SlashCommandInfo[] {
   return SLASH_COMMANDS.filter((command) =>
     !command.requires || client[command.requires] !== null);
 }
 
-export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents'>): string {
+export function commandHelp(client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints'>): string {
   const lines = ['Commands'];
   for (const command of commandsForClient(client)) {
     const usage = command.usage ?? command.name;
@@ -81,6 +83,8 @@ export type SlashOutcome =
   /** Walk-back fork; ref is the picker number when given. Surfaces own the
    *  candidate list (their rendered user messages) and the fork() call. */
   | { kind: 'fork'; ref?: string }
+  /** /undo [n] — surfaces run performUndo() and then offer the walk-back. */
+  | { kind: 'undo'; ref?: string }
   | { kind: 'cancel' }
   | { kind: 'unknown'; command: string };
 
@@ -185,6 +189,9 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return { kind: 'queue', text: arg || undefined };
     case '/fork':
       return { kind: 'fork', ref: arg || undefined };
+    case '/undo':
+      if (!client.checkpoints) return { kind: 'unknown', command: cmd };
+      return { kind: 'undo', ref: arg || undefined };
     case '/sessions':
       return { kind: 'sessions', mode: 'list' };
     case '/resume':
@@ -192,6 +199,90 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     default:
       return { kind: 'unknown', command: cmd };
   }
+}
+
+export interface UndoResult {
+  /** Presentation-neutral report: the restore plan and what was applied. */
+  text: string;
+  /** True when files were actually restored — the surface should then offer
+   *  the conversation walk-back through its existing fork mechanics. */
+  restored: boolean;
+}
+
+/** Group checkpoints by turn, newest first — /undo n addresses the nth most
+ *  recent turn that has a file checkpoint (a turn may snapshot several dirs). */
+export function groupCheckpointsByTurn(entries: ReadonlyArray<FileCheckpointEntry>): FileCheckpointEntry[][] {
+  const groups: FileCheckpointEntry[][] = [];
+  const byTurn = new Map<string, FileCheckpointEntry[]>();
+  for (const entry of entries) {
+    const key = entry.turnId ?? `checkpoint:${entry.id}`;
+    let group = byTurn.get(key);
+    if (!group) {
+      group = [];
+      byTurn.set(key, group);
+      groups.push(group);
+    }
+    group.push(entry);
+  }
+  return groups;
+}
+
+const RESTORE_GLYPH = { modify: '~', create: '+', delete: '-' } as const;
+
+/**
+ * The /undo flow shared by the TUI and the classic REPL: pick the checkpoint
+ * taken before the nth-most-recent turn (default: last), show what restoring
+ * changes (paths + counts), apply it, and tell the surface to offer the
+ * conversation walk-back (the existing fork plumbing). Zero prompts.
+ */
+export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?: string): Promise<UndoResult> {
+  const surface = client.checkpoints;
+  if (!surface) return { text: 'File checkpoints are not available for this agent.', restored: false };
+  const status = await surface.status();
+  if (!status.available) {
+    return { text: status.reason ?? 'File checkpoints are unavailable.', restored: false };
+  }
+  const turns = groupCheckpointsByTurn(await surface.list(200));
+  if (turns.length === 0) {
+    return {
+      text: 'No file checkpoints yet — one is taken automatically before the first file change of each turn.',
+      restored: false,
+    };
+  }
+  const n = ref ? Number.parseInt(ref, 10) : 1;
+  if (!Number.isInteger(n) || n < 1 || n > turns.length) {
+    const lines = [`Usage: /undo [n] — n is turns back (1–${turns.length} available):`];
+    turns.slice(0, 10).forEach((group, i) => {
+      const at = new Date(group[0]!.at).toLocaleString();
+      lines.push(`  ${i + 1}. ${at}  ${group.map((e) => e.dir).join(', ')}`);
+    });
+    return { text: lines.join('\n'), restored: false };
+  }
+
+  const lines: string[] = [];
+  let restored = false;
+  for (const entry of turns[n - 1]!) {
+    const plan = await surface.plan(entry.dir, entry.id);
+    if (plan.files.length === 0) {
+      lines.push(`${entry.dir} — already matches that checkpoint, nothing to restore.`);
+      continue;
+    }
+    const { modified, created, deleted } = summarizeRestorePlan(plan.files);
+    const counts = [
+      modified > 0 ? `${modified} modified` : null,
+      created > 0 ? `${created} recreated` : null,
+      deleted > 0 ? `${deleted} removed` : null,
+    ].filter(Boolean).join(', ');
+    lines.push(`Restoring ${entry.dir} to ${new Date(entry.at).toLocaleString()} (${counts}):`);
+    for (const file of plan.files.slice(0, 25)) {
+      lines.push(`  ${RESTORE_GLYPH[file.kind]} ${file.path}`);
+    }
+    if (plan.files.length > 25) lines.push(`  … ${plan.files.length - 25} more`);
+    const result = await surface.restore(entry.dir, entry.id);
+    restored = true;
+    lines.push(`✓ ${plan.files.length} file(s) restored.${result.preRestoreId ? ` Undo this with /undo 1.` : ''}`);
+  }
+  return { text: lines.join('\n'), restored };
 }
 
 export function renderSearchTree(nodes: readonly AgentSearchNode[]): string {

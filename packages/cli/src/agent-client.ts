@@ -7,7 +7,10 @@
  * (`consents`, `localControls`) and is null elsewhere.
  */
 
-import type { BroadcastEvent, PromptFile, ShellApprovalMode } from '@proteus/core';
+import type {
+  BroadcastEvent, PromptFile, ShellApprovalMode,
+  CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
+} from '@proteus/core';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelEntry } from './model-catalog.js';
 
@@ -177,6 +180,16 @@ export interface DeviceConsentSurface {
   resolve(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }>;
 }
 
+/** Capability surface: shadow-git file checkpoints (/undo). Local agents hit
+ *  the host engine directly; cloud agents go through orchestrator RPCs that
+ *  forward to the connected device daemon. */
+export interface FileCheckpointSurface {
+  list(limit?: number): Promise<FileCheckpointEntry[]>;
+  plan(dir: string, id: string): Promise<FileRestorePlan>;
+  restore(dir: string, id: string): Promise<FileRestoreResult>;
+  status(): Promise<CheckpointAvailability>;
+}
+
 /** Capability surface: knobs that only exist on an in-process local session. */
 export interface LocalSessionControls {
   getAlwaysActiveSkills(): string[];
@@ -193,6 +206,7 @@ export interface AgentClient {
   readonly cliSession: CliSession;
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
+  readonly checkpoints: FileCheckpointSurface | null;
 
   /** Bring up startup resources (MCP servers, orphaned-job recovery). Input
    *  should not be accepted before this resolves. */

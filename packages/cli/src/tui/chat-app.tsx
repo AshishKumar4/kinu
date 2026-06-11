@@ -32,6 +32,7 @@ import {
   commandsForClient,
   executeSlashCommand,
   filterCommands,
+  performUndo,
   resolveCommandDraft,
   type SlashOutcome,
 } from '../slash-commands.js';
@@ -251,6 +252,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         return;
       case 'queue':
       case 'fork':
+      case 'undo':
         // Surface-owned outcomes — handleSubmit intercepts them before this.
         return;
       case 'cancel':
@@ -337,6 +339,17 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
             return;
           }
           await performWalkback(picked);
+          return;
+        }
+        if (outcome.kind === 'undo') {
+          const undone = await performUndo(client, outcome.ref);
+          addMessage({ role: 'system', content: undone.text });
+          if (undone.restored && forkCandidates(messages).length > 0) {
+            // opencode parity: files + conversation together — reuse the
+            // Esc-Esc walk-back picker for the conversation half.
+            addMessage({ role: 'system', content: 'Pick a message to also walk back the conversation, or Esc to keep it.' });
+            dispatchInput({ type: 'open-walkback' });
+          }
           return;
         }
         await applySlashOutcome(outcome);

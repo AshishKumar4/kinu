@@ -14,7 +14,7 @@
 
 import * as readline from 'node:readline';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
-import { executeSlashCommand, renderStatusLines, type SlashOutcome } from './slash-commands.js';
+import { executeSlashCommand, performUndo, renderStatusLines, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
 import { watchTerminalConsents } from './consent-watch.js';
 import {
@@ -261,6 +261,17 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
           await handleFork(outcome.ref);
           continue;
         }
+        if (outcome.kind === 'undo') {
+          const undone = await performUndo(client, outcome.ref);
+          console.log(`\n${MUTED(undone.text)}\n`);
+          if (undone.restored) {
+            // opencode parity: files came back — offer the conversation
+            // walk-back through the existing fork mechanics.
+            console.log(DIM('Files restored. To also walk the conversation back:'));
+            await handleFork(undefined);
+          }
+          continue;
+        }
         const done = await applySlashOutcome(client, rl, outcome);
         if (done === 'exit') { await onExit(); return; }
       } catch (err) {
@@ -422,6 +433,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       return 'ok';
     case 'queue':
     case 'fork':
+    case 'undo':
       // Surface-owned outcomes — runChatLoop intercepts them before this.
       return 'ok';
     case 'unknown':

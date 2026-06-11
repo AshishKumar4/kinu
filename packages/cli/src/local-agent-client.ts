@@ -13,6 +13,7 @@ import {
   CONFIG_PATH,
   agentDbPath,
   createCodexAuthStore,
+  loadConfigFile,
   resolveMcpServers,
   resolveProviderCredentials,
 } from './config.js';
@@ -46,6 +47,7 @@ import type {
   AgentToolSurface,
   AgentTranscriptMessage,
   AgentTurnResult,
+  FileCheckpointSurface,
   ForkPoint,
   LocalSessionControls,
 } from './agent-client.js';
@@ -68,7 +70,10 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
   const providerCredentials = resolveProviderCredentials();
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
-  const openConfig = { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH };
+  const openConfig = {
+    llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
+    checkpointKeep: loadConfigFile().checkpointKeep,
+  };
   const { rt, info } = openAgentCLI(db, dbPath, openConfig);
   return new LocalAgentClient({
     agentName: name,
@@ -108,6 +113,7 @@ export class LocalAgentClient implements AgentClient {
   readonly agentName: string;
   readonly consents = null;
   readonly localControls: LocalSessionControls;
+  readonly checkpoints: FileCheckpointSurface;
 
   private readonly deps: LocalAgentClientDeps;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
@@ -135,6 +141,13 @@ export class LocalAgentClient implements AgentClient {
         available: provider.available,
         unavailableReason: provider.unavailableReason,
       })),
+    };
+    // Closures read this.session so the surface survives fork/resume swaps.
+    this.checkpoints = {
+      list: (limit) => this.session.listFileCheckpoints(limit),
+      plan: (dir, id) => this.session.planFileRestore(dir, id),
+      restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
+      status: () => this.session.checkpointStatus(),
     };
   }
 
