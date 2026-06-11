@@ -28,6 +28,19 @@ export interface ExecutorInfo {
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
+/** One Steer-as-Branch run as the chat chip renders it — driven entirely by
+ *  the server's branch_status broadcasts (single source of truth). */
+export interface BranchRun {
+  branchId: string;
+  task: string;
+  status: "running" | "settled" | "error";
+  /** Settled: the persisted takes set + the turn it is claimed against. */
+  takeSetId?: string;
+  turnId?: string;
+  /** Errored: the honest reason the branch produced no comparison. */
+  message?: string;
+}
+
 export interface ForkLineage {
   sourceAgentId: string;
   sourceAgentName: string;
@@ -99,6 +112,8 @@ export function useProteus(agentId?: string) {
   // Evolution Changelog unseen count — badges the Brain tab from any surface;
   // viewing the digest (BrainSurface) marks seen server-side and zeroes it.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
+  // Steer-as-Branch runs — the split progress chips near the streaming answer.
+  const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
 
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -289,6 +304,18 @@ export function useProteus(agentId?: string) {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
         } else if (msg.type === "work_cancelled") {
           refreshBackgroundJobs();
+        } else if (msg.type === "branch_status" && typeof msg.branchId === "string") {
+          setBranchRuns((prev) => [
+            ...prev.filter((b) => b.branchId !== msg.branchId),
+            {
+              branchId: msg.branchId,
+              task: typeof msg.task === "string" ? msg.task : "",
+              status: msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running",
+              takeSetId: typeof msg.takeSetId === "string" ? msg.takeSetId : undefined,
+              turnId: typeof msg.turnId === "string" ? msg.turnId : undefined,
+              message: typeof msg.message === "string" ? msg.message : undefined,
+            },
+          ]);
         }
       } catch { /* not JSON or not our message */ }
     };
@@ -489,6 +516,10 @@ export function useProteus(agentId?: string) {
      *  (BrainSurface marks seen server-side, then calls this). */
     changelogUnseen,
     clearChangelogUnseen: () => setChangelogUnseen(0),
+    /** Steer-as-Branch chips (running → settled/error) + the dismiss. */
+    branchRuns,
+    dismissBranchRun: (branchId: string) =>
+      setBranchRuns((prev) => prev.filter((b) => b.branchId !== branchId)),
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',

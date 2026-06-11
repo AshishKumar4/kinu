@@ -7,8 +7,9 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, CheckCircleIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, CheckCircleIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import type { AlternateTakeSet, TakePickOutcome } from "@proteus/core";
+import type { BranchRun } from "@/hooks/use-proteus";
 import { Modal } from "@/components/ui/Modal";
 import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";
@@ -97,8 +98,14 @@ function TakesComparison({ set, onPick, onClose }: {
       </>}
     >
       <p className="text-xs p-text-3 leading-relaxed">
-        The agent explored {count} near-tied approaches for{" "}
-        <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>.
+        {set.source === "branch" ? (
+          <>You redirected mid-turn with{" "}
+            <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>{" "}
+            and it ran as a parallel branch — compare both answers.</>
+        ) : (
+          <>The agent explored {count} near-tied approaches for{" "}
+            <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>.</>
+        )}{" "}
         Your pick becomes a real preference signal it learns from.
       </p>
 
@@ -127,10 +134,14 @@ function TakesComparison({ set, onPick, onClose }: {
         </div>
       </div>
 
-      <div className="space-y-1">
-        <ScoreBar value={candidate.score} />
-        <div className="text-[10px] p-text-3">{takeEvidence(candidate)} · execution-grounded branch value</div>
-      </div>
+      {candidate.origin ? (
+        <div className="text-[10px] p-text-3">{takeEvidence(candidate)}</div>
+      ) : (
+        <div className="space-y-1">
+          <ScoreBar value={candidate.score} />
+          <div className="text-[10px] p-text-3">{takeEvidence(candidate)} · execution-grounded branch value</div>
+        </div>
+      )}
 
       {notice && (
         <div className="text-xs text-emerald-300 border border-emerald-400/30 rounded-md px-3 py-2" style={{ background: "rgba(52,211,153,0.06)" }}>
@@ -143,5 +154,49 @@ function TakesComparison({ set, onPick, onClose }: {
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Steer-as-Branch progress chip — rendered near the streaming answer while
+ *  the branch head runs, becoming the takes affordance (the SAME TakesChip /
+ *  comparison) on settle, or an honest one-line reason on failure. */
+export function BranchRunChip({ run, takes, onPick, onDismiss }: {
+  run: BranchRun;
+  /** The settled set (hydrated from listAlternateTakes by the run's turnId). */
+  takes?: AlternateTakeSet;
+  onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
+  onDismiss: () => void;
+}) {
+  const task = run.task.length > 80 ? `${run.task.slice(0, 80)}…` : run.task;
+  return (
+    <div className="flex justify-start animate-fade-in py-0.5">
+      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+        {run.status === "running" && (
+          <>
+            <Loader size="sm" />
+            <GitBranchIcon size={12} className="p-accent shrink-0" />
+            <span className="truncate">Branching: <span className="p-text">{task}</span> — the live turn continues</span>
+          </>
+        )}
+        {run.status === "settled" && (
+          <>
+            <GitBranchIcon size={12} className="text-emerald-400 shrink-0" weight="fill" />
+            <span className="truncate">Branch settled —</span>
+            {takes ? <TakesChip set={takes} onPick={onPick} /> : <span className="p-text-3">loading the comparison…</span>}
+          </>
+        )}
+        {run.status === "error" && (
+          <>
+            <WarningCircleIcon size={12} className="text-amber-400 shrink-0" weight="fill" />
+            <span className="truncate">Branch discarded — {run.message ?? "no comparison available"}</span>
+          </>
+        )}
+        {run.status !== "running" && (
+          <button onClick={onDismiss} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss branch chip">
+            <XIcon size={11} />
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

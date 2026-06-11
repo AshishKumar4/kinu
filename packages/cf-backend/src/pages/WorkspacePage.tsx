@@ -22,7 +22,7 @@ import { ConnectionIndicator } from "@/components/connection-indicator";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
-import { TakesChip } from "@/components/AlternateTakes";
+import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
@@ -725,6 +725,20 @@ export default function WorkspacePage() {
     setAttachError(null);
   }, [chatInput, pendingAttachments, state]);
 
+  // Steer-as-Branch: while the agent streams, the composer's split affordance
+  // runs the draft as a parallel head (branchTurn) — the live turn continues;
+  // progress arrives as branch_status broadcasts (state.branchRuns).
+  const [branchNotice, setBranchNotice] = useState<string | null>(null);
+  const handleBranch = useCallback(() => {
+    const t = chatInput.trim();
+    if (!t || !state.isStreaming) return;
+    setBranchNotice(null);
+    state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t])
+      .then((r) => { if (!r.accepted) setBranchNotice(r.reason ?? "Branching is unavailable right now."); })
+      .catch((err) => setBranchNotice(err instanceof Error ? err.message : String(err)));
+    setChatInput("");
+  }, [chatInput, state]);
+
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
 
@@ -743,12 +757,15 @@ export default function WorkspacePage() {
   // and refreshed when a turn settles (a think convergence may have produced
   // a fresh near-tied set for the answer that just streamed in).
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
+  const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || state.isStreaming) return;
     state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes')
       .then(setTakesByTurn)
       .catch(() => {});
-  }, [state.connectionStatus, state.isStreaming, state.rpc]);
+    // settledBranchCount: a branch settling after the turn ended persists a
+    // fresh set — refetch so its chip can hydrate the comparison.
+  }, [state.connectionStatus, state.isStreaming, state.rpc, settledBranchCount]);
 
   const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
     const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
@@ -923,6 +940,15 @@ export default function WorkspacePage() {
                   onPickTake={onPickTake}
                 />
               ))}
+              {state.branchRuns.map((run) => (
+                <BranchRunChip
+                  key={run.branchId}
+                  run={run}
+                  takes={run.turnId ? takesByTurn[run.turnId] : undefined}
+                  onPick={onPickTake}
+                  onDismiss={() => state.dismissBranchRun(run.branchId)}
+                />
+              ))}
             </div>
             </ErrorBoundary>
 
@@ -941,6 +967,12 @@ export default function WorkspacePage() {
               onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
               {state.error && <div className="mb-2 text-xs text-red-400 p-card rounded-lg px-3 py-1.5">{state.error}</div>}
               {attachError && <div className="mb-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">{attachError}</div>}
+              {branchNotice && (
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">
+                  <span className="truncate">Branch unavailable: {branchNotice}</span>
+                  <button onClick={() => setBranchNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
+                </div>
+              )}
               {restoreNotice && (
                 <div className="mb-2 flex items-center justify-between gap-2 text-xs p-text-2 p-card rounded-lg px-3 py-1.5">
                   <span className="flex items-center gap-1.5 min-w-0"><ClockCounterClockwiseIcon size={12} className="shrink-0" /><span className="truncate">{restoreNotice}</span></span>
@@ -967,7 +999,17 @@ export default function WorkspacePage() {
                   placeholder="Send a message..." disabled={state.connectionStatus !== "connected"} rows={1}
                   className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
                 {state.isStreaming
-                  ? <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
+                  ? <>
+                      {chatInput.trim() !== "" && (
+                        <button onClick={handleBranch}
+                          className="p-text-2 hover:p-text transition-colors p-2 mb-0.5 rounded-lg border p-border cursor-pointer"
+                          aria-label="Run as a parallel branch"
+                          title="Branch: run this as a parallel take without interrupting the live turn — compare answers when both finish">
+                          <GitBranchIcon size={16} />
+                        </button>
+                      )}
+                      <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
+                    </>
                   : <button onClick={handleSend} disabled={(!chatInput.trim() && pendingAttachments.length === 0) || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
               </div>
             </div>

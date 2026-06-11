@@ -24,8 +24,11 @@ export function cycleTakeIndex(current: number, delta: number, count: number): n
   return ((current + delta) % count + count) % count;
 }
 
-/** One-line score evidence under the take text. */
+/** One-line score evidence under the take text. Branch-sourced candidates
+ *  have no node scores — their evidence is which side of the split they are. */
 export function takeEvidence(candidate: AlternateTakeCandidate): string {
+  if (candidate.origin === 'live') return "the live turn's answer";
+  if (candidate.origin === 'branch') return "the branched redirect's answer";
   return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
 }
 

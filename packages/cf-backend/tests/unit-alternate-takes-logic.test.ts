@@ -8,7 +8,7 @@ import {
 
 function makeSet(overrides: Partial<AlternateTakeSet> = {}): AlternateTakeSet {
   return {
-    id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan',
+    id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan', source: 'mcts',
     winnerNodeId: 'win', chosenNodeId: null, createdAt: 1, pickedAt: null,
     candidates: [
       { nodeId: 'win', text: 'plan A', score: 0.9, visits: 3, depth: 1 },
@@ -42,6 +42,13 @@ describe('alternate-takes view logic', () => {
   test('evidence line carries score, visits, and depth', () => {
     expect(takeEvidence(makeSet().candidates[0]!)).toBe('score 0.90 · 3 visits · depth 1');
     expect(takeEvidence(makeSet().candidates[1]!)).toBe('score 0.85 · 1 visit · depth 2');
+  });
+
+  test('branch-sourced candidates are labeled by their split side, not a fabricated score', () => {
+    expect(takeEvidence({ nodeId: 'l', text: 'a', score: 0.5, visits: 1, depth: 0, origin: 'live' }))
+      .toBe("the live turn's answer");
+    expect(takeEvidence({ nodeId: 'b', text: 'b', score: 0.5, visits: 1, depth: 0, origin: 'branch' }))
+      .toBe("the branched redirect's answer");
   });
 
   test('only sets with a genuine choice are comparable', () => {
