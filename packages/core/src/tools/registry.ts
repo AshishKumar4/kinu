@@ -81,7 +81,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     summary: 'Run a deeper reasoning strategy: heads (parallel sub-agents) or mcts (approach search).',
     whenToUse:
       'heads = 2-6 independent subtasks, each running its own full multi-step tool loop concurrently (takes minutes; may auto-background). ' +
-      'mcts = compare competing approaches when the right path is unclear — branches propose and score TEXT ONLY and cannot run tools.',
+      'mcts = compare competing approaches when the right path is unclear — branches propose text + code and cannot run tools, but proposed code is executed when scored.',
     whenNotToUse: 'Neither is for linear work you can simply do directly, nor when branches would race on the same mutable resource.',
     result: 'Returns a strategy result with branch/head outputs, scores, and selected work.',
   },

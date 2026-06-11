@@ -92,7 +92,6 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
     return {
       explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[]) =>
         rpc('explore', { history, tools }),
-      evaluate: (task: string) => rpc('evaluate', { task }),
       generateReflection: (task: string) => rpc('reflect', { task }),
     };
   };

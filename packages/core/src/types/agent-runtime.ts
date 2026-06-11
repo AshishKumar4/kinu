@@ -28,12 +28,16 @@ export interface CraftStore {
   getAll(): CraftedTool[];
 }
 
+/**
+ * A branch EXPLORES and reflects; it deliberately cannot score itself.
+ * Scoring happens at the engine seam (mcts/engine.ts) through the grounded
+ * evaluator, so no backend can reintroduce same-model self-rating.
+ */
 export interface BranchHandle {
   explore(
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
   ): Promise<{ text: string; codeUsed: string | null }>;
-  evaluate(task: string): Promise<number>;
   generateReflection(task: string): Promise<string>;
 }
 

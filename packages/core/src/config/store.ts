@@ -45,6 +45,8 @@ export const AGENT_CONFIG_KEYS = {
   mctsBudget: 'mcts_iterations',
   mctsMaxDepth: 'mcts_depth',
   mctsBranches: 'mcts_branches',
+  mctsJudgeSamples: 'mcts_judge_samples',
+  mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -106,6 +108,10 @@ export interface MctsOverrides {
   budget?: number;
   maxDepth?: number;
   branches?: number;
+  /** Judge ensemble size per branch evaluation (median-aggregated). */
+  judgeSamples?: number;
+  /** Per-branch evaluation LLM-call budget (assertions + judge samples). */
+  maxEvalLLMCalls?: number;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -229,10 +235,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       const budget = positive(AGENT_CONFIG_KEYS.mctsBudget);
       const maxDepth = positive(AGENT_CONFIG_KEYS.mctsMaxDepth);
       const branches = positive(AGENT_CONFIG_KEYS.mctsBranches);
+      const judgeSamples = positive(AGENT_CONFIG_KEYS.mctsJudgeSamples);
+      const maxEvalLLMCalls = positive(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls);
       if (w !== undefined) out.explorationWeight = w;
       if (budget !== undefined) out.budget = Math.floor(budget);
       if (maxDepth !== undefined) out.maxDepth = Math.floor(maxDepth);
       if (branches !== undefined) out.branches = Math.floor(branches);
+      if (judgeSamples !== undefined) out.judgeSamples = Math.floor(judgeSamples);
+      if (maxEvalLLMCalls !== undefined) out.maxEvalLLMCalls = Math.floor(maxEvalLLMCalls);
       return out;
     },
     setMctsOverrides(overrides) {
@@ -245,6 +255,8 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       write(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
       write(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
       write(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
+      write(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
+      write(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
     },
   };
 }

@@ -33,11 +33,11 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('shared/findings/');
   });
 
-  test('teaches the honest strategy doctrine: mcts branches cannot run tools', () => {
+  test('teaches the honest strategy doctrine: mcts branches cannot run tools, code runs at scoring', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/score TEXT ONLY/);
     expect(prompt).toMatch(/cannot run tools/);
+    expect(prompt).toMatch(/code is executed when scored/);
   });
 
   test('teaches craft-on-repeat, search-before-solve, and the lessons loop', () => {

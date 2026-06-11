@@ -241,7 +241,6 @@ export function createTestRuntime(opts?: {
 
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'explored approach A', codeUsed: null }),
-    evaluate: async () => 0.7,
     generateReflection: async () => 'reflection: approach was suboptimal',
   };
 

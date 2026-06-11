@@ -5,9 +5,10 @@
  *
  *   MCTS mode  (existing) — short-form one-shot rollouts used by the MCTS
  *                           engine. @callable explore() returns a single
- *                           text + optional code; @callable evaluate()
- *                           judges the accumulated trace; generateReflection
- *                           produces a failure post-mortem.
+ *                           text + optional code; generateReflection
+ *                           produces a failure post-mortem. Scoring lives in
+ *                           core (mcts/evaluation.ts via the engine seam) —
+ *                           branches do not rate themselves.
  *
  *   HEAD mode         — long-form multi-step inference used by the
  *                           branching-heads primitive (think strategy=heads).
@@ -55,8 +56,6 @@ import {
   runHeadInference,
   buildHeadAccumulatorTools,
   buildHeadSandboxTools,
-  extractJsonObject,
-  jsonObjectOnlyInstruction,
 } from "@proteus/core";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
@@ -211,31 +210,6 @@ export class ExplorationAgent extends Agent<Env> {
     const codeUsed = codeMatch?.[1]?.trim() ?? null;
     this.sql`INSERT INTO traces (step, text, code_used) VALUES (1, ${trimmed}, ${codeUsed})`;
     return { text: trimmed, codeUsed };
-  }
-
-  @callable()
-  async evaluate(task: string): Promise<number> {
-    const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
-    const trajectory = traces.map(t => t.text).join("\n---\n");
-
-    const model = this.getModel();
-    const { text } = await generateText({
-      model,
-      messages: [{
-        role: "user" as const,
-        content: `Task: ${task}\n\nTrajectory:\n${trajectory.slice(0, 2000)}\n\nRate 0.0-1.0.\nJSON shape: {"score": <float>, "reason": "<5 words>"}\n${jsonObjectOnlyInstruction()}`,
-      }],
-      maxOutputTokens: 100,
-    });
-
-    try {
-      const parsed = extractJsonObject(text) as { score?: unknown };
-      const score = Number(parsed.score);
-      if (!Number.isFinite(score)) return 0;
-      return Math.min(1, Math.max(0, score));
-    } catch {
-      return 0;
-    }
   }
 
   @callable()

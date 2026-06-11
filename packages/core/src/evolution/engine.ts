@@ -366,6 +366,8 @@ export class EvolutionEngine {
         branches: overrides.branches ?? this.config.lifetimeMCTSBranches,
         ...(overrides.maxDepth !== undefined ? { maxDepth: overrides.maxDepth } : {}),
         ...(overrides.explorationWeight !== undefined ? { explorationWeight: overrides.explorationWeight } : {}),
+        ...(overrides.judgeSamples !== undefined ? { judgeSamples: overrides.judgeSamples } : {}),
+        ...(overrides.maxEvalLLMCalls !== undefined ? { maxEvalLLMCalls: overrides.maxEvalLLMCalls } : {}),
         onIterationComplete: this.config.onMctsProgress,
       });
 

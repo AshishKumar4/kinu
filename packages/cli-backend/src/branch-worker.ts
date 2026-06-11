@@ -6,13 +6,17 @@
  * the agent's learned capabilities during exploration.
  *
  * Protocol:
- *   Parent → Child: { method: 'explore'|'evaluate'|'reflect', args: any }
+ *   Parent → Child: { method: 'explore'|'reflect', args: any }
  *   Child → Parent: { method: string, result?: any, error?: string }
+ *
+ * There is deliberately no 'evaluate' method: branch scoring happens in the
+ * parent process at the engine seam (core mcts/evaluation.ts), grounded in
+ * execution — branches must not rate themselves.
  */
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, extractJsonObject, jsonObjectOnlyInstruction, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -87,19 +91,6 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         // Store trace in the branch's own DB
         db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, text]);
         result = { text, codeUsed: null };
-        break;
-      }
-      case 'evaluate': {
-        const { task } = msg.args as { task: string };
-        const response = await complete(
-          `Rate this approach for effectiveness (0.0-1.0):\n${task.slice(0, 500)}\n\n` +
-          `JSON shape: {"score": <float>, "reason": "<5 words>"}\n${jsonObjectOnlyInstruction()}`
-        );
-        try {
-          const parsed = extractJsonObject(response) as { score?: unknown };
-          const score = Number(parsed.score);
-          result = Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0;
-        } catch { result = 0; }
         break;
       }
       case 'reflect': {

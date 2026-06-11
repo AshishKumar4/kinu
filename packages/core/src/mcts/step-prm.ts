@@ -5,10 +5,15 @@
 // spending the full rollout cost. Math-RL literature (Lightman 2024,
 // ThinkPRM 2025, BiRM 2025) reports substantial efficiency gains.
 //
-// STATUS: available but NOT yet wired into any production path — neither the
-// MCTS engine nor the scaffold runtime calls scoreStepWithJudge today. R1 of
-// the SOTA roadmap blends step scores into UCT backprop. Covered by unit
-// tests only.
+// STATUS: NOT wired into any production path, deliberately. Proteus branch
+// rollouts are single-step (BranchHandle.explore is one LLM call producing
+// one proposal), so there is no intermediate step to prune mid-rollout —
+// every tree level already receives the full grounded evaluator
+// (mcts/evaluation.ts) per node, and a PRM call per node would duplicate
+// that signal at extra cost. This module becomes useful only when branches
+// gain multi-step rollouts (deep tool-loop branches / checkpoint-seeded
+// searches, roadmap R6) — wire scoreStepWithJudge inside the rollout loop
+// then. Covered by unit tests only.
 //
 // The judge model receives (task, accumulated trajectory so far, current
 // step's action+observation) and emits a [0..1] score with a short rationale.

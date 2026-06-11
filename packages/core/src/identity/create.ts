@@ -47,12 +47,13 @@ function buildComponents(
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
   const llm = createVercelAILLM(config.llm);
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : llm;
+  // Cross-model judge only when configured — consumers document their own
+  // same-model fallback (mcts/evaluation.ts: judge ?? explorer).
+  const judgeModel = config.judge ? createVercelAILLM(config.judge) : undefined;
   const schedule = createInlineSchedule(sql);
 
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'exploration result', codeUsed: null }),
-    evaluate: async () => 0.5,
     generateReflection: async () => 'no reflection available',
   };
 

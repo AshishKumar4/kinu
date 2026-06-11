@@ -94,7 +94,9 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
   const craftStore = createInlineCraftStore(db);
 
   const llm = createVercelAILLM(config.llm);
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : llm;
+  // Cross-model judge only when configured — consumers document their own
+  // same-model fallback (mcts/evaluation.ts: judge ?? explorer).
+  const judgeModel = config.judge ? createVercelAILLM(config.judge) : undefined;
 
   const schedule = createInlineSchedule(sql);
 
@@ -104,7 +106,6 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
     memory, craftStore, judgeModel,
     spawnBranch: async () => ({
       explore: async () => ({ text: 'exploration', codeUsed: null }),
-      evaluate: async () => 0.5,
       generateReflection: async () => 'reflection',
     }),
     abortBranch: async () => {},

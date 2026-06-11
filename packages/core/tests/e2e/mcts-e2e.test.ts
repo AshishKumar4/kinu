@@ -49,21 +49,6 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
         );
         return { text, codeUsed: null };
       },
-      async evaluate(task) {
-        const score = await branchLLM.complete(
-          `Rate how well this approach addresses the task on a scale 0.0 to 1.0.\n` +
-          `Task: ${task}\n` +
-          `Respond with ONLY a JSON object: {"score": <float>, "reason": "<5 words>"}`,
-        );
-        try {
-          const m = score.match(/\{[^}]+\}/);
-          const parsed = JSON.parse(m?.[0] ?? '{"score": 0}');
-          const parsedScore = Number(parsed.score);
-          return Number.isFinite(parsedScore) ? Math.min(1, Math.max(0, parsedScore)) : 0;
-        } catch {
-          return 0;
-        }
-      },
       async generateReflection(task) {
         return branchLLM.complete(
           `The approach to "${task}" didn't work well. ` +

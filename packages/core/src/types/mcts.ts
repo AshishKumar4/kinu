@@ -45,6 +45,10 @@ export interface MCTSConfig {
   pruneThreshold?: number;
   minAcceptableScore?: number;
   maxCostUSD?: number;
+  /** Judge ensemble size per branch evaluation (median-aggregated). */
+  judgeSamples?: number;
+  /** Per-branch evaluation LLM-call budget (assertions + judge samples). */
+  maxEvalLLMCalls?: number;
   signal?: AbortSignal;
   /** Called after each MCTS iteration completes — use for real-time UI updates. */
   onIterationComplete?: (iteration: number, remainingBudget: number) => void;

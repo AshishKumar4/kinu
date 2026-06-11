@@ -23,6 +23,8 @@ interface MCTSStrategyOptions {
   pruneThreshold?: number;
   minAcceptableScore?: number;
   maxCostUSD?: number;
+  judgeSamples?: number;
+  maxEvalLLMCalls?: number;
   /** SessionWriter for trajectory recording. Required (provided by caller). */
   session: SessionWriter;
 }
@@ -33,7 +35,8 @@ export function createMCTSStrategy(): ExplorationStrategy {
     label: 'MCTS (parallel tree search)',
     description:
       'Monte Carlo Tree Search: compare competing approaches when the right path ' +
-      'is unclear. Branches propose and score TEXT ONLY — they cannot run tools.',
+      'is unclear. Branches propose text + code but cannot run tools mid-exploration; ' +
+      'proposed code IS executed during scoring, so runnable proposals score honestly.',
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
       const o = (ctx.options?.mcts ?? {}) as Partial<MCTSStrategyOptions>;
@@ -50,6 +53,8 @@ export function createMCTSStrategy(): ExplorationStrategy {
         pruneThreshold: o.pruneThreshold ?? defaults.pruneThreshold,
         minAcceptableScore: o.minAcceptableScore ?? defaults.minAcceptableScore,
         maxCostUSD: o.maxCostUSD ?? defaults.maxCostUSD,
+        judgeSamples: o.judgeSamples ?? defaults.judgeSamples,
+        maxEvalLLMCalls: o.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls,
         signal: ctx.signal,
       });
       // The winner's trajectory is the agent-readable answer.

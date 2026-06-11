@@ -17,6 +17,7 @@ import { selectNode } from './uct.js';
 import { backpropagate } from './backpropagation.js';
 import { recordNode } from './record-node.js';
 import { converge } from './convergence.js';
+import { evaluateWithMultiModelJudging } from './evaluation.js';
 import { pruneAndReflect } from './pruning.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
 import { estimateCost } from './cost.js';
@@ -36,10 +37,12 @@ export async function runMCTS(
   const pruneThreshold = config.pruneThreshold ?? defaults.pruneThreshold;
   const minAcceptableScore = config.minAcceptableScore ?? defaults.minAcceptableScore;
   const maxCostUSD = config.maxCostUSD ?? defaults.maxCostUSD;
+  const judgeSamples = config.judgeSamples ?? defaults.judgeSamples;
+  const maxEvalLLMCalls = config.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
   const reflectionThreshold = defaults.reflectionThreshold;
   const craftExtractionThreshold = defaults.craftExtractionThreshold;
 
-  const estimate = estimateCost(config.budget, N_BRANCHES);
+  const estimate = estimateCost(config.budget, N_BRANCHES, 3, maxEvalLLMCalls);
   if (estimate.estimatedUSD > maxCostUSD) {
     throw new Error(
       `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD}. ` +
@@ -127,17 +130,33 @@ export async function runMCTS(
         `;
       }
 
-      // EVALUATE — cross-model judging. Evaluation failures score 0, not
-      // neutral 0.5; otherwise failed infrastructure can look like a balanced
-      // optimum and converge falsely.
+      // EVALUATE — the engine-level seam every backend shares: branches only
+      // explore; scoring happens HERE through the one grounded evaluator
+      // (execution verdicts via rt.executor + judge ensemble via
+      // rt.judgeModel ?? rt.llm, sibling-relative). Evaluation failures score
+      // 0, not neutral 0.5; otherwise failed infrastructure can look like a
+      // balanced optimum and converge falsely.
+      const proposals = explorations.map(e => e.text);
       const scoreResults = await abortable(
-        Promise.allSettled(branchHandles.map(handle => handle.evaluate(task))),
+        Promise.allSettled(explorations.map((exploration, i) =>
+          evaluateWithMultiModelJudging({
+            task,
+            trajectory: exploration.text,
+            codeUsed: exploration.codeUsed,
+            siblings: proposals.filter((p, j) => j !== i && p.length > 0),
+            executor: rt.executor,
+            judge: rt.judgeModel,
+            explorer: rt.llm,
+            judgeSamples,
+            maxLLMCalls: maxEvalLLMCalls,
+          }),
+        )),
         config.signal,
         abortBranches,
       );
       throwIfAborted(config.signal);
       const scores = scoreResults.map(r =>
-        r.status === 'fulfilled' ? r.value : 0,
+        r.status === 'fulfilled' ? r.value.score : 0,
       );
 
       // BACKPROPAGATE

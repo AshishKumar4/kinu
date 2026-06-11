@@ -189,9 +189,13 @@ export function createCLIRuntime(
     codexAuthStore: config.codexAuthStore,
     onCodexRefresh: config.onCodexRefresh,
   });
+  // Cross-model judge only when one is actually configured. Leaving this
+  // undefined lets consumers apply their documented same-model fallback
+  // (mcts/evaluation.ts judge ensemble, local-session auto-judge) instead of
+  // hiding it here.
   const judgeModel = config.judge
     ? createLocalProviderLLM({ llm: config.judge, credentials: config.providerCredentials, codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh })
-    : llm;
+    : undefined;
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },

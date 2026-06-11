@@ -27,8 +27,6 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
   createAgentConfigStore,
-  extractJsonObject,
-  jsonObjectOnlyInstruction,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -247,6 +245,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   return {
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
+    judgeModel: createJudgeLLM(agent),
     spawnBranch: createFacetSpawner(agent),
     abortBranch: createFacetAborter(agent),
     executionRouter,
@@ -482,6 +481,39 @@ function createDualPathLLM(agent: AgentHost): LLM {
   };
 }
 
+/**
+ * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
+ * operator's review_model (Settings → setAgentConfig('review_model')) at call
+ * time so judging can run on a DIFFERENT model from the explorer — the
+ * self-enhancement-bias fix. When no review_model is set this resolves the
+ * agent's chat model: same-model judging is the documented fallback, not a
+ * separate code path. Errors propagate — the evaluator's judge ensemble
+ * drops failed samples instead of misreading them as scores.
+ */
+function createJudgeLLM(agent: AgentHost): LLM {
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      const config = createAgentConfigStore(
+        agent.sql.bind(agent) as unknown as CoreSqlExecutor,
+      );
+      const reg = createAgentProviderRegistry({
+        env: agent.env,
+        userDOStub: userDOStubFor(agent),
+        appTitle: 'Proteus (judge)',
+        workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+      });
+      const spec = config.getReviewModel() ?? config.getModel();
+      const model = reg.resolveModel(reg.normalizeSpecSync(spec));
+      const result = await generateText({
+        model, prompt, maxOutputTokens: 1024,
+        ...effortFor('judge'),
+      });
+      return result.text.trim();
+    },
+  };
+}
+
 // ── Schedule: real runFiber from Agent base class ────────────────
 
 function createRealSchedule(agent: AgentHost): Schedule {
@@ -522,7 +554,6 @@ function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<Bra
       if (owner) await stub.setOwner(owner);
       return {
         explore: async (history, tools) => stub.explore(history, tools),
-        evaluate: async (task) => stub.evaluate(task),
         generateReflection: async (task) => stub.generateReflection(task),
       };
     } catch (err) {
@@ -574,21 +605,6 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
       const text = result.text.trim();
       const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
       return { text, codeUsed: codeMatch?.[1]?.trim() ?? null };
-    },
-    evaluate: async (task) => {
-      const result = await generateText({
-        model: getModel(),
-        messages: [{
-          role: "user" as const,
-          content: `Rate this approach (0-1): ${task.slice(0, 500)}\nJSON shape: {"score": <float>}\n${jsonObjectOnlyInstruction()}`,
-        }],
-        maxOutputTokens: 100,
-      });
-      try {
-        const parsed = extractJsonObject(result.text) as { score?: unknown };
-        const score = Number(parsed.score);
-        return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0;
-      } catch { return 0; }
     },
     generateReflection: async (task) => {
       const result = await generateText({

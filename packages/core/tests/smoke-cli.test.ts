@@ -64,7 +64,6 @@ function createFullCLIRuntime() {
     judgeModel: llm,
     spawnBranch: async () => ({
       explore: async () => ({ text: 'cli branch explored', codeUsed: null }),
-      evaluate: async () => 0.75,
       generateReflection: async () => 'cli branch reflection',
     }),
     abortBranch: async () => {},

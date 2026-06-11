@@ -22,6 +22,11 @@ export interface MCTSDefaults {
   reflectionThreshold: number;
   /** Score threshold above which crafted tools are extracted */
   craftExtractionThreshold: number;
+  /** Judge ensemble size per branch evaluation (median-aggregated). */
+  judgeSamples: number;
+  /** Per-branch evaluation LLM-call budget (assertion generation + judge
+   *  samples) — the operator's spend dial for grounded scoring. */
+  maxEvalLLMCalls: number;
 }
 
 /** CraftStore quality management parameters */
@@ -81,6 +86,8 @@ export const DEFAULT_CONFIG: AgentConfig = {
     minVisitsForPrune: 2,
     reflectionThreshold: 0.35,
     craftExtractionThreshold: 0.8,
+    judgeSamples: 3,
+    maxEvalLLMCalls: 4,
   },
   craftStore: {
     emaAlpha: 0.3,
