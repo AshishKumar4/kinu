@@ -2,7 +2,8 @@
  * Scaffold modification — 4-gate validation pipeline.
  *
  * Architecture reference: final-architecture.md §4
- * Formal spec: ScaffoldSafety.lean — rollback_restores_code, structural_gate_no_import
+ * Formal spec: Evolution/Scaffold.lean — append_increases_length (version history
+ * only grows); Safety/CapabilitySafety.lean — scaffoldwrite_not_grantable.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

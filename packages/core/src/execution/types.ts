@@ -5,7 +5,7 @@
  * namespaced APIs: workspace.readFile(), nimbus.exec(), sandbox.startProcess().
  *
  * Architecture: docs/EXECUTION-LAYER-SPEC.md
- * Lean formalization: lean/Proteus/Execution.lean
+ * Lean formalization: lean/Proteus/Execution/{Capabilities,ToolSystem}.lean
  */
 
 export type ExecutorCapability =

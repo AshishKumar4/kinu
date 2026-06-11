@@ -2,7 +2,8 @@
  * Periodic CraftStore consolidation — retire stale tools.
  *
  * Architecture reference: final-architecture.md §6
- * Formal spec: CraftStore.lean — all_below_gives_empty, consolidation_requires_nonempty_guard
+ * Formal spec: Evolution/FullCraftLifecycle.lean — consolidation_never_empties,
+ * consolidation_nonincreasing, below_threshold_filtered
  *
  * BUG-2 FIX: The arch doc claims "consolidation cannot decrease mean effective score"
  * but this is ONLY true when the remaining list is non-empty. If ALL tools are stale,
@@ -48,7 +49,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
   }
 
   // BUG-2 GUARD: don't retire ALL tools — that would empty the CraftStore
-  // Formal spec: CraftStore.lean:all_below_gives_empty proves the danger
+  // Formal spec: Evolution/FullCraftLifecycle.lean:consolidation_never_empties
   if (toRetire.length >= allTools.length) {
     // All tools are stale — skip consolidation, keep what we have
     return;

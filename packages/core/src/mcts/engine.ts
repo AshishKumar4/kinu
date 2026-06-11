@@ -3,7 +3,7 @@
  *
  * Architecture reference: final-architecture.md §5.12 (Full Lifecycle)
  * Paper: LATS arXiv:2310.04406
- * Formal spec: DistributedModel.lean — storage_isolation_invariant
+ * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

@@ -4,9 +4,7 @@
  * Architecture reference: final-architecture.md §5.3
  *
  * CRITICAL: SessionMessage uses `parts: SessionMessagePart[]`, NOT `content: string`.
- * Verified: session/types.ts:27–33 — SessionMessage has `id`, `role`, `parts[]`.
  * The architecture doc's v1 used `content: "..."` which is a TYPE ERROR.
- * Formal spec: Types.lean — SessionMessage has parts field.
  */
 
 import type { SqlExecutor } from '../types/primitives.js';
@@ -54,7 +52,6 @@ export async function recordNode(
   const msgId = nanoid();
 
   // CORRECT: SessionMessage.parts, not .content
-  // Formal spec: Types.lean:SessionMessage has parts field
   await session.appendMessage(
     {
       id: msgId,

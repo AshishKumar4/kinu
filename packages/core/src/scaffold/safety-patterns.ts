@@ -6,8 +6,6 @@
  * scaffold/modify.ts, evolution/gepa/scaffold-bridge.ts, and
  * evolution/gepa/tool-bridge.ts — a security blocklist that would drift
  * the moment one copy was edited. Import from here instead.
- *
- * Formal spec: ScaffoldSafety.lean — structural_gate_no_import.
  */
 
 /** Constructs the scaffold sandbox must never reference — module loaders,

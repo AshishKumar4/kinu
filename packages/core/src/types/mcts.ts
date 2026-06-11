@@ -4,7 +4,7 @@
  * Architecture reference: final-architecture.md §5.2
  *
  * BUG-1 FIX: NodeData.value defaults to 0, NOT 0.5.
- * Formal spec: Backpropagation.lean:initial_valid, init_05_eq_init_0_first_step.
+ * Formal spec: MCTS/Backpropagation.lean — initial_valid, init_values_equal_at_first_step.
  */
 
 export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';

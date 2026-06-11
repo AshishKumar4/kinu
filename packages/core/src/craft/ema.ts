@@ -2,7 +2,8 @@
  * EMA scoring + time decay for CraftStore tools.
  *
  * Architecture reference: final-architecture.md §6
- * Formal spec: CraftStore.lean — ema_in_range, effective_score_zero_decay
+ * Formal spec: Evolution/FullCraftLifecycle.lean — ema_bounded, ema_nonneg
+ * (over a scaled-integer model of the EMA update)
  */
 
 import type { SqlExecutor } from '../types/primitives.js';

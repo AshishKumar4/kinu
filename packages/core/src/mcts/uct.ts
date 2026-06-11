@@ -3,7 +3,6 @@
  *
  * Architecture reference: final-architecture.md §5.6
  * Paper: LATS arXiv:2310.04406 §3.2 Equation (1)
- * Formal spec: UCT.lean — float_log_ofNat_one axiom, uct_root_is_value theorem
  *
  * CRITICAL: SQLite log() is log₁₀, NOT natural log (ln).
  * The UCT formula requires ln. We use: ln(x) = log(x) / log(exp(1.0))
@@ -22,8 +21,6 @@ import { DEFAULT_CONFIG } from '../config.js';
  * In SQLite: ln(x) = log(x) / log(exp(1.0))
  * - max(1.0, ...) guards against log(0) and division by zero
  * - log(1.0) / log(exp(1.0)) = 0, so root nodes get UCT = value only
- *
- * Formal spec: UCT.lean:uct_root_is_value proves this is correct at root.
  */
 export function selectNode(
   sql: SqlExecutor,
