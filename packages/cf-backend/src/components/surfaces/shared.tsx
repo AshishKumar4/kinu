@@ -87,12 +87,15 @@ export function extractPreviewUrl(output: unknown): string | null {
   return null;
 }
 
-export function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
+export function EmptyState({ icon, title, hint, children }: {
+  icon: React.ReactNode; title: string; hint?: React.ReactNode; children?: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <div className="p-text-3 mb-3 opacity-60">{icon}</div>
       <p className="text-sm p-text-2">{title}</p>
       {hint && <p className="text-xs p-text-3 mt-1.5 max-w-xs leading-relaxed">{hint}</p>}
+      {children}
     </div>
   );
 }

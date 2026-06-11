@@ -33,7 +33,8 @@ import { PreviewFrame } from "./PreviewFrame";
 import type { ExecutorOutput } from "../hooks/use-proteus";
 import type { DirEntry } from "@/lib/protocol";
 import { MAX_UPLOAD_BYTES, encodeBase64 } from "@/lib/files";
-import { listDevices, registerDevice, revokeDevice, type UserDevice } from "@/lib/user-api";
+import { listDevices, registerDevice, revokeDevice, getCliSetup, type UserDevice } from "@/lib/user-api";
+import { EmptyState } from "./surfaces/shared";
 
 const EXECUTOR_LABELS: Record<string, string> = {
   sandbox:   "Sandbox",
@@ -180,15 +181,68 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
 }
 
 function NoDeviceActive() {
-  return (
-    <div className="h-full flex items-center justify-center p-6">
-      <div className="max-w-sm text-center space-y-2">
-        <PlugIcon size={26} className="p-text-3 mx-auto" />
-        <div className="text-sm font-medium p-text">No device active</div>
-        <p className="text-xs p-text-3 leading-relaxed">
-          A device will appear here when the agent starts or connects one.
-        </p>
+  const [devices, setDevices] = useState<UserDevice[] | null>(null);
+  const [installCommand, setInstallCommand] = useState<string | null>(null);
+
+  useEffect(() => {
+    listDevices().then(setDevices).catch(() => setDevices([]));
+    getCliSetup().then((s) => setInstallCommand(s.installCommand)).catch(() => null);
+  }, []);
+
+  if (devices === null) {
+    return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
+  }
+
+  if (devices.length > 0) {
+    const labels = devices.map((d) => d.label).join(", ");
+    return (
+      <div className="h-full flex items-center justify-center overflow-y-auto p-6">
+        <EmptyState
+          icon={<PlugIcon size={26} />}
+          title="Device offline"
+          hint={<>
+            {labels} {devices.length > 1 ? "are" : "is"} registered but the daemon is not running.
+            Restart it on that machine with <code className="font-mono p-elevated px-1 rounded">proteus connect</code>.
+          </>}
+        />
       </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex items-center justify-center overflow-y-auto p-6">
+      <EmptyState
+        icon={<PlugIcon size={26} />}
+        title="No device connected"
+        hint="Connect your PC so your agents can run commands, read files, and serve previews on it. Two steps from a terminal:"
+      >
+        <div className="mt-4 w-full max-w-md space-y-2">
+          <CommandRow
+            label="Install"
+            command={installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`}
+          />
+          <CommandRow label="Connect" command="proteus connect" />
+        </div>
+      </EmptyState>
+    </div>
+  );
+}
+
+function CommandRow({ label, command }: { label: string; command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2 rounded-md border p-border p-2 text-left">
+      <div className="w-14 shrink-0 text-[11px] p-text-3">{label}</div>
+      <code className="font-mono text-[11px] p-text flex-1 truncate" title={command}>{command}</code>
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(command).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1000);
+          });
+        }}
+        className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 text-xs p-text-2"
+      ><CopyIcon size={11} />{copied ? "copied" : "Copy"}</button>
     </div>
   );
 }
