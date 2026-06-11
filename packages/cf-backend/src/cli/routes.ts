@@ -874,6 +874,17 @@ has_tty() {
   ( exec </dev/tty >/dev/tty ) 2>/dev/null
 }
 
+# Interactive children get the terminal on stdin and must leave it sane; if
+# one dies mid-prompt anyway, restore the terminal before surfacing failure.
+run_on_tty() {
+  rc=0
+  env PROTEUS_HOME="$PROTEUS_HOME" "$@" < /dev/tty || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    stty sane < /dev/tty 2>/dev/null || true
+  fi
+  return "$rc"
+}
+
 run_setup_if_requested() {
   if [ "$NO_SETUP" = "1" ]; then return 0; fi
   if ! has_tty; then
@@ -883,9 +894,9 @@ run_setup_if_requested() {
   fi
   say "Starting Proteus setup..."
   if [ "$YES" = "1" ]; then
-    PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only --yes < /dev/tty
+    run_on_tty "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only --yes
   else
-    PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only < /dev/tty
+    run_on_tty "$BIN_PATH" setup --origin "$PROTEUS_ORIGIN" --account-only
   fi
 }
 
@@ -893,9 +904,9 @@ run_connect_if_requested() {
   if [ "$CONNECT" != "1" ]; then return 0; fi
   if has_tty; then
     if [ -n "$CONNECT_LABEL" ]; then
-      PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" connect --label "$CONNECT_LABEL" < /dev/tty
+      run_on_tty "$BIN_PATH" connect --label "$CONNECT_LABEL"
     else
-      PROTEUS_HOME="$PROTEUS_HOME" "$BIN_PATH" connect < /dev/tty
+      run_on_tty "$BIN_PATH" connect
     fi
   else
     if [ -n "$CONNECT_LABEL" ]; then
