@@ -382,7 +382,7 @@ describe('auth and desktop security invariants', () => {
     expect(workspace).toContain('cloudflareReconnectPath');
     expect(home).toContain('CloudflareAIConnectNotice');
     expect(modal).toContain('CloudflareAIConnectNotice');
-    expect(settings).toContain('Cloudflare Workers AI');
+    expect(settings).toContain('CloudflareAIConnectNotice');
   });
 });
 

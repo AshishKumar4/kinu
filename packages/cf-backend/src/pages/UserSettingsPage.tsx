@@ -23,8 +23,10 @@ import {
   getProfile, listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
   listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
+  listCloudflareGateways, selectCloudflareGateway,
   type UserProfile, type CredentialSummary, type CodexStatus,
   type ModelMenuEntry, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
+  type CloudflareGatewayStatus,
 } from "../lib/user-api";
 
 const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
@@ -54,6 +56,7 @@ export default function UserSettingsPage() {
   const [codex, setCodex] = useState<CodexStatus | null>(null);
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
   const [catalog, setCatalog] = useState<ProviderCatalogEntry[]>([]);
+  const [gateways, setGateways] = useState<CloudflareGatewayStatus | null>(null);
   const [defaults, setDefaults] = useState<{ model: string | null }>({ model: null });
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +65,7 @@ export default function UserSettingsPage() {
   const refresh = useCallback(async () => {
     try {
       setErr(null);
-      const [p, c, k, m, cat, defaultModel, cli] = await Promise.all([
+      const [p, c, k, m, cat, defaultModel, cli, gw] = await Promise.all([
         getProfile().catch(() => null),
         listCredentials().catch(() => []),
         codexStatus().catch(() => null),
@@ -70,6 +73,7 @@ export default function UserSettingsPage() {
         listProviderCatalog().catch(() => []),
         getConfig('default_model').catch(() => ({ key: 'default_model', value: null })),
         getCliSetup().catch(() => null),
+        listCloudflareGateways().catch(() => null),
       ]);
       setProfile(p);
       setCreds(c ?? []);
@@ -78,6 +82,7 @@ export default function UserSettingsPage() {
       setCatalog(cat ?? []);
       setDefaults({ model: defaultModel?.value ?? null });
       setCliSetup(cli);
+      setGateways(gw);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -130,15 +135,18 @@ export default function UserSettingsPage() {
           </div>
         </Card>
 
-        <Card title="Cloudflare Workers AI" icon={PlugIcon}>
+        <Card title="Cloudflare AI" icon={PlugIcon}>
           {workersAIConnected ? (
-            <div className="flex items-center gap-2 text-xs text-emerald-300">
-              <CheckIcon size={13} /> Connected
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-xs text-emerald-300">
+                <CheckIcon size={13} /> Connected
+              </div>
+              <CloudflareGatewaySection status={gateways} onChanged={refresh} />
             </div>
           ) : (
             <CloudflareAIConnectNotice
               returnTo="/user/settings"
-              message="Connect Cloudflare Workers AI so agents can use your Cloudflare account quota."
+              message="Connect Cloudflare so agents can use your Workers AI quota and your own AI Gateway."
             />
           )}
         </Card>
@@ -209,6 +217,70 @@ function CommandCopy({ label, command }: { label: string; command: string }) {
       >
         <CopyIcon size={11} />{copied ? "copied" : "Copy"}
       </button>
+    </div>
+  );
+}
+
+// ── Cloudflare AI Gateway selection ─────────────────────────────────
+
+function CloudflareGatewaySection({ status, onChanged }: {
+  status: CloudflareGatewayStatus | null;
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!status?.connected) return null;
+
+  const choose = async (id: string) => {
+    setSaving(true);
+    setError(null);
+    try { await selectCloudflareGateway(id || null); onChanged(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  if (status.error) {
+    return (
+      <CloudflareAIConnectNotice
+        returnTo="/user/settings"
+        message={`Your AI Gateways couldn't be listed: ${status.error}`}
+      />
+    );
+  }
+  if (status.gateways.length === 0) {
+    return (
+      <p className="text-[11px] p-text-3">
+        No AI Gateway found in your Cloudflare account. Create one under AI &gt; AI Gateway in the
+        Cloudflare dashboard to use your own provider keys (BYOK) or Unified Billing credits here.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs p-text-2">Your AI Gateway</div>
+      {status.gateways.length === 1 && status.selectedId === status.gateways[0].id ? (
+        <div className="flex items-center gap-2 text-xs">
+          <CheckIcon size={13} className="p-success" />
+          <span className="font-mono">{status.selectedId}</span>
+        </div>
+      ) : (
+        <select
+          value={status.selectedId ?? ''}
+          onChange={(e) => choose(e.target.value)}
+          disabled={saving}
+          className={inputCls}
+        >
+          <option value="">(none — pick a gateway)</option>
+          {status.gateways.map((gw) => (
+            <option key={gw.id} value={gw.id}>{gw.id}</option>
+          ))}
+        </select>
+      )}
+      <p className="text-[11px] p-text-3">
+        Third-party models (spec <code className="p-card px-1">my-gateway/&lt;provider&gt;/&lt;model&gt;</code>) route
+        through this gateway using its stored provider keys or your Unified Billing credits.
+      </p>
+      {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
   );
 }

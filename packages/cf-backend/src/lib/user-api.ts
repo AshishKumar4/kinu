@@ -159,6 +159,24 @@ export interface ProviderCatalogEntry {
 export const listProviderCatalog = () =>
   api<ProviderCatalogEntry[]>('GET', '/providers/catalog');
 
+// ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
+export interface CloudflareGatewaySummary {
+  id: string;
+  authenticated: boolean;
+  createdAt: string | null;
+}
+export interface CloudflareGatewayStatus {
+  connected: boolean;
+  selectedId: string | null;
+  gateways: CloudflareGatewaySummary[];
+  error: string | null;
+}
+export const listCloudflareGateways = () =>
+  api<CloudflareGatewayStatus>('GET', '/cloudflare/gateways');
+export const selectCloudflareGateway = (id: string | null) =>
+  api<{ ok: boolean }>('PUT', '/cloudflare/gateway', { id })
+    .then((r) => { invalidateModelsCache(); return r; });
+
 export function cloudflareReconnectPath(returnTo: string): string {
   const params = new URLSearchParams({
     return_to: returnTo || '/',

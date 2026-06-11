@@ -23,6 +23,8 @@
  *   GET    /api/user/models                        — union of available models
  *   GET    /api/user/providers                     — connected provider summary
  *   GET    /api/user/providers/catalog             — connectable providers (BYO key)
+ *   GET    /api/user/cloudflare/gateways           — the user's AI Gateways + selection
+ *   PUT    /api/user/cloudflare/gateway            — select an AI Gateway (or null)
  *   GET    /api/user/mcp/servers                   — list configured MCP servers
  *   POST   /api/user/mcp/servers                   — add a new MCP server
  *   DELETE /api/user/mcp/servers/:id               — remove an MCP server
@@ -179,6 +181,21 @@ export async function handleUserRequest(
   }
   if (path === '/models' && method === 'GET') {
     return json(await listAvailableModels(env, identity.userId));
+  }
+
+  // ── Cloudflare AI Gateway (the user's own gateway) ──────────────────
+  if (path === '/cloudflare/gateways' && method === 'GET') {
+    return json(await stub.listAIGateways());
+  }
+  if (path === '/cloudflare/gateway' && method === 'PUT') {
+    const body = await safeJson<{ id?: string | null }>(request);
+    if (!body || (body.id !== null && typeof body.id !== 'string')) {
+      return err(400, 'id (string | null) required');
+    }
+    try { await stub.selectAIGateway(body.id); }
+    catch (e) { return err(400, (e as Error).message); }
+    notifyAgentsCredentialsChanged(env, stub, ctx);
+    return json({ ok: true });
   }
 
   // ── MCP servers ────────────────────────────────────────────────────
