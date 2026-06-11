@@ -116,6 +116,9 @@ import {
   initGepaTables, startGepaRun, finishGepaRun, makePersistingHook, listGepaRuns,
   loadGepaCandidates,
   type EvalInstance, type MetricOutcome, type GepaRunSummary,
+  // Turn-outcome signal + replay-eval loss curve (audit R3)
+  buildOutcomeEvalSplit, listReplayEvals,
+  type OutcomeEvalExpectation, type ReplayEvalSummary,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
@@ -687,6 +690,9 @@ export class OrchestratorAgent extends Think<Env> {
         onMctsProgress: (iteration, remaining) => {
           this.broadcastMctsProgress("iteration", iteration, remaining);
         },
+        // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
+        // bridges — the closest re-run of "what would the agent do today".
+        replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
       });
     }
     return this._engine;
@@ -1254,6 +1260,13 @@ export class OrchestratorAgent extends Think<Env> {
     this._cliCwd = readCliCwd(ctx.body);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
+    // A real user message is the verdict on the previous turn — dispatch the
+    // detached outcome review (Hermes-style forked background review). Runs
+    // concurrently with this turn; never blocks it. Programmatic turns
+    // (reactor / job wake) are not user verdicts.
+    if (!this.lastUserTurnIsProgrammatic()) {
+      this.orch.observeUserTurn(extractLastUserText(ctx.messages));
+    }
     // Start a new run for the event log, with provenance so cross-run history
     // (Supervise altitude) can show what kicked each run off. This is the chat
     // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
@@ -1385,6 +1398,15 @@ export class OrchestratorAgent extends Think<Env> {
     this.acc.onFirstChunk();
   }
 
+  /** Whether the in-flight turn was injected programmatically (reactor drain,
+   *  background-job wake, consent resume) — enqueueTurn stamps proteusEvent
+   *  metadata on the saved user message; real chat messages carry none. */
+  private lastUserTurnIsProgrammatic(): boolean {
+    const userMessages = this.messages.filter(m => m.role === "user");
+    const last = userMessages[userMessages.length - 1] as { metadata?: unknown } | undefined;
+    return isRecord(last?.metadata) && typeof last.metadata.proteusEvent === 'string';
+  }
+
   afterToolCall(ctx: ToolCallResultContext): void {
     // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
     // accumulator records it + fires the activity log + run-event sinks.
@@ -1460,8 +1482,9 @@ export class OrchestratorAgent extends Think<Env> {
     // Record which crafted tools this turn used, keyed by the assistant
     // message id, so async thumbs feedback (setTurnFeedback) can re-score
     // exactly those tools. Feedback is inherently asynchronous — it arrives
-    // after the turn completes — so turn.feedback stays null here and the
-    // heuristic in assessTurnQuality scores the turn at completion time.
+    // after the turn completes — so turn.feedback is null here; the outcome
+    // review (engine.reviewTurn, dispatched when the NEXT user message
+    // arrives) populates it from explicit thumbs or the follow-up classifier.
     const msgId = (result.message as { id?: string } | null | undefined)?.id;
     if (msgId) {
       const craftNames = this.acc.toolCalls
@@ -1485,22 +1508,26 @@ export class OrchestratorAgent extends Think<Env> {
       // status is "completed" here (the !== "completed" early-return above),
       // so turn errors are tracked via the accumulator's per-step hadError flag.
       hadError: this.acc.hadError,
+      turnId: msgId,
+      sessionId: 'default',
+      origin: this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
     };
 
-    // CRITICAL: Evolution hooks make LLM calls (reflection, extraction, session
-    // reflection) that take 5-30 seconds each. onChatResponse runs INSIDE
-    // Think's TurnQueue — if we await here, the queue is blocked and the next
-    // message can't start processing until evolution finishes. The user sees
-    // "nothing happens" for the second message.
+    // CRITICAL: Evolution hooks make LLM calls (outcome classification,
+    // reflection, extraction, session reflection) that take 5-30 seconds
+    // each. onChatResponse runs INSIDE Think's TurnQueue — if we await here,
+    // the queue is blocked and the next message can't start processing until
+    // evolution finishes. The user sees "nothing happens" for the second message.
     //
     // Fix: fire evolution asynchronously. The DO stays alive via keepAliveWhile
     // in the outer scope. Errors are caught and logged, never propagated.
     //
     // The core AgentOrchestrator owns the shared cadence: advance the
-    // session-reflection counter (firing engine.onSessionComplete every N turns)
-    // + fire turn-level evolution (engine.onTurnCompleteAsync — Hermes-style
-    // reflection: quality/threshold, generateTurnReflection → MEMORY.md lesson,
-    // pattern extraction → crafted tools, periodic scaffold evolution). All
+    // session-reflection counter (firing engine.onSessionComplete every N
+    // turns) + buffer this turn for its outcome review — the NEXT user
+    // message grades it (beforeTurn → observeUserTurn → engine.reviewTurn:
+    // outcome classification, turn.feedback, craft EMA, reflection/lesson,
+    // pattern extraction). Programmatic turns review immediately. All
     // fire-and-forget; never blocks the TurnQueue.
     this.orch.recordTurn(turn);
 
@@ -2711,6 +2738,13 @@ export class OrchestratorAgent extends Think<Env> {
         this._cachedToolsKey = '';
       }
     }
+    // One outcome ledger: the explicit verdict overrides any classifier row
+    // for this turn and, when negative, corroborates provisional lessons.
+    try {
+      await this.engine.applyExplicitFeedback(messageId, feedback);
+    } catch (err) {
+      console.warn('[proteus] applyExplicitFeedback failed:', err instanceof Error ? err.message : err);
+    }
     return { ok: true, messageId, feedback, rescored };
   }
 
@@ -2753,6 +2787,7 @@ export class OrchestratorAgent extends Think<Env> {
       'sleep_time_compute',
       'tool_surfacing_mode',
       'review_model',
+      'gepa_eval_budget',
       // shell_approval_mode has its own typed setter; not allowed via this.
     ]);
     if (!allowedKeys.has(key)) {
@@ -2793,15 +2828,18 @@ export class OrchestratorAgent extends Think<Env> {
 
   /**
    * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
-   * Offline + batch: builds an eval set from the agent's own recent tasks,
-   * runs the current scaffold + reflection-mutated candidates against them,
-   * scores each with a judge LLM, and — if a strictly-better candidate is
-   * found — hands the winner to modifyScaffold so it enters the normal shadow-
-   * eval → promote pipeline. Persisted to gepa_runs/gepa_candidates so the
-   * UI can show lineage.
+   * Offline + batch: draws a budgeted train/val split from the turn-outcome
+   * ledger (corrected/frustrated turns = the negative train set reflection
+   * must fix; accepted turns = the val regression guards), runs the current
+   * scaffold + reflection-mutated candidates against them, scores each with
+   * an outcome-aware judge, and — if a strictly-better candidate is found —
+   * hands the winner to modifyScaffold so it enters the normal shadow-eval →
+   * promote pipeline. Persisted to gepa_runs/gepa_candidates so the UI can
+   * show lineage.
    *
-   * Cost-bounded: small default budget (each metric call runs a full scaffold
-   * + a judge call). Tune via opts.
+   * Cost-bounded: the instance budget comes from agent_config
+   * gepa_eval_budget (default 8) unless opts.evalSize overrides it; each
+   * metric call runs a full scaffold + a judge call.
    */
   @callable()
   async runScaffoldGepaOptimization(opts?: {
@@ -2819,35 +2857,42 @@ export class OrchestratorAgent extends Think<Env> {
     seedScore?: number;
     iterations?: number;
   }> {
-    const evalSize = Math.max(1, Math.min(opts?.evalSize ?? 5, 20));
+    const evalSize = Math.max(2, Math.min(opts?.evalSize ?? this.config.getGepaEvalBudget(), 20));
     const budget = {
       maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
       maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 40, 200)),
       minibatchSize: 1,
     };
 
-    // 1. Eval set from the agent's recent distinct user tasks.
-    const taskRows = this.sql<{ content: string }>`
-      SELECT DISTINCT content FROM messages
-      WHERE role = 'user' AND length(content) > 0
-      ORDER BY created_at DESC LIMIT ${evalSize}`;
-    const evalSet: EvalInstance<string>[] = taskRows
-      .map((r, i) => ({ id: `task-${i}`, input: r.content.slice(0, 2000) }))
-      .filter(e => e.input.trim().length > 0);
+    // 1. Train/val split from outcome-labeled turns (turn_outcomes ledger).
+    const { train: trainSet, val: evalSet } = buildOutcomeEvalSplit(this.boundSql, evalSize);
     if (evalSet.length === 0) {
-      return { ok: false, error: 'no eval tasks yet — chat with the agent first' };
+      return { ok: false, error: 'no outcome-labeled turns yet — chat with the agent first' };
     }
 
     const model = this.getModel();
 
-    // 2. Metric: run the candidate scaffold against a task, judge the output.
-    const metric = async (candidate: string, instance: EvalInstance<string>): Promise<MetricOutcome> => {
+    // 2. Metric: run the candidate scaffold against the task, then judge
+    // against the recorded outcome — accepted turns are regression checks
+    // against the response the user approved; corrected/frustrated turns are
+    // scored on whether the candidate already addresses the user's correction.
+    const metric = async (
+      candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
+    ): Promise<MetricOutcome> => {
       let output: string;
       try {
-        output = await this.runScaffoldCaptureText(candidate, instance.input);
+        output = await this.runScaffoldCaptureText(instance.input, candidate);
       } catch (err) {
         return { score: 0, feedback: `scaffold execution failed: ${(err as Error).message}` };
       }
+      const exp = instance.expected;
+      const criterion = exp && exp.outcome === 'accepted'
+        ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
+          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${exp.recordedResponse.slice(0, 2500)}`
+        : `The agent's previous response to this task FAILED — the user had to correct it. Score 1.0 when ` +
+          `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
+          `Previous (failed) response:\n${(exp?.recordedResponse ?? '').slice(0, 1500)}\n\n` +
+          `User's correction:\n${(exp?.followup ?? '(not recorded)').slice(0, 1000)}`;
       try {
         const obj = await generateJson({
           model,
@@ -2856,10 +2901,10 @@ export class OrchestratorAgent extends Think<Env> {
             feedback: v.pipe(v.string(), v.minLength(1)),
           }),
           prompt:
-            `Rate this agent response to the task on a 0..1 scale (correctness, ` +
-            `helpfulness, clarity) and give one sentence of specific, actionable ` +
-            `feedback on how the agent's behaviour could improve.\n\n` +
-            `Task:\n${instance.input}\n\nResponse:\n${output.slice(0, 4000)}\n\n` +
+            `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
+            `actionable feedback on how the agent's behaviour could improve.\n\n` +
+            `Task:\n${instance.input}\n\nNew response:\n${output.slice(0, 4000)}\n\n` +
+            `${criterion}\n\n` +
             `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
           providerOptions: effortFor('judge').providerOptions,
         });
@@ -2883,6 +2928,7 @@ export class OrchestratorAgent extends Think<Env> {
       result = await runScaffoldGepa({
         rt: this.rt,
         evalSet,
+        trainSet,
         metric,
         reflectionLm,
         budget,
@@ -2921,6 +2967,23 @@ export class OrchestratorAgent extends Think<Env> {
   async getGepaRuns(limit: number = 20): Promise<GepaRunSummary[]> {
     try { return listGepaRuns(this.boundSql, limit); }
     catch { return []; }
+  }
+
+  // ── Replay-eval loss curve ──────────────────────────────────────
+
+  /** Run one replay-eval pass now: sample outcome-labeled turns, re-run them
+   *  through the LIVE scaffold, score against the recorded outcomes, persist
+   *  the loss entry. Also runs periodically inside lifetime evolution. */
+  @callable()
+  async runReplayEval(opts?: { sampleSize?: number }): Promise<ReplayEvalSummary | null> {
+    return this.engine.runReplayEval(opts?.sampleSize);
+  }
+
+  /** The persisted loss curve (replay_evals), newest first. Read-only — the
+   *  data a loss chart would render. */
+  @callable()
+  async getReplayEvals(limit: number = 50): Promise<ReplayEvalSummary[]> {
+    return listReplayEvals(this.boundSql, limit);
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +
@@ -3157,9 +3220,11 @@ export class OrchestratorAgent extends Think<Env> {
     } catch { return []; }
   }
 
-  /** Run a candidate scaffold against a task and return the concatenated
-   *  text it produced. Used as the GEPA metric's rollout. */
-  private async runScaffoldCaptureText(candidateCode: string, task: string): Promise<string> {
+  /** Run a scaffold against a task and return the concatenated text it
+   *  produced. With candidateCode it is the GEPA metric's rollout; without,
+   *  it rolls the LIVE scaffold — the replay-eval harness's current-config
+   *  runner. */
+  private async runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
     let text = '';
     const result = await runScaffold({
       rt: this.rt,

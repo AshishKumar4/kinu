@@ -13,6 +13,7 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
     listScaffoldVersions: async (limit) => { calls.push(`archive:${limit ?? 'all'}`); return [{ version: 0, status: "current" }]; },
     createTimerTrigger: (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
     cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
+    getReplayEvals: async (limit) => { calls.push(`replay:${limit ?? 'all'}`); return [{ id: "rpl-1", loss: 0.25 }]; },
     ...over,
   };
 }
@@ -80,6 +81,15 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const r = await p.tools.scaffoldVersions.execute(10);
     expect(r).toEqual([{ version: 0, status: "current" }]);
     expect(host.calls).toEqual(["archive:10"]);
+  });
+
+  test("replayEvals exposes the loss curve read-only via the host", async () => {
+    const host = fakeHost();
+    const p = createAgentSelfProvider(host);
+    const r = await p.tools.replayEvals.execute(5);
+    expect(r).toEqual([{ id: "rpl-1", loss: 0.25 }]);
+    expect(host.calls).toEqual(["replay:5"]);
+    expect(p.types).toContain("replayEvals");
   });
 
   test("acceptCurriculumTask rejects a non-string id", async () => {

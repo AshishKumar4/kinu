@@ -30,6 +30,7 @@ export interface AgentSelfHost {
   cancelTrigger(id: string): Promise<unknown> | unknown;
   jobResult(jobId: string): Promise<unknown>;
   listBackgroundJobs(limit?: number): Promise<unknown>;
+  getReplayEvals(limit?: number): Promise<unknown>;
 }
 
 const TYPES = `export declare const agent: {
@@ -66,6 +67,10 @@ const TYPES = `export declare const agent: {
   jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed'; result: string | null; error: string | null } | null>;
   /** List your recent background jobs (newest first). */
   backgroundJobs(limit?: number): Promise<unknown>;
+  /** Read-only loss curve: replay-eval entries (newest first) — outcome-
+   *  labeled past turns re-run against your CURRENT config and scored
+   *  against how they originally landed. loss = 1 − mean score. */
+  replayEvals(limit?: number): Promise<unknown>;
 };
 `;
 
@@ -163,6 +168,14 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           const limit = typeof args[0] === 'number' ? args[0] : undefined;
           try { return await host.listBackgroundJobs(limit); }
           catch (err) { return { error: `agent.backgroundJobs: ${(err as Error).message}` }; }
+        },
+      },
+      replayEvals: {
+        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed.',
+        execute: async (...args: unknown[]) => {
+          const limit = typeof args[0] === 'number' ? args[0] : undefined;
+          try { return await host.getReplayEvals(limit); }
+          catch (err) { return { error: `agent.replayEvals: ${(err as Error).message}` }; }
         },
       },
     },
