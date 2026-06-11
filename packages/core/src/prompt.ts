@@ -21,6 +21,7 @@ import {
   type PromptSurfaceOptions,
 } from './prompting/surface.js';
 import { DEFAULT_SOUL_MD, readSoul } from './identity/soul.js';
+import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
 
 export type {
   PromptBackend,
@@ -44,6 +45,9 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   activeSkills?: ActiveSkillSet;
   /** Optional working directory hint for local/cloud execution surfaces. */
   cwd?: string;
+  /** Discovered AGENTS.md files, ordered root-most first, nearest last.
+   *  CLI: walk-up from cwd; CF: agent VFS root + active sandbox workspace. */
+  agentsMd?: ReadonlyArray<AgentsMdFile>;
   /** Optional date string. Kept opt-in so prompt cache prefixes remain stable. */
   currentDate?: string;
 }
@@ -307,6 +311,7 @@ export function buildSystemPromptSync(
     renderToolsSection(surface),
     renderExecutorSection(surface),
     renderAgentStateSection(surface),
+    opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
     opts.activeSkills ? renderActiveSkillsSection(opts.activeSkills).trim() : '',
     renderKnowledgeSection(opts.extraKnowledge),
   ].filter(Boolean).join('\n\n');

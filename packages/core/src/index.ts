@@ -160,6 +160,11 @@ export {
   type PromptModelProfile,
 } from './prompting/model-profile.js';
 export {
+  renderAgentsMdSection,
+  AGENTS_MD_MAX_CHARS,
+  type AgentsMdFile,
+} from './prompting/agents-md.js';
+export {
   extractJsonArray,
   extractJsonObject,
   jsonArrayOnlyInstruction,
