@@ -105,6 +105,29 @@ describe('createHostCheckpoints', () => {
     } finally { cleanup(); }
   });
 
+  test('the pre-restore snapshot carries no turn meta even while a turn is armed', async () => {
+    const { work, engine, cleanup } = setup();
+    try {
+      writeFileSync(join(work, 'a.txt'), 'original');
+      engine.beginTurn({ turnId: 'turn-1', sessionId: 's' });
+      const id = await engine.ensureCheckpoint(work);
+      writeFileSync(join(work, 'a.txt'), 'damage');
+
+      // The turn is still armed when /undo restores mid-session; the safety
+      // snapshot must NOT inherit it, or /undo groups it with turn-1 and
+      // "/undo 1" after a restore lands back on the pre-turn state.
+      const result = await engine.restore(work, id!);
+      const entries = await engine.list();
+      const preRestore = entries.find((e) => e.id === result.preRestoreId);
+      expect(preRestore).toBeDefined();
+      expect(preRestore!.reason).toBe('pre-restore');
+      expect(preRestore!.turnId).toBeNull();
+      expect(preRestore!.sessionId).toBeNull();
+      const turnSnapshot = entries.find((e) => e.id === id);
+      expect(turnSnapshot!.turnId).toBe('turn-1');
+    } finally { cleanup(); }
+  });
+
   test("the user's own .git repo is never snapshotted or touched", async () => {
     const { work, engine, cleanup } = setup();
     try {

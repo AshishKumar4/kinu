@@ -135,9 +135,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     await fs.writeFile(join(gitDir, WORKDIR_MARKER), resolve(workdir) + '\n', 'utf8');
   }
 
-  function subjectFor(reason: string): string {
+  function subjectFor(meta: CheckpointTurnMeta | null, reason: string): string {
     const clean = (s: string) => s.replace(/[\n|]/g, ' ').trim() || '-';
-    return `turn=${clean(turn?.turnId ?? '-')} session=${clean(turn?.sessionId ?? '-')} ${clean(reason)}`;
+    return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
   }
 
   function parseSubject(subject: string): { turnId: string | null; sessionId: string | null; reason: string } {
@@ -189,9 +189,11 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return tree.stdout.trim();
   }
 
-  /** Take a snapshot of dir. Returns the checkpoint id, or the newest existing
-   *  id when nothing changed since it. */
-  async function snapshot(dir: string, reason: string): Promise<string | null> {
+  /** Take a snapshot of dir tagged with the given turn meta (null for
+   *  out-of-turn snapshots like pre-restore, matching the daemon mirror).
+   *  Returns the checkpoint id, or the newest existing id when nothing
+   *  changed since it. */
+  async function snapshot(dir: string, meta: CheckpointTurnMeta | null, reason: string): Promise<string | null> {
     if (snapshotSkipped(dir)) return null;
     const abs = resolve(dir);
     const gitDir = storeDirFor(abs);
@@ -206,7 +208,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (latestTree.code === 0 && latestTree.stdout.trim() === tree) return latest.id;
     }
 
-    const commit = await runGit(['commit-tree', tree, '-m', subjectFor(reason)], abs, env);
+    const commit = await runGit(['commit-tree', tree, '-m', subjectFor(meta, reason)], abs, env);
     if (commit.code !== 0) throw new Error(`checkpoint commit failed: ${commit.stderr.trim()}`);
     const sha = commit.stdout.trim();
     const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
@@ -272,7 +274,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         const abs = resolve(dir);
         if (turnDone.has(abs)) return null;
         turnDone.add(abs);
-        return await snapshot(abs, reason);
+        return await snapshot(abs, turn, reason);
       } catch {
         // Snapshot failures must never block the mutation they precede.
         return null;
@@ -311,8 +313,11 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (!existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
       const files = await diffToCheckpoint(gitDir, abs, id);
 
-      // Safety snapshot first, so the restore itself is undoable.
-      const preRestoreId = await snapshot(abs, 'pre-restore');
+      // Safety snapshot first, so the restore itself is undoable. Turn meta
+      // is explicitly null: stamping the armed chat turn would merge this
+      // snapshot into that turn's /undo group and break "/undo 1 undoes the
+      // restore" (the daemon mirror passes null for the same reason).
+      const preRestoreId = await snapshot(abs, null, 'pre-restore');
 
       // Remove files created since the checkpoint, then materialize the
       // checkpoint tree (content + recreated deletions) from the store index.

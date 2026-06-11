@@ -67,6 +67,28 @@ describe('performUndo', () => {
     } finally { cleanup(); }
   });
 
+  test('"/undo 1" after a restore undoes the restore, as the success hint promises', async () => {
+    const { work, engine, client, cleanup } = realEngineClient();
+    try {
+      writeFileSync(join(work, 'app.ts'), 'turn zero');
+      engine.beginTurn({ turnId: 'turn-1', sessionId: 'default' });
+      await engine.ensureCheckpoint(work);
+      writeFileSync(join(work, 'app.ts'), 'turn one damage');
+
+      // First /undo restores to pre-turn state and advertises its own undo.
+      const first = await performUndo(client);
+      expect(first.restored).toBe(true);
+      expect(first.text).toContain('Undo this with /undo 1.');
+      expect(readFileSync(join(work, 'app.ts'), 'utf8')).toBe('turn zero');
+
+      // The promised follow-up: /undo 1 must land on the pre-restore
+      // snapshot ("turn one damage"), not re-apply the pre-turn checkpoint.
+      const second = await performUndo(client, '1');
+      expect(second.restored).toBe(true);
+      expect(readFileSync(join(work, 'app.ts'), 'utf8')).toBe('turn one damage');
+    } finally { cleanup(); }
+  });
+
   test('reports honestly when nothing changed since the checkpoint', async () => {
     const { work, engine, client, cleanup } = realEngineClient();
     try {
