@@ -122,7 +122,7 @@ import {
 import { combineAbortSignals } from "@proteus/agent-utils";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
-import { PreambleCraftedExecutor } from "./crafted-tool-registry.js";
+import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { agentAffinityKey } from "./providers/workers-ai.js";
@@ -703,27 +703,25 @@ export class OrchestratorAgent extends Think<Env> {
       const env = this.env as Env & Record<string, unknown>;
       if (!env.LOADER) throw new Error("CF runtime missing LOADER binding");
 
-      const executor = new PreambleCraftedExecutor(env.LOADER, this.rt.craftStore);
+      const executor = new PreambleCraftedExecutor(env.LOADER, this.rt.craftStore, this.boundSql);
 
-      // Seed the `codemode` provider with whatever crafted tools exist at
-      // construction time so the LLM's initial description string lists them.
-      // No-op bodies suffice — the actual execution goes through the preamble.
+      // Seed the `codemode` provider with the INJECTABLE crafted tools at
+      // construction time so the LLM's initial description string lists them
+      // — the same selection the preamble makes, so the advertised set can't
+      // disagree with the callable set. No-op bodies suffice.
       const seededCraftedTools: Record<string, { description: string; execute: (arg: unknown) => Promise<unknown> }> = {};
-      try {
-        for (const t of this.rt.craftStore.list()) {
-          if (!t.code || t.code.startsWith('//')) continue;
-          seededCraftedTools[t.name] = {
-            description: t.description ?? `Crafted tool: ${t.name}`,
-            // This execute is never invoked — the preamble injects the real
-            // body as a `tools.<name>` literal in-sandbox. The dispatcher
-            // miss that would otherwise occur is irrelevant because the
-            // sandbox's `codemode.<name>(args)` goes to the local `tools`
-            // object, not through the dispatcher. We provide an execute
-            // stub only because createCodeTool's ToolProvider shape requires it.
-            execute: async () => ({ error: 'crafted tools run through the preamble, not the dispatcher' }),
-          };
-        }
-      } catch { /* craftStore may not be initialized on first onStart */ }
+      for (const t of selectInjectableCraftedTools(this.rt.craftStore, this.boundSql)) {
+        seededCraftedTools[t.name] = {
+          description: t.description || `Crafted tool: ${t.name}`,
+          // This execute is never invoked — the preamble injects the real
+          // body as a `tools.<name>` literal in-sandbox. The dispatcher
+          // miss that would otherwise occur is irrelevant because the
+          // sandbox's `codemode.<name>(args)` goes to the local `tools`
+          // object, not through the dispatcher. We provide an execute
+          // stub only because createCodeTool's ToolProvider shape requires it.
+          execute: async () => ({ error: 'crafted tools run through the preamble, not the dispatcher' }),
+        };
+      }
 
       const executionRouter = this.rt.executionRouter;
       const executorProviders = executionRouter?.getProviders() ?? [];

@@ -33,7 +33,7 @@ import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
 import type { CraftedToolExecute } from './crafted-executor.js';
-import { effectiveScore } from '../craft/ema.js';
+import { filterByEffectiveScore } from '../craft/ema.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
@@ -191,17 +191,12 @@ function buildCraftedToolSetFromExecute(
     return out;
   }
 
-  const now = Date.now();
-  const scores = new Map<string, { score: number; lastUsedAt: number }>();
-  try {
-    const rows = rt.storage.sql<{ tool_name: string; score: number; last_used_at: number }>`
-      SELECT tool_name, score, last_used_at FROM craft_scores`;
-    for (const r of rows) scores.set(r.tool_name, { score: r.score, lastUsedAt: r.last_used_at });
-  } catch {
-    // craft_scores may not exist yet; treat all tools as unscored
-  }
-
   for (const t of list) preexistingNames.add(t.name);
+
+  // Single injection policy — shared with the CF preamble path.
+  const scorePassing = new Set(
+    filterByEffectiveScore(rt.storage.sql, list, minScore).map((t) => t.name),
+  );
 
   // Relevance filter (Voyager / Tool-Search style): when the agent has many
   // crafted tools, stuffing them all into every turn wastes context and hurts
@@ -229,11 +224,7 @@ function buildCraftedToolSetFromExecute(
   for (const t of list) {
     if (!t.code || t.code.startsWith('//')) continue;
     if (relevantNames && !relevantNames.has(t.name)) continue;
-    const s = scores.get(t.name);
-    if (s) {
-      const eff = effectiveScore(s.score, s.lastUsedAt, now);
-      if (eff < minScore) continue;
-    }
+    if (!scorePassing.has(t.name)) continue;
     const description = t.description || `Crafted tool: ${t.name}`;
     try {
       const execute = factory({ name: t.name, description, code: t.code });

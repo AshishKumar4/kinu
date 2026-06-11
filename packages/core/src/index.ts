@@ -218,7 +218,7 @@ export {
 } from './scaffold/auto-judge.js';
 
 // CraftStore quality
-export { emaUpdate, effectiveScore, updateCraftScores } from './craft/ema.js';
+export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
 // SKILL.md export/import (Hermes-style git-friendly tool format)
 export {

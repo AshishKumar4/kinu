@@ -25,7 +25,8 @@
  */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
-import type { CraftStore } from '@proteus/core';
+import { filterByEffectiveScore } from '@proteus/core';
+import type { CraftStore, SqlExecutor } from '@proteus/core';
 
 /** Minimal WorkerLoader shape. Typed loosely — we hand it to DWE untouched. */
 type WorkerLoaderLike = unknown;
@@ -35,6 +36,29 @@ interface ResolvedProvider {
   name: string;
   fns: Record<string, (...args: unknown[]) => Promise<unknown>>;
   positionalArgs?: boolean;
+}
+
+/**
+ * Select the crafted tools eligible for injection: non-empty, non-comment
+ * code, passing the SAME effective-score policy core's tool builder applies
+ * (filterByEffectiveScore) — one policy, two call sites. Reads the CraftStore
+ * fresh so mid-turn-saved tools are visible to the NEXT execute_tools call.
+ */
+export function selectInjectableCraftedTools(
+  craftStore: CraftStore,
+  sql: SqlExecutor,
+): Array<{ name: string; code: string; description: string }> {
+  let rows: Array<{ name: string; code: string; description: string }>;
+  try {
+    rows = craftStore.list().map(r => ({
+      name: r.name,
+      code: (r.code ?? '').trim(),
+      description: r.description ?? '',
+    })).filter(t => t.name && t.code && !t.code.startsWith('//'));
+  } catch {
+    return [];
+  }
+  return filterByEffectiveScore(sql, rows);
 }
 
 /**
@@ -118,8 +142,8 @@ function wrapProvidersWithStructuredErrors(providers: ResolvedProvider[]): Resol
  *   - Constructed once per DO lifetime (inner DWE caches LOADER stubs).
  *   - `execute(code, providers)` is called by codemode's `createCodeTool`
  *     on every `execute_tools` invocation. We:
- *       a. Read `craftStore.list()` (source of truth — mid-turn-saved tools
- *          are visible to the NEXT execute_tools call).
+ *       a. Select injectable tools (fresh craftStore.list(), score-filtered
+ *          by the shared effective-score policy).
  *       b. Build + splice the preamble.
  *       c. Wrap provider fns with structured-error capture.
  *       d. Delegate to DWE.
@@ -127,12 +151,14 @@ function wrapProvidersWithStructuredErrors(providers: ResolvedProvider[]): Resol
 export class PreambleCraftedExecutor {
   #inner: DynamicWorkerExecutor;
   #craftStore: CraftStore;
+  #sql: SqlExecutor;
 
-  constructor(loader: WorkerLoaderLike, craftStore: CraftStore) {
+  constructor(loader: WorkerLoaderLike, craftStore: CraftStore, sql: SqlExecutor) {
     this.#inner = new DynamicWorkerExecutor({
       loader: loader as ConstructorParameters<typeof DynamicWorkerExecutor>[0]['loader'],
     });
     this.#craftStore = craftStore;
+    this.#sql = sql;
   }
 
   async execute(
@@ -145,18 +171,10 @@ export class PreambleCraftedExecutor {
       ? providers
       : [{ name: 'codemode', fns: providers }];
 
-    // Read fresh from the CraftStore every execute — mid-turn-saved tools
-    // appear on the very next `execute_tools` call (the preamble pattern).
-    const craftedRows = (() => {
-      try {
-        return this.#craftStore.list().map(r => ({
-          name: r.name,
-          code: (r.code ?? '').trim(),
-        })).filter(t => t.name && t.code && !t.code.startsWith('//'));
-      } catch {
-        return [];
-      }
-    })();
+    // Fresh selection every execute — mid-turn-saved tools appear on the very
+    // next `execute_tools` call, score-retired tools drop out (one policy with
+    // core's builder, see selectInjectableCraftedTools).
+    const craftedRows = selectInjectableCraftedTools(this.#craftStore, this.#sql);
 
     const preamble = buildToolsPreamble(craftedRows);
     const injected = injectPreamble(code, preamble);

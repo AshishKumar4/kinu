@@ -35,6 +35,35 @@ export function effectiveScore(
   return score * Math.pow(0.5, daysSince / halfLifeDays);
 }
 
+/**
+ * The ONE injection policy for crafted tools: drop tools whose time-decayed
+ * effective score fell below the threshold. Unscored tools (no craft_scores
+ * row yet) pass — a new tool must get the chance to earn a score. A missing
+ * craft_scores table means nothing is scored yet, so everything passes.
+ *
+ * Used by both injection paths — core's buildCraftedToolSetFromExecute and
+ * the CF PreambleCraftedExecutor — so the filter cannot drift between them.
+ */
+export function filterByEffectiveScore<T extends { name: string }>(
+  sql: SqlExecutor,
+  tools: readonly T[],
+  minScore: number = DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
+  now: number = nowMs(),
+): T[] {
+  let rows: Array<{ tool_name: string; score: number; last_used_at: number }>;
+  try {
+    rows = sql<{ tool_name: string; score: number; last_used_at: number }>`
+      SELECT tool_name, score, last_used_at FROM craft_scores`;
+  } catch {
+    return [...tools];
+  }
+  const scores = new Map(rows.map((r) => [r.tool_name, r]));
+  return tools.filter((t) => {
+    const s = scores.get(t.name);
+    return !s || effectiveScore(s.score, s.last_used_at, now) >= minScore;
+  });
+}
+
 /** Update EMA score for tools used in a successful branch */
 export function updateCraftScores(
   sql: SqlExecutor,
