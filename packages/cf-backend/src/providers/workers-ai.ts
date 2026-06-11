@@ -50,18 +50,30 @@ export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvi
           );
         }
 
-        const headers = new Headers(init?.headers);
-        for (const [key, value] of Object.entries(auth.headers)) headers.set(key, value);
-        // Replica pinning for the server-side prefix cache — without this
-        // header same-agent turns route randomly and the cache never hits.
-        if (opts.sessionAffinity) headers.set('x-session-affinity', opts.sessionAffinity);
         const originalUrl = typeof input === 'string' ? input
           : input instanceof URL ? input.toString()
             : input.url;
-        const url = originalUrl.startsWith(placeholder)
-          ? auth.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
-          : originalUrl;
-        return baseFetch(url, { ...init, headers });
+        const send = async (resolved: { headers: Record<string, string>; baseURL?: string }) => {
+          const headers = new Headers(init?.headers);
+          for (const [key, value] of Object.entries(resolved.headers)) headers.set(key, value);
+          // Replica pinning for the server-side prefix cache — without this
+          // header same-agent turns route randomly and the cache never hits.
+          if (opts.sessionAffinity) headers.set('x-session-affinity', opts.sessionAffinity);
+          const url = originalUrl.startsWith(placeholder) && resolved.baseURL
+            ? resolved.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
+            : originalUrl;
+          return baseFetch(url, { ...init, headers });
+        };
+
+        let res = await send(auth);
+        // Expiry-401: the proactive refresh in UserDO.getAuthHeaders covers
+        // normal expiry, but a token revoked or expired mid-flight comes back
+        // 401 — force one refresh and retry once, same as the codex provider.
+        if (res.status === 401) {
+          const refreshed = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY, { forceRefresh: true });
+          if (refreshed?.baseURL) res = await send(refreshed);
+        }
+        return res;
       });
 
       return createOpenAICompatible({

@@ -1,7 +1,10 @@
 import type { OAuthCredential } from '@proteus/core';
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
-export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.run';
+// `offline_access` is what makes dash.cloudflare.com issue a refresh token
+// (the OAuth client must also have the Refresh Token grant enabled). Without
+// it the credential dies at access-token expiry and Workers AI "disconnects".
+export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.run offline_access';
 export const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
@@ -25,6 +28,16 @@ export interface CloudflareTokenPayload {
   token_type?: unknown;
   expires_in?: unknown;
   scope?: unknown;
+}
+
+/** Token-endpoint rejection carrying the OAuth error code, so callers can
+ *  tell a terminal `invalid_grant` (revoked/expired refresh token) apart
+ *  from transient failures. */
+export class CloudflareOAuthTokenError extends Error {
+  constructor(public readonly oauthError: string, message: string) {
+    super(message);
+    this.name = 'CloudflareOAuthTokenError';
+  }
 }
 
 export async function requestCloudflareOAuthToken(
@@ -52,8 +65,9 @@ export async function requestCloudflareOAuthToken(
   const response = await fetch(CLOUDFLARE_TOKEN_URL, { method: 'POST', headers, body });
   const payload = await readJsonObject(response, 'Cloudflare token endpoint');
   if (!response.ok) {
+    const code = stringField(payload, 'error') ?? `http_${response.status}`;
     const reason = stringField(payload, 'error_description') ?? stringField(payload, 'error') ?? `HTTP ${response.status}`;
-    throw new Error(`Cloudflare token refresh failed: ${reason}`);
+    throw new CloudflareOAuthTokenError(code, `Cloudflare token refresh failed: ${reason}`);
   }
   return payload;
 }

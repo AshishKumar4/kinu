@@ -91,6 +91,10 @@ describe('auth and desktop security invariants', () => {
     expect(provider.scopes).toContain('account-settings.read');
     expect(provider.scopes).toContain('ai.write');
     expect(provider.scopes).toContain('aig.run');
+    // Without offline_access dash.cloudflare.com never issues a refresh
+    // token, so the credential dies at access-token expiry and the user is
+    // forced to reconnect Workers AI on every visit.
+    expect(provider.scopes).toContain('offline_access');
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
     expect(routes).toContain('cloudflare_credential');

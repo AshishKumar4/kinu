@@ -139,8 +139,13 @@ OAuth. Proteus requests these scopes so user-owned Cloudflare billing can power
 Workers AI and AI Gateway calls:
 
 ```text
-user-details.read account-settings.read ai.write aig.run
+user-details.read account-settings.read ai.write aig.run offline_access
 ```
+
+`offline_access` is required: `dash.cloudflare.com/oauth2/token` only returns
+a `refresh_token` when the authorization request asked for it (and the client
+has the Refresh Token grant enabled). Without it the stored credential dies at
+access-token expiry and every visit demands a Workers AI reconnect.
 
 Set:
 

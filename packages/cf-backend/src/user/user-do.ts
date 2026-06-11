@@ -57,6 +57,7 @@ import {
 } from './mcp.js';
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
+  CloudflareOAuthTokenError,
   accountIdFromCloudflareCredential,
   cloudflareAIGatewayId,
   cloudflareWorkersAIBaseURL,
@@ -926,6 +927,7 @@ export class UserDO extends Agent<Env> {
       if (needRefresh) {
         if (!cred.refreshToken) return null;
         const refreshed = await this.refreshCloudflareInternal(cred);
+        if (refreshed === 'revoked') return null;
         if (refreshed) cred = refreshed;
       }
     }
@@ -940,7 +942,13 @@ export class UserDO extends Agent<Env> {
     catch { return null; }
   }
 
-  private async refreshCloudflareInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | null> {
+  /** Returns the rotated credential, `'revoked'` when Cloudflare rejected
+   *  the refresh token outright (`invalid_grant`), or null on transient
+   *  failure (the current credential stays in place). On `invalid_grant`
+   *  the dead refresh token is stripped from storage so the credential
+   *  stops counting as usable and the connect CTA resurfaces, instead of
+   *  advertising a provider whose every call would 401. */
+  private async refreshCloudflareInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | 'revoked' | null> {
     try {
       const next = await refreshCloudflareCredential(this.env, current);
       this.sqlx(
@@ -949,6 +957,15 @@ export class UserDO extends Agent<Env> {
       );
       return next as Credential & { kind: 'oauth' };
     } catch (err) {
+      if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
+        console.warn('[user-do] cloudflare refresh token revoked; reconnect required:', err.message);
+        const { refreshToken: _dead, ...rest } = current;
+        this.sqlx(
+          `UPDATE user_credentials SET value = ?, updated_at = ? WHERE key = ?`,
+          JSON.stringify(rest), Date.now(), CLOUDFLARE_OAUTH_CRED_KEY,
+        );
+        return 'revoked';
+      }
       console.warn('[user-do] cloudflare refresh failed; keeping current credential:', (err as Error).message);
       return null;
     }
