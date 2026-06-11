@@ -244,7 +244,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
       ...(isCf ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs; handle either a string result or `{ error }`.'] : []),
       '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
-      ...(isCf ? ['- `agent.proposeScaffold(rationale, code)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live.'] : []),
+      ...(isCf ? ['- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.'] : []),
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder.',
       '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
     ].join('\n'));

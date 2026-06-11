@@ -72,6 +72,7 @@ import {
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   runScaffold, scaffoldEventsToUIStream, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
+  listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
   // Auto-judge shadow eval — sampled per-turn shadow rollout closure
   runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
@@ -2467,8 +2468,11 @@ export class OrchestratorAgent extends Think<Env> {
    * surface.
    */
   @callable()
-  async proposeScaffold(rationale: string, code: string) {
-    const result = await modifyScaffold(this.rt, rationale, code);
+  async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
+    const result = await modifyScaffold(
+      this.rt, rationale, code,
+      baseVersion !== undefined ? { baseVersion } : undefined,
+    );
     if (result.ok) {
       try {
         this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
@@ -2726,6 +2730,7 @@ export class OrchestratorAgent extends Think<Env> {
     const allowedKeys = new Set([
       'shadow_sample_rate',
       'auto_promote_scaffold',
+      'scaffold_explore_share',
       'sleep_time_compute',
       'tool_surfacing_mode',
       'review_model',
@@ -2744,12 +2749,25 @@ export class OrchestratorAgent extends Think<Env> {
     return { key, value: this.config.get(key) };
   }
 
-  /** List recent scaffold versions with their status. */
+  /** The scaffold variant archive: recent versions with status, DGM lineage
+   *  (parent_version) and aggregated shadow-eval record. Read-only — also the
+   *  backing for the agent.scaffoldVersions codemode helper. Computed by
+   *  core's listScaffoldArchive; keys stay snake_case here because this RPC's
+   *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
   @callable()
   async listScaffoldVersions(limit: number = 20) {
-    return this.sql<{ version: number; written_at: number; rationale: string; status: string }>`
-      SELECT version, written_at, rationale, status FROM scaffold_versions
-      ORDER BY version DESC LIMIT ${limit}`;
+    return listScaffoldArchive(this.boundSql, limit).map((e) => ({
+      version: e.version,
+      written_at: e.writtenAt,
+      rationale: e.rationale,
+      status: e.status,
+      parent_version: e.parentVersion,
+      trials: e.trials,
+      wins: e.wins,
+      losses: e.losses,
+      ties: e.ties,
+      win_rate: e.winRate,
+    }));
   }
 
   // ── GEPA offline scaffold optimisation ─────────────────────────

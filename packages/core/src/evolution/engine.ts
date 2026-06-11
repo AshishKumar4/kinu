@@ -44,6 +44,11 @@ import { BUILTIN_TOOL_NAMES as BUILT_IN_TOOL_NAMES } from '../tools/registry.js'
 import { modifyScaffold } from '../scaffold/modify.js';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
+import {
+  listScaffoldArchive, selectEvolutionBase,
+  type EvolutionBaseSelection, type ScaffoldArchiveEntry,
+} from '../scaffold/archive.js';
+import { readScaffoldVersion } from '../scaffold/shadow.js';
 import { runMCTS } from '../mcts/engine.js';
 import { createAgentConfigStore, type AgentConfigStore } from '../config/store.js';
 
@@ -54,18 +59,47 @@ export function feedbackToQuality(feedback: 'positive' | 'negative'): number {
   return feedback === 'positive' ? 0.9 : 0.2;
 }
 
+/** The archive context handed to the proposal prompt: which version the
+ *  proposal branches from + the variants it may cite as stepping stones. */
+export interface ProposalArchiveContext {
+  base: EvolutionBaseSelection;
+  entries: ReadonlyArray<ScaffoldArchiveEntry>;
+}
+
+function renderArchiveBlock(archive: ProposalArchiveContext): string {
+  const lines = archive.entries.slice(0, 8).map((e) => {
+    const lineage = e.parentVersion != null ? `parent v${e.parentVersion}` : 'root';
+    const record = e.trials > 0 ? `${e.wins}-${e.losses}-${e.ties} W-L-T` : 'untried';
+    return `  v${e.version} [${e.status}, ${lineage}, ${record}] — ${e.rationale.slice(0, 80)}`;
+  });
+  const baseNote = archive.base.mode === 'explore'
+    ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current) — its code is shown above.`
+    : `You are branching from the live current v${archive.base.version}.`;
+  return (
+    `Scaffold archive (your prior variants — lineage + shadow record):\n` +
+    `${lines.join('\n')}\n` +
+    `${baseNote} You may take ideas from any archived variant; cite its version when you do.\n\n`
+  );
+}
+
 /**
  * The scaffold-proposal prompt — documents the REAL sandbox contract
  * (scaffold/executor.ts): the host runtime never crosses the sandbox
  * boundary, so all host interaction goes through the `host.*` bridge, and
  * both `run(rt, task)` parameters receive the task string. Exported so
  * tests can assert a proposal written against these instructions survives
- * the executor's smoke path.
+ * the executor's smoke path. When archive context is given, the prompt shows
+ * the variant archive so proposals can cite stepping stones (DGM-style).
  */
-export function buildScaffoldProposalPrompt(currentScaffold: string, reflection: string): string {
+export function buildScaffoldProposalPrompt(
+  baseScaffold: string,
+  reflection: string,
+  archive?: ProposalArchiveContext,
+): string {
   return (
     `Current agent scaffold (your agentic loop — it runs inside a sandboxed worker):\n` +
-    `\`\`\`js\n${currentScaffold}\n\`\`\`\n\n` +
+    `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
+    (archive ? renderArchiveBlock(archive) : '') +
     `Based on these session patterns:\n${reflection.slice(0, 500)}\n\n` +
     `Propose an improved scaffold. The scaffold MUST:\n` +
     `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
@@ -256,8 +290,21 @@ export class EvolutionEngine {
       const currentScaffold = await this.rt.identity.scaffold.read();
       if (!currentScaffold || currentScaffold.length < 50) return;
 
+      // DGM archive branching: mostly evolve the live current, with a
+      // configurable exploration share drawn from archived stepping stones
+      // (policy + justification in scaffold/archive.ts selectEvolutionBase).
+      const archive = listScaffoldArchive(this.rt.storage.sql, 12);
+      const base = selectEvolutionBase(archive, {
+        exploreShare: this.agentConfig.getScaffoldExploreShare(),
+      });
+      const baseCode = base ? await readScaffoldVersion(this.rt, base.version) : null;
+
       const proposed = await this.rt.llm.complete(
-        buildScaffoldProposalPrompt(currentScaffold, reflection),
+        buildScaffoldProposalPrompt(
+          baseCode ?? currentScaffold,
+          reflection,
+          base && baseCode ? { base, entries: archive } : undefined,
+        ),
       );
 
       // Only attempt mutation if the LLM produced something that looks like a scaffold
@@ -266,10 +313,16 @@ export class EvolutionEngine {
       // Extract just the code from potential markdown fences
       const code = proposed.replace(/```(?:js|javascript)?\n?/g, '').replace(/```\n?$/g, '').trim();
 
-      const rationale = `Session reflection: ${reflection.slice(0, 100)}`;
-      const result = await modifyScaffold(this.rt, rationale, code);
+      const branchNote = base && baseCode
+        ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
+        : 'branched from the live scaffold';
+      const rationale = `Session reflection, ${branchNote}: ${reflection.slice(0, 100)}`;
+      const result = await modifyScaffold(
+        this.rt, rationale, code,
+        base && baseCode ? { baseVersion: base.version } : undefined,
+      );
       if (result.ok) {
-        this.emit({ type: 'scaffold_proposed', message: `Scaffold evolved to v${result.version}: ${reflection.slice(0, 60)}` });
+        this.emit({ type: 'scaffold_proposed', message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` });
       }
     } catch {
       // Scaffold mutation failed validation — that's fine, skip silently

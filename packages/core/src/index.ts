@@ -27,7 +27,10 @@ export {
 } from './identity/naming.js';
 
 // Evolution engine (3-timescale auto-evolution)
-export { EvolutionEngine, feedbackToQuality } from './evolution/engine.js';
+export {
+  EvolutionEngine, feedbackToQuality, buildScaffoldProposalPrompt,
+  type ProposalArchiveContext,
+} from './evolution/engine.js';
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
@@ -182,6 +185,12 @@ export {
   checkMisevolution, recordMisevolutionVeto,
   type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
 } from './scaffold/misevolution.js';
+// Variant archive — DGM-style lineage + branch-base selection over the
+// existing scaffold_versions/scaffold_evaluations rows (no parallel store).
+export {
+  listScaffoldArchive, selectEvolutionBase,
+  type ScaffoldArchiveEntry, type EvolutionBaseSelection,
+} from './scaffold/archive.js';
 // scaffold execution + shadow-mode rollout
 export {
   runScaffold,

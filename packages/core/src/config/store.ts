@@ -22,6 +22,9 @@ export const AGENT_CONFIG_KEYS = {
   sleepTimeCompute: 'sleep_time_compute',
   autoPromoteScaffold: 'auto_promote_scaffold',
   shadowSampleRate: 'shadow_sample_rate',
+  /** Fraction of scaffold proposals that branch from an archived variant
+   *  instead of the live current (DGM archive exploration). */
+  scaffoldExploreShare: 'scaffold_explore_share',
   toolSurfacingMode: 'tool_surfacing_mode',
   reviewModel: 'review_model',
   /** Comma-separated list of skill names the operator wants always-on. */
@@ -69,6 +72,8 @@ export interface AgentConfigStore {
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getAutoPromoteScaffold(): boolean;
   getShadowSampleRate(): number;
+  /** Archive-exploration share for proposal base selection (0..1, default 0.2). */
+  getScaffoldExploreShare(): number;
   getToolSurfacingMode(): 'all' | 'relevant';
   getReviewModel(): string | null;
   /** Skills the operator has pinned as always-active for this agent. */
@@ -157,6 +162,11 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       const v = get(AGENT_CONFIG_KEYS.shadowSampleRate);
       const n = v ? Number(v) : 0.25;
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.25;
+    },
+    getScaffoldExploreShare() {
+      const v = get(AGENT_CONFIG_KEYS.scaffoldExploreShare);
+      const n = v ? Number(v) : 0.2;
+      return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
     },
     getToolSurfacingMode() {
       const v = get(AGENT_CONFIG_KEYS.toolSurfacingMode);

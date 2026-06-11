@@ -22,10 +22,17 @@ interface ModifyResult {
   stage?: number;
 }
 
+export interface ModifyScaffoldOpts {
+  /** The archive version this proposal branches from (DGM stepping stone).
+   *  Recorded as the new row's parent_version. Default: the live current. */
+  baseVersion?: number;
+}
+
 export async function modifyScaffold(
   rt: AgentRuntime,
   rationale: string,
   code: string,
+  opts?: ModifyScaffoldOpts,
 ): Promise<ModifyResult> {
   const minRationaleLength = DEFAULT_CONFIG.scaffold.minRationaleLength;
 
@@ -88,13 +95,24 @@ export async function modifyScaffold(
     SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions`;
   const newVersion = (maxRows[0]?.v ?? currentVersion) + 1;
 
+  // Lineage: a proposal may branch from ANY archived version (DGM stepping
+  // stones), not only the current. The base must be a real archive row.
+  const baseVersion = opts?.baseVersion ?? currentVersion;
+  if (baseVersion !== currentVersion) {
+    const baseRows = rt.storage.sql<{ version: number }>`
+      SELECT version FROM scaffold_versions WHERE version = ${baseVersion} LIMIT 1`;
+    if (baseRows.length === 0) {
+      return { ok: false, stage: 3, error: `base version v${baseVersion} not found in the scaffold archive` };
+    }
+  }
+
   // Ensure the current content is backed up at its own version file so
   // rollback can restore it.
   const current = await rt.identity.scaffold.read();
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${currentVersion}`, current);
   rt.storage.sql`
-    INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending')
+    INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_version)
+    VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion})
   `;
 
   // Gate 4: write the pending code to the VERSIONED file, NOT the live file.

@@ -13,6 +13,9 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
   // status: 'current' | 'pending' | 'rolled_back' | 'historical'
   // Drives shadow-mode rollout in scaffold/shadow.ts. Existing rows
   // (created before this column landed) default to 'current'.
+  // parent_version: DGM-style lineage — the version this one branched from
+  // (NULL for the v0 bootstrap and pre-lineage rows). Drives the variant
+  // archive in scaffold/archive.ts.
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_versions (
       version        INTEGER PRIMARY KEY,
@@ -20,13 +23,17 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
       rationale      TEXT NOT NULL,
       canary_score   REAL,
       baseline_score REAL,
-      status         TEXT NOT NULL DEFAULT 'current'
+      status         TEXT NOT NULL DEFAULT 'current',
+      parent_version INTEGER
     )
   `);
-  // Existing databases: backfill status via ALTER if the column is
-  // missing. Try/catch because ALTER fails if the column already exists.
+  // Existing databases: backfill columns via ALTER if missing. Try/catch
+  // because ALTER fails if the column already exists.
   try {
     execRaw(`ALTER TABLE scaffold_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'current'`);
+  } catch { /* column exists — fine */ }
+  try {
+    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN parent_version INTEGER`);
   } catch { /* column exists — fine */ }
 
   execRaw(`
