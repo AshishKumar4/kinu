@@ -315,6 +315,14 @@ export {
 // Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
 export { appendMemoryNote } from './memory/note.js';
 
+// Zero-LLM transcript search over the canonical `messages` table (FTS5).
+// Backs the `memory` tool's `sessions` action on both backends.
+export {
+  SessionSearchStore,
+  type SessionSearchHit, type SessionScrollMessage,
+  type SessionScrollResult, type SessionSummary,
+} from './memory/session-search.js';
+
 // agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
 // Top-K recent facts are auto-rendered into the system prompt every turn.
 export {
