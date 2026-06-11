@@ -45,6 +45,7 @@ import {
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
 import { watchDeviceConsents } from '../consent-watch.js';
 import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
+import { requireInteractiveTerminal } from '../prompt.js';
 import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
@@ -785,6 +786,7 @@ function welcomeMessage(agentName: string): DisplayMessage {
 }
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
+  requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   const root = createRoot(renderer);
   let currentClient = opts.client;

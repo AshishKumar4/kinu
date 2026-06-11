@@ -10,6 +10,7 @@ import {
 } from '../agent-create.js';
 import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list.js';
 import type { AgentMode } from '../config.js';
+import { requireInteractiveTerminal } from '../prompt.js';
 import { DeviceConnectOverlay } from './overlays.js';
 import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { tuiColors } from './theme.js';
@@ -368,6 +369,7 @@ function ModeSegment(props: {
 }
 
 export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiAction> {
+  requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   const root = createRoot(renderer);
   return await new Promise<HomeTuiAction>((resolve) => {

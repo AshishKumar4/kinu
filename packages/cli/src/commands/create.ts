@@ -1,14 +1,14 @@
-import * as readline from 'node:readline';
 import { ensureAgentHome, pathHint, type AgentMode } from '../config.js';
 import { createCliAgent } from '../agent-create.js';
 import { ACCENT, DIM, OK, createSpinner, printCreatedCard, printError } from '../display.js';
+import { ask, canPrompt } from '../prompt.js';
 
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
   mode?: string; alias?: string; aliasAgent?: boolean; origin?: string;
 }): Promise<void> {
   ensureAgentHome();
-  const interactive = process.stdin.isTTY && (!name || !opts.mode);
+  const interactive = canPrompt() && (!name || !opts.mode);
   if (!name) {
     name = interactive
       ? await ask('Agent name', 'jarvis')
@@ -64,11 +64,4 @@ async function resolveMode(raw: string | undefined, interactive: boolean): Promi
   const answer = (await ask('Mode (cloud/local)', 'cloud')).toLowerCase();
   if (answer === 'local' || answer === 'l') return 'local';
   return 'cloud';
-}
-
-async function ask(label: string, fallback: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>(resolve => rl.question(`${DIM(label)} ${DIM(`[${fallback}]`)} ${ACCENT('›')} `, resolve));
-  rl.close();
-  return answer.trim() || fallback;
 }

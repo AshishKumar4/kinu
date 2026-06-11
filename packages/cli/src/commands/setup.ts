@@ -1,4 +1,3 @@
-import * as readline from 'node:readline';
 import {
   createCodexOAuthClient,
   decodeCodexAccountId,
@@ -6,6 +5,7 @@ import {
 } from '@proteus/core';
 import { loadConfigFile, saveConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
+import { ask, askSecret, canPrompt, confirm } from '../prompt.js';
 import { authCommand, openBrowser } from './auth.js';
 
 export async function setupCommand(opts: {
@@ -30,7 +30,10 @@ export async function setupCommand(opts: {
   }
 
   if (!opts.skipCloud && !config.accessToken) {
-    const shouldLogin = opts.yes || await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true);
+    // Without a terminal there is nothing to ask — fall through to the
+    // honest instruction paths below instead of letting readline hang on
+    // a pipe (the `curl | bash` installer freeze).
+    const shouldLogin = opts.yes || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });
       cloudReady = Boolean(loadConfigFile().accessToken);
@@ -51,9 +54,14 @@ export async function setupCommand(opts: {
     return;
   }
 
-  if (!process.stdin.isTTY && !opts.yes && !opts.provider && !opts.localModel && !cloudSkipped && cloudReady) {
-    console.log(`${OK('✓')} Proteus account ready.`);
-    console.log(DIM('Workers AI is tied to the Cloudflare account used during browser sign-in.'));
+  if (!opts.yes && !opts.provider && !opts.localModel && !canPrompt()) {
+    if (cloudReady) {
+      console.log(`${OK('✓')} Proteus account ready.`);
+      console.log(DIM('Workers AI is tied to the Cloudflare account used during browser sign-in.'));
+    } else {
+      console.log(`${WARN('!')} Proteus account was not connected (no interactive terminal).`);
+      console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
+    }
     console.log(DIM('Run proteus provider connect <provider> to configure local agent model access.'));
     return;
   }
@@ -213,62 +221,4 @@ function stripProviderPrefix(model: string, provider: string): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function confirm(label: string, fallback: boolean): Promise<boolean> {
-  const answer = (await ask(label, fallback ? 'Y/n' : 'y/N')).trim().toLowerCase();
-  if (!answer || answer === 'y' || answer === 'yes') return true;
-  if (answer === 'n' || answer === 'no') return false;
-  return fallback;
-}
-
-async function ask(label: string, fallback = ''): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((resolve) => {
-    const suffix = fallback ? ` ${DIM(`[${fallback}]`)}` : '';
-    rl.question(`${DIM(label)}${suffix} ${ACCENT('›')} `, resolve);
-  });
-  rl.close();
-  return answer.trim() || fallback;
-}
-
-async function askSecret(label: string, fallback = ''): Promise<string> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY || typeof process.stdin.setRawMode !== 'function') {
-    return ask(label, fallback);
-  }
-
-  process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.setEncoding('utf8');
-  let value = '';
-  return new Promise<string>((resolve) => {
-    const onData = (chunk: string) => {
-      for (const ch of chunk) {
-        if (ch === '\u0003') {
-          process.stdin.setRawMode(false);
-          process.stdin.off('data', onData);
-          process.stdout.write('\n');
-          process.exit(130);
-        }
-        if (ch === '\r' || ch === '\n') {
-          process.stdin.setRawMode(false);
-          process.stdin.off('data', onData);
-          process.stdout.write('\n');
-          resolve(value.trim() || fallback);
-          return;
-        }
-        if (ch === '\u007f' || ch === '\b') {
-          if (value.length > 0) {
-            value = value.slice(0, -1);
-            process.stdout.write('\b \b');
-          }
-          continue;
-        }
-        value += ch;
-        process.stdout.write('*');
-      }
-    };
-    process.stdin.on('data', onData);
-  });
 }
