@@ -5,10 +5,15 @@
  * slash commands through the shared command core, surfaces device-consent
  * requests inline while a turn is processing, and maps the first Ctrl+C during
  * a turn to client.stop() (second Ctrl+C, or Ctrl+C while idle, exits).
+ *
+ * Steering trio (classic equivalents): a line typed while a turn runs STEERS
+ * the running turn (client.steer); `/queue <text>` holds a message to send
+ * after the turn; `/fork [n]` walks back to an earlier user message, forking
+ * the conversation there and pre-filling the input with it for editing.
  */
 
 import * as readline from 'node:readline';
-import type { AgentClient, AgentClientEvent } from './agent-client.js';
+import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
 import { executeSlashCommand, renderStatusLines, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
 import { watchTerminalConsents } from './consent-watch.js';
@@ -32,20 +37,36 @@ export interface ChatLoopOpts {
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
-  const { client } = opts;
+  let client = opts.client;
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   // Per-turn render state — reset on every user turn so the agent-name header
   // prints once per turn and the typing indicator stops on first output.
-  const typing = createTypingIndicator(client.agentName);
+  let typing = createTypingIndicator(client.agentName);
   let headerPrinted = false;
   let turnInFlight = false;
   let interruptRequested = false;
   let exiting = false;
+  /** Turn-lifecycle depth from paired turn-start/turn-end events — covers
+   *  cascaded turns (leftover steers, cloud-steer follow-ups) past send(). */
+  let activeTurns = 0;
+  /** Messages held for after the current turn (/queue, or a steer that lost
+   *  the race with turn end). Drained FIFO before the next prompt. */
+  const queuedInputs: string[] = [];
+  /** Input pre-filled into the next prompt (walk-back fork edit). */
+  let pendingPrefill: string | null = null;
+  /** True while a consent question owns the readline — its answer lines must
+   *  not be mistaken for mid-turn steering input. */
+  let consentAskPending = false;
 
-  const unsubscribe = client.subscribe((event) =>
-    renderClientEvent(event, client.agentName, typing, () => headerPrinted, (v) => { headerPrinted = v; }));
+  const onClientEvent = (event: AgentClientEvent) => {
+    if (event.type === 'turn-start') activeTurns += 1;
+    else if (event.type === 'turn-end') activeTurns = Math.max(0, activeTurns - 1);
+    renderClientEvent(event, client.agentName, typing, () => headerPrinted, (v) => { headerPrinted = v; });
+  };
+  let unsubscribe = client.subscribe(onClientEvent);
 
   const onExit = async () => {
     if (exiting) return;
@@ -63,6 +84,11 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       interruptRequested = true;
       client.stop();
       console.log(WARN('\n  Interrupting the active turn… (Ctrl+C again to exit)'));
+      // Interrupt means stop — held messages must not auto-fire afterwards.
+      if (queuedInputs.length > 0) {
+        console.log(WARN(`  Dropping ${queuedInputs.length} queued message(s):`));
+        for (const queued of queuedInputs.splice(0)) console.log(DIM(`    ⧗ ${queued}`));
+      }
       return;
     }
     void onExit();
@@ -70,35 +96,97 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   rl.on('SIGINT', onInterrupt);
   process.on('SIGINT', onInterrupt);
 
+  // Mid-turn input: a plain line steers the running turn; /queue holds it for
+  // after; /stop interrupts. Lines answering a consent question are excluded.
+  const onMidTurnLine = async (input: string) => {
+    const command = input.split(/\s+/, 1)[0]!.toLowerCase();
+    if (command === '/stop') {
+      client.stop();
+      return;
+    }
+    if (command === '/queue') {
+      const text = input.slice('/queue'.length).trim();
+      if (text) {
+        queuedInputs.push(text);
+        console.log(DIM(`  ⧗ queued — sends after this turn (${queuedInputs.length} waiting)`));
+      } else {
+        console.log(DIM('  Usage while a turn runs: /queue <text>'));
+      }
+      return;
+    }
+    if (input.startsWith('/')) {
+      console.log(DIM('  A turn is running — type to steer it, or use /queue <text> and /stop.'));
+      return;
+    }
+    const resolved = await resolvePromptAttachments(input);
+    for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
+    const payload = resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text;
+    if (client.steer(payload, { cwd: process.cwd() })) {
+      console.log(DIM('  ↪ steering the running turn'));
+    } else {
+      queuedInputs.push(input);
+      console.log(DIM('  ⧗ the turn just finished — queued to send next'));
+    }
+  };
+  rl.on('line', (line) => {
+    if (!turnInFlight || consentAskPending || exiting) return;
+    const input = line.trim();
+    if (!input) return;
+    void onMidTurnLine(input);
+  });
+
   await client.connect();
   if (tty) {
     console.log(`\n${ACCENT(client.agentName)} ${DIM(`${client.mode} chat`)}`);
-    console.log(DIM('Type a message, /help for commands, /exit to leave. Ctrl+C interrupts a running turn.\n'));
+    console.log(DIM('Type a message, /help for commands, /exit to leave. Ctrl+C interrupts a running turn.'));
+    console.log(DIM('While a turn runs: type+Enter steers it · /queue <text> sends after · /fork walks back.\n'));
   }
   if (client.mode === 'cloud') await maybeOfferDeviceConnect(rl, tty);
 
-  const prompt = tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
+  const promptLabel = () => tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
+
+  /** Wait until every cascaded turn settles — a leftover steer (local) or a
+   *  steered follow-up (cloud) starts moments after the previous turn-end, so
+   *  idle must hold through a short debounce. */
+  const waitForTurnsToSettle = async () => {
+    for (;;) {
+      while (activeTurns > 0 && !exiting) await sleep(25);
+      if (exiting) return;
+      await sleep(60);
+      if (activeTurns === 0) return;
+    }
+  };
+
+  const consentAsk = async (question: string, signal: AbortSignal) => {
+    consentAskPending = true;
+    try {
+      return await ask(rl, question, signal);
+    } finally {
+      consentAskPending = false;
+    }
+  };
 
   const runTurn = async (input: string) => {
     // @path mentions (plus quoted/~ path tokens) become attachments: images
     // and PDFs inline as file parts, other files stay path references.
-    const prompt = await resolvePromptAttachments(input);
-    for (const problem of prompt.errors) console.log(WARN(`  ${problem}`));
-    if (prompt.attached.length > 0) {
-      console.log(DIM(`  📎 ${prompt.attached.map(describePromptAttachment).join(' · ')}`));
+    const resolved = await resolvePromptAttachments(input);
+    for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
+    if (resolved.attached.length > 0) {
+      console.log(DIM(`  📎 ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
     }
     headerPrinted = false;
     turnInFlight = true;
     interruptRequested = false;
     typing.start();
     const consentWatch = client.consents
-      ? watchTerminalConsents(client.consents, client.agentName, (question, signal) => ask(rl, question, signal))
+      ? watchTerminalConsents(client.consents, client.agentName, consentAsk)
       : null;
     try {
       await client.send(
-        prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
+        resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text,
         { cwd: process.cwd() },
       );
+      await waitForTurnsToSettle();
     } catch (err) {
       typing.stop();
       console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
@@ -110,19 +198,70 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     console.log('\n');
   };
 
+  const handleFork = async (ref: string | undefined) => {
+    const history = await client.history().catch(() => []);
+    const candidates = forkCandidates(history);
+    if (candidates.length === 0) {
+      console.log(WARN('  No user messages to walk back to.'));
+      return;
+    }
+    if (!ref) {
+      console.log(`\n${DIM('Walk back to (1 = most recent):')}`);
+      candidates.forEach((candidate, i) => {
+        console.log(`  ${ACCENT(String(i + 1))} ${candidate.text.replace(/\s+/g, ' ').slice(0, 100)}`);
+      });
+      console.log(DIM('Fork with /fork <number> — the conversation restarts just before that message.\n'));
+      return;
+    }
+    const index = Number.parseInt(ref, 10) - 1;
+    const picked = Number.isInteger(index) ? candidates[index] : undefined;
+    if (!picked) {
+      console.log(WARN(`  No walk-back candidate "${ref}". List them with /fork.`));
+      return;
+    }
+    const result = await client.fork(picked);
+    if (result.client !== client) {
+      unsubscribe();
+      const previous = client;
+      client = result.client;
+      unsubscribe = client.subscribe(onClientEvent);
+      typing = createTypingIndicator(client.agentName);
+      await previous.close().catch(() => {});
+      await client.connect();
+    }
+    console.log(`\n${DIM('Forked')} ${ACCENT(result.label)} ${DIM('— edit the message and press Enter to resend.')}\n`);
+    pendingPrefill = picked.text;
+  };
+
   if (opts.initialPrompt?.trim()) {
     await runTurn(opts.initialPrompt.trim());
   }
 
   while (!exiting) {
-    const line = await ask(rl, prompt);
+    // Drain messages queued during the previous turn, in order.
+    while (!exiting && queuedInputs.length > 0) {
+      await runTurn(queuedInputs.shift()!);
+    }
+    const prefill = pendingPrefill;
+    pendingPrefill = null;
+    const line = await ask(rl, promptLabel(), undefined, prefill ?? undefined);
     if (line === null) break; // EOF
     const input = line.trim();
     if (!input) continue;
 
     if (input.startsWith('/')) {
       try {
-        const done = await applySlashOutcome(client, rl, await executeSlashCommand(client, input));
+        const outcome = await executeSlashCommand(client, input);
+        if (outcome.kind === 'queue') {
+          if (outcome.text) queuedInputs.push(outcome.text);
+          else console.log(DIM('  Usage: /queue <text> — it sends after the running turn (or immediately when idle).'));
+          continue;
+        }
+        if (outcome.kind === 'fork') {
+          await handleFork(outcome.ref);
+          continue;
+        }
+        const done = await applySlashOutcome(client, rl, outcome);
         if (done === 'exit') { await onExit(); return; }
       } catch (err) {
         console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
@@ -138,8 +277,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
 /** Read one line; resolves null on EOF/close (so piped input terminates
  *  cleanly) and on abort (a consent question cancelled by turn end). Settling
- *  always detaches the listeners, so abandoned questions never leak them. */
-function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal): Promise<string | null> {
+ *  always detaches the listeners, so abandoned questions never leak them.
+ *  `prefill` seeds the line buffer for editing (walk-back fork resend). */
+function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefill?: string): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
     const settle = (answer: string | null) => {
@@ -155,6 +295,7 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal): Prom
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
       rl.question(prompt, settle);
+      if (prefill) rl.write(prefill);
     } catch {
       settle(null); // readline already closed (stdin hit EOF) — treat as EOF
     }
@@ -279,6 +420,10 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'cancel':
       console.log(DIM('  Nothing to cancel.'));
       return 'ok';
+    case 'queue':
+    case 'fork':
+      // Surface-owned outcomes — runChatLoop intercepts them before this.
+      return 'ok';
     case 'unknown':
       console.log(WARN(`  Unknown command: ${outcome.command}. Type /help`));
       return 'ok';
@@ -302,6 +447,10 @@ function renderClientEvent(
         typing.stop();
         setHeader(false);
         console.log(`\n${DIM(`⚡ ${event.event ?? 'event'}`)} ${MUTED(event.text.slice(0, 80))}`);
+      } else {
+        // A cascaded user turn (steer follow-up / queued leftover) gets its
+        // own agent-name header when its response starts.
+        setHeader(false);
       }
       break;
     case 'text-delta':

@@ -6,7 +6,7 @@ import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { SLASH_COMMANDS } from '../src/slash-commands.js';
-import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay } from '../src/tui/overlays.js';
+import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays.js';
 import type { AgentModelEntry } from '../src/model-catalog.js';
 import { MessageList } from '../src/tui/messages.js';
 
@@ -99,6 +99,61 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('steered user messages carry the steering marker', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: '#0f0f23' }}>
+          <MessageList
+            streamingText={null}
+            messages={[
+              { id: 'u1', role: 'user', content: 'start the deploy' },
+              { id: 'u2', role: 'user', content: 'use staging instead', steered: true },
+            ]}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('use staging instead');
+      expect(frame).toContain('↪ steering');
+      // The marker belongs to the steered bubble only.
+      expect(frame.split('↪ steering')).toHaveLength(2);
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('walk-back overlay lists recent user messages newest first', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <WalkbackOverlay
+            candidates={[
+              { text: 'now run step two', occurrenceFromEnd: 1 },
+              { text: 'plan the migration', occurrenceFromEnd: 1 },
+            ]}
+            terminal={{ width: 96, height: 24 }}
+            onSelect={() => {}}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('Walk back');
+      expect(frame).toContain('Enter forks before that message');
+      expect(frame).toContain('latest · now run step two');
+      expect(frame).toContain('-1 · plan the migration');
     } finally {
       root.render(<box />);
       renderer.destroy();

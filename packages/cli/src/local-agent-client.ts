@@ -30,6 +30,7 @@ import {
 import { recordAgentClientEvent } from './session-recorder.js';
 import { normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
 import {
+  findForkPivot,
   promptFiles,
   promptText,
 } from './agent-client.js';
@@ -38,12 +39,14 @@ import type {
   AgentClientEvent,
   AgentClientSendOptions,
   AgentClientStatus,
+  AgentForkResult,
   AgentPrompt,
   AgentJobSummary,
   AgentSearchNode,
   AgentToolSurface,
   AgentTranscriptMessage,
   AgentTurnResult,
+  ForkPoint,
   LocalSessionControls,
 } from './agent-client.js';
 
@@ -172,6 +175,66 @@ export class LocalAgentClient implements AgentClient {
     } finally {
       if (this.pending === pending) this.pending = null;
     }
+  }
+
+  steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
+    const text = promptText(prompt);
+    const files = promptFiles(prompt);
+    const accepted = this.session.steer(files.length > 0 ? { text, files } : text);
+    if (!accepted) return false;
+    this.activeCliSession.append('user', {
+      text,
+      steered: true,
+      cwd: opts.cwd ?? process.cwd(),
+      backend: 'local',
+      ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
+    });
+    return true;
+  }
+
+  /** Walk-back fork: copy the durable conversation strictly before the picked
+   *  user message into a fresh conversation, recorded as a forked CLI session
+   *  (the existing --fork lineage), and re-point this client at it. */
+  async fork(point: ForkPoint): Promise<AgentForkResult> {
+    if (this.pending) throw new Error('Cannot fork while a turn is running.');
+    if (this.activeCliSession.mode === 'none') {
+      throw new Error('This chat is not recorded (--no-session), so there is no conversation to fork.');
+    }
+    const conversationId = this.conversationIdForAgentSession();
+    const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
+      SELECT id, parent_id, role, content, created_at
+      FROM messages
+      WHERE session_id = ${conversationId} AND role IN ('user', 'assistant')
+      ORDER BY created_at ASC, rowid ASC`;
+    const pivot = findForkPivot(rows, point);
+    if (pivot < 0) {
+      throw new Error('Could not locate that message in the durable conversation; it may predate recording.');
+    }
+
+    const next = createCliSession(this.agentName, {
+      ...this.deps.sessionOptions,
+      fork: this.activeCliSession.id,
+      session: undefined,
+      continue: undefined,
+      resume: undefined,
+      conversationId: undefined,
+    });
+    // Copy rows before the pivot under fresh ids (id is the table PK), keeping
+    // timestamps and remapping the parent chain.
+    const idMap = new Map<string, string>();
+    for (const row of rows.slice(0, pivot)) {
+      const newId = crypto.randomUUID();
+      idMap.set(row.id, newId);
+      const parent = row.parent_id ? idMap.get(row.parent_id) ?? null : null;
+      this.deps.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${newId}, ${next.conversationId}, ${parent}, ${row.role}, ${row.content}, ${row.created_at})`;
+    }
+
+    await this.session.end().catch(() => {});
+    this.activeCliSession = next;
+    this.session = this.createAgentSession(this.conversationIdForAgentSession());
+    await this.connect();
+    return { client: this, label: `session ${next.id}` };
   }
 
   stop(): void {

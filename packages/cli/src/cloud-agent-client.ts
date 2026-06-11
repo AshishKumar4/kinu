@@ -26,11 +26,13 @@ import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from 
 import {
   asRecord,
   createUserUiMessage,
+  findForkPivot,
   promptFiles,
   promptText,
   type AgentClient,
   type AgentClientEvent,
   type AgentClientSendOptions,
+  type AgentForkResult,
   type AgentPrompt,
   type AgentClientStatus,
   type AgentJobSummary,
@@ -39,6 +41,7 @@ import {
   type AgentTranscriptMessage,
   type AgentTurnResult,
   type DeviceConsentSurface,
+  type ForkPoint,
 } from './agent-client.js';
 
 export interface CloudAgentClientOptions {
@@ -58,7 +61,6 @@ interface ActiveTurn {
   toolCalls: AgentTurnResult['toolCalls'];
   toolById: Map<string, AgentTurnResult['toolCalls'][number]>;
   resolve: (result: AgentTurnResult) => void;
-  reject: (err: Error) => void;
 }
 
 /**
@@ -84,6 +86,8 @@ export class CloudAgentClient implements AgentClient {
   private ws: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
   private readonly activeTurns = new Map<string, ActiveTurn>();
+  /** In-flight @callable RPCs over the agent websocket ({type:'rpc'} frames). */
+  private readonly pendingRpcs = new Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
@@ -112,6 +116,22 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
+    return this.submit(prompt, opts, false);
+  }
+
+  /** Cloud steer: the DO persists an incoming chat request immediately and
+   *  serializes it on its TurnQueue, so a mid-turn submit reaches the agent
+   *  now and runs as the next turn at the boundary. Fire-and-forget — the
+   *  response (and any pre-flight failure) streams through the event feed. */
+  steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
+    if (this.activeTurns.size === 0) return false;
+    void this.submit(prompt, opts, true).catch((err) => {
+      this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+    });
+    return true;
+  }
+
+  private async submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Promise<AgentTurnResult> {
     const text = promptText(prompt).trim();
     const files = promptFiles(prompt);
     if (!text && files.length === 0) throw new Error('prompt required');
@@ -124,21 +144,22 @@ export class CloudAgentClient implements AgentClient {
       text,
       cwd: opts.cwd ?? process.cwd(),
       backend: 'cloud',
+      ...(steered ? { steered: true } : {}),
       ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
     });
     this.emit({ type: 'turn-start', kind: 'user', text });
 
     const requestId = randomRequestId();
-    return await new Promise<AgentTurnResult>((resolve, reject) => {
-      this.activeTurns.set(requestId, {
+    return await new Promise<AgentTurnResult>((resolve) => {
+      const turn: ActiveTurn = {
         startedAt: Date.now(),
         text: '',
         steps: 0,
         toolCalls: [],
         toolById: new Map(),
         resolve,
-        reject,
-      });
+      };
+      this.activeTurns.set(requestId, turn);
 
       try {
         ws.send(JSON.stringify({
@@ -154,7 +175,53 @@ export class CloudAgentClient implements AgentClient {
           type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
         }));
       } catch (err) {
+        // The turn-start already went out — keep the lifecycle paired.
         this.activeTurns.delete(requestId);
+        this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+        this.settleTurn(turn, true);
+      }
+    });
+  }
+
+  /** Walk-back fork: the cloud's fork primitive is agent-level — forkAgent
+   *  copies SOUL/memory/messages up to a message id into a NEW agent DO. We
+   *  fork at the message preceding the picked user message and hand back a
+   *  sibling client pointed at the fork. */
+  async fork(point: ForkPoint): Promise<AgentForkResult> {
+    if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
+    const rows = await getCloudAgentMessages(this.origin, this.token, this.cloudName);
+    const pivot = findForkPivot(rows, point);
+    if (pivot < 0) throw new Error('Could not locate that message in the agent’s chat history.');
+    if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud agent.');
+    const untilId = rows[pivot - 1]!.id;
+    const result = await this.callRpc('forkAgent', [untilId]);
+    const forkName = (result as { name?: unknown } | null)?.name;
+    if (typeof forkName !== 'string' || !forkName) throw new Error('Cloud fork returned no agent name.');
+    const sibling = new CloudAgentClient({
+      origin: this.origin,
+      token: this.token,
+      agentName: forkName,
+      cloudName: forkName,
+      session: {
+        sessionDir: this.sessionOptions.sessionDir,
+        noSession: this.sessionOptions.noSession,
+      },
+    });
+    return { client: sibling, label: `agent ${forkName}` };
+  }
+
+  /** Invoke a @callable agent method over the websocket ({type:'rpc'}). */
+  private async callRpc(method: string, args: unknown[]): Promise<unknown> {
+    await this.ensureOpen();
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud agent connection is not open.');
+    const id = randomRequestId();
+    return await new Promise<unknown>((resolve, reject) => {
+      this.pendingRpcs.set(id, { resolve, reject });
+      try {
+        ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
+      } catch (err) {
+        this.pendingRpcs.delete(id);
         reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
@@ -174,7 +241,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async close(): Promise<void> {
-    this.rejectActive(new Error('Cloud agent connection closed.'));
+    this.failInFlight(new Error('Cloud agent connection closed.'));
     this.ws?.close();
     this.ws = null;
     this.connectPromise = null;
@@ -262,13 +329,16 @@ export class CloudAgentClient implements AgentClient {
     }
   }
 
-  private settleTurn(turn: ActiveTurn): void {
+  /** Settle a turn: every turn-start is followed by exactly ONE turn-end —
+   *  failures carry hadError (the error event precedes it) so surfaces can
+   *  track turn lifecycle by pairing starts with ends. */
+  private settleTurn(turn: ActiveTurn, hadError = false): void {
     const result: AgentTurnResult = {
       text: turn.text,
       toolCalls: turn.toolCalls,
       steps: turn.steps,
       durationMs: Date.now() - turn.startedAt,
-      hadError: false,
+      hadError,
     };
     this.emit({ type: 'turn-end', turn: result });
     turn.resolve(result);
@@ -296,10 +366,10 @@ export class CloudAgentClient implements AgentClient {
     ws.addEventListener('message', (event) => this.handleMessage(event));
     ws.addEventListener('close', () => {
       if (this.ws === ws) this.ws = null;
-      this.rejectActive(new Error('Cloud agent connection closed.'));
+      this.failInFlight(new Error('Cloud agent connection closed.'));
     });
     ws.addEventListener('error', () => {
-      this.rejectActive(new Error('Cloud agent connection failed.'));
+      this.failInFlight(new Error('Cloud agent connection failed.'));
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -319,6 +389,15 @@ export class CloudAgentClient implements AgentClient {
     const payload = parseSocketJson(event.data);
     if (!payload) return;
 
+    if (payload.type === 'rpc' && typeof payload.id === 'string') {
+      const pending = this.pendingRpcs.get(payload.id);
+      if (!pending) return;
+      this.pendingRpcs.delete(payload.id);
+      if (payload.success === true) pending.resolve(payload.result);
+      else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud agent RPC failed.'));
+      return;
+    }
+
     // Ack a resuming stream only when it is one of our own turns, so the DO
     // replays its chunks after a reconnect; other clients' streams are ignored.
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && typeof payload.id === 'string') {
@@ -335,7 +414,7 @@ export class CloudAgentClient implements AgentClient {
       this.activeTurns.delete(payload.id);
       const message = typeof payload.body === 'string' && payload.body ? payload.body : 'Cloud agent stream failed.';
       this.emit({ type: 'error', message });
-      active.reject(new Error(message));
+      this.settleTurn(active, true);
       return;
     }
     if (typeof payload.body === 'string' && payload.body.trim()) {
@@ -387,11 +466,14 @@ export class CloudAgentClient implements AgentClient {
     }
   }
 
-  private rejectActive(error: Error): void {
+  private failInFlight(error: Error): void {
     const active = [...this.activeTurns.values()];
     this.activeTurns.clear();
     if (active.length > 0) this.emit({ type: 'error', message: error.message });
-    for (const turn of active) turn.reject(error);
+    for (const turn of active) this.settleTurn(turn, true);
+    const rpcs = [...this.pendingRpcs.values()];
+    this.pendingRpcs.clear();
+    for (const rpc of rpcs) rpc.reject(error);
   }
 }
 

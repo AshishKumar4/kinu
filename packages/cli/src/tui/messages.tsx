@@ -14,9 +14,11 @@ export interface DisplayMessage {
   timestamp?: string;
   /** Attachment chip labels (file mentions resolved at submit). */
   attachments?: string[];
+  /** User message injected into a running turn (mid-turn steer). */
+  steered?: boolean;
 }
 
-function UserMessage({ content, attachments }: { content: string; attachments?: string[] }) {
+function UserMessage({ content, attachments, steered }: { content: string; attachments?: string[]; steered?: boolean }) {
   return (
     <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box
@@ -26,14 +28,17 @@ function UserMessage({ content, attachments }: { content: string; attachments?: 
           backgroundColor: tuiColors.bubbleBg,
           border: true,
           borderStyle: 'single',
-          borderColor: tuiColors.bubbleBorder,
+          borderColor: steered ? tuiColors.amberDeep : tuiColors.bubbleBorder,
           paddingLeft: 1,
           paddingRight: 1,
           paddingTop: 0,
           paddingBottom: 0,
         }}
       >
-        <text><strong fg={tuiColors.blue}>You</strong></text>
+        <text>
+          <strong fg={tuiColors.blue}>You</strong>
+          {steered ? <span fg={tuiColors.amber}> ↪ steering</span> : null}
+        </text>
         <text><span fg={tuiColors.textBright}>{content}</span></text>
         {attachments?.map((label, i) => (
           <text key={i}><span fg={tuiColors.muted}>📎 {label}</span></text>
@@ -155,7 +160,7 @@ export function MessageList({ messages, streamingText }: Props) {
       {messages.map((msg) => {
         switch (msg.role) {
           case 'user':
-            return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} />;
+            return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} steered={msg.steered} />;
           case 'assistant':
             return <AssistantMessage key={msg.id} content={msg.content} />;
           case 'tool_call':

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { formatContextWindow } from '@proteus/core';
 import type { SlashCommandInfo } from '../slash-commands.js';
 import type { AgentModelEntry } from '../model-catalog.js';
+import type { ForkPoint } from '../agent-client.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
 import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
@@ -133,6 +134,70 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
       )}
     </PaletteFrame>
   );
+}
+
+interface WalkbackOverlayProps {
+  /** Recent user messages, newest first (forkCandidates order). */
+  candidates: readonly ForkPoint[];
+  terminal: OverlayGeometry;
+  onSelect: (point: ForkPoint) => void;
+}
+
+/** Esc-Esc walk-back picker: choose an earlier user message; the conversation
+ *  forks just before it and the message returns to the input for editing. */
+export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOverlayProps) {
+  const paletteWidth = boundedPaletteWidth(terminal, 0.56, 56, 90);
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const options: SelectOption[] = candidates.map((candidate, index) => ({
+    name: clipText(`${index === 0 ? 'latest' : `-${index}`} · ${candidate.text.replace(/\s+/g, ' ')}`, innerWidth),
+    description: '',
+    value: candidate,
+  }));
+  const paletteHeight = Math.min(Math.max(options.length + 6, 10), Math.max(10, terminal.height - 6), 18);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  return (
+    <PaletteFrame
+      title="Walk back"
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+      dim={true}
+    >
+      <PaletteLine text="↑/↓ move · Enter forks before that message · Esc close" width={innerWidth} color={tuiColors.muted} />
+      <select
+        focused={true}
+        options={options}
+        selectedIndex={0}
+        showDescription={false}
+        showScrollIndicator={true}
+        wrapSelection={true}
+        onSelect={(_index, option) => {
+          const selected = option?.value;
+          if (isForkPoint(selected)) onSelect(selected);
+        }}
+        style={{
+          flexGrow: 1,
+          height: Math.max(3, paletteHeight - 5),
+          backgroundColor: tuiColors.panel,
+          textColor: tuiColors.text,
+          focusedBackgroundColor: tuiColors.panel,
+          focusedTextColor: tuiColors.text,
+          selectedBackgroundColor: tuiColors.selection,
+          selectedTextColor: tuiColors.textStrong,
+          descriptionColor: tuiColors.muted,
+          selectedDescriptionColor: tuiColors.accentStrong,
+        }}
+      />
+    </PaletteFrame>
+  );
+}
+
+function isForkPoint(value: unknown): value is ForkPoint {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as ForkPoint).text === 'string'
+    && typeof (value as ForkPoint).occurrenceFromEnd === 'number';
 }
 
 interface DeviceConsentOverlayProps {

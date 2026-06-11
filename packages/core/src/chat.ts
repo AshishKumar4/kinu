@@ -29,6 +29,11 @@ export interface ChatOptions {
   modelContext?: PromptModelContext;
   maxSteps?: number;
   signal?: AbortSignal;
+  /** Step-boundary seam: called before each model step with the messages the
+   *  SDK is about to send; returning an array replaces them for that step.
+   *  Backends use it to drain mid-turn steering input into the running turn
+   *  at a role-alternation-safe point. */
+  prepareStepMessages?: (args: { stepNumber: number; messages: ModelMessage[] }) => ModelMessage[] | undefined;
 }
 
 /**
@@ -48,6 +53,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const pendingStepEvents: Array<{ stepIndex: number }> = [];
   let stepCount = 0;
 
+  const prepareStepMessages = opts.prepareStepMessages;
   const result = streamText({
     model: opts.model,
     system: opts.system,
@@ -55,6 +61,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     tools: opts.tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
+    ...(prepareStepMessages ? {
+      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) => {
+        const next = prepareStepMessages({ stepNumber, messages });
+        return next ? { messages: next } : undefined;
+      },
+    } : {}),
     onStepFinish: () => {
       stepCount++;
       pendingStepEvents.push({ stepIndex: stepCount });

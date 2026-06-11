@@ -633,3 +633,171 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     await session.end();
   });
 });
+
+describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', () => {
+  /** Two-call model: call #1 streams a `fact` tool call, gated so the test can
+   *  steer before the step boundary; call #2 answers in text. Captures the v2
+   *  prompt of every doStream call so tests can assert what the model saw. */
+  function toolThenAnswerModel(answer: string) {
+    const prompts: Array<Array<{ role: string; content: unknown }>> = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let calls = 0;
+    const model = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async ({ prompt }: { prompt: Array<{ role: string; content: unknown }> }) => {
+        prompts.push(prompt);
+        calls += 1;
+        if (calls === 1) {
+          return {
+            stream: new ReadableStream({
+              async start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
+                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                });
+                await gate;
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    } as unknown as LanguageModel;
+    return { model, prompts, release };
+  }
+
+  /** Single-step model that streams one delta, then holds the turn open until
+   *  release() — a deterministic window for mid-turn steering. */
+  function gatedTextModel(answer: string) {
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const model = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async ({ abortSignal }: { abortSignal?: AbortSignal }) => ({
+        stream: new ReadableStream({
+          async start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '0' });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+            abortSignal?.addEventListener('abort', () => {
+              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            }, { once: true });
+            await gate;
+            if (abortSignal?.aborted) return;
+            controller.enqueue({ type: 'text-end', id: '0' });
+            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      }),
+    } as unknown as LanguageModel;
+    return { model, release };
+  }
+
+  const userTexts = (prompt: Array<{ role: string; content: unknown }>) =>
+    prompt.filter((m) => m.role === 'user').map((m) => {
+      if (typeof m.content === 'string') return m.content;
+      return (m.content as Array<{ type: string; text?: string }>)
+        .filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
+    });
+
+  test('two rapid steers drain into ONE merged user message at the step boundary, after the tool results', async () => {
+    const { model, prompts, release } = toolThenAnswerModel('done, checked both');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    expect(session.steer('also check X')).toBe(true);
+    expect(session.steer('and Y')).toBe(true);
+    release();
+    await turn;
+
+    // The second model call (post-tool step) sees exactly one injected user
+    // message, merged from both steers, AFTER the tool-result message.
+    expect(prompts.length).toBe(2);
+    const second = prompts[1]!;
+    const injected = userTexts(second).filter((text) => text.includes('also check X'));
+    expect(injected).toEqual(['also check X\n\nand Y']);
+    const roles = second.map((m) => m.role);
+    expect(roles.indexOf('tool')).toBeGreaterThan(-1);
+    expect(roles.lastIndexOf('user')).toBeGreaterThan(roles.lastIndexOf('tool'));
+
+    // One turn only — steering never spawned a second turn.
+    expect(turnStarts(events)).toHaveLength(1);
+
+    // Durable conversation keeps the merged steer between user and assistant.
+    const rows = db.query(`SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`)
+      .all() as Array<{ role: string; content: string }>;
+    expect(rows.map((r) => r.role)).toEqual(['user', 'user', 'assistant']);
+    expect(rows[1]!.content).toBe('also check X\n\nand Y');
+    await session.end();
+  });
+
+  test('a steer with no remaining step boundary runs as the immediate next user turn', async () => {
+    const { model, release } = gatedTextModel('first answer');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('first question');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.steer('follow up please')).toBe(true);
+    release();
+    await turn;
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length >= 2);
+
+    const starts = turnStarts(events);
+    expect(starts).toHaveLength(2);
+    expect(starts[1]!).toMatchObject({ kind: 'user', text: 'follow up please' });
+
+    const rows = db.query(`SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`)
+      .all() as Array<{ role: string; content: string }>;
+    expect(rows.map((r) => `${r.role}:${r.content}`)).toContain('user:follow up please');
+    await session.end();
+  });
+
+  test('steer with no active turn returns false', () => {
+    const { session } = setup('idle');
+    expect(session.steer('nothing running')).toBe(false);
+  });
+
+  test('interrupt drops pending steers — no surprise follow-up turn', async () => {
+    const { model } = gatedTextModel('never finishes');
+    const { session, events } = setup('unused', model);
+
+    const turn = session.send('long task');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(session.steer('change of plans')).toBe(true);
+    session.interrupt();
+    await turn;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(turnStarts(events)).toHaveLength(1);
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    await session.end();
+  });
+});

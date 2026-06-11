@@ -28,6 +28,8 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/jobs', description: 'List background jobs' },
   { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents' },
   { name: '/stop', description: 'Stop the active turn' },
+  { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>' },
+  { name: '/fork', description: 'Walk back: fork the conversation before an earlier message', usage: '/fork [number]' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
   { name: '/exit', description: 'Exit chat' },
@@ -74,6 +76,11 @@ export type SlashOutcome =
   | { kind: 'model-set'; spec: string }
   | { kind: 'sessions'; mode: 'list' | 'resume'; resumeRef?: string }
   | { kind: 'device-connect' }
+  /** Queue text to send after the active turn (surface-owned queue). */
+  | { kind: 'queue'; text?: string }
+  /** Walk-back fork; ref is the picker number when given. Surfaces own the
+   *  candidate list (their rendered user messages) and the fork() call. */
+  | { kind: 'fork'; ref?: string }
   | { kind: 'cancel' }
   | { kind: 'unknown'; command: string };
 
@@ -174,6 +181,10 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/stop':
       client.stop();
       return { kind: 'text', text: 'Stop requested for the active turn.' };
+    case '/queue':
+      return { kind: 'queue', text: arg || undefined };
+    case '/fork':
+      return { kind: 'fork', ref: arg || undefined };
     case '/sessions':
       return { kind: 'sessions', mode: 'list' };
     case '/resume':

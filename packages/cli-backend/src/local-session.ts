@@ -211,6 +211,10 @@ export class LocalAgentSession implements BackendHost {
   private pumping = false;
   /** The in-flight turn's abort handle — interrupt() aborts it. */
   private currentAbort: AbortController | null = null;
+  /** Mid-turn steers awaiting the next step boundary (Hermes steer-drain:
+   *  everything pending merges into ONE user message per drain, injected after
+   *  the latest tool results so role alternation stays provider-safe). */
+  private pendingSteers: Array<{ text: string; files?: ReadonlyArray<PromptFile> }> = [];
 
   constructor(opts: LocalAgentSessionOpts) {
     this.rt = opts.rt;
@@ -524,8 +528,24 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** Abort the in-flight turn (Ctrl+C / Esc). */
+  /**
+   * Steer the in-flight turn: queue the message for injection at the next step
+   * boundary (prepareStep), where everything pending drains into one merged
+   * user message. Input that never sees a boundary (the model was already
+   * writing its final answer) runs as the immediate next turn instead.
+   * Returns false when no turn is active — callers should send() normally.
+   */
+  steer(input: string | { text: string; files: ReadonlyArray<PromptFile> }): boolean {
+    if (!this.pumping) return false;
+    const { text, files } = typeof input === 'string' ? { text: input, files: undefined } : input;
+    this.pendingSteers.push({ text, files });
+    return true;
+  }
+
+  /** Abort the in-flight turn (Ctrl+C / Esc). Pending steers are dropped —
+   *  an interrupt means "stop", not "stop and do what I typed". */
   interrupt(): void {
+    this.pendingSteers = [];
     this.currentAbort?.abort();
   }
 
@@ -680,6 +700,33 @@ export class LocalAgentSession implements BackendHost {
     const abort = new AbortController();
     this.currentAbort = abort;
 
+    // Steer-drain bookkeeping (Hermes conversation_loop pattern): at each step
+    // boundary all pending steers merge into ONE user message appended after
+    // the latest tool results (Anthropic groups tool+user into a single turn,
+    // so role alternation holds). streamText rebuilds each step's messages
+    // from scratch, so every drained injection is re-applied at the position
+    // (in base-message coordinates) where it first entered the conversation.
+    const baseLength = this.history.length;
+    const injections: Array<{ index: number; message: ModelMessage; text: string }> = [];
+    const prepareStepMessages = ({ messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
+      if (this.pendingSteers.length > 0) {
+        const drained = this.pendingSteers.splice(0);
+        injections.push({
+          index: messages.length,
+          message: steerUserMessage(drained),
+          text: drained.map((steer) => steer.text).join('\n\n'),
+        });
+      }
+      if (injections.length === 0) return undefined;
+      const next = [...messages];
+      let offset = 0;
+      for (const injection of injections) {
+        next.splice(injection.index + offset, 0, injection.message);
+        offset += 1;
+      }
+      return next;
+    };
+
     try {
       for await (const ev of runChat({
         model,
@@ -689,6 +736,7 @@ export class LocalAgentSession implements BackendHost {
         tools: turnTools,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
+        prepareStepMessages,
       })) {
         switch (ev.type) {
           case 'text-delta':
@@ -712,10 +760,21 @@ export class LocalAgentSession implements BackendHost {
           case 'step-finish':
             this.orch.acc.recordStep({});
             break;
-          case 'done':
-            for (const msg of ev.responseMessages) this.history.push(msg);
+          case 'done': {
+            // Replay the drained steers into the durable history at the exact
+            // positions the model saw them (indices are base-coordinate, so
+            // relative to responseMessages they sit at index - baseLength).
+            const merged = [...ev.responseMessages];
+            let spliced = 0;
+            for (const injection of injections) {
+              const at = Math.max(0, Math.min(merged.length, injection.index - baseLength + spliced));
+              merged.splice(at, 0, injection.message);
+              spliced += 1;
+            }
+            for (const msg of merged) this.history.push(msg);
             if (!fullText.trim() && ev.text.trim()) fullText = ev.text;
             break;
+          }
         }
       }
     } catch (err) {
@@ -725,7 +784,19 @@ export class LocalAgentSession implements BackendHost {
       this.currentAbort = null;
     }
 
-    const assistantMsgId = this.persist(item.text, fullText);
+    // Steers that never saw a step boundary (the model was already finishing)
+    // run as the IMMEDIATE next turn — ahead of any programmatic injects.
+    if (this.pendingSteers.length > 0) {
+      const leftover = this.pendingSteers.splice(0);
+      this.queue.unshift({
+        text: leftover.map((steer) => steer.text).join('\n\n'),
+        files: leftover.flatMap((steer) => steer.files ?? []),
+        kind: 'user',
+        resolve: () => {},
+      });
+    }
+
+    const assistantMsgId = this.persist(item.text, injections.map((injection) => injection.text), fullText);
 
     const turn: CompletedTurn = {
       userMessage: item.text,
@@ -942,16 +1013,24 @@ export class LocalAgentSession implements BackendHost {
     return wrapped;
   }
 
-  /** Persist the exchange; returns the assistant message id (the turn id the
-   *  outcome ledger keys on), or null when persistence is disabled. */
-  private persist(userText: string, assistantText: string): string | null {
+  /** Persist the exchange (user, any mid-turn steers, assistant); returns the
+   *  assistant message id (the turn id the outcome ledger keys on), or null
+   *  when persistence is disabled. */
+  private persist(userText: string, steeredTexts: ReadonlyArray<string>, assistantText: string): string | null {
     if (!this.persistMessagesEnabled) return null;
     const msgId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
     this.rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
       VALUES (${msgId}, ${this.sessionId}, ${'user'}, ${userText})`;
+    let parentId = msgId;
+    for (const steered of steeredTexts) {
+      const steerId = crypto.randomUUID();
+      this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+        VALUES (${steerId}, ${this.sessionId}, ${parentId}, ${'user'}, ${steered})`;
+      parentId = steerId;
+    }
     this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-      VALUES (${assistantId}, ${this.sessionId}, ${msgId}, ${'assistant'}, ${assistantText})`;
+      VALUES (${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
     return assistantId;
   }
 
@@ -1024,6 +1103,21 @@ export class LocalAgentSession implements BackendHost {
     });
     this.tools = this.wrapToolsForBackground(rawTools);
   }
+}
+
+/** Merge drained steers into ONE user ModelMessage — text joined in arrival
+ *  order, attachments carried as file parts (the runChat user-message shape). */
+function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: ReadonlyArray<PromptFile> }>): ModelMessage {
+  const text = drained.map((steer) => steer.text).join('\n\n');
+  const files = drained.flatMap((steer) => steer.files ?? []);
+  if (files.length === 0) return { role: 'user', content: text };
+  return {
+    role: 'user',
+    content: [
+      ...files.map((f) => ({ type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename })),
+      { type: 'text' as const, text },
+    ],
+  };
 }
 
 /** Serialize message content for head inheritance. File-part payloads (data

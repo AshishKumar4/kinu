@@ -333,7 +333,7 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
 function textEntry(entry: CliSessionEntry, role: 'user' | 'assistant'): AgentTranscriptMessage | null {
   const text = entry.text;
   if (typeof text !== 'string' || !text.trim()) return null;
-  return { id: entry.id, role, content: text.trim() };
+  return { id: entry.id, role, content: text.trim(), ...(entry.steered === true ? { steered: true } : {}) };
 }
 
 function safeJson(value: unknown): string {

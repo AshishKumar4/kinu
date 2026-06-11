@@ -174,6 +174,96 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
+  test('steer mid-turn records a steered user entry and reaches the agent', async () => {
+    // Single-step model held open until release() — a deterministic steer window.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const model = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async () => ({
+        stream: new ReadableStream({
+          async start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '0' });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'working on it' });
+            await gate;
+            controller.enqueue({ type: 'text-end', id: '0' });
+            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      }),
+    } as unknown as LanguageModel;
+
+    const { client } = setup(model);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    await client.connect();
+
+    expect(client.steer('too early')).toBe(false);
+
+    const turn = client.send('start');
+    const deadline = Date.now() + 2_000;
+    while (!events.some((event) => event.type === 'text-delta') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(client.steer('actually, use yaml')).toBe(true);
+    release();
+    await turn;
+    // The undrained steer cascades as the immediate next turn.
+    const settled = Date.now() + 2_000;
+    while (events.filter((event) => event.type === 'turn-end').length < 2 && Date.now() < settled) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const history = await client.history();
+    const steered = history.find((message) => message.content === 'actually, use yaml');
+    expect(steered).toMatchObject({ role: 'user', steered: true });
+    await client.close();
+  });
+
+  test('fork walks the conversation back before the picked message and re-points the client', async () => {
+    // Capture what the model sees so the forked context is provable.
+    const seenPrompts: string[] = [];
+    const base = fakeModel('answer') as unknown as { doStream: (options: unknown) => unknown };
+    const inner = base.doStream.bind(base);
+    const model = {
+      ...(base as object),
+      doStream: async (options: { prompt?: unknown }) => {
+        seenPrompts.push(JSON.stringify(options.prompt ?? ''));
+        return inner(options);
+      },
+    } as unknown as LanguageModel;
+
+    const { client } = setup(model);
+    await client.connect();
+    await client.send('first question');
+    await client.send('second question');
+    const originalSessionId = client.cliSession.id;
+
+    const result = await client.fork({ text: 'second question', occurrenceFromEnd: 1 });
+    expect(result.client).toBe(client);
+    expect(client.cliSession.id).not.toBe(originalSessionId);
+    expect(result.label).toBe(`session ${client.cliSession.id}`);
+    expect(client.listSessions().some((session) => session.id === client.cliSession.id)).toBe(true);
+
+    // The forked conversation keeps turn one but not the walked-back message.
+    await client.send('third question');
+    const forkedPrompt = seenPrompts.at(-1)!;
+    expect(forkedPrompt).toContain('first question');
+    expect(forkedPrompt).toContain('third question');
+    expect(forkedPrompt).not.toContain('second question');
+
+    await expect(client.fork({ text: 'never said', occurrenceFromEnd: 1 }))
+      .rejects.toThrow('Could not locate that message');
+    await client.close();
+  });
+
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));
     await client.connect();

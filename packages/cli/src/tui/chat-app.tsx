@@ -5,19 +5,28 @@
  * client owns transport, recording, and history; this renders its
  * AgentClientEvent stream into scrollable message history with streaming text,
  * tool cards, evolution markers, a status bar, model/session pickers, and the
- * device-consent overlay. Esc interrupts an in-flight turn via client.stop().
+ * device-consent overlay.
+ *
+ * Input is driven by ONE state machine (tui/input-state.ts): Enter while a
+ * turn runs STEERS it (client.steer), Tab queues the draft for after the turn,
+ * Esc interrupts, and Esc-Esc opens the walk-back picker that forks the
+ * conversation before an earlier user message (client.fork) with that message
+ * pre-filled for editing.
  */
 
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import type {
-  AgentClient,
-  AgentClientEvent,
-  AgentClientStatus,
-  DeviceConsentDecision,
-  PendingDeviceConsent,
+import {
+  findForkPivot,
+  forkCandidates,
+  type AgentClient,
+  type AgentClientEvent,
+  type AgentClientStatus,
+  type DeviceConsentDecision,
+  type ForkPoint,
+  type PendingDeviceConsent,
 } from '../agent-client.js';
 import {
   commandsForClient,
@@ -33,11 +42,13 @@ import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
 import { StatusView } from './help-view.js';
-import { CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine } from './overlays.js';
+import { CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, WalkbackOverlay } from './overlays.js';
 import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { estimateContextTokens } from './context-status.js';
 import { useStreamingBuffer } from './streaming-buffer.js';
 import { renderSessionBrowser, selectSession } from './session-browser.js';
+import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state.js';
+import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
 
 export interface ChatAppOpts {
@@ -46,17 +57,22 @@ export interface ChatAppOpts {
   hydrateHistory?: boolean;
   initialPrompt?: string;
   onExit?: () => void;
+  /** A cloud walk-back fork swaps in a sibling client; the host needs the
+   *  current one so exit cleanup closes the right connection. */
+  onClientChange?: (client: AgentClient) => void;
 }
 
 const STATUS_VIEW = 'STATUS_VIEW';
 
 let globalExit: (() => void) | null = null;
 
-export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatAppOpts) {
+export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, onExit, onClientChange }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
+  // The client can be swapped mid-session: a cloud walk-back fork returns a
+  // sibling client pointed at the forked agent.
+  const [client, setClient] = useState(initialClient);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
   const [streamingText, setStreamingText] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
@@ -67,138 +83,90 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
   const [draft, setDraft] = useState('');
   const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
+  const [inputState, setInputState] = useState(initialInputState);
 
   const msgIdRef = useRef(0);
   const inputRef = useRef<TextareaRenderable | null>(null);
   const initialPromptSentRef = useRef(false);
+  const machineRef = useRef(initialInputState);
+  /** A fork swap re-points the message list itself — skip the next hydration. */
+  const skipHydrationRef = useRef(false);
   const stream = useStreamingBuffer(setStreamingText);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
+
+  const isProcessing = inputState.activeTurns > 0;
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
     setMessages((prev) => [...prev, { ...msg, id }]);
   }, []);
 
-  const handleClientEvent = useCallback((event: AgentClientEvent) => {
-    switch (event.type) {
-      case 'turn-start':
-        stream.start();
-        setIsProcessing(true);
-        setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
-        if (event.kind === 'programmatic') {
-          addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
-        }
-        break;
-      case 'text-delta':
-        stream.append(event.delta);
-        setTurnPhase((current) => current === 'writing' ? current : 'writing');
-        break;
-      case 'tool-call':
-        setTurnPhase(`calling ${event.toolName}`);
-        addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
-        break;
-      case 'tool-result':
-        setTurnPhase(`finished ${event.toolName}`);
-        addMessage({ role: 'tool_result', content: event.result });
-        break;
-      case 'step-finish':
-        setTurnPhase(`step ${event.stepIndex}`);
-        break;
-      case 'evolution':
-        addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
-        break;
-      case 'error':
-        addMessage({ role: 'system', content: `Error: ${event.message}` });
-        stream.clear();
-        setIsProcessing(false);
-        setTurnPhase(null);
-        break;
-      case 'turn-end':
-        stream.clear();
-        setIsProcessing(false);
-        setTurnPhase(null);
-        if (event.turn.text.trim()) {
-          addMessage({ role: 'assistant', content: event.turn.text.trim() });
-        }
-        break;
-      case 'broadcast':
-        break;
-    }
-  }, [addMessage, stream]);
-
-  // Connect once: event subscription, startup resources, initial hydration.
-  useEffect(() => {
-    const unsubscribe = client.subscribe(handleClientEvent);
-    let cancelled = false;
-    void (async () => {
-      if (hydrateHistory) {
-        try {
-          const history = await client.history();
-          if (!cancelled && history.length > 0) {
-            setMessages([welcomeMessage(client.agentName), ...history]);
-          }
-        } catch { /* hydration is best effort; the welcome message stands */ }
-      }
-      await client.connect();
-      if (cancelled) return;
-      setReady(true);
-      // Natural device access: a cloud chat with no connected PC offers to
-      // connect this one (at most once per CLI invocation).
-      if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
-    })();
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void client.status()
-      .then((next) => {
-        if (cancelled) return;
-        setStatus(next);
-        setModelSpec((current) => current || (next.model ?? ''));
-      })
-      .catch(() => {});
-    void client.listModels()
-      .then((models) => { if (!cancelled) setModelCatalog(models); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [client]);
-
-  // Watch pending device consents while a turn is processing (cloud agents).
-  // The shared watcher presents each consent once (no re-show when a poll tick
-  // races the resolution) and cancels the overlay when the turn settles.
-  const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
-  useEffect(() => {
-    const consents = client.consents;
-    if (!consents || !isProcessing) {
-      setPendingConsent(null);
-      return;
-    }
-    const watcher = watchDeviceConsents(consents, {
-      present: (consent, signal) => new Promise((resolve) => {
-        const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
-          consentDecisionRef.current = null;
-          setPendingConsent(null);
-          resolve(outcome);
-        };
-        consentDecisionRef.current = settle;
-        setPendingConsent(consent);
-        signal.addEventListener('abort', () => settle('cancelled'), { once: true });
-      }),
-      note: (kind, message) => {
-        addMessage({ role: 'system', content: kind === 'error' ? `Error: ${message}` : message });
-      },
-    });
-    return () => watcher.stop();
-  }, [addMessage, client, isProcessing]);
-
-  const resolvePendingConsent = useCallback((decision: DeviceConsentDecision) => {
-    consentDecisionRef.current?.(decision);
+  /** All input transitions flow through the one reducer; effects come back to
+   *  the caller so client events and keypresses never race over state. */
+  const dispatchInput = useCallback((event: InputMachineEvent): InputEffect[] => {
+    const { state, effects } = reduceInput(machineRef.current, event);
+    machineRef.current = state;
+    setInputState(state);
+    return effects;
   }, []);
+
+  const setInputText = useCallback((text: string) => {
+    inputRef.current?.setText(text);
+    setDraft(text);
+  }, []);
+
+  /** Send (or steer) one user prompt. @path mentions (plus quoted/~ path
+   *  tokens) become attachments: images and PDFs inline as file parts, other
+   *  files stay path references. */
+  const sendPrompt = useCallback(async (input: string) => {
+    const prompt = await resolvePromptAttachments(input);
+    for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
+    const steering = machineRef.current.activeTurns > 0;
+    addMessage({
+      role: 'user',
+      content: prompt.text,
+      ...(prompt.attached.length > 0 ? { attachments: prompt.attached.map(describePromptAttachment) } : {}),
+      ...(steering ? { steered: true } : {}),
+    });
+    const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
+    if (steering && client.steer(payload, { cwd: process.cwd() })) return;
+    try {
+      await client.send(payload, { cwd: process.cwd() });
+    } catch (err) {
+      // Transport/pre-flight failures never reach the event stream.
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
+  /** Fork before the picked user message, truncate the rendered transcript to
+   *  match, and put the message back in the input for editing. */
+  const performWalkback = useCallback(async (point: ForkPoint) => {
+    dispatchInput({ type: 'walkback-closed' });
+    try {
+      const result = await client.fork(point);
+      if (result.client !== client) {
+        skipHydrationRef.current = true;
+        const previous = client;
+        setClient(result.client);
+        onClientChange?.(result.client);
+        void previous.close().catch(() => {});
+      }
+      setMessages((prev) => {
+        const pivot = findForkPivot(prev, point);
+        const kept = pivot < 0 ? prev : prev.slice(0, pivot);
+        return [...kept, {
+          id: `msg-${++msgIdRef.current}`,
+          role: 'system',
+          content: `Forked ${result.label} — edit the message and press Enter to resend.`,
+        }];
+      });
+      setActiveSessionId(result.client.cliSession.id);
+      setInputText(point.text);
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client, dispatchInput, onClientChange, setInputText]);
 
   const resumeSession = useCallback(async (input: string, available?: CliSessionInfo[]) => {
     const sessions = available ?? client.listSessions();
@@ -211,7 +179,6 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
     setModelPicker(null);
     setReady(false);
     setStreamingText(null);
-    setIsProcessing(false);
     setTurnPhase(null);
     await client.resumeConversation(selected.info.id);
     const history = await client.history().catch(() => []);
@@ -282,6 +249,10 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
       case 'device-connect':
         await deviceConnect.open();
         return;
+      case 'queue':
+      case 'fork':
+        // Surface-owned outcomes — handleSubmit intercepts them before this.
+        return;
       case 'cancel':
         if (modelPicker) {
           setModelPicker(null);
@@ -298,6 +269,32 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         return;
     }
   }, [addMessage, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker]);
+
+  const runInputEffects = useCallback((effects: InputEffect[]) => {
+    for (const effect of effects) {
+      switch (effect.kind) {
+        case 'interrupt':
+          client.stop();
+          addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
+          break;
+        case 'exit':
+          onExit ? onExit() : globalExit?.();
+          break;
+        case 'clear-input':
+          setInputText('');
+          break;
+        case 'set-input':
+          setInputText(effect.text);
+          break;
+        case 'hint':
+          addMessage({ role: 'system', content: effect.text });
+          break;
+        case 'send-queued':
+          void sendPrompt(effect.text);
+          break;
+      }
+    }
+  }, [addMessage, client, onExit, sendPrompt, setInputText]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
@@ -317,29 +314,163 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
     const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
     if (submitted.startsWith('/')) {
       try {
-        await applySlashOutcome(await executeSlashCommand(client, submitted));
+        const outcome = await executeSlashCommand(client, submitted);
+        if (outcome.kind === 'queue') {
+          if (outcome.text) runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
+          else addMessage({ role: 'system', content: 'Usage: /queue <text> — it sends after the running turn (or immediately when idle).' });
+          return;
+        }
+        if (outcome.kind === 'fork') {
+          const candidates = forkCandidates(messages);
+          if (candidates.length === 0) {
+            addMessage({ role: 'system', content: 'No user messages to walk back to.' });
+            return;
+          }
+          if (!outcome.ref) {
+            dispatchInput({ type: 'open-walkback' });
+            return;
+          }
+          const index = Number.parseInt(outcome.ref, 10) - 1;
+          const picked = Number.isInteger(index) ? candidates[index] : undefined;
+          if (!picked) {
+            addMessage({ role: 'system', content: `No walk-back candidate "${outcome.ref}". Esc-Esc (or /fork) lists them.` });
+            return;
+          }
+          await performWalkback(picked);
+          return;
+        }
+        await applySlashOutcome(outcome);
       } catch (err) {
         addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
       }
       return;
     }
-    // @path mentions (plus quoted/~ path tokens) become attachments: images
-    // and PDFs inline as file parts, other files stay path references.
-    const prompt = await resolvePromptAttachments(submitted);
-    for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
-    addMessage({
-      role: 'user',
-      content: prompt.text,
-      ...(prompt.attached.length > 0 ? { attachments: prompt.attached.map(describePromptAttachment) } : {}),
+    await sendPrompt(submitted);
+  }, [addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
+
+  const handleClientEvent = useCallback((event: AgentClientEvent) => {
+    switch (event.type) {
+      case 'turn-start': {
+        const wasIdle = machineRef.current.activeTurns === 0;
+        runInputEffects(dispatchInput({ type: 'turn-start' }));
+        if (wasIdle) stream.start();
+        setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
+        if (event.kind === 'programmatic') {
+          addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
+        }
+        break;
+      }
+      case 'text-delta':
+        stream.append(event.delta);
+        setTurnPhase((current) => current === 'writing' ? current : 'writing');
+        break;
+      case 'tool-call':
+        setTurnPhase(`calling ${event.toolName}`);
+        addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+        break;
+      case 'tool-result':
+        setTurnPhase(`finished ${event.toolName}`);
+        addMessage({ role: 'tool_result', content: event.result });
+        break;
+      case 'step-finish':
+        setTurnPhase(`step ${event.stepIndex}`);
+        break;
+      case 'evolution':
+        addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
+        break;
+      case 'error':
+        // Informational: the lifecycle settles through the paired turn-end.
+        addMessage({ role: 'system', content: `Error: ${event.message}` });
+        stream.clear();
+        break;
+      case 'turn-end': {
+        stream.clear();
+        if (event.turn.text.trim()) {
+          addMessage({ role: 'assistant', content: event.turn.text.trim() });
+        }
+        runInputEffects(dispatchInput({ type: 'turn-settled' }));
+        if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+        break;
+      }
+      case 'broadcast':
+        break;
+    }
+  }, [addMessage, dispatchInput, runInputEffects, stream]);
+
+  // Connect once per client: event subscription, startup resources, initial
+  // hydration. Re-runs when a walk-back fork swaps in a sibling client.
+  useEffect(() => {
+    const unsubscribe = client.subscribe(handleClientEvent);
+    let cancelled = false;
+    void (async () => {
+      if (hydrateHistory && !skipHydrationRef.current) {
+        try {
+          const history = await client.history();
+          if (!cancelled && history.length > 0) {
+            setMessages([welcomeMessage(client.agentName), ...history]);
+          }
+        } catch { /* hydration is best effort; the welcome message stands */ }
+      }
+      skipHydrationRef.current = false;
+      await client.connect();
+      if (cancelled) return;
+      setReady(true);
+      // Natural device access: a cloud chat with no connected PC offers to
+      // connect this one (at most once per CLI invocation).
+      if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.status()
+      .then((next) => {
+        if (cancelled) return;
+        setStatus(next);
+        setModelSpec((current) => current || (next.model ?? ''));
+      })
+      .catch(() => {});
+    void client.listModels()
+      .then((models) => { if (!cancelled) setModelCatalog(models); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [client]);
+
+  // Watch pending device consents while a turn is processing (cloud agents).
+  // The shared watcher presents each consent once (no re-show when a poll tick
+  // races the resolution) and cancels the overlay when the turn settles.
+  const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
+  useEffect(() => {
+    const consents = client.consents;
+    if (!consents || !isProcessing) {
+      setPendingConsent(null);
+      return;
+    }
+    const watcher = watchDeviceConsents(consents, {
+      present: (consent, signal) => new Promise((resolve) => {
+        const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
+          consentDecisionRef.current = null;
+          setPendingConsent(null);
+          resolve(outcome);
+        };
+        consentDecisionRef.current = settle;
+        setPendingConsent(consent);
+        signal.addEventListener('abort', () => settle('cancelled'), { once: true });
+      }),
+      note: (kind, message) => {
+        addMessage({ role: 'system', content: kind === 'error' ? `Error: ${message}` : message });
+      },
     });
-    // Errors surface as client error events.
-    try {
-      await client.send(
-        prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
-        { cwd: process.cwd() },
-      );
-    } catch { /* rendered via events */ }
-  }, [addMessage, applySlashOutcome, client, commands, ready, resumeSession, sessionPicker]);
+    return () => watcher.stop();
+  }, [addMessage, client, isProcessing]);
+
+  const resolvePendingConsent = useCallback((decision: DeviceConsentDecision) => {
+    consentDecisionRef.current?.(decision);
+  }, []);
 
   useEffect(() => {
     if (!ready || initialPromptSentRef.current) return;
@@ -365,31 +496,40 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         return;
       }
     }
+    const overlayOpen = Boolean(modelPicker || sessionPicker || inputState.walkbackOpen);
+    if (key.name === 'tab') {
+      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'tab', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (key.name === 'backspace') {
+      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
     if (key.name !== 'escape') return;
     if (modelPicker) {
       setModelPicker(null);
       return;
     }
-    if (isProcessing) {
-      client.stop();
-      addMessage({ role: 'system', content: 'Interrupting the active turn…' });
-      return;
-    }
-    globalExit?.();
+    runInputEffects(dispatchInput({
+      type: 'escape',
+      now: Date.now(),
+      draft: inputRef.current?.plainText ?? '',
+      hasUserMessages: messages.some((msg) => msg.role === 'user'),
+    }));
   });
 
   const onInputSubmit = useCallback(() => {
     const value = inputRef.current?.plainText ?? '';
     if (!value.trim()) return;
-    inputRef.current?.setText('');
-    setDraft('');
+    setInputText('');
     void handleSubmit(value);
-  }, [handleSubmit]);
+  }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
-  const commandHints = !modelPicker && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
+  const commandHints = !modelPicker && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
   const contextTokens = estimateContextTokens(messages, streamingText);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
+  const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
   return (
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
@@ -429,6 +569,19 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
         <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
 
+      {inputState.queue.length > 0 && (
+        <box flexDirection="column" style={{ paddingLeft: 2, paddingRight: 2 }}>
+          {inputState.queue.map((text, i) => (
+            <text key={`queued-${i}`}>
+              <span fg={tuiColors.amberDeep}>⧗ </span>
+              <span fg={tuiColors.muted}>{i + 1} · </span>
+              <span fg={tuiColors.text}>{clipText(text.replace(/\s+/g, ' '), Math.max(8, width - 12))}</span>
+            </text>
+          ))}
+          <text><span fg={tuiColors.muted}>queued — sends after this turn · Backspace (empty input) edits the last</span></text>
+        </box>
+      )}
+
       <box
         style={{
           height: draftLines + 2,
@@ -438,12 +591,12 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… (Esc interrupts)' : modelPicker ? 'Model picker' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Esc interrupts' : modelPicker ? 'Model picker' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
-          focused={ready && !isProcessing && !modelPicker && !deviceConnect.state}
-          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Waiting for response… (Esc interrupts)' : modelPicker ? 'Select a model or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          focused={ready && !modelPicker && !deviceConnect.state && !inputState.walkbackOpen}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues for after)' : modelPicker ? 'Select a model or Esc' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
             { name: 'return', action: 'submit' },
@@ -465,6 +618,12 @@ export function ChatApp({ client, hydrateHistory, initialPrompt, onExit }: ChatA
           error={modelPicker.error}
           onSelect={(model) => { void selectModel(model); }}
         />
+      ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
+        <WalkbackOverlay
+          candidates={walkbackList}
+          terminal={{ width, height }}
+          onSelect={(point) => { void performWalkback(point); }}
+        />
       ) : (
         <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
       )}
@@ -481,9 +640,10 @@ function welcomeMessage(agentName: string): DisplayMessage {
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   const root = createRoot(renderer);
+  let currentClient = opts.client;
 
   const cleanup = async () => {
-    try { await opts.client.close(); } catch { /* best effort */ }
+    try { await currentClient.close(); } catch { /* best effort */ }
     root.render(<box />);
     renderer.destroy();
     console.log('\n  Goodbye.\n');
@@ -493,7 +653,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   globalExit = () => { void cleanup(); };
   process.on('SIGINT', () => { void cleanup(); });
 
-  root.render(<ChatApp {...opts} />);
+  root.render(<ChatApp {...opts} onClientChange={(client) => { currentClient = client; }} />);
 
   // Keep the process alive
   await new Promise<void>(() => {});

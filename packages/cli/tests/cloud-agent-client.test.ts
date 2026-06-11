@@ -13,6 +13,8 @@ interface MockAgentServer {
   frames: Array<Record<string, unknown>>;
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
+  /** Rows served from /api/cli/agents/:name/messages (the DO chat projection). */
+  chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: Record<string, unknown>): void;
   close(): void;
@@ -28,6 +30,7 @@ function startMockAgentServer(): MockAgentServer {
   const frames: Array<Record<string, unknown>> = [];
   const ticketRequests: Array<{ name: string; auth: string | null }> = [];
   const connectUrls: URL[] = [];
+  const chatMessages: MockAgentServer['chatMessages'] = [];
   let ws: ServerWebSocket<unknown> | null = null;
 
   const server = Bun.serve({
@@ -41,6 +44,9 @@ function startMockAgentServer(): MockAgentServer {
           auth: req.headers.get('authorization'),
         });
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
+      }
+      if (/^\/api\/cli\/agents\/[^/]+\/messages$/.test(url.pathname)) {
+        return Response.json(chatMessages);
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
         connectUrls.push(url);
@@ -63,6 +69,7 @@ function startMockAgentServer(): MockAgentServer {
     frames,
     ticketRequests,
     connectUrls,
+    chatMessages,
     socket() {
       if (!ws) throw new Error('no websocket connection yet');
       return ws;
@@ -179,9 +186,11 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  test('error frame rejects the turn with the server message', async () => {
+  test('error frame settles the turn with hadError, pairing turn-start with one turn-end', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
 
     const turn = client.send('boom');
     const request = await waitFor(
@@ -190,7 +199,10 @@ describe('CloudAgentClient protocol', () => {
     );
     mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: 'model exploded', done: true, error: true });
 
-    await expect(turn).rejects.toThrow('model exploded');
+    const result = await turn;
+    expect(result.hadError).toBe(true);
+    expect(events.map((event) => event.type)).toEqual(['turn-start', 'error', 'turn-end']);
+    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'model exploded' });
     await client.close();
   });
 
@@ -260,9 +272,105 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  test('connection close mid-turn rejects the in-flight send', async () => {
+  test('steer mid-turn submits a second chat request immediately; both turns settle in order', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('start the deploy');
+    const first = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'first chat request',
+    );
+
+    expect(client.steer('use the staging cluster instead')).toBe(true);
+    const second = await waitFor(() => {
+      const requests = mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
+      if (requests.length < 2) return undefined;
+      const frame = requests[1]!;
+      const init = frame.init as { body: string };
+      return { id: frame.id as string, body: JSON.parse(init.body) as Record<string, unknown> };
+    }, 'steered chat request');
+
+    // The steer rides the same protocol as send: one fresh user message,
+    // delivered while the first turn is still streaming (the DO persists it
+    // immediately and serializes it on its TurnQueue).
+    const messages = second.body.messages as Array<{ role: string; parts: Array<{ type: string; text: string }> }>;
+    expect(messages[0]!.parts).toEqual([{ type: 'text', text: 'use the staging cluster instead' }]);
+    expect(second.id).not.toBe(first.id);
+
+    // DO finishes turn 1, then streams the steered turn.
+    mock.reply(responseChunk(first.id, { type: 'text-delta', delta: 'deploying' }, true));
+    mock.reply(responseChunk(second.id, { type: 'text-delta', delta: 'switched to staging' }, true));
+
+    await expect(turn).resolves.toMatchObject({ text: 'deploying' });
+    await waitFor(() => events.filter((event) => event.type === 'turn-end').length === 2 ? true : undefined, 'both turn-ends');
+    expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(2);
+    await client.close();
+  });
+
+  test('steer with no active turn returns false and sends nothing', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    expect(client.steer('nothing running')).toBe(false);
+    expect(mock.frames).toHaveLength(0);
+    await client.close();
+  });
+
+  test('fork walks back to the message before the picked user message via the forkAgent RPC', async () => {
+    const mock = startMockAgentServer();
+    mock.chatMessages.push(
+      { id: 'm1', role: 'user', content: 'plan the migration', createdAt: 1 },
+      { id: 'm2', role: 'assistant', content: 'plan drafted', createdAt: 2 },
+      { id: 'm3', role: 'user', content: 'now run step two', createdAt: 3 },
+      { id: 'm4', role: 'assistant', content: 'step two failed', createdAt: 4 },
+    );
+    const client = newClient(mock);
+
+    // Open the socket via a quick completed turn, then fork while idle.
+    const warmup = client.send('hello');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'warmup request',
+    );
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
+    await warmup;
+
+    const forkPromise = client.fork({ text: 'now run step two', occurrenceFromEnd: 1 });
+    const rpc = await waitFor(
+      () => mock.frames.find((f) => f.type === 'rpc'),
+      'forkAgent rpc frame',
+    );
+    // The fork point is the message BEFORE the picked user message.
+    expect(rpc.method).toBe('forkAgent');
+    expect(rpc.args).toEqual(['m2']);
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { id: 'do-2', name: 'helios-fork-ab12', url: '/agent/helios-fork-ab12', forkPointMs: 2 } });
+
+    const result = await forkPromise;
+    expect(result.label).toBe('agent helios-fork-ab12');
+    expect(result.client).not.toBe(client);
+    expect(result.client.agentName).toBe('helios-fork-ab12');
+    await client.close();
+    await result.client.close();
+  });
+
+  test('fork refuses to walk back before the first message', async () => {
+    const mock = startMockAgentServer();
+    mock.chatMessages.push({ id: 'm1', role: 'user', content: 'first words', createdAt: 1 });
+    const client = newClient(mock);
+    await expect(client.fork({ text: 'first words', occurrenceFromEnd: 1 }))
+      .rejects.toThrow('Cannot walk back before the first message');
+    await expect(client.fork({ text: 'never said this', occurrenceFromEnd: 1 }))
+      .rejects.toThrow('Could not locate that message');
+    await client.close();
+  });
+
+  test('connection close mid-turn settles the in-flight send with hadError', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
 
     const turn = client.send('hello');
     await waitFor(
@@ -271,7 +379,10 @@ describe('CloudAgentClient protocol', () => {
     );
     mock.socket().close();
 
-    await expect(turn).rejects.toThrow('Cloud agent connection closed.');
+    const result = await turn;
+    expect(result.hadError).toBe(true);
+    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Cloud agent connection closed.' });
+    expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
     await client.close();
   });
 });

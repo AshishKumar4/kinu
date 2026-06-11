@@ -103,6 +103,63 @@ export interface AgentTranscriptMessage {
   content: string;
   toolName?: string;
   args?: string;
+  /** User message delivered mid-turn through steer(). */
+  steered?: boolean;
+}
+
+/** A walk-back fork point: a user message identified by its verbatim text and
+ *  its occurrence among same-text user messages counted from the newest (1 =
+ *  most recent). Robust across surfaces whose message ids don't align with the
+ *  backend's canonical store. */
+export interface ForkPoint {
+  text: string;
+  occurrenceFromEnd: number;
+}
+
+export interface AgentForkResult {
+  /** The client to continue on: `this` re-pointed (local) or a sibling client
+   *  for the forked cloud agent. Callers must switch and close the old client
+   *  when a different instance is returned. */
+  client: AgentClient;
+  /** Human-readable description of what was forked (session id / agent name). */
+  label: string;
+}
+
+/** Index of the fork-point user message in a canonical row list, or -1 when
+ *  the point cannot be located (the surfaces' view drifted from the store). */
+export function findForkPivot(
+  rows: ReadonlyArray<{ role: string; content: string }>,
+  point: ForkPoint,
+): number {
+  let remaining = point.occurrenceFromEnd;
+  const target = point.text.trim();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!;
+    if (row.role !== 'user' || row.content.trim() !== target) continue;
+    remaining -= 1;
+    if (remaining === 0) return i;
+  }
+  return -1;
+}
+
+/** Pick the walk-back candidates from a rendered message list: the most recent
+ *  user messages (newest first), each with the occurrence index fork() needs. */
+export function forkCandidates(
+  messages: ReadonlyArray<{ role: string; content: string }>,
+  limit = 10,
+): ForkPoint[] {
+  const seen = new Map<string, number>();
+  const candidates: ForkPoint[] = [];
+  for (let i = messages.length - 1; i >= 0 && candidates.length < limit; i--) {
+    const message = messages[i]!;
+    if (message.role !== 'user') continue;
+    const text = message.content.trim();
+    if (!text) continue;
+    const occurrence = (seen.get(text) ?? 0) + 1;
+    seen.set(text, occurrence);
+    candidates.push({ text, occurrenceFromEnd: occurrence });
+  }
+  return candidates;
 }
 
 export interface PendingDeviceConsent {
@@ -146,6 +203,16 @@ export interface AgentClient {
   /** Run one user turn. Events stream through subscribe(); the JSONL log is
    *  appended internally. */
   send(prompt: AgentPrompt, opts?: AgentClientSendOptions): Promise<AgentTurnResult>;
+  /** Deliver a user message while a turn is in flight. Local sessions inject
+   *  it into the RUNNING turn at the next role-safe step boundary; cloud
+   *  sessions submit it immediately and the DO runs it as the next serialized
+   *  turn. Returns false when no turn is active — use send() instead. */
+  steer(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
+  /** Walk-back fork: start a new conversation containing the history strictly
+   *  BEFORE the given user message. Local agents re-point this client to a
+   *  forked CLI session + copied conversation; cloud agents fork the agent DO
+   *  (forkAgent RPC) and return a sibling client for it. */
+  fork(point: ForkPoint): Promise<AgentForkResult>;
   /** Interrupt the in-flight turn (Esc / Ctrl+C / /stop). */
   stop(): void;
   close(): Promise<void>;
