@@ -983,8 +983,8 @@ export class OrchestratorAgent extends Think<Env> {
     const execKey = execs.map(e =>
       `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
     ).join(",");
-    const modelId = this.getStoredModelId();
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${modelId}`;
+    const model = this.promptModelContext();
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -1000,7 +1000,7 @@ export class OrchestratorAgent extends Think<Env> {
         executors: execs,
         availableTools: ACTIVE_TOOLS,
         backend: 'cf',
-        model: { id: modelId ?? undefined },
+        model,
       });
       this._cachedSystemPrompt = base;
       this._cachedSystemPromptKey = key;
@@ -1294,6 +1294,22 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
+  /** Prompt model context from the RESOLVED spec. The raw stored id is null
+   *  on default-configured agents, which left family gating (the Kimi bare
+   *  tool-name index + operating guidance) inert on the primary hosted path —
+   *  the same raw-spec class of bug effectiveModelSpec() fixed for the
+   *  compaction threshold. */
+  private promptModelContext(): { id?: string; provider?: string } {
+    const spec = this.effectiveModelSpec();
+    if (!spec) return {};
+    try {
+      const { provider, modelId } = parseModelSpec(spec);
+      return { id: modelId, provider };
+    } catch {
+      return { id: spec };
+    }
+  }
+
   /** Catalog-reported context window for the resolved spec, cached per spec.
    *  Arms an async catalog lookup on first sight of a spec; until (and unless)
    *  it lands, the static fallback table answers. */
@@ -1503,7 +1519,6 @@ export class OrchestratorAgent extends Think<Env> {
     // ONE volatile context message appended at the END of the turn's messages
     // (prompting/volatile-context.ts), so it never re-prefills the prefix.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const modelId = this.getStoredModelId();
     const systemOverride = buildSystemPromptSync(this.rt, {
       executors: execs,
       availableTools: activeTools,
@@ -1511,7 +1526,7 @@ export class OrchestratorAgent extends Think<Env> {
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
-      model: { id: modelId ?? undefined },
+      model: this.promptModelContext(),
       currentDate: currentDateForPrompt(),
     });
     this.recordSystemPromptHash(systemOverride);

@@ -1,4 +1,8 @@
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildSystemPromptSync, parseModelSpec } from '@proteus/core';
+import { createTestRuntime } from '@proteus/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
@@ -124,5 +128,37 @@ describe('sync default provider with a null UserDO stub (inline-branch context)'
     const reg = createAgentProviderRegistry({ env: {}, userDOStub: null });
     expect(reg.normalizeSpecSync('workers-ai/@cf/moonshotai/kimi-k2.6'))
       .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+  });
+});
+
+describe('default-agent prompt model context (Kimi family gating)', () => {
+  // Regression: the orchestrator used to build prompts from the RAW stored
+  // model id — null on default-configured agents — so resolveFamily saw ''
+  // and the Kimi bare tool-name index never rendered on the primary hosted
+  // path. The prompt context must come from the RESOLVED spec.
+  test('an unset stored model resolves to a spec whose prompt renders the kimi index', () => {
+    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
+    const storedModelId: string | null = null; // default-configured agent
+    const spec = reg.normalizeSpecSync(storedModelId);
+    const { provider, modelId } = parseModelSpec(spec);
+    expect(provider).toBe('workers-ai');
+    expect(modelId).toBe('@cf/moonshotai/kimi-k2.6');
+
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      availableTools: ['run', 'memory'],
+      backend: 'cf',
+      model: { id: modelId, provider },
+    });
+    // Kimi family: bare names, no per-tool summary prose.
+    expect(prompt).toContain('\n- run\n');
+    expect(prompt).not.toContain('**run**');
+
+    // Wiring: both orchestrator prompt-build sites must derive the model
+    // context from the resolved spec, never the raw stored id.
+    const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+    expect(orchestrator).toContain('private promptModelContext()');
+    expect(orchestrator.match(/model: this\.promptModelContext\(\)|const model = this\.promptModelContext\(\)/g)?.length).toBe(2);
+    expect(orchestrator).not.toContain('model: { id: modelId ?? undefined }');
   });
 });
