@@ -2,8 +2,8 @@
 //
 // Composes:
 //   1. Cloudflare-specific providers from cf-backend/src/providers/
-//      (workers-ai via the logged-in user's Cloudflare OAuth credential,
-//       ai-gateway env vars)
+//      (workers-ai + my-gateway via the logged-in user's Cloudflare OAuth
+//       credential, ai-gateway env vars)
 //   2. Runtime-agnostic providers from @proteus/core
 //      (codex, openai, openrouter, openai-compat, anthropic)
 //   3. The models.dev dynamic catalog source — any other catalog provider
@@ -11,7 +11,7 @@
 //      wire path. Static providers stay authoritative for their ids.
 //
 // Ordering is also the preference order for `defaultSpec()`:
-//   workers-ai → ai-gateway → codex → openai → anthropic → openrouter → openai-compat → catalog
+//   workers-ai → my-gateway → ai-gateway → codex → openai → anthropic → openrouter → openai-compat → catalog
 //
 // Auth flows through the UserDO stub passed in opts.userDOStub — getAuth /
 // hasCredential are thin wrappers over its RPCs. No credential material ever
@@ -24,6 +24,7 @@ import {
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js';
+import { createMyGatewayProvider } from './my-gateway.js';
 import { createAIGatewayProvider } from './ai-gateway.js';
 import type { UserDO } from '../user/user-do.js';
 
@@ -57,6 +58,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   const registry = createProviderRegistry();
 
   registry.register(createWorkersAIProvider(opts.workersAI));
+  registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());

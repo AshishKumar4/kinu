@@ -23,14 +23,14 @@ function fakeUserDOStub(
 }
 
 describe('AgentProviderRegistry composition', () => {
-  test('registers all 7 providers in preference order', () => {
+  test('registers all 8 providers in preference order', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDOStub: fakeUserDOStub(),
     });
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
-      'workers-ai', 'ai-gateway', 'codex', 'openai',
+      'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
   });
@@ -100,7 +100,7 @@ describe('AgentProviderRegistry composition', () => {
     });
     const list = await reg.registry.listProviders(reg.deps);
     const credGated = list.filter((p) =>
-      ['workers-ai', 'codex', 'openai', 'anthropic', 'openrouter', 'openai-compat'].includes(p.id),
+      ['workers-ai', 'my-gateway', 'codex', 'openai', 'anthropic', 'openrouter', 'openai-compat'].includes(p.id),
     );
     for (const p of credGated) expect(p.available).toBe(false);
   });

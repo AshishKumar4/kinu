@@ -1,6 +1,9 @@
-// Cloudflare AI Gateway provider — proxies to Workers AI / OpenAI / Anthropic
-// upstreams under one URL + bearer. Pass any modelId understood by the upstream
-// configured in `env.AI_GATEWAY_URL`.
+// The PLATFORM's Cloudflare AI Gateway — env-bound (AI_GATEWAY_URL +
+// AI_GATEWAY_AUTH worker secret), used as the deploy-time fallback when no
+// user credential is reachable. A user's OWN gateway is the separate
+// `my-gateway` provider (providers/my-gateway.ts). Proxies to Workers AI /
+// OpenAI / Anthropic upstreams under one URL + bearer; pass any modelId
+// understood by the upstream configured in `env.AI_GATEWAY_URL`.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
@@ -13,7 +16,7 @@ import {
 export function createAIGatewayProvider(): ModelProvider {
   return {
     id: 'ai-gateway',
-    label: 'Cloudflare AI Gateway',
+    label: 'Cloudflare AI Gateway (platform)',
     defaultModel: DEFAULT_WORKERS_AI_MODEL_SPEC,
     isAvailable: deps => {
       const url = deps.env.AI_GATEWAY_URL;
