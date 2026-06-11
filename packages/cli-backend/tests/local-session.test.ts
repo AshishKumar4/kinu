@@ -825,11 +825,14 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // One turn only — steering never spawned a second turn.
     expect(turnStarts(events)).toHaveLength(1);
 
-    // Durable conversation keeps the merged steer between user and assistant.
+    // Durable conversation keeps ONE row per steer (verbatim, as surfaces
+    // recorded them) so the walk-back fork pivot can match each individually —
+    // only the model-facing injection is merged.
     const rows = db.query(`SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`)
       .all() as Array<{ role: string; content: string }>;
-    expect(rows.map((r) => r.role)).toEqual(['user', 'user', 'assistant']);
-    expect(rows[1]!.content).toBe('also check X\n\nand Y');
+    expect(rows.map((r) => r.role)).toEqual(['user', 'user', 'user', 'assistant']);
+    expect(rows[1]!.content).toBe('also check X');
+    expect(rows[2]!.content).toBe('and Y');
     await session.end();
   });
 
@@ -859,19 +862,95 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(session.steer('nothing running')).toBe(false);
   });
 
-  test('interrupt drops pending steers — no surprise follow-up turn', async () => {
+  test('interrupt drops pending steers — no surprise follow-up turn — and returns them to the caller', async () => {
     const { model } = gatedTextModel('never finishes');
     const { session, events } = setup('unused', model);
 
     const turn = session.send('long task');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
     expect(session.steer('change of plans')).toBe(true);
-    session.interrupt();
+    // Surfaces already rendered the steer as sent — the dropped text comes
+    // back so they can restore it to the composer instead of losing it.
+    expect(session.interrupt()).toEqual(['change of plans']);
     await turn;
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(turnStarts(events)).toHaveLength(1);
     expect(events.some((e) => e.type === 'error')).toBe(true);
+    await session.end();
+  });
+
+  test('a mid-stream failure keeps drained steers in the live context for the next turn', async () => {
+    // Call #1 streams a tool call (steer drains at its step boundary), then
+    // call #2 — which HAS seen the steer — dies mid-stream.
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const prompts: Array<Array<{ role: string; content: unknown }>> = [];
+    let calls = 0;
+    const model = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async ({ prompt }: { prompt: Array<{ role: string; content: unknown }> }) => {
+        prompts.push(prompt);
+        calls += 1;
+        if (calls === 1) {
+          return {
+            stream: new ReadableStream({
+              async start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
+                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                });
+                await gate;
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+        if (calls === 2) {
+          return {
+            stream: new ReadableStream({
+              start(controller) { controller.error(new Error('provider exploded')); },
+            }),
+            response: { headers: {} },
+          };
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'recovered' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    } as unknown as LanguageModel;
+
+    const { session, events } = setup('unused', model);
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    expect(session.steer('do it differently')).toBe(true);
+    release();
+    await turn;
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+
+    // The NEXT turn's model context must still carry the steer the model
+    // already saw (and the surfaces already recorded).
+    await session.send('follow-up');
+    const last = prompts.at(-1)!;
+    const texts = userTexts(last);
+    expect(texts).toContain('do it differently');
     await session.end();
   });
 });
@@ -930,7 +1009,11 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
         VALUES ('win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
     rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
         VALUES ('alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
-    captureAlternateTakes(rt.storage.sql, { task: 'pick a strategy', winnerId: 'win', epsilon: 0.1 });
+    // In production the capture happens MID-turn (inside think-mcts), so its
+    // timestamp falls inside the claiming turn's window. This seed runs
+    // before send() — stamp it just ahead so the scoped claim sees it as a
+    // mid-turn capture rather than a stale leftover.
+    captureAlternateTakes(rt.storage.sql, { task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
     // Mirror converge()'s close: winner terminal, the near-tied rival pruned.
     rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
     rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;

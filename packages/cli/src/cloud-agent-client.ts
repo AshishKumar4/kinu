@@ -263,8 +263,10 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** Cancel in-flight turns: ask the DO to abort, resolve locally with the
-   *  partial output so callers return to idle immediately. */
-  stop(): void {
+   *  partial output so callers return to idle immediately. Cloud steers are
+   *  persisted by the DO the moment they are submitted, so nothing typed is
+   *  ever dropped here. */
+  stop(): string[] {
     const ws = this.ws;
     for (const [id, turn] of [...this.activeTurns]) {
       if (ws?.readyState === WebSocket.OPEN) {
@@ -273,6 +275,7 @@ export class CloudAgentClient implements AgentClient {
       this.activeTurns.delete(id);
       this.settleTurn(turn);
     }
+    return [];
   }
 
   async close(): Promise<void> {

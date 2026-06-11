@@ -345,10 +345,14 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   }, [addMessage, changelogView, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker, takesView]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
+    // Steers accepted mid-turn but never delivered come back to the composer
+    // on interrupt — the same restore contract as the Tab queue (a queue
+    // restore in the same batch merges behind them instead of clobbering).
+    let droppedSteers: string[] = [];
     for (const effect of effects) {
       switch (effect.kind) {
         case 'interrupt':
-          client.stop();
+          droppedSteers = client.stop();
           addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
           break;
         case 'exit':
@@ -358,7 +362,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           setInputText('');
           break;
         case 'set-input':
-          setInputText(effect.text);
+          setInputText([...droppedSteers.splice(0), effect.text].filter(Boolean).join('\n'));
           break;
         case 'hint':
           addMessage({ role: 'system', content: effect.text });
@@ -370,6 +374,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           void performBranch(effect.text);
           break;
       }
+    }
+    if (droppedSteers.length > 0) {
+      setInputText([...droppedSteers, inputRef.current?.plainText ?? ''].filter(Boolean).join('\n'));
     }
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 

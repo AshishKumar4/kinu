@@ -244,8 +244,12 @@ export interface AgentClient {
    *  forked CLI session + copied conversation; cloud agents fork the agent DO
    *  (forkAgent RPC) and return a sibling client for it. */
   fork(point: ForkPoint): Promise<AgentForkResult>;
-  /** Interrupt the in-flight turn (Esc / Ctrl+C / /stop). */
-  stop(): void;
+  /** Interrupt the in-flight turn (Esc / Ctrl+C / /stop). Returns steer texts
+   *  that were accepted mid-turn but never delivered to the model — surfaces
+   *  already rendered them as sent, so they must be handed back to the user,
+   *  not dropped silently. Empty when nothing was pending (cloud steers
+   *  persist server-side immediately, so the cloud client always returns []). */
+  stop(): string[];
   close(): Promise<void>;
 
   /** Canonical conversation history: the DO chat projection for cloud, the

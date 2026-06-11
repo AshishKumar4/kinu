@@ -657,10 +657,14 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Abort the in-flight turn (Ctrl+C / Esc). Pending steers are dropped —
-   *  an interrupt means "stop", not "stop and do what I typed". */
-  interrupt(): void {
-    this.pendingSteers = [];
+   *  an interrupt means "stop", not "stop and do what I typed" — but the
+   *  dropped texts are RETURNED so the surface can hand them back to the
+   *  user (the composer restore), never lose them silently: the chat already
+   *  rendered them as sent. */
+  interrupt(): string[] {
+    const dropped = this.pendingSteers.splice(0).map((steer) => steer.text);
     this.currentAbort?.abort();
+    return dropped;
   }
 
   /** Connect configured stdio MCP servers + merge their tools into the surface.
@@ -839,14 +843,14 @@ export class LocalAgentSession implements BackendHost {
     // from scratch, so every drained injection is re-applied at the position
     // (in base-message coordinates) where it first entered the conversation.
     const baseLength = turnMessages.length;
-    const injections: Array<{ index: number; message: ModelMessage; text: string }> = [];
+    const injections: Array<{ index: number; message: ModelMessage; texts: string[] }> = [];
     const prepareStepMessages = ({ messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
       if (this.pendingSteers.length > 0) {
         const drained = this.pendingSteers.splice(0);
         injections.push({
           index: messages.length,
           message: steerUserMessage(drained),
-          text: drained.map((steer) => steer.text).join('\n\n'),
+          texts: drained.map((steer) => steer.text),
         });
       }
       if (injections.length === 0) return undefined;
@@ -910,6 +914,11 @@ export class LocalAgentSession implements BackendHost {
         }
       }
     } catch (err) {
+      // The model already consumed the drained steers and the surfaces
+      // rendered them as sent — a failed stream must not erase them from the
+      // live context (their exact splice positions died with the stream, so
+      // they append in drain order).
+      for (const injection of injections) this.history.push(injection.message);
       this.orch.acc.hadError = true;
       this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -928,7 +937,10 @@ export class LocalAgentSession implements BackendHost {
       });
     }
 
-    const assistantMsgId = this.persist(item.text, injections.map((injection) => injection.text), fullText);
+    // One durable row PER steer (not per drain): the walk-back fork pivot
+    // matches individual user messages verbatim, exactly as surfaces and the
+    // JSONL transcript recorded them.
+    const assistantMsgId = this.persist(item.text, injections.flatMap((injection) => injection.texts), fullText);
 
     // Alternate Takes captured during this turn's think-mcts runs get the
     // turn id they competed for, so a pick can credit the right turn. A turn

@@ -227,9 +227,15 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/connect':
       if (!client.consents) return { kind: 'unknown', command: cmd };
       return { kind: 'device-connect' };
-    case '/stop':
-      client.stop();
-      return { kind: 'text', text: 'Stop requested for the active turn.' };
+    case '/stop': {
+      const dropped = client.stop();
+      return {
+        kind: 'text',
+        text: dropped.length > 0
+          ? `Stop requested for the active turn. Undelivered steered input:\n${dropped.map((t) => `  ${t}`).join('\n')}`
+          : 'Stop requested for the active turn.',
+      };
+    }
     case '/queue':
       return { kind: 'queue', text: arg || undefined };
     case '/branch':

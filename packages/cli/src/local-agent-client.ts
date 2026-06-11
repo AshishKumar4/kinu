@@ -266,8 +266,8 @@ export class LocalAgentClient implements AgentClient {
     return { client: this, label: `session ${next.id}` };
   }
 
-  stop(): void {
-    this.session.interrupt();
+  stop(): string[] {
+    return this.session.interrupt();
   }
 
   async close(): Promise<void> {
