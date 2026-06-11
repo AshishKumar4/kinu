@@ -277,8 +277,8 @@ const MessageView = memo(function MessageView({
   if (isUser) {
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
-      <div className="flex flex-col items-start animate-fade-in group">
-        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-bl-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
+      <div className="flex flex-col items-end animate-fade-in group">
+        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
@@ -288,7 +288,7 @@ const MessageView = memo(function MessageView({
           {canFork && (
             <button
               onClick={() => onFork!(message.id)}
-              className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
+              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded"
               title="Fork from here"
             >
               <GitBranchIcon size={12} />
