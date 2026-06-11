@@ -36,6 +36,23 @@ export {
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types.js';
+// Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
+// every evolution surface reads (audit R3: the measurable loss).
+export {
+  outcomeToFeedback, outcomeQuality, isTrivialTurn,
+  initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes,
+  realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
+  recordLesson, listLessons, corroborateLessonsForTurn,
+  type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
+  type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
+  type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
+} from './evolution/outcomes.js';
+// Replay-eval harness — outcome-labeled turns re-run against the current
+// config; the persisted loss curve.
+export {
+  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
+  type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
+} from './evolution/replay.js';
 // Canonical `buildBuiltinTools` is exported below; the older `buildAgentTools`
 // surface is no longer exported.
 

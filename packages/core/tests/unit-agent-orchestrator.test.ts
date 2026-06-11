@@ -35,13 +35,14 @@ function webhook(deliveryId: string): IngressDescriptor {
 }
 
 function fakeEngine() {
-  const turns: CompletedTurn[] = [];
+  const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
   const engine = {
-    onTurnCompleteAsync: (t: CompletedTurn) => { turns.push(t); },
+    reviewTurnDetached: (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
+    reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
   } as unknown as EvolutionEngine;
-  return { engine, turns, sessions };
+  return { engine, reviews, sessions };
 }
 function fakeHost() {
   const enqueued: ProgrammaticTurn[] = [];
@@ -51,23 +52,23 @@ function fakeHost() {
   };
   return { host, enqueued };
 }
-const aTurn = (i: number): CompletedTurn => ({
-  task: `t${i}`, response: 'r', toolCalls: [], quality: 1, durationMs: 1, steps: 1, hadError: false, feedback: null,
-} as unknown as CompletedTurn);
+const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({
+  userMessage: `t${i}`, assistantResponse: 'r', toolCalls: [], durationMs: 1, steps: 1,
+  hadError: false, feedback: null, turnId: `m${i}`, origin,
+});
 
 describe('AgentOrchestrator.recordTurn — session cadence', () => {
-  test('fires turn evolution every turn; session reflection every N turns', () => {
-    const { engine, turns, sessions } = fakeEngine();
+  test('session reflection fires every N turns', () => {
+    const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 3 });
     for (let i = 0; i < 7; i++) orch.recordTurn(aTurn(i));
-    expect(turns).toHaveLength(7);            // every turn
     expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (count resets)
     expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
   });
 
-  test('flushSession reflects a partial window (CLI exit); no-op when empty', async () => {
-    const { engine, sessions } = fakeEngine();
+  test('flushSession reviews the pending turn as abandoned, then reflects the partial window', async () => {
+    const { engine, reviews, sessions } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 5 });
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i));   // below the interval — no auto reflection
@@ -75,8 +76,44 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     await orch.flushSession();
     expect(sessions).toEqual([2]);                            // the 2 buffered turns reflected
     expect(orch.sessionTurnIndex).toBe(0);                    // window reset
+    // The last user-origin turn had no follow-up — reviewed as abandoned.
+    expect(reviews).toEqual([{ turn: aTurn(1), followup: null }]);
     await orch.flushSession();                                // nothing buffered now
     expect(sessions).toEqual([2]);                            // still just the one
+    expect(reviews).toHaveLength(1);
+  });
+});
+
+describe('AgentOrchestrator — turn-outcome review dispatch', () => {
+  test('the next user message grades the previous turn (Hermes-style forked review)', () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.observeUserTurn('first message');            // nothing pending yet
+    expect(reviews).toHaveLength(0);
+
+    orch.recordTurn(aTurn(0));                        // turn 0 completes → pending
+    expect(reviews).toHaveLength(0);                  // not reviewed at completion
+
+    orch.observeUserTurn('actually, that was wrong'); // user turn 1 arrives
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'actually, that was wrong' }]);
+
+    orch.observeUserTurn('another message');          // pending already consumed
+    expect(reviews).toHaveLength(1);
+  });
+
+  test('programmatic turns review immediately with no follow-up and do not displace the pending user turn', () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.recordTurn(aTurn(0));                        // user turn pending
+    orch.recordTurn(aTurn(1, 'programmatic'));        // reactor/job-wake turn
+    expect(reviews).toEqual([{ turn: aTurn(1, 'programmatic'), followup: null }]);
+
+    orch.observeUserTurn('follow-up for the USER turn');
+    expect(reviews[1]).toEqual({ turn: aTurn(0), followup: 'follow-up for the USER turn' });
   });
 });
 

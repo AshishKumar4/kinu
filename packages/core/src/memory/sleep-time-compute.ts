@@ -7,10 +7,10 @@
 // Mechanism: while the agent is idle between user turns, a background fork
 // re-reads recent activity and rewrites the agent_facts world model so the
 // next turn starts from a denser, cleaner state. The user never waits for this
-// — it runs fire-and-forget in onTurnCompleteAsync.
+// — it runs fire-and-forget after the turn completes.
 //
-// Proteus implements this as a thin layer on top of the existing background
-// review (`EvolutionEngine.onTurnCompleteAsync`) — same fork, additional work.
+// Proteus implements this as a sibling of the detached outcome review
+// (`EvolutionEngine.reviewTurnDetached`) — same forked pattern, additional work.
 // The keyed world model is its lever; long-conversation summarization is owned
 // by Session compaction (configureSession), so there is no parallel prose summary.
 //

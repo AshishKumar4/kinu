@@ -33,6 +33,10 @@ export class AgentOrchestrator {
   private sessionTurnCount = 0;
   private sessionTurns: CompletedTurn[] = [];
   private sessionStartedAt = Date.now();
+  /** The last completed user-origin turn, awaiting its outcome review — the
+   *  next user message grades it (engine.reviewTurn); a session flush grades
+   *  it as abandoned. */
+  private pendingReview: CompletedTurn | null = null;
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks);
@@ -50,10 +54,27 @@ export class AgentOrchestrator {
   }
 
   /**
+   * A new USER message arrived — the verdict on the previous turn. Dispatch
+   * the detached outcome review (engine.reviewTurn: trivial pre-filter, one
+   * cheap LLM classification, turn_outcomes row + downstream evolution).
+   * Backends call this at user-turn start; programmatic turns must not.
+   */
+  observeUserTurn(userText: string): void {
+    const previous = this.pendingReview;
+    if (!previous) return;
+    this.pendingReview = null;
+    this.deps.engine.reviewTurnDetached(previous, userText);
+  }
+
+  /**
    * Advance the session-reflection cadence + fire turn/session evolution. All
    * fire-and-forget — never blocks the loop. Does NOT drain events (the backend
    * calls drainPendingEvents() separately so it controls ordering vs its own
    * platform-specific post-turn work).
+   *
+   * Turn-level evolution is outcome-driven: a user-origin turn waits for the
+   * user's follow-up (observeUserTurn) or the session flush (abandoned); a
+   * programmatic turn has no user verdict coming, so it reviews immediately.
    */
   recordTurn(turn: CompletedTurn): void {
     this.sessionTurnCount++;
@@ -65,16 +86,27 @@ export class AgentOrchestrator {
           console.error('[proteus] Session evolution failed:', err));
       }
     }
-    this.deps.engine.onTurnCompleteAsync(turn);
+    if (turn.origin === 'programmatic') this.deps.engine.reviewTurnDetached(turn, null);
+    else this.pendingReview = turn;
   }
 
   /**
-   * Flush a partial session (fewer than N turns) — fire session evolution on the
-   * buffered turns and reset, AWAITING the reflection. For backends with an
-   * explicit session end (the CLI on exit); the always-on DO rolls over via the
-   * N-turn cadence in recordTurn instead. No-op when no turns are buffered.
+   * Flush a partial session (fewer than N turns) — review the still-pending
+   * last turn as abandoned (the session ended with no follow-up), then fire
+   * session evolution on the buffered turns and reset, AWAITING the
+   * reflection. For backends with an explicit session end (the CLI on exit);
+   * the always-on DO rolls over via the N-turn cadence in recordTurn instead.
    */
   async flushSession(): Promise<void> {
+    const pending = this.pendingReview;
+    this.pendingReview = null;
+    if (pending) {
+      try {
+        await this.deps.engine.reviewTurn(pending, null);
+      } catch (err) {
+        console.error('[proteus] Turn review failed at flush:', err);
+      }
+    }
     const sessionData = this.snapshotSession();
     if (!sessionData) return;
     try {
