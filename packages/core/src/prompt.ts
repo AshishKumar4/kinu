@@ -309,13 +309,13 @@ function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
 /** Skill BODIES belong in the stable prefix (an activation-set change is a
  *  deliberate cache bust), but the per-turn activation REASONS do not — the
  *  same active set must render byte-identically regardless of which keyword
- *  matched. Reasons render in the volatile turn context instead; name order
- *  is pinned so set equality means byte equality. */
+ *  matched. Reasons render in the volatile turn context instead. Activation
+ *  precedence order is PRESERVED here: the renderer spends its char budget in
+ *  that order (earlier-activated skills are never crowded out by a later
+ *  giant one) while pinning the rendered block order by name for byte
+ *  equality. */
 function stableActiveSkills(activeSkills: ActiveSkillSet): ActiveSkillSet {
-  return {
-    active: [...activeSkills.active].sort((a, b) => a.name.localeCompare(b.name)),
-    reasons: [],
-  };
+  return { active: activeSkills.active, reasons: [] };
 }
 
 /**

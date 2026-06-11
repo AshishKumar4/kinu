@@ -49,25 +49,32 @@ export function renderActiveSkillsSection(
   for (const r of activeSet.reasons) reasonByName.set(r.name, r.reason);
 
   // Spend the budget in activation order (the resolver's precedence order),
-  // so earlier-activated skills can never be crowded out by a later giant one.
+  // so earlier-activated skills can never be crowded out by a later giant
+  // one — but RENDER the blocks in stable name order so the same active set
+  // is byte-identical regardless of how it was activated. (When the set
+  // overflows the budget under a different precedence order, truncation
+  // shifts with it — a real priority change, hence a deliberate cache bust.)
   // A cut body keeps its header + tool restriction and points at skills read.
   let remaining = Math.max(0, maxChars);
-  const blocks = activeSet.active.map((s) => {
+  const blockByName = new Map<string, string>();
+  for (const s of activeSet.active) {
     const r = reasonByName.get(s.name);
     const header = `### ${s.name} (${describeReason(r)})`;
     const body = s.body.trimEnd();
     const readPointer = `read the full body with skills({action:"read", name:"${s.name}"})`;
     if (body.length <= remaining) {
       remaining -= body.length;
-      return `${header}\n\n${body}`;
-    }
-    if (remaining >= MIN_TRUNCATED_CHARS) {
+      blockByName.set(s.name, `${header}\n\n${body}`);
+    } else if (remaining >= MIN_TRUNCATED_CHARS) {
       const head = body.slice(0, remaining);
       remaining = 0;
-      return `${header}\n\n${head}\n… [truncated: ${body.length - head.length} more chars — ${readPointer}]`;
+      blockByName.set(s.name, `${header}\n\n${head}\n… [truncated: ${body.length - head.length} more chars — ${readPointer}]`);
+    } else {
+      blockByName.set(s.name, `${header}\n\n(body omitted by the size cap — ${readPointer})`);
     }
-    return `${header}\n\n(body omitted by the size cap — ${readPointer})`;
-  });
+  }
+  const blocks = [...blockByName.keys()].sort((a, b) => a.localeCompare(b))
+    .map((name) => blockByName.get(name)!);
 
   return [
     '',

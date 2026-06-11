@@ -13,6 +13,7 @@ import {
   appendVolatileContextMessage,
   executorAvailabilityLabel,
   hashSystemPrompt,
+  renderActiveSkillsSection,
   VOLATILE_CONTEXT_HEADER,
   type PromptExecutorInfo,
 } from '../src/index.ts';
@@ -138,5 +139,29 @@ describe('hashSystemPrompt', () => {
     expect(hashSystemPrompt('abc')).toBe(hashSystemPrompt('abc'));
     expect(hashSystemPrompt('abc')).not.toBe(hashSystemPrompt('abd'));
     expect(hashSystemPrompt('')).toHaveLength(16);
+  });
+});
+
+describe('active-skill budget priority (activation precedence, stable render order)', () => {
+  test('an alphabetically-early giant skill cannot crowd out an earlier-activated one', () => {
+    const giant: ParsedSkill = { ...skill('aaa-giant'), body: 'G'.repeat(20_000) };
+    const invoked: ParsedSkill = { ...skill('zzz-invoked'), body: 'THE-INVOKED-BODY '.repeat(10) };
+    // Activation precedence: the explicitly-invoked skill came FIRST; the
+    // giant keyword skill activated after it.
+    const section = renderActiveSkillsSection({ active: [invoked, giant], reasons: [] });
+    // Budget follows precedence: the invoked skill keeps its full body and
+    // the giant absorbs the truncation…
+    expect(section).toContain('THE-INVOKED-BODY');
+    expect(section).not.toContain('zzz-invoked"})'); // not truncated/omitted
+    expect(section).toContain('[truncated:');
+    // …while render order stays name-stable (giant block renders first).
+    expect(section.indexOf('### aaa-giant')).toBeLessThan(section.indexOf('### zzz-invoked'));
+  });
+
+  test('without overflow, activation order still renders byte-identically', () => {
+    const a = skill('alpha');
+    const b = skill('beta');
+    expect(renderActiveSkillsSection({ active: [a, b], reasons: [] }))
+      .toBe(renderActiveSkillsSection({ active: [b, a], reasons: [] }));
   });
 });
