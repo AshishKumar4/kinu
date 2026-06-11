@@ -15,7 +15,7 @@
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@proteus/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
-import { executeSlashCommand, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands.js';
+import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
 import { watchTerminalConsents } from './consent-watch.js';
 import {
@@ -115,8 +115,17 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       }
       return;
     }
+    if (command === '/branch') {
+      const text = input.slice('/branch'.length).trim();
+      if (!text) console.log(DIM('  Usage while a turn runs: /branch <text> — runs the redirect in parallel.'));
+      else if (!client.branch(text, { cwd: process.cwd() })) {
+        queuedInputs.push(text);
+        console.log(DIM('  ⧗ the turn just finished — queued to send next'));
+      }
+      return;
+    }
     if (input.startsWith('/')) {
-      console.log(DIM('  A turn is running — type to steer it, or use /queue <text> and /stop.'));
+      console.log(DIM('  A turn is running — type to steer it, or use /queue <text>, /branch <text>, /stop.'));
       return;
     }
     const resolved = await resolvePromptAttachments(input);
@@ -256,6 +265,12 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         if (outcome.kind === 'queue') {
           if (outcome.text) queuedInputs.push(outcome.text);
           else console.log(DIM('  Usage: /queue <text> — it sends after the running turn (or immediately when idle).'));
+          continue;
+        }
+        if (outcome.kind === 'branch') {
+          // Idle — there is no live turn to branch from; run it normally.
+          if (outcome.text) await runTurn(outcome.text);
+          else console.log(DIM('  Usage: /branch <text> — runs a redirect as a parallel branch while a turn is running.'));
           continue;
         }
         if (outcome.kind === 'fork') {
@@ -443,6 +458,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       console.log(DIM('  Nothing to cancel.'));
       return 'ok';
     case 'queue':
+    case 'branch':
     case 'fork':
     case 'undo':
       // Surface-owned outcomes — runChatLoop intercepts them before this.
@@ -494,9 +510,14 @@ function renderClientEvent(
       typing.stop();
       console.log(`\n${ERR('error')} ${event.message}\n`);
       break;
+    case 'broadcast':
+      if (isBranchStatusEvent(event.event)) {
+        typing.stop();
+        console.log(`\n${DIM(describeBranchStatus(event.event))}`);
+      }
+      break;
     case 'turn-end':
     case 'step-finish':
-    case 'broadcast':
       break;
   }
 }

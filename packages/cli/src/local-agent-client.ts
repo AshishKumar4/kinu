@@ -206,6 +206,21 @@ export class LocalAgentClient implements AgentClient {
     return true;
   }
 
+  /** Steer-as-Branch: the in-process session runs the redirect as one
+   *  budgeted head against the live turn's input history (text-only — the
+   *  head task is a string). */
+  branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
+    const text = promptText(prompt);
+    if (!this.session.branch(text)) return false;
+    this.activeCliSession.append('user', {
+      text,
+      branched: true,
+      cwd: opts.cwd ?? process.cwd(),
+      backend: 'local',
+    });
+    return true;
+  }
+
   /** Walk-back fork: copy the durable conversation strictly before the picked
    *  user message into a fresh conversation, recorded as a forked CLI session
    *  (the existing --fork lineage), and re-point this client at it. */

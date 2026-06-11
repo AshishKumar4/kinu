@@ -26,7 +26,7 @@ import {
 } from './session.js';
 import { recordAgentClientEvent } from './session-recorder.js';
 import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
-import type { AlternateTakeSet, ChangelogEntry, ChangelogRevertResult, TakePickOutcome } from '@proteus/core';
+import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, TakePickOutcome } from '@proteus/core';
 import {
   asRecord,
   createUserUiMessage,
@@ -142,6 +142,27 @@ export class CloudAgentClient implements AgentClient {
     void this.submit(prompt, opts, true).catch((err) => {
       this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     });
+    return true;
+  }
+
+  /** Steer-as-Branch: fire the branchTurn RPC — the DO spawns the head and
+   *  streams 'branch_status' broadcasts back over this websocket (forwarded
+   *  as broadcast events). A rejected branch surfaces as an error status. */
+  branch(prompt: AgentPrompt, _opts: AgentClientSendOptions = {}): boolean {
+    if (this.activeTurns.size === 0) return false;
+    const text = promptText(prompt).trim();
+    if (!text) return false;
+    this.activeCliSession.append('user', { text, branched: true, backend: 'cloud' });
+    const fail = (message: string) => this.emit({
+      type: 'broadcast',
+      event: { type: 'branch_status', status: 'error', branchId: '', task: text, message } satisfies BranchStatusEvent,
+    });
+    void this.callRpc('branchTurn', [text])
+      .then((result) => {
+        const r = result as { accepted?: boolean; reason?: string } | null;
+        if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
+      })
+      .catch((err) => fail(err instanceof Error ? err.message : String(err)));
     return true;
   }
 
@@ -437,6 +458,13 @@ export class CloudAgentClient implements AgentClient {
       this.pendingRpcs.delete(payload.id);
       if (payload.success === true) pending.resolve(payload.result);
       else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud agent RPC failed.'));
+      return;
+    }
+
+    // Branch progress broadcasts (the DO fans them to every ws client) feed
+    // the TUI's branch segment + settle hint.
+    if (payload.type === 'branch_status') {
+      this.emit({ type: 'broadcast', event: payload as unknown as BranchStatusEvent });
       return;
     }
 

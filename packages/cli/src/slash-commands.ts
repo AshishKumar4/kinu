@@ -5,7 +5,7 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { summarizeRestorePlan, type AlternateTakeCandidate, type AlternateTakeSet, type FileCheckpointEntry, type TakePickOutcome } from '@proteus/core';
+import { summarizeRestorePlan, type AlternateTakeCandidate, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type TakePickOutcome } from '@proteus/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
 
 export interface SlashCommandInfo {
@@ -32,6 +32,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents' },
   { name: '/stop', description: 'Stop the active turn' },
   { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>' },
+  { name: '/branch', description: 'Run a redirect as a parallel branch of the running turn', usage: '/branch <text>' },
   { name: '/fork', description: 'Walk back: fork the conversation before an earlier message', usage: '/fork [number]' },
   { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
@@ -86,6 +87,9 @@ export type SlashOutcome =
   | { kind: 'device-connect' }
   /** Queue text to send after the active turn (surface-owned queue). */
   | { kind: 'queue'; text?: string }
+  /** Steer-as-Branch: run the text as a parallel branch of the running turn
+   *  (surface-owned — falls back to a normal send when idle). */
+  | { kind: 'branch'; text?: string }
   /** Walk-back fork; ref is the picker number when given. Surfaces own the
    *  candidate list (their rendered user messages) and the fork() call. */
   | { kind: 'fork'; ref?: string }
@@ -228,6 +232,8 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return { kind: 'text', text: 'Stop requested for the active turn.' };
     case '/queue':
       return { kind: 'queue', text: arg || undefined };
+    case '/branch':
+      return { kind: 'branch', text: arg || undefined };
     case '/fork':
       return { kind: 'fork', ref: arg || undefined };
     case '/undo':
@@ -342,6 +348,25 @@ export function renderTakesText(set: AlternateTakeSet): string {
   });
   lines.push('Pick with /takes <n> — your pick becomes a real preference signal.');
   return lines.join('\n');
+}
+
+/** Narrow a BroadcastEvent to the Steer-as-Branch progress event. */
+export function isBranchStatusEvent(event: { type: string }): event is BranchStatusEvent {
+  return event.type === 'branch_status';
+}
+
+/** One presentation-neutral line per branch_status broadcast — shared by the
+ *  TUI and the classic REPL. */
+export function describeBranchStatus(event: BranchStatusEvent): string {
+  const task = event.task.replace(/\s+/g, ' ').slice(0, 80);
+  switch (event.status) {
+    case 'running':
+      return `⎇ branching — running "${task}" in parallel (the live turn continues)`;
+    case 'settled':
+      return '⎇ branch settled into alternate takes — /takes to compare and pick';
+    case 'error':
+      return `⎇ branch discarded — ${event.message}`;
+  }
 }
 
 /** What a pick did, for the surfaces' confirmation line. */

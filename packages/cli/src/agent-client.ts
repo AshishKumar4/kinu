@@ -109,6 +109,8 @@ export interface AgentTranscriptMessage {
   args?: string;
   /** User message delivered mid-turn through steer(). */
   steered?: boolean;
+  /** User redirect run as a parallel branch through branch(). */
+  branched?: boolean;
 }
 
 /** A walk-back fork point: a user message identified by its verbatim text and
@@ -231,6 +233,12 @@ export interface AgentClient {
    *  sessions submit it immediately and the DO runs it as the next serialized
    *  turn. Returns false when no turn is active — use send() instead. */
   steer(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
+  /** Steer-as-Branch: run the prompt as a parallel budgeted head against the
+   *  live turn's input snapshot WITHOUT interrupting it. When both finish the
+   *  pair settles into Alternate Takes (progress + settle stream as
+   *  'branch_status' broadcast events). Returns false when no turn is active —
+   *  use send() instead. */
+  branch(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
   /** Walk-back fork: start a new conversation containing the history strictly
    *  BEFORE the given user message. Local agents re-point this client to a
    *  forked CLI session + copied conversation; cloud agents fork the agent DO
