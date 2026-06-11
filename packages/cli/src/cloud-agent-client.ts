@@ -148,11 +148,11 @@ export class CloudAgentClient implements AgentClient {
   /** Steer-as-Branch: fire the branchTurn RPC — the DO spawns the head and
    *  streams 'branch_status' broadcasts back over this websocket (forwarded
    *  as broadcast events). A rejected branch surfaces as an error status. */
-  branch(prompt: AgentPrompt, _opts: AgentClientSendOptions = {}): boolean {
+  branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
     const text = promptText(prompt).trim();
     if (!text) return false;
-    this.activeCliSession.append('user', { text, branched: true, backend: 'cloud' });
+    this.activeCliSession.append('user', { text, branched: true, cwd: opts.cwd ?? process.cwd(), backend: 'cloud' });
     const fail = (message: string) => this.emit({
       type: 'broadcast',
       event: { type: 'branch_status', status: 'error', branchId: '', task: text, message } satisfies BranchStatusEvent,
