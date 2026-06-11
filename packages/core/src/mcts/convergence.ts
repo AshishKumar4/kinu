@@ -41,6 +41,11 @@ export async function converge(
       `Task: ${winner.task.slice(0, 200)}\nAll approaches scored below ${minAcceptable}.\n`,
     );
     await rt.memory.index('memory/MEMORY.md');
+    // Close every remaining open node so the next runMCTS starts from its own
+    // fresh root: global-argmax UCT only considers status='open', and leaving
+    // these open let a later task expand under this task's nodes.
+    rt.storage.sql`UPDATE search_nodes SET status = 'failed' WHERE status = 'open'`;
+    await recordTaskOutcome(rt, winner.task, 'error', winner.value);
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -79,12 +84,18 @@ export async function converge(
     }
   }
 
-  // Mark all other open nodes as pruned
+  // Close the tree: the winner becomes terminal and every other open node is
+  // pruned. Nothing stays 'open' across tasks — otherwise global-argmax UCT
+  // would prefer this task's high-value winner over the next task's fresh root.
   rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
     WHERE status = 'open' AND id != ${winner.id}
   `;
+  rt.storage.sql`
+    UPDATE search_nodes SET status = 'terminal' WHERE id = ${winner.id}
+  `;
+  await recordTaskOutcome(rt, winner.task, 'success', winner.value);
 
   return {
     winnerId: winner.id,
@@ -92,4 +103,24 @@ export async function converge(
     converged: true,
     trajectory,
   };
+}
+
+/** Record the task outcome into task_history — the per-task ledger behind the
+ *  agent-info "Tasks" stat and scaffold error-rate monitoring. */
+async function recordTaskOutcome(
+  rt: AgentRuntime,
+  task: string,
+  outcome: 'success' | 'error',
+  score: number,
+): Promise<void> {
+  let scaffoldVersion = 0;
+  try { scaffoldVersion = await rt.identity.scaffold.version(); } catch { /* scaffold-less backend */ }
+  try {
+    rt.storage.sql`
+      INSERT INTO task_history (task, scaffold_version, outcome, score)
+      VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
+    `;
+  } catch {
+    // task_history may not exist in minimal test runtimes — non-fatal.
+  }
 }

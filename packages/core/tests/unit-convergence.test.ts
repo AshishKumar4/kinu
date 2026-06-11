@@ -6,6 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, createMockSession } from './helpers.js';
 import { converge } from '../src/mcts/convergence.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
+import { initScaffoldTables } from '../src/scaffold/schemas.js';
 
 describe('Convergence', () => {
   test('throws when no nodes exist', async () => {
@@ -46,9 +47,14 @@ describe('Convergence', () => {
     const result = await converge(rt, session);
     expect(result.converged).toBe(false);
     expect(result.trajectory).toHaveLength(0);
+
+    // Failed search closes its open nodes so the next task starts fresh.
+    const statuses = rt.storage.sql<{ id: string; status: string }>`
+        SELECT id, status FROM search_nodes ORDER BY id`;
+    expect(statuses.map((r) => r.status)).toEqual(['failed', 'failed']);
   });
 
-  test('marks non-winning open nodes as pruned after convergence', async () => {
+  test('marks the winner terminal and other open nodes pruned after convergence', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
@@ -60,7 +66,25 @@ describe('Convergence', () => {
 
     await converge(rt, session);
 
+    const best = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'best'`[0]!;
     const other = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'other'`[0]!;
+    expect(best.status).toBe('terminal');
     expect(other.status).toBe('pruned');
+  });
+
+  test('records the task outcome into task_history when the table exists', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);   // creates task_history
+    const session = createMockSession();
+
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, status)
+        VALUES ('w', 'ship the feature', 0.8, 4, 'open')`;
+    await converge(rt, session);
+
+    const rows = rt.storage.sql<{ task: string; outcome: string; score: number }>`
+        SELECT task, outcome, score FROM task_history`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ task: 'ship the feature', outcome: 'success', score: 0.8 });
   });
 });

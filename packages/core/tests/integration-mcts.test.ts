@@ -61,9 +61,49 @@ describe('MCTS integration', () => {
     const root = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NULL`[0]!;
     expect(root.visits).toBeGreaterThan(0);
 
-    // Non-winning open nodes should be pruned after convergence
+    // Convergence closes the tree: winner terminal, everything else pruned —
+    // nothing stays open to contaminate the next task's UCT selection.
     const openNodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE status = 'open'`;
-    expect(openNodes.length).toBeLessThanOrEqual(1); // only winner stays open
+    expect(openNodes.length).toBe(0);
+    const terminal = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE status = 'terminal'`;
+    expect(terminal.length).toBe(1);
+    expect(terminal[0]!.id).toBe(result.winnerId);
+  });
+
+  test('sequential tasks on one DB do not contaminate each other (fresh root per task)', async () => {
+    // Regression: converge used to leave the winner status='open', so the
+    // SECOND runMCTS's global-argmax UCT selected the FIRST task's high-value
+    // winner instead of the new task's root and expanded under it.
+    const { rt } = createTestRuntime();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'explored', codeUsed: null }),
+      evaluate: async () => 0.9,
+      generateReflection: async () => 'n/a',
+    });
+
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftScoreTables(rt.storage.execRaw);
+
+    const first = await runMCTS(rt, createMockSession(), 'first task', { budget: 1, branches: 2 });
+    expect(first.converged).toBe(true);
+
+    const second = await runMCTS(rt, createMockSession(), 'second task', { budget: 1, branches: 2 });
+    expect(second.converged).toBe(true);
+
+    // Every node created for the second task must hang off the second task's
+    // own root — never under the first task's winner.
+    const secondNodes = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes WHERE task = 'second task'`;
+    expect(secondNodes.length).toBe(3); // 1 root + 2 branches
+    const secondRoot = secondNodes.find((n) => n.parent_id === null)!;
+    expect(secondRoot).toBeDefined();
+    for (const n of secondNodes) {
+      if (n.id === secondRoot.id) continue;
+      expect(n.parent_id).toBe(secondRoot.id);
+    }
+    // And the second winner is one of the second task's nodes.
+    expect(secondNodes.some((n) => n.id === second.winnerId)).toBe(true);
   });
 
   test('reflections stored in memory on low scores', async () => {

@@ -2510,7 +2510,7 @@ export class OrchestratorAgent extends Think<Env> {
    * The per-trial shadow-eval verdict grid that drives the promote/rollback
    * decision — the moat surface's data source. Thin wrapper over core's
    * `readShadowVerdict` (reads `scaffold_evaluations`, regressions-first;
-   * NOT `task_history`/`canary_score`, which are never written).
+   * NOT `task_history`, which is the MCTS converge outcome ledger).
    */
   @callable()
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
