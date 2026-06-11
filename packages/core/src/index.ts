@@ -391,7 +391,7 @@ export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredent
 // Wire constants shared by the cf-backend Worker and the CLI.
 export { DEVICE_CONNECT_PATH, MAX_INLINE_ATTACHMENT_BYTES, ORCHESTRATOR_AGENT_SLUG } from './cloud-wire.js';
 
-// safety — approval gating for shell exec
+// safety — approval gating + OS sandbox policy for shell exec
 export {
   reviewCommand,
   formatApproval,
@@ -399,6 +399,27 @@ export {
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
+  SANDBOX_MODES,
+  isSandboxMode,
+  clampSandboxMode,
+  resolveSandboxPolicy,
+  isPathWritable,
+  normalizePosixPath,
+  escalationForWrite,
+  detectSandboxDenial,
+  formatSandboxEscalation,
+  parseSandboxEnforcementReport,
+  buildSandboxedSpawn,
+  buildSeatbeltProfile,
+  type SandboxMode,
+  type SandboxPolicy,
+  type ResolveSandboxPolicyOpts,
+  type SandboxEscalation,
+  type SandboxEnforcement,
+  type SandboxEnforcementReport,
+  type SandboxBackend,
+  type SandboxLaunch,
+  type SandboxSpawnOpts,
 } from './safety/index.js';
 
 // Utils

@@ -9,7 +9,10 @@
  * policy (tagging, attachment marking, replace-on-reconnect, rebuild) in a
  * unit-testable home — the UserDO just wires tickets, SQL, and consent.
  */
-import { DeviceTunnel, type TunnelSocket } from '@proteus/core';
+import {
+  DeviceTunnel, parseSandboxEnforcementReport,
+  type TunnelSocket, type SandboxEnforcementReport,
+} from '@proteus/core';
 
 /** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
@@ -38,6 +41,17 @@ export function deviceIdFromSocket(ws: DeviceSocket): string | null {
   try {
     const attachment = ws.deserializeAttachment() as { device?: unknown } | null;
     return attachment && typeof attachment.device === 'string' ? attachment.device : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The sandbox report a daemon announced in HELLO, persisted in the socket
+ *  attachment so it survives DO hibernation alongside the device tag. */
+function sandboxFromSocket(ws: DeviceSocket): SandboxEnforcementReport | null {
+  try {
+    const attachment = ws.deserializeAttachment() as { sandbox?: unknown } | null;
+    return parseSandboxEnforcementReport(attachment?.sandbox);
   } catch {
     return null;
   }
@@ -97,9 +111,28 @@ export class DeviceSocketHub {
     return tunnel;
   }
 
-  /** Feed an incoming RPC-response frame to the device's tunnel. */
+  /** Feed an incoming device frame: HELLO frames carry the daemon's sandbox
+   *  policy (stashed on the socket attachment); everything else goes to the
+   *  device's tunnel as an RPC response. */
   handleMessage(deviceId: string, data: string): void {
+    try {
+      const msg = JSON.parse(data) as { type?: unknown; sandbox?: unknown };
+      if (msg?.type === 'HELLO') {
+        const sandbox = parseSandboxEnforcementReport(msg.sandbox);
+        const ws = this.liveSocket(deviceId);
+        if (sandbox && ws) ws.serializeAttachment({ device: deviceId, sandbox });
+        return;
+      }
+    } catch { /* not JSON — let the tunnel's own parser ignore it */ }
     this.tunnel(deviceId)?.handleMessage(data);
+  }
+
+  /** The sandbox policy + enforcement the connected daemon reported, or null
+   *  (pre-sandbox daemons / no live socket). Consent and status surfaces use
+   *  this to show the mode being approved. */
+  sandboxReport(deviceId: string): SandboxEnforcementReport | null {
+    const ws = this.liveSocket(deviceId);
+    return ws ? sandboxFromSocket(ws) : null;
   }
 
   /** A device socket closed. Rejects its tunnel's in-flight calls — but only

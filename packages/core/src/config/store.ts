@@ -8,6 +8,7 @@
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { DirectoryBackup } from '../execution/sandbox.js';
+import { isSandboxMode, type SandboxMode } from '../safety/sandbox-policy.js';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -19,6 +20,12 @@ export const AGENT_CONFIG_KEYS = {
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
   shellApprovalMode: 'shell_approval_mode',
+  /** OS sandbox mode for local execution (read-only / workspace-write / full). */
+  sandboxMode: 'sandbox_mode',
+  /** 'true' to allow outbound network under workspace-write (default off). */
+  sandboxNetwork: 'sandbox_network',
+  /** JSON array of extra absolute writable roots under workspace-write. */
+  sandboxWritableRoots: 'sandbox_writable_roots',
   sleepTimeCompute: 'sleep_time_compute',
   autoPromoteScaffold: 'auto_promote_scaffold',
   shadowSampleRate: 'shadow_sample_rate',
@@ -73,6 +80,15 @@ export interface AgentConfigStore {
   setNameOrigin(origin: 'user' | 'auto'): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
+  /** OS sandbox mode for local execution. Default 'workspace-write'. */
+  getSandboxMode(): SandboxMode;
+  setSandboxMode(mode: SandboxMode): void;
+  /** Outbound network under workspace-write. Default false (network off). */
+  getSandboxNetwork(): boolean;
+  setSandboxNetwork(enabled: boolean): void;
+  /** Operator-granted extra writable roots (absolute paths) for workspace-write. */
+  getSandboxWritableRoots(): string[];
+  setSandboxWritableRoots(roots: ReadonlyArray<string>): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getAutoPromoteScaffold(): boolean;
@@ -160,6 +176,36 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
     setShellApprovalMode(mode) { set(AGENT_CONFIG_KEYS.shellApprovalMode, mode); },
+    getSandboxMode(): SandboxMode {
+      const v = get(AGENT_CONFIG_KEYS.sandboxMode);
+      return isSandboxMode(v) ? v : 'workspace-write';
+    },
+    setSandboxMode(mode) {
+      if (!isSandboxMode(mode)) throw new Error(`invalid sandbox mode: ${String(mode)}`);
+      set(AGENT_CONFIG_KEYS.sandboxMode, mode);
+    },
+    getSandboxNetwork() {
+      return get(AGENT_CONFIG_KEYS.sandboxNetwork) === 'true';
+    },
+    setSandboxNetwork(enabled) {
+      set(AGENT_CONFIG_KEYS.sandboxNetwork, enabled ? 'true' : 'false');
+    },
+    getSandboxWritableRoots() {
+      const v = get(AGENT_CONFIG_KEYS.sandboxWritableRoots);
+      if (!v) return [];
+      try {
+        const parsed = JSON.parse(v) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed.filter((r): r is string => typeof r === 'string' && r.startsWith('/'));
+        }
+      } catch { /* malformed → no extra roots */ }
+      return [];
+    },
+    setSandboxWritableRoots(roots) {
+      const cleaned = Array.from(new Set(roots.filter((r) => r.startsWith('/'))));
+      if (cleaned.length === 0) sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.sandboxWritableRoots}`;
+      else set(AGENT_CONFIG_KEYS.sandboxWritableRoots, JSON.stringify(cleaned));
+    },
     getSleepTimeComputeEnabled() {
       return get(AGENT_CONFIG_KEYS.sleepTimeCompute) === 'true';
     },
