@@ -21,11 +21,12 @@ import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
+import { createHostCheckpoints } from './checkpoints.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
 import { createLocalProviderLLM, type LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
-import type { OAuthCredential } from '@proteus/core';
+import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
@@ -36,6 +37,8 @@ export interface CLIRuntimeConfig {
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
   onCodexRefresh?: (credential: OAuthCredential) => void;
+  /** Shadow-git checkpoints kept per working directory (the one retention knob). */
+  checkpointKeep?: number;
 }
 
 export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void } }): SqlExecutor {
@@ -228,16 +231,20 @@ export function createCLIRuntime(
   // workspace provider and a bound POSIX shell. In CLI/local mode the shell is
   // the user's real machine, rooted at the process cwd where `proteus` or an
   // alias was invoked. Durable agent memory still lives in SQLite/VFS.
-  const shell: Shell = createHostShell(process.cwd());
+  // Shadow-git checkpoints: every host-FS mutation path (the bound shell — the
+  // run tool + laptop.exec — and laptop.writeFile) snapshots its target dir
+  // before the first mutation of each turn. Invisible until /undo.
+  const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
+  const shell: Shell = withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd());
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
-  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell));
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints));
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel,
     spawnBranch: spawn, abortBranch: abort,
-    executionRouter, shell,
+    executionRouter, shell, checkpoints,
   });
 }
 
@@ -292,7 +299,18 @@ export function createHostShell(cwd: string): Shell {
   };
 }
 
-function createLocalLaptopExecutor(cwd: string, shell: Shell): ExecutorProvider {
+/** Snapshot before any shell command — a command may mutate anything in the
+ *  cwd; the engine dedupes to one snapshot per turn and skips no-op trees. */
+export function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: string): Shell {
+  return {
+    async exec(command, stdinOrOptions) {
+      await checkpoints.ensureCheckpoint(cwd, 'shell exec');
+      return shell.exec(command, stdinOrOptions);
+    },
+  };
+}
+
+function createLocalLaptopExecutor(cwd: string, shell: Shell, checkpoints: FileCheckpoints): ExecutorProvider {
   const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
   return {
     name: 'laptop',
@@ -320,6 +338,7 @@ function createLocalLaptopExecutor(cwd: string, shell: Shell): ExecutorProvider 
         description: 'Write a UTF-8 file on the local machine. Parent directories are created.',
         execute: async (path: unknown, content: unknown) => {
           const p = toHostPath(path);
+          await checkpoints.ensureCheckpoint(checkpoints.workdirForPath(p), 'file write');
           await fs.mkdir(resolvePath(p, '..'), { recursive: true });
           await fs.writeFile(p, String(content), 'utf-8');
           return `Written ${String(content).length} bytes to ${p}`;

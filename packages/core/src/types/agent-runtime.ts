@@ -16,6 +16,7 @@ import type {
 } from './primitives.js';
 import type { CraftedTool, CraftScoreEntry } from './craft.js';
 import type { ExecutionRouter } from '../execution/types.js';
+import type { FileCheckpoints } from '../checkpoints/types.js';
 
 /** CraftStore interface — matches agent-utils CraftStore API */
 export interface CraftStore {
@@ -72,4 +73,10 @@ export interface AgentRuntime {
    * router-only routing.
    */
   shell?: Shell;
+  /**
+   * Shadow-git file checkpoints over REAL filesystems (the local exec cwd /
+   * device project dirs). Backends with host filesystem access supply an
+   * engine; absence simply means no /undo for that backend's file surface.
+   */
+  checkpoints?: FileCheckpoints;
 }

@@ -35,6 +35,8 @@ export interface CLIOpenConfig {
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
   onCodexRefresh?: (credential: OAuthCredential) => void;
+  /** Shadow-git checkpoints kept per working directory. */
+  checkpointKeep?: number;
 }
 
 type AgentDb = {
@@ -108,6 +110,7 @@ export function openAgentCLI(
     codexAuthStore: config.codexAuthStore,
     codexConfigPath: config.codexConfigPath,
     onCodexRefresh: config.onCodexRefresh,
+    checkpointKeep: config.checkpointKeep,
     agentName: identity.name,
   });
 

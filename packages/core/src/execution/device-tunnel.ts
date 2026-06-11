@@ -55,8 +55,10 @@ export class DeviceTunnel {
     return this.socket.readyState === WS_OPEN;
   }
 
-  /** Issue a JSON-RPC call and await its correlated response. */
-  rpc(method: string, params: unknown[]): Promise<unknown> {
+  /** Issue a JSON-RPC call and await its correlated response. `extra` fields
+   *  ride on the frame next to id/method/params (e.g. the pre-mutation
+   *  `checkpoint` hint the daemon acts on before executing the call). */
+  rpc(method: string, params: unknown[], extra?: Record<string, unknown>): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.isConnected()) { reject(new Error(TUNNEL_DISCONNECTED)); return; }
       const id = `rpc-${++this.seq}`;
@@ -66,7 +68,7 @@ export class DeviceTunnel {
       }, this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
-        this.socket.send(JSON.stringify({ id, method, params }));
+        this.socket.send(JSON.stringify({ ...extra, id, method, params }));
       } catch (err) {
         this.pending.delete(id);
         clearTimeout(timer);

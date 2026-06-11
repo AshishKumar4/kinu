@@ -20,6 +20,7 @@ import type {
   HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
+  FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
@@ -308,6 +309,30 @@ export class LocalAgentSession implements BackendHost {
   /** Skills pinned always-active for this agent (the `/always` command). */
   getAlwaysActiveSkills(): string[] { return this.config.getAlwaysActiveSkills(); }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { this.config.setAlwaysActiveSkills(names); }
+
+  /** Shadow-git file checkpoints (newest first) for /undo. Empty when git is
+   *  unavailable — checkpointStatus() carries the honest reason. */
+  listFileCheckpoints(limit?: number): Promise<FileCheckpointEntry[]> {
+    return this.rt.checkpoints?.list(limit) ?? Promise.resolve([]);
+  }
+
+  planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
+    return this.requireCheckpoints().plan(dir, id);
+  }
+
+  restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
+    return this.requireCheckpoints().restore(dir, id);
+  }
+
+  checkpointStatus(): Promise<CheckpointAvailability> {
+    return this.rt.checkpoints?.status()
+      ?? Promise.resolve({ available: false, reason: 'checkpoints are not configured for this session' });
+  }
+
+  private requireCheckpoints(): FileCheckpoints {
+    if (!this.rt.checkpoints) throw new Error('checkpoints are not configured for this session');
+    return this.rt.checkpoints;
+  }
 
   getShellApprovalMode(): { mode: ShellApprovalMode } {
     return { mode: this.config.getShellApprovalMode() };
@@ -649,6 +674,10 @@ export class LocalAgentSession implements BackendHost {
 
     const startedAt = Date.now();
     this.orch.beginTurn(startedAt);
+    // Shadow-git checkpoints: arm the per-turn dedup so the first host-FS
+    // mutation of this turn snapshots its working directory (invisible /undo
+    // substrate — see core checkpoints/types.ts).
+    this.rt.checkpoints?.beginTurn({ turnId: crypto.randomUUID(), sessionId: this.sessionId });
     // A real user message grades the previous turn — dispatch the detached
     // outcome review (same core pipeline as the DO's beforeTurn hook).
     if (item.kind === 'user') this.orch.observeUserTurn(item.text);

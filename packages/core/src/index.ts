@@ -295,6 +295,14 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
+// File checkpoints — the shadow-git snapshot seam (backends implement it)
+export {
+  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, summarizeRestorePlan,
+  type FileCheckpoints, type CheckpointTurnMeta, type CheckpointAvailability,
+  type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
+  type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
+} from './checkpoints/types.js';
+
 // Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
 export {
   reciprocalRankFusion,

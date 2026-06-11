@@ -21,6 +21,7 @@ import type {
 } from './types/primitives.js';
 import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch } from './types/agent-runtime.js';
 import type { ExecutionRouter } from './execution/types.js';
+import type { FileCheckpoints } from './checkpoints/types.js';
 
 export interface RuntimeComponents {
   sql: SqlExecutor;
@@ -53,6 +54,8 @@ export interface RuntimeComponents {
    * the `execute_tools` new-Function fallback.
    */
   shell?: Shell;
+  /** Shadow-git file checkpoints over real filesystems (host backends only). */
+  checkpoints?: FileCheckpoints;
 }
 
 /**
@@ -87,5 +90,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     abortBranch: components.abortBranch,
     executionRouter: components.executionRouter,
     shell: components.shell,
+    checkpoints: components.checkpoints,
   };
 }

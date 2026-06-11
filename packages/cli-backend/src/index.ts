@@ -2,7 +2,8 @@
  * CLI backend — Linux/Bun runtime for the self-evolving agent.
  */
 
-export { createCLIRuntime, makeSql, makeExecRaw, type CLIRuntimeConfig } from './runtime.js';
+export { createCLIRuntime, makeSql, makeExecRaw, withCheckpointedShell, type CLIRuntimeConfig } from './runtime.js';
+export { createHostCheckpoints, CHECKPOINT_EXCLUDES, type HostCheckpointsOpts } from './checkpoints.js';
 export { openAgentCLI, type AgentInfo, type CLIOpenConfig } from './open.js';
 export { createSandboxedExecutor, createNodeExecutor } from './executor.js';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';
