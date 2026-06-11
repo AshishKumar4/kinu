@@ -867,8 +867,11 @@ install_bun_if_missing() {
   command -v bun >/dev/null 2>&1 || die "Bun installation completed but bun is still not on PATH."
 }
 
+# Permission probes (test -r/-w) pass even without a controlling terminal,
+# so actually open /dev/tty — the redirect itself must work or the
+# interactive steps would die with "/dev/tty: No such device or address".
 has_tty() {
-  [ -r /dev/tty ] && [ -w /dev/tty ]
+  ( exec </dev/tty >/dev/tty ) 2>/dev/null
 }
 
 run_setup_if_requested() {
@@ -905,7 +908,9 @@ run_connect_if_requested() {
 
 prepare_cli_source() {
   say "Preparing Proteus CLI..."
-  help="$(PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help)" || die "Proteus CLI source setup failed."
+  # </dev/null: under curl|bash our stdin is the unread remainder of this
+  # script — a child that reads stdin would consume it mid-execution.
+  help="$(PROTEUS_HOME="$PROTEUS_HOME" PROTEUS_REFRESH_SOURCE=1 "$BIN_PATH" --help </dev/null)" || die "Proteus CLI source setup failed."
   printf '%s\\n' "$help" | grep -Eq '^[[:space:]]+setup[[:space:]]' \
     || die "Downloaded Proteus CLI is missing setup. Retry after the deployment has finished."
 }
