@@ -36,7 +36,7 @@ import {
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
-  buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
+  buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -740,6 +740,7 @@ export class LocalAgentSession implements BackendHost {
       mode: promptModeForTurn(item),
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       cwd: this.cwd,
+      currentDate: currentDateForPrompt(),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       ...(activeSkills ? { activeSkills } : {}),
     }) + this.factsTail();
@@ -955,6 +956,7 @@ export class LocalAgentSession implements BackendHost {
       backend: 'cli-local',
       mode: 'chat',
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      currentDate: currentDateForPrompt(),
     }) + this.factsTail();
     let text = '';
     for await (const ev of runChat({

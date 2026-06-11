@@ -9,6 +9,7 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
   compilePromptSurface,
+  currentDateForPrompt,
   modelSupportsTools,
 } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
@@ -339,6 +340,15 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt, { mode: 'background_resume' })).toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'cron' })).toContain('Scheduled wake mode');
     expect(buildSystemPromptSync(rt, { mode: 'product_change' })).toContain('Never deploy Proteus product changes');
+  });
+
+  test('renders the date-only current date in runtime context', () => {
+    const { rt } = createTestRuntime();
+    expect(currentDateForPrompt(new Date('2026-06-11T17:42:03Z'))).toBe('2026-06-11');
+    const prompt = buildSystemPromptSync(rt, { backend: 'cf', currentDate: currentDateForPrompt() });
+    expect(prompt).toContain(`- Current date: ${currentDateForPrompt()}`);
+    // Date-only keeps the prompt byte-stable within a day (cache-safe).
+    expect(prompt).not.toMatch(/Current date: .*\d:\d/);
   });
 
   test('does NOT promise unimplemented or redundant strategies', () => {

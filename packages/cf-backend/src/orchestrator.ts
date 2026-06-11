@@ -50,6 +50,7 @@ import {
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   buildSystemPromptSync,
+  currentDateForPrompt,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   shouldBackupWorkspace, workspaceBackupOptions,
@@ -1417,6 +1418,7 @@ export class OrchestratorAgent extends Think<Env> {
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       model: { id: modelId ?? undefined },
+      currentDate: currentDateForPrompt(),
     }) + this.factsTail();
     if (deviceNotice) systemOverride += `\n\n${deviceNotice}`;
 

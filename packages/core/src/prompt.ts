@@ -48,8 +48,16 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Discovered AGENTS.md files, ordered root-most first, nearest last.
    *  CLI: walk-up from cwd; CF: agent VFS root + active sandbox workspace. */
   agentsMd?: ReadonlyArray<AgentsMdFile>;
-  /** Optional date string. Kept opt-in so prompt cache prefixes remain stable. */
+  /** Date-only string (YYYY-MM-DD, see currentDateForPrompt). Date-only is
+   *  byte-stable for a full day, so prompt cache prefixes survive the turn. */
   currentDate?: string;
+}
+
+/** The canonical `currentDate` value: date-only, never time. Both backends
+ *  pass this so cron wakes, agent.schedule, and dated facts reason from the
+ *  real date without busting the prompt-cache prefix within a day. */
+export function currentDateForPrompt(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
 }
 
 export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;

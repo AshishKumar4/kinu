@@ -143,6 +143,7 @@ export {
 } from './tools/crafted-executor.js';
 export {
   buildSystemPromptSync,
+  currentDateForPrompt,
   FALLBACK_PURPOSE,
   type SystemPromptOptions,
 } from './prompt.js';
