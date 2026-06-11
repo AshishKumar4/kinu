@@ -476,3 +476,74 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
   });
 });
+
+describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)', () => {
+  function setupWithEvolution(classifierJson: string) {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+      role TEXT NOT NULL, content TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    const rt = createCLIRuntime(db as never, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+    // The classifier + reflection ride rt.llm.complete — stub it so the review
+    // runs without a network LLM.
+    (rt as { llm: { complete(p: string): Promise<string>; stream: unknown } }).llm = {
+      stream: rt.llm.stream.bind(rt.llm),
+      complete: async (prompt: string) =>
+        prompt.includes('Classify what the follow-up reveals')
+          ? classifierJson
+          : 'verify the cluster name before rotating keys',
+    };
+    const events: SessionEvent[] = [];
+    const session = new LocalAgentSession({
+      rt, db, model: fakeModel('rotated the production keys'), onEvent: (e) => events.push(e),
+    });
+    return { db, rt, session, events };
+  }
+
+  test('the next user message grades the previous turn into the durable outcome ledger', async () => {
+    const { db, session } = setupWithEvolution('{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}');
+
+    await session.send('please rotate the API keys for the staging cluster');
+    await session.send('no — I said STAGING, you rotated production');
+
+    await waitFor(() => (db.query(`SELECT count(*) AS c FROM turn_outcomes`).get() as { c: number }).c >= 1, 3000);
+    const row = db.query(`SELECT * FROM turn_outcomes`).get() as {
+      outcome: string; source: string; turn_id: string; session_id: string; followup: string;
+    };
+    expect(row.outcome).toBe('corrected');
+    expect(row.source).toBe('classifier');
+    expect(row.followup).toContain('STAGING');
+    expect(row.session_id).toBe('default');
+    // Tied to the FIRST turn's durable assistant message id.
+    const firstAssistant = db.query(
+      `SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at, rowid LIMIT 1`,
+    ).get() as { id: string };
+    expect(row.turn_id).toBe(firstAssistant.id);
+
+    // The corrected outcome reflects a corroborated lesson into MEMORY.md.
+    await waitFor(() => (db.query(`SELECT count(*) AS c FROM lessons WHERE status = 'corroborated'`).get() as { c: number }).c >= 1, 3000);
+    await session.end();
+  });
+
+  test('trivial turns (greetings) skip classification entirely', async () => {
+    const { db, session } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}');
+
+    await session.send('hi');
+    await session.send('thanks!');
+    // Give any (wrongly) dispatched detached review a beat to land.
+    await new Promise((r) => setTimeout(r, 50));
+    expect((db.query(`SELECT count(*) AS c FROM turn_outcomes`).get() as { c: number }).c).toBe(0);
+    await session.end();
+  });
+
+  test('end() reviews the still-pending turn as abandoned', async () => {
+    const { db, session } = setupWithEvolution('unused');
+
+    await session.send('please summarize the deployment runbook for me');
+    await session.end();
+
+    const row = db.query(`SELECT outcome, source FROM turn_outcomes`).get() as { outcome: string; source: string } | null;
+    expect(row).toEqual({ outcome: 'abandoned', source: 'session_end' });
+  });
+});

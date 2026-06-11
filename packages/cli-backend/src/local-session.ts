@@ -37,6 +37,7 @@ import {
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, createChatModel, runChat, resolveMaxSteps,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
+  listReplayEvals, type ReplayEvalSummary,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
@@ -215,7 +216,15 @@ export class LocalAgentSession implements BackendHost {
     this.fallbackModelSpec = opts.modelSpec ?? 'local/static';
     this.modelResolver = opts.modelResolver ?? null;
 
-    this.engine = new EvolutionEngine(this.rt, { enabled: !opts.noAutoEvolve });
+    this.engine = new EvolutionEngine(this.rt, {
+      enabled: !opts.noAutoEvolve,
+      // Replay-eval rollout: the current system prompt (lessons/facts/soul) +
+      // model, tools disabled. Unlike the DO's sandboxed scaffold rollout, a
+      // local re-run with tools would re-execute shell work on the user's
+      // machine and can block on shell approvals — so CLI replay measures the
+      // prompt/model config, not tool trajectories.
+      replayTaskRunner: (task) => this.runReplayTask(task),
+    });
     this.engine.onEvent((e) => this.emit({ type: 'evolution', event: e.type, message: e.message }));
 
     // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
@@ -436,6 +445,18 @@ export class LocalAgentSession implements BackendHost {
     return { ok: this.jobRunner.cancel(jobId) };
   }
 
+  /** Run one replay-eval pass now (also runs periodically inside lifetime
+   *  evolution). Returns the persisted loss entry, or null when no
+   *  outcome-labeled turns exist yet. */
+  async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
+    return this.engine.runReplayEval(sampleSize);
+  }
+
+  /** The persisted replay-eval loss curve, newest first (read-only). */
+  async getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]> {
+    return listReplayEvals(this.rt.storage.sql, limit);
+  }
+
   async proposeCurriculumTasks(count?: number) {
     return proposeNextTasks({
       rt: this.rt,
@@ -602,6 +623,9 @@ export class LocalAgentSession implements BackendHost {
 
     const startedAt = Date.now();
     this.orch.beginTurn(startedAt);
+    // A real user message grades the previous turn — dispatch the detached
+    // outcome review (same core pipeline as the DO's beforeTurn hook).
+    if (item.kind === 'user') this.orch.observeUserTurn(item.text);
     this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
@@ -690,7 +714,7 @@ export class LocalAgentSession implements BackendHost {
       this.currentAbort = null;
     }
 
-    this.persist(item.text, fullText);
+    const assistantMsgId = this.persist(item.text, fullText);
 
     const turn: CompletedTurn = {
       userMessage: item.text,
@@ -700,6 +724,9 @@ export class LocalAgentSession implements BackendHost {
       durationMs: Date.now() - startedAt,
       feedback: null,
       hadError: this.orch.acc.hadError,
+      ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
+      sessionId: this.sessionId,
+      origin: item.kind,
     };
     // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
     await this.orch.completeTurn(turn);
@@ -774,6 +801,33 @@ export class LocalAgentSession implements BackendHost {
       if (name === 'skills' || toolAllowedBySkills(name, allowed)) filtered[name] = t;
     }
     return filtered;
+  }
+
+  /** Re-run a task for the replay-eval harness: the current system prompt
+   *  (knowledge tail + facts + soul) and model, isolated history, no tools
+   *  (see the engine-construction note). */
+  private async runReplayTask(task: string): Promise<string> {
+    const model = this.ensureModelState();
+    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
+    const systemPrompt = buildSystemPromptSync(this.rt, {
+      extraKnowledge: knowledge || undefined,
+      backend: 'cli-local',
+      mode: 'chat',
+      model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+    }) + this.factsTail();
+    let text = '';
+    for await (const ev of runChat({
+      model,
+      modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      system: systemPrompt,
+      history: [{ role: 'user', content: task }],
+      tools: {},
+      maxSteps: 1,
+    })) {
+      if (ev.type === 'text-delta') text += ev.delta;
+      else if (ev.type === 'done' && !text.trim()) text = ev.text;
+    }
+    return text;
   }
 
   /** The recent-facts world-model block appended to every system prompt (single
@@ -877,13 +931,17 @@ export class LocalAgentSession implements BackendHost {
     return wrapped;
   }
 
-  private persist(userText: string, assistantText: string): void {
-    if (!this.persistMessagesEnabled) return;
+  /** Persist the exchange; returns the assistant message id (the turn id the
+   *  outcome ledger keys on), or null when persistence is disabled. */
+  private persist(userText: string, assistantText: string): string | null {
+    if (!this.persistMessagesEnabled) return null;
     const msgId = crypto.randomUUID();
+    const assistantId = crypto.randomUUID();
     this.rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
       VALUES (${msgId}, ${this.sessionId}, ${'user'}, ${userText})`;
     this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-      VALUES (${crypto.randomUUID()}, ${this.sessionId}, ${msgId}, ${'assistant'}, ${assistantText})`;
+      VALUES (${assistantId}, ${this.sessionId}, ${msgId}, ${'assistant'}, ${assistantText})`;
+    return assistantId;
   }
 
   private restoreHistory(limit: number): void {
