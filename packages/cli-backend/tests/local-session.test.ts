@@ -271,6 +271,38 @@ function messageText(message: ModelMessage): string {
   return JSON.stringify(message.content);
 }
 
+describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
+  test('each turn arms the engine with a fresh turn id and the durable session id', async () => {
+    const { rt, session } = setup('ok', undefined, { sessionId: 'chat-1' });
+    const turns: Array<{ turnId: string; sessionId: string }> = [];
+    rt.checkpoints = {
+      beginTurn: (meta) => { turns.push(meta); },
+      ensureCheckpoint: async () => null,
+      list: async () => [],
+      plan: async () => { throw new Error('unused'); },
+      restore: async () => { throw new Error('unused'); },
+      status: async () => ({ available: true }),
+      workdirForPath: (p) => p,
+    };
+    await session.send('first');
+    await session.send('second');
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.sessionId).toBe('chat-1');
+    expect(turns[1]!.sessionId).toBe('chat-1');
+    expect(turns[0]!.turnId).not.toBe(turns[1]!.turnId);
+  });
+
+  test('the checkpoint surface degrades honestly when no engine is configured', async () => {
+    const { rt, session } = setup();
+    rt.checkpoints = undefined;
+    expect(await session.listFileCheckpoints()).toEqual([]);
+    expect(await session.checkpointStatus()).toEqual({
+      available: false, reason: 'checkpoints are not configured for this session',
+    });
+    expect(session.restoreFileCheckpoint('/tmp', 'abcdef0')).rejects.toThrow('not configured');
+  });
+});
+
 describe('LocalAgentSession — programmatic turns (reactor / background-job wake)', () => {
   test('enqueueTurn runs serialized after the user turn, marked with its event', async () => {
     const { session, events } = setup('ok');

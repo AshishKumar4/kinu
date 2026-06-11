@@ -316,11 +316,11 @@ export class LocalAgentSession implements BackendHost {
     return this.rt.checkpoints?.list(limit) ?? Promise.resolve([]);
   }
 
-  planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
+  async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
     return this.requireCheckpoints().plan(dir, id);
   }
 
-  restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
+  async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
     return this.requireCheckpoints().restore(dir, id);
   }
 
