@@ -10,8 +10,10 @@
  * Timescale 1 — Turn-level (after every response):
  *   Assess quality → on failure: reflect + store → on success: extract pattern
  *
- * Timescale 2 — Session-level (every N turns):
- *   Reflect on patterns → update context blocks → propose scaffold changes
+ * Timescale 2 — Session-level (onSessionComplete):
+ *   Reflect on patterns → update context blocks → propose scaffold changes.
+ *   The every-N-turns cadence lives in ONE place — AgentOrchestrator
+ *   (recordTurn / flushSession) — which calls onSessionComplete.
  *
  * Timescale 3 — Lifetime-level (every N conversations or daily):
  *   MCTS exploration → CraftStore consolidation → scaffold canary testing
@@ -83,7 +85,6 @@ export class EvolutionEngine {
   private rt: AgentRuntime;
   private config: EvolutionConfig;
   private listeners: EvolutionListener[] = [];
-  private turnsSinceReflection = 0;
   private conversationCount = 0;
   /** Operator-tuned agent_config (MCTS overrides for lifetime evolution). */
   private agentConfig: AgentConfigStore;
@@ -127,8 +128,6 @@ export class EvolutionEngine {
   async onTurnComplete(turn: CompletedTurn): Promise<void> {
     if (!this.config.enabled) return;
 
-    this.turnsSinceReflection++;
-
     // Assess quality: use the judge model if available, else heuristic
     const quality = await this.assessTurnQuality(turn);
 
@@ -166,12 +165,6 @@ export class EvolutionEngine {
     if (quality > this.config.turnCraftThreshold && turn.toolCalls.length > 0) {
       await this.extractPattern(turn, quality);
     }
-
-    // Check if session-level reflection is due
-    if (this.turnsSinceReflection >= this.config.sessionReflectionInterval) {
-      await this.onSessionReflection();
-      this.turnsSinceReflection = 0;
-    }
   }
 
   /**
@@ -189,18 +182,17 @@ export class EvolutionEngine {
   // ── Timescale 2: Session-level (end of conversation or every N turns) ──
 
   /**
-   * Called when a conversation ends or after N turns.
-   * Reflects on patterns, updates context blocks.
+   * Called by AgentOrchestrator (the single home of the every-N-turns
+   * cadence) when a session window closes. Reflects on patterns, updates
+   * context blocks.
    */
   async onSessionComplete(session: CompletedSession): Promise<void> {
     if (!this.config.enabled) return;
 
     this.conversationCount++;
-    const alreadyReflected = this.turnsSinceReflection === 0; // 0 means onTurnComplete just reflected
-    this.turnsSinceReflection = 0;
 
-    // Reflect on the entire session (skip if onTurnComplete already reflected this cycle)
-    if (session.turns.length >= 3 && !alreadyReflected) {
+    // Reflect on the entire session (skip trivially short windows)
+    if (session.turns.length >= 3) {
       await this.onSessionReflection();
     }
 

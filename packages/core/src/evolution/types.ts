@@ -42,12 +42,13 @@ export interface EvolutionEvent {
 /** Callback for evolution events — CLI/web can hook into this */
 export type EvolutionListener = (event: EvolutionEvent) => void;
 
-/** Evolution engine configuration */
+/** Evolution engine configuration. The every-N-turns session-reflection
+ *  cadence is NOT here — AgentOrchestrator owns it (sessionReflectionInterval
+ *  on its deps) and calls onSessionComplete. */
 export interface EvolutionConfig {
   enabled: boolean;
   turnReflectionThreshold: number;
   turnCraftThreshold: number;
-  sessionReflectionInterval: number;
   lifetimeEvolutionInterval: number;
   lifetimeMCTSBudget: number;
   lifetimeMCTSBranches: number;
@@ -59,7 +60,6 @@ export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {
   enabled: true,
   turnReflectionThreshold: 0.4,
   turnCraftThreshold: 0.8,
-  sessionReflectionInterval: 10,
   lifetimeEvolutionInterval: 5,
   lifetimeMCTSBudget: 2,
   lifetimeMCTSBranches: 2,

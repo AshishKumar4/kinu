@@ -111,25 +111,35 @@ describe('EvolutionEngine — Turn-level', () => {
 });
 
 describe('EvolutionEngine — Session-level', () => {
-  test('triggers session reflection after N turns', async () => {
+  test('onSessionComplete reflects on a ≥3-turn window (AgentOrchestrator owns the cadence)', async () => {
     const { rt } = createTestRuntime();
-    // Set interval to 3 turns for testing
-    const engine = new EvolutionEngine(rt, { sessionReflectionInterval: 3 });
-
-    const events: EvolutionEvent[] = [];
-    engine.onEvent(e => events.push(e));
+    const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
 
     // First store some lessons so reflection has content
     await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nPrevious lesson content\n');
 
-    // Send 3 normal turns
-    for (let i = 0; i < 3; i++) {
+    await engine.onSessionComplete({
+      sessionId: 'test',
+      turns: [makeTurn(), makeTurn(), makeTurn()],
+      startedAt: Date.now() - 60000,
+      endedAt: Date.now(),
+    });
+
+    const memory = await rt.memory.read('memory/MEMORY.md');
+    expect(memory).toContain('Session reflection');
+  });
+
+  test('turn completion alone never fires a session reflection (no duplicate cadence)', async () => {
+    const { rt } = createTestRuntime();
+    const engine = new EvolutionEngine(rt);
+    await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nPrevious lesson content\n');
+
+    for (let i = 0; i < 12; i++) {
       await engine.onTurnComplete(makeTurn({ feedback: 'positive' }));
     }
 
-    // Session reflection should have been triggered
     const memory = await rt.memory.read('memory/MEMORY.md');
-    expect(memory).toContain('Session reflection');
+    expect(memory).not.toContain('Session reflection');
   });
 
   test('onSessionComplete tracks conversation count', async () => {
