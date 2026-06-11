@@ -221,9 +221,11 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows.some((r) => r.content.includes('Turn context'))).toBe(false);
   });
 
-  test('the knowledge block carries the TAIL of MEMORY.md (newest lessons)', async () => {
-    // Regression: slice(0, 2000) injected the OLDEST bytes of the append-only
-    // MEMORY.md, so the newest lessons never reached the prompt.
+  test('the MEMORY.md tail (newest lessons) rides the volatile message, never the system prefix', async () => {
+    // Two regressions guarded here: slice(0, 2000) once injected the OLDEST
+    // bytes of the append-only MEMORY.md, and the tail once lived in the
+    // byte-stable system prefix — where every lesson/reflection/take-pick
+    // append busted the prompt cache with no real agent event.
     let observed: ModelMessage[] = [];
     const { rt, session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
     await rt.memory.write(
@@ -234,7 +236,12 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     const system = observed.find((m) => m.role === 'system');
     expect(system).toBeDefined();
-    const text = String(system!.content);
+    expect(String(system!.content)).not.toContain('NEW-LESSON-MARKER');
+    const volatile = observed.findLast((m) => m.role === 'user')!;
+    const text = typeof volatile.content === 'string'
+      ? volatile.content
+      : (volatile.content as Array<{ type: string; text?: string }>)
+          .filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
     expect(text).toContain('NEW-LESSON-MARKER');
     expect(text).not.toContain('OLD-STALE-MARKER');
   });

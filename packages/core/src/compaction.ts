@@ -3,8 +3,10 @@
  * uses when the conversation middle is compressed (hermes context_compressor
  * / Codex compact-prompt lineage). This module owns WHAT a compaction
  * summary must say; the boundary/overlay machinery (head/tail protection,
- * tool-pair alignment, storage) is the agents-SDK Session seam, wired per
- * backend. Shared here so cloud and CLI compaction cannot drift.
+ * tool-pair alignment, storage) is the agents-SDK Session seam. Today only
+ * the CF backend compacts (cf-backend/lib/compaction.ts consumes these
+ * helpers); the CLI backend has no compaction yet — when it grows one it
+ * must wire this same spec rather than invent a second.
  *
  * Tuning order is recall first, then precision: a successor that re-asks a
  * resolved question or re-reads a summarized file wastes more than a few

@@ -777,8 +777,11 @@ export class LocalAgentSession implements BackendHost {
     this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
-    // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections
-    // (prompt.ts documents extraKnowledge as "a bounded memory/MEMORY.md tail").
+    // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
+    // It is per-turn-read live state (lessons/reflections/take-pick
+    // corrections append constantly), so it rides the VOLATILE context
+    // message: in the stable prefix every append would bust the cache and
+    // trip the prompt-hash telemetry with no real agent event.
     const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
     const activeSkills = await this.resolveTurnSkills(item.text);
@@ -798,7 +801,6 @@ export class LocalAgentSession implements BackendHost {
     // activation reasons) rides in the volatile context message appended to
     // the turn's messages below, sharing the seam with the DO backend.
     const systemPrompt = buildSystemPromptSync(this.rt, {
-      extraKnowledge: knowledge || undefined,
       executors,
       availableTools: availableBuiltins,
       externalTools,
@@ -827,6 +829,7 @@ export class LocalAgentSession implements BackendHost {
     // into the durable history, so the stable prefix stays cacheable.
     const turnMessages = appendVolatileContextMessage(this.history, {
       factsBlock: this.renderFactsForTurn(),
+      memoryTail: knowledge || undefined,
       executors,
       ...(activeSkills ? { activeSkills } : {}),
     });
@@ -1069,7 +1072,6 @@ export class LocalAgentSession implements BackendHost {
     const model = this.ensureModelState();
     const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
     const systemPrompt = buildSystemPromptSync(this.rt, {
-      extraKnowledge: knowledge || undefined,
       backend: 'cli-local',
       mode: 'chat',
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
@@ -1082,7 +1084,7 @@ export class LocalAgentSession implements BackendHost {
       system: systemPrompt,
       history: appendVolatileContextMessage(
         [{ role: 'user', content: task }],
-        { factsBlock: this.renderFactsForTurn() },
+        { factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined },
       ),
       tools: {},
       maxSteps: 1,

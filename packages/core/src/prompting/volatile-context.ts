@@ -23,6 +23,11 @@ import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
 export interface VolatileTurnContext {
   /** Rendered recent-facts block (renderFactsBlock output). */
   factsBlock?: string;
+  /** Bounded MEMORY.md tail (newest lessons/reflections). Per-turn-read live
+   *  state, exactly like facts: every corroborated lesson / reflection /
+   *  take-pick correction appends to MEMORY.md, so a stable-prefix placement
+   *  would bust the cache on each write. */
+  memoryTail?: string;
   /** Live executor lifecycle at turn start — rendered as status labels only;
    *  the executor doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
@@ -60,6 +65,9 @@ export function renderVolatileContext(ctx: VolatileTurnContext): string | null {
 
   const facts = ctx.factsBlock?.trim();
   if (facts) sections.push(`## World model (facts you remembered)\n${facts}`);
+
+  const memoryTail = ctx.memoryTail?.trim();
+  if (memoryTail) sections.push(`## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
   if (executors.length > 0) {

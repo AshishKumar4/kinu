@@ -37,8 +37,6 @@ export type {
 } from './prompting/model-profile.js';
 
 export interface SystemPromptOptions extends PromptSurfaceOptions {
-  /** Extra knowledge to append — CLI pastes a bounded memory/MEMORY.md tail. */
-  extraKnowledge?: string;
   /** Override the SOUL.md lookup. Tests and head runtimes use this for isolated prompt construction. */
   soulOverride?: string;
   /** Active skills for this turn, resolved by the backend at turn start. */
@@ -296,11 +294,6 @@ function renderAgentStateSection(surface: PromptSurface): string {
   return parts.join('\n\n');
 }
 
-function renderKnowledgeSection(extraKnowledge?: string): string {
-  const text = extraKnowledge?.trim();
-  return text ? `## Knowledge\n${text}` : '';
-}
-
 function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
   if (override) return override;
   return readSoul(rt.storage.sql) ?? FALLBACK_PURPOSE;
@@ -336,6 +329,5 @@ export function buildSystemPromptSync(
     renderAgentStateSection(surface),
     opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
     opts.activeSkills ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills)).trim() : '',
-    renderKnowledgeSection(opts.extraKnowledge),
   ].filter(Boolean).join('\n\n');
 }

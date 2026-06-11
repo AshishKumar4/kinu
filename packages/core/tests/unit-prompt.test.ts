@@ -246,26 +246,11 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/exposePort/);
   });
 
-  test('appends knowledge section when extraKnowledge supplied', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, { extraKnowledge: 'EXTRA-NOTE-XYZ' });
-    expect(prompt).toContain('## Knowledge');
-    expect(prompt).toContain('EXTRA-NOTE-XYZ');
-  });
-
   test('includes output-format guidance', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/Output format/);
     expect(prompt).toMatch(/plain markdown|markdown/);
-  });
-
-  test('orders core guidance before the volatile knowledge tail', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, { extraKnowledge: 'VOLATILE-NOTE' });
-    expect(prompt).toContain('Operating guidance');
-    expect(prompt).toContain('Tools available this turn');
-    expect(prompt.indexOf('Operating guidance')).toBeLessThan(prompt.indexOf('VOLATILE-NOTE'));
   });
 
   test('renders only the available built-in tools for a gated turn', () => {
