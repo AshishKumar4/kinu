@@ -798,7 +798,8 @@ export class LocalAgentSession implements BackendHost {
       rt: this.rt,
       model: this.cachedModel ?? this.fallbackModel,
       defaultOptions: () => ({
-        mcts: { session: this.createMCTSSession() },
+        // Stored operator overrides ride along; an explicit LLM budget wins.
+        mcts: { session: this.createMCTSSession(), ...this.config.getMctsOverrides() },
         heads: {
           controller: this.headController,
           inheritedContext: this.readInheritedContext(),

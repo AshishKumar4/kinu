@@ -45,7 +45,7 @@ export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } 
 export {
   createAgentConfigStore, initAgentConfigTable,
   AGENT_CONFIG_KEYS,
-  type AgentConfigStore, type AgentConfigKey, type ShellApprovalMode,
+  type AgentConfigStore, type AgentConfigKey, type MctsOverrides, type ShellApprovalMode,
 } from './config/index.js';
 
 // Types

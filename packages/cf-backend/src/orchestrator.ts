@@ -84,7 +84,7 @@ import {
   // Per-turn device awareness (laptop runtime presence + change notice)
   observeDevicePresence,
   // Typed agent_config store
-  createAgentConfigStore,
+  createAgentConfigStore, DEFAULT_CONFIG,
   // Voyager curriculum + Absolute Zero learnability proposer
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
@@ -572,11 +572,13 @@ export class OrchestratorAgent extends Think<Env> {
       rt: this.rt,
       model: this.getModel(),
       // Host-injected infrastructure the LLM must not set. Recomputed per
-      // think() call: MCTS gets a fresh SessionWriter; heads get the shared
-      // controller, the live conversation as inheritedContext, and an onPhase
-      // sink that streams head_split / head_merge into the durable event log.
+      // think() call: MCTS gets a fresh SessionWriter + the operator's stored
+      // overrides (mcts_c/iterations/depth/branches — an explicit LLM budget
+      // still wins); heads get the shared controller, the live conversation as
+      // inheritedContext, and an onPhase sink that streams head_split /
+      // head_merge into the durable event log.
       defaultOptions: () => ({
-        mcts: { session: this.createMCTSSession() },
+        mcts: { session: this.createMCTSSession(), ...this.config.getMctsOverrides() },
         heads: {
           controller: this.getHeadController(),
           inheritedContext: this.readInheritedContext(),
@@ -3691,11 +3693,15 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable() async getMctsConfig() {
+    // Effective values: stored overrides over the engine defaults — exactly
+    // what the think-tool path and lifetime evolution will run with.
+    const o = this.config.getMctsOverrides();
+    const d = DEFAULT_CONFIG.mcts;
     return {
-      explorationConstant: parseFloat(this.config.get('mcts_c') ?? '1.414'),
-      maxIterations: parseInt(this.config.get('mcts_iterations') ?? '50'),
-      maxDepth: parseInt(this.config.get('mcts_depth') ?? '5'),
-      branchBudget: parseInt(this.config.get('mcts_branches') ?? '3'),
+      explorationConstant: o.explorationWeight ?? d.explorationWeight,
+      maxIterations: o.budget ?? d.budget,
+      maxDepth: o.maxDepth ?? d.maxDepth,
+      branchBudget: o.branches ?? d.branches,
     };
   }
 
@@ -3703,10 +3709,12 @@ export class OrchestratorAgent extends Think<Env> {
     explorationConstant?: number; maxIterations?: number;
     maxDepth?: number; branchBudget?: number;
   }) {
-    if (config.explorationConstant !== undefined) this.config.set('mcts_c', String(config.explorationConstant));
-    if (config.maxIterations !== undefined) this.config.set('mcts_iterations', String(config.maxIterations));
-    if (config.maxDepth !== undefined) this.config.set('mcts_depth', String(config.maxDepth));
-    if (config.branchBudget !== undefined) this.config.set('mcts_branches', String(config.branchBudget));
+    this.config.setMctsOverrides({
+      explorationWeight: config.explorationConstant,
+      budget: config.maxIterations,
+      maxDepth: config.maxDepth,
+      branches: config.branchBudget,
+    });
     return config;
   }
 

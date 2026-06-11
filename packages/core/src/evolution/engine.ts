@@ -43,6 +43,7 @@ import { modifyScaffold } from '../scaffold/modify.js';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
 import { runMCTS } from '../mcts/engine.js';
+import { createAgentConfigStore, type AgentConfigStore } from '../config/store.js';
 
 /** Single source for the explicit-feedback → turn-quality mapping. Used by
  *  the turn-time assessment AND by the async setTurnFeedback re-scoring path
@@ -84,10 +85,13 @@ export class EvolutionEngine {
   private listeners: EvolutionListener[] = [];
   private turnsSinceReflection = 0;
   private conversationCount = 0;
+  /** Operator-tuned agent_config (MCTS overrides for lifetime evolution). */
+  private agentConfig: AgentConfigStore;
 
   constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
     this.rt = rt;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
+    this.agentConfig = createAgentConfigStore(rt.storage.sql);
 
     // Load conversation count from DB to resume lifetime tracking
     const count = rt.storage.sql<{ c: number }>`
@@ -302,9 +306,14 @@ export class EvolutionEngine {
       `to be more effective. Consider: new tools, knowledge gaps, workflow improvements.`;
 
     try {
+      // Operator MCTS overrides apply here too; the iteration budget stays
+      // the lifetime-specific cadence cap (its own knob), not mcts_iterations.
+      const overrides = this.agentConfig.getMctsOverrides();
       const result = await runMCTS(this.rt, writer, task, {
         budget: this.config.lifetimeMCTSBudget,
-        branches: this.config.lifetimeMCTSBranches,
+        branches: overrides.branches ?? this.config.lifetimeMCTSBranches,
+        ...(overrides.maxDepth !== undefined ? { maxDepth: overrides.maxDepth } : {}),
+        ...(overrides.explorationWeight !== undefined ? { explorationWeight: overrides.explorationWeight } : {}),
         onIterationComplete: this.config.onMctsProgress,
       });
 

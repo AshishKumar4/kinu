@@ -5,13 +5,18 @@
 // instead of importing runMCTS directly.
 //
 // Per-strategy options (StrategyContext.options.mcts):
-//   { branches?, maxDepth?, explorationWeight?, sessionWriter? }
+//   { budget?, branches?, maxDepth?, explorationWeight?, session }
+// The host injects the operator's stored MCTS overrides
+// (AgentConfigStore.getMctsOverrides) alongside the session; an explicit
+// caller budget (ctx.budget.maxIterations) still wins.
 import { runMCTS } from '../mcts/engine.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
 import type { SessionWriter } from '../mcts/record-node.js';
 
 interface MCTSStrategyOptions {
+  /** Default iteration budget when the caller doesn't pass one explicitly. */
+  budget?: number;
   branches?: number;
   maxDepth?: number;
   explorationWeight?: number;
@@ -36,8 +41,9 @@ export function createMCTSStrategy(): ExplorationStrategy {
         throw new Error("MCTS strategy requires options.mcts.session (SessionWriter).");
       }
       const defaults = DEFAULT_CONFIG.mcts;
+      const budget = ctx.budget?.maxIterations ?? o.budget ?? defaults.budget;
       const result = await runMCTS(ctx.rt, o.session, ctx.task, {
-        budget: ctx.budget?.maxIterations ?? defaults.budget,
+        budget,
         branches: o.branches ?? defaults.branches,
         maxDepth: o.maxDepth ?? defaults.maxDepth,
         explorationWeight: o.explorationWeight ?? defaults.explorationWeight,
@@ -52,7 +58,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
         strategy: 'mcts',
         best: { text, payload: { winnerId: result.winnerId }, score: result.winnerValue, source: result.winnerId },
         all: [{ text, payload: result, score: result.winnerValue, source: result.winnerId }],
-        cost: { durationMs: Date.now() - t0, iterations: ctx.budget?.maxIterations ?? defaults.budget },
+        cost: { durationMs: Date.now() - t0, iterations: budget },
         trace: `MCTS converged=${result.converged} winnerValue=${result.winnerValue.toFixed(3)}`,
       };
     },

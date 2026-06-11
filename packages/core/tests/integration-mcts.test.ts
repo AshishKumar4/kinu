@@ -191,3 +191,35 @@ describe('MCTS integration', () => {
     expect(child.value).toBe(0);
   });
 });
+
+describe('MCTS strategy — stored operator overrides', () => {
+  test('options.mcts budget/branches apply when the caller passes no explicit budget', async () => {
+    // This is the seam the backends use to inject AgentConfigStore.getMctsOverrides():
+    // think({strategy:'mcts'}) without an explicit budget must run with the
+    // stored knobs, not hardcoded defaults.
+    const { createMCTSStrategy } = await import('../src/strategy/mcts.js');
+    const { rt } = createTestRuntime();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'explored', codeUsed: null }),
+      evaluate: async () => 0.9,
+      generateReflection: async () => 'n/a',
+    });
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftScoreTables(rt.storage.execRaw);
+
+    const strategy = createMCTSStrategy();
+    const result = await strategy.explore({
+      task: 'tuned task',
+      rt,
+      model: undefined as never,
+      budget: { maxIterations: undefined },
+      options: { mcts: { session: createMockSession(), budget: 2, branches: 1 } },
+    });
+
+    expect(result.cost.iterations).toBe(2);
+    // 1 root + 2 iterations × 1 branch = 3 nodes.
+    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE task = 'tuned task'`;
+    expect(nodes.length).toBe(3);
+  });
+});

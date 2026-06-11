@@ -43,7 +43,8 @@ interface ThinkHeadSpec {
 interface ThinkInput {
   strategy: string;
   task: string;
-  /** Max iterations / branches / sub-calls. Default 10. */
+  /** Max iterations / branches / sub-calls. Unset = the strategy's own
+   *  default (which the host may override from stored agent config). */
   budget?: number;
   /** Wall-clock budget in ms. Default 60s. */
   wall_clock_ms?: number;
@@ -151,7 +152,8 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
         model: deps.model,
         signal: readAbortSignal(toolOptions),
         budget: {
-          maxIterations: input.budget ?? 10,
+          // Unset = strategy default (lets stored agent-config overrides apply).
+          maxIterations: input.budget,
           // Only set a wall-clock bound when the caller explicitly asks for one.
           // A blanket 60s default silently killed heads mid-work (each head's
           // sub-agent cold-start alone could eat it); leaving it undefined lets

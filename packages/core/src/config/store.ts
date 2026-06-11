@@ -36,6 +36,12 @@ export const AGENT_CONFIG_KEYS = {
   /** Run GEPA self-optimization after this many turns of new execution traces
    *  (0 = off). Trace-driven, not clock-driven. */
   autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
+  /** Operator-tuned MCTS knobs (Settings UI / setMctsConfig). Unset = engine
+   *  defaults (DEFAULT_CONFIG.mcts) at the call site. */
+  mctsExplorationWeight: 'mcts_c',
+  mctsBudget: 'mcts_iterations',
+  mctsMaxDepth: 'mcts_depth',
+  mctsBranches: 'mcts_branches',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -83,6 +89,18 @@ export interface AgentConfigStore {
   getAutoGepaEveryNTurns(): number;
   /** Set the auto-GEPA cadence (turns). 0 / negative disables. */
   setAutoGepaEveryNTurns(n: number): void;
+  /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
+   *  into runMCTS call sites so unset knobs keep engine defaults. */
+  getMctsOverrides(): MctsOverrides;
+  /** Persist MCTS overrides; undefined fields are left untouched. */
+  setMctsOverrides(overrides: MctsOverrides): void;
+}
+
+export interface MctsOverrides {
+  explorationWeight?: number;
+  budget?: number;
+  maxDepth?: number;
+  branches?: number;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -188,6 +206,35 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setAutoGepaEveryNTurns(n) {
       if (Number.isFinite(n) && n > 0) set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(Math.floor(n)));
       else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.autoGepaEveryNTurns}`;
+    },
+    getMctsOverrides() {
+      const positive = (key: string): number | undefined => {
+        const raw = get(key);
+        if (raw == null) return undefined;
+        const n = Number(raw);
+        return Number.isFinite(n) && n > 0 ? n : undefined;
+      };
+      const out: MctsOverrides = {};
+      const w = positive(AGENT_CONFIG_KEYS.mctsExplorationWeight);
+      const budget = positive(AGENT_CONFIG_KEYS.mctsBudget);
+      const maxDepth = positive(AGENT_CONFIG_KEYS.mctsMaxDepth);
+      const branches = positive(AGENT_CONFIG_KEYS.mctsBranches);
+      if (w !== undefined) out.explorationWeight = w;
+      if (budget !== undefined) out.budget = Math.floor(budget);
+      if (maxDepth !== undefined) out.maxDepth = Math.floor(maxDepth);
+      if (branches !== undefined) out.branches = Math.floor(branches);
+      return out;
+    },
+    setMctsOverrides(overrides) {
+      const write = (key: string, value: number | undefined, integer: boolean) => {
+        if (value === undefined) return;
+        if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
+        set(key, String(integer ? Math.floor(value) : value));
+      };
+      write(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false);
+      write(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
+      write(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
+      write(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
     },
   };
 }

@@ -148,3 +148,33 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getToolSurfacingMode()).toBe('all');
   });
 });
+
+describe('AgentConfigStore — MCTS overrides', () => {
+  test('empty when nothing stored (engine defaults apply at call sites)', () => {
+    const c = setup();
+    expect(c.getMctsOverrides()).toEqual({});
+  });
+
+  test('round-trips only the explicitly set knobs', () => {
+    const c = setup();
+    c.setMctsOverrides({ explorationWeight: 1.2, branches: 4 });
+    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 1.2, branches: 4 });
+    c.setMctsOverrides({ budget: 8, maxDepth: 6 });
+    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 1.2, budget: 8, maxDepth: 6, branches: 4 });
+  });
+
+  test('floors integer knobs and rejects non-positive values', () => {
+    const c = setup();
+    c.setMctsOverrides({ budget: 3.7 });
+    expect(c.getMctsOverrides()).toEqual({ budget: 3 });
+    expect(() => c.setMctsOverrides({ branches: 0 })).toThrow(/invalid MCTS setting/);
+    expect(() => c.setMctsOverrides({ explorationWeight: Number.NaN })).toThrow(/invalid MCTS setting/);
+  });
+
+  test('garbage stored values are ignored on read', () => {
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.mctsBudget, 'lots');
+    c.set(AGENT_CONFIG_KEYS.mctsBranches, '-2');
+    expect(c.getMctsOverrides()).toEqual({});
+  });
+});
