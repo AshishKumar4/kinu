@@ -1,14 +1,12 @@
 import { existsSync } from 'node:fs';
-import * as readline from 'node:readline';
 import { agentDbPath, resolveAgentRef } from '../config.js';
 import { resolveAgentTarget } from '../agent-target.js';
 import { createAgentClient } from '../client-factory.js';
-import { runTuiChat } from '../tui/chat-app.js';
 import { runChatLoop } from '../chat-loop.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
 import { printError, ACCENT, DIM } from '../display.js';
 import { listKnownAgents } from '../agent-list.js';
-import { runHomeTui } from '../tui/home-app.js';
+import { ask } from '../prompt.js';
 
 export async function chatCommand(name: string | undefined, opts: {
   model?: string; baseUrl?: string; auth?: string; classic?: boolean; initialPrompt?: string;
@@ -17,6 +15,9 @@ export async function chatCommand(name: string | undefined, opts: {
   // No name: let user pick from existing agents
   if (!name) {
     if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
+      // Lazy: opentui captures the terminal — it must never load on
+      // non-TUI command paths (e.g. the installer's setup prompts).
+      const { runHomeTui } = await import('../tui/home-app.js');
       const action = await runHomeTui(opts);
       if (action.type === 'open-agent') {
         await chatCommand(action.name, { ...opts, initialPrompt: action.initialPrompt });
@@ -34,9 +35,7 @@ export async function chatCommand(name: string | undefined, opts: {
       console.log(`\n${DIM('Select an agent:')}`);
       agents.forEach((a, i) => console.log(`  ${ACCENT(String(i + 1))} ${a.label}`));
       console.log('');
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>(resolve => rl.question(`${DIM('Agent #: ')}`, resolve));
-      rl.close();
+      const answer = await ask('Agent #');
       const idx = parseInt(answer, 10) - 1;
       if (idx < 0 || idx >= agents.length) {
         printError('Invalid selection.');
@@ -61,6 +60,7 @@ export async function chatCommand(name: string | undefined, opts: {
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
     await runChatLoop({ client, initialPrompt: opts.initialPrompt });
   } else {
+    const { runTuiChat } = await import('../tui/chat-app.js');
     await runTuiChat({ client, hydrateHistory, initialPrompt: opts.initialPrompt });
   }
 }
