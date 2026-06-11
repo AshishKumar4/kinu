@@ -1420,8 +1420,8 @@ export class OrchestratorAgent extends Think<Env> {
   async onChatResponse(result: ChatResponseResult) {
     this.logActivity("response_complete", result.status);
     // Clear the in-flight flag once the turn is durably completed — forkAgent
-    // is allowed again from here forward. Evolution (engine.onTurnCompleteAsync)
-    // runs fire-and-forget below and does NOT extend the busy window.
+    // is allowed again from here forward. Evolution (engine.reviewTurnDetached)
+    // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;
     // Emit turn_end + run_end into the durable event log.
