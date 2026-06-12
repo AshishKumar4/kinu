@@ -242,6 +242,58 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
   });
 });
 
+describe('createLocalModelResolver — claude subscription provider', () => {
+  const openaiLlm: LLMProviderConfig = {
+    name: 'openai',
+    baseURL: 'https://api.openai.com/v1',
+    headers: { Authorization: 'Bearer sk-openai' },
+    model: 'gpt-4o-mini',
+  };
+
+  test('lists claude/* models when the binary is present and logged in', async () => {
+    const resolver = createLocalModelResolver({
+      llm: openaiLlm,
+      credentials: {},
+      fetch: async () => new Response('{}'),
+      claudeCli: { probe: async () => ({ binary: true, loggedIn: true }) },
+    });
+
+    const providers = await resolver.listProviders();
+    expect(providers.find((p) => p.id === 'claude')?.available).toBe(true);
+
+    const models = await resolver.listModels();
+    const opus = models.find((m) => m.provider === 'claude' && m.id === 'claude-opus-4-x');
+    expect(opus).toBeDefined();
+    expect(resolver.normalizeSpecSync('claude/claude-opus-4-x')).toBe('claude/claude-opus-4-x');
+  });
+
+  test('stays visible but unavailable with the install hint when the binary is absent', async () => {
+    const resolver = createLocalModelResolver({
+      llm: openaiLlm,
+      credentials: {},
+      fetch: async () => new Response('{}'),
+      claudeCli: { probe: async () => ({ binary: false, loggedIn: false }) },
+    });
+    const providers = await resolver.listProviders();
+    const claude = providers.find((p) => p.id === 'claude');
+    expect(claude?.available).toBe(false);
+    expect(claude?.unavailableReason).toMatch(/Install Claude Code/i);
+  });
+
+  test('unavailable with a sign-in hint when the binary is present but logged out', async () => {
+    const resolver = createLocalModelResolver({
+      llm: openaiLlm,
+      credentials: {},
+      fetch: async () => new Response('{}'),
+      claudeCli: { probe: async () => ({ binary: true, loggedIn: false }) },
+    });
+    const providers = await resolver.listProviders();
+    const claude = providers.find((p) => p.id === 'claude');
+    expect(claude?.available).toBe(false);
+    expect(claude?.unavailableReason).toMatch(/sign in to your Claude subscription/i);
+  });
+});
+
 describe('createLocalModelResolver — signed out', () => {
   test('cloud providers stay visible but honestly unavailable with the auth hint', async () => {
     const resolver = createLocalModelResolver({

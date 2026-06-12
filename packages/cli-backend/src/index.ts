@@ -21,5 +21,10 @@ export {
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver.js';
 export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store.js';
+export {
+  createClaudeCliProvider, buildClaudePrompt,
+  CLAUDE_CLI_PROVIDER_ID, CLAUDE_CLI_DEFAULT_MODEL,
+  type ClaudeCliProviderOptions, type ClaudeSpawn, type SpawnedClaude, type ClaudeAvailability,
+} from './claude-cli-provider.js';
 export { createCLIHeadRuntime } from './head-runtime.js';
 export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp.js';

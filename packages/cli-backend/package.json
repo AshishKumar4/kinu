@@ -7,9 +7,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@ai-sdk/provider": "^3.0.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@proteus/core": "workspace:*",
-    "@proteus/agent-utils": "workspace:*"
+    "@proteus/agent-utils": "workspace:*",
+    "ai": "^6.0.196"
   },
   "scripts": {
     "build": "tsc",

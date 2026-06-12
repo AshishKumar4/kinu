@@ -113,9 +113,11 @@
       "name": "@proteus/cli-backend",
       "version": "0.1.0",
       "dependencies": {
+        "@ai-sdk/provider": "^3.0.10",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@proteus/agent-utils": "workspace:*",
         "@proteus/core": "workspace:*",
+        "ai": "^6.0.196",
       },
     },
     "packages/core": {
