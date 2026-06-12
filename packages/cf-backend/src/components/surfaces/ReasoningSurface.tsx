@@ -240,7 +240,7 @@ function MctsBranchInspector({
     <aside className="min-h-0 rounded-lg border p-border p-surface overflow-hidden flex flex-col">
       <div className="px-4 py-3 border-b p-border shrink-0">
         <div className="flex items-center gap-2">
-          <span className={`size-1.5 rounded-full shrink-0 ${branch.status === "terminal" ? "bg-emerald-500" : branch.status === "failed" ? "bg-red-500" : branch.status === "pruned" ? "bg-zinc-500" : "bg-amber-500"}`} />
+          <span className={`size-1.5 rounded-full shrink-0 ${branch.status === "terminal" ? "bg-emerald-500" : branch.status === "failed" ? "bg-red-500" : branch.status === "pruned" ? "bg-stone-500" : "bg-amber-500"}`} />
           <span className="text-[10px] uppercase p-text-3 tracking-normal">{label}</span>
           <span className="text-[10px] p-text-3">depth {branch.depth}</span>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={onClose}>Close</Button>
@@ -323,7 +323,7 @@ function MctsBranchInspector({
                   onClick={() => onOpenNode(c.id)}
                   className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-elevated text-left hover:p-card transition-colors"
                 >
-                  <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "bg-emerald-500" : c.status === "failed" ? "bg-red-500" : c.status === "pruned" ? "bg-zinc-500" : "bg-amber-500"}`} />
+                  <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "bg-emerald-500" : c.status === "failed" ? "bg-red-500" : c.status === "pruned" ? "bg-stone-500" : "bg-amber-500"}`} />
                   <div className="min-w-0 flex-1">
                     <div className="text-[10px] p-text-2 truncate" title={cleanBranchTitle(c.action, c.id)}>{cleanBranchTitle(c.action, "(branch)")}</div>
                     <div className="text-[9px] p-text-3 font-mono">{c.id.slice(0, 12)} · {formatScore(c.value)} · {c.visits} visits</div>
@@ -623,7 +623,7 @@ function GepaView({ rpc }: { rpc: Rpc }) {
         {runs.map((r) => (
           <button key={r.runId} onClick={() => open(r.runId)}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-elevated" : "hover:p-card"}`}>
-            <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "bg-emerald-500" : r.status === "running" ? "bg-amber-500" : "bg-zinc-500"}`} />
+            <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "bg-emerald-500" : r.status === "running" ? "bg-amber-500" : "bg-stone-500"}`} />
             <span className="text-[11px] p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
             <span className="text-[10px] p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
           </button>
@@ -644,7 +644,7 @@ function GepaView({ rpc }: { rpc: Rpc }) {
                 <div key={c.id} className="flex items-center gap-2 text-[10px]">
                   <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "text-emerald-300" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
                   <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden">
-                    <div className={`h-full ${isWinner ? "bg-emerald-500" : onPareto ? "bg-sky-500" : "bg-zinc-600"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
+                    <div className={`h-full ${isWinner ? "bg-emerald-500" : onPareto ? "bg-sky-500" : "bg-stone-600"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
                   </div>
                   <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
                 </div>

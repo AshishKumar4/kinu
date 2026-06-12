@@ -56,9 +56,9 @@ function applySelection(g: d3.Selection<SVGGElement, unknown, null, undefined>, 
 	const nodes = g.selectAll<SVGGElement, d3.HierarchyPointNode<MCTSNode>>(".node") as NodeSelection;
 	nodes.select<SVGCircleElement>("circle")
 		.attr("stroke", (d) => {
-			if (selectedId === d.data.id) return "#a78bfa";
-			if (d.data.status === "terminal") return "#4ade80";
-			return "rgba(255,255,255,0.15)";
+			if (selectedId === d.data.id) return "var(--c-accent)";
+			if (d.data.status === "terminal") return "var(--c-success)";
+			return "var(--c-border)";
 		})
 		.attr("stroke-width", (d) => selectedId === d.data.id ? 3 : d.data.status === "terminal" ? 2 : 1)
 		.attr("opacity", (d) => selectedId === d.data.id ? 1 : d.data.status === "pruned" ? 0.34 : 1)
@@ -74,7 +74,7 @@ function applySelection(g: d3.Selection<SVGGElement, unknown, null, undefined>, 
 			const label = cleanNodeLabel(d.data.action, STATUS_ICON[d.data.status] || "");
 			return label.length > (selected ? 34 : 24) ? label.slice(0, selected ? 31 : 21) + "…" : label;
 		})
-		.attr("fill", (d) => selectedId === d.data.id ? "#c4b5fd" : d.data.status === "pruned" ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.6)");
+		.attr("fill", (d) => selectedId === d.data.id ? "var(--c-accent-fg)" : d.data.status === "pruned" ? "var(--c-text-3)" : "var(--c-text-2)");
 }
 
 export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
@@ -141,9 +141,14 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 				.y((d) => d.y) as unknown as string)
 			.attr("fill", "none")
 			.attr("stroke", (d) => {
-				if (d.target.data.status === "pruned") return "rgba(255,255,255,0.05)";
+				if (d.target.data.status === "pruned") return "var(--c-border)";
 				const v = d.target.data.value;
-				return v > 0.7 ? "rgba(74,222,128,0.3)" : v > 0.4 ? "rgba(250,204,21,0.2)" : "rgba(248,113,113,0.15)";
+				return v > 0.7 ? "var(--c-success)" : v > 0.4 ? "var(--c-warning)" : "var(--c-danger)";
+			})
+			.attr("stroke-opacity", (d) => {
+				if (d.target.data.status === "pruned") return 0.5;
+				const v = d.target.data.value;
+				return v > 0.7 ? 0.3 : v > 0.4 ? 0.22 : 0.18;
 			})
 			.attr("stroke-width", (d) => d.target.data.status === "pruned" ? 1 : Math.max(1, d.target.data.visits * 0.5))
 			.attr("stroke-dasharray", (d) => d.target.data.status === "pruned" ? "4,4" : "none");
@@ -186,7 +191,7 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 			.text((d) => `n=${d.data.visits}`)
 			.attr("text-anchor", "middle")
 			.attr("dy", (d) => -(nodeRadius(d.data.visits) + 6))
-			.attr("fill", "rgba(255,255,255,0.35)")
+			.attr("fill", "var(--c-text-3)")
 			.attr("font-size", "8px")
 			.attr("font-family", "var(--font-mono)");
 
@@ -196,7 +201,7 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 			.text((d) => d.data.status === "pruned" ? "╳" : "!")
 			.attr("text-anchor", "middle")
 			.attr("dy", "0.35em")
-			.attr("fill", (d) => d.data.status === "failed" ? "#f87171" : "rgba(255,255,255,0.3)")
+			.attr("fill", (d) => d.data.status === "failed" ? "var(--c-danger)" : "var(--c-text-3)")
 			.attr("font-size", "12px");
 
 		// Interactions

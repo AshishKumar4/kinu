@@ -86,7 +86,7 @@ function ReasoningBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="p-card rounded-lg px-3 py-2 my-1.5" style={{ borderLeftWidth: 2, borderLeftColor: "var(--c-accent)" }}>
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs text-purple-400/80 w-full text-left">
+      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs w-full text-left" style={{ color: "var(--c-sage)" }}>
         <GearIcon size={12} className="shrink-0" />
         <span className="font-medium">Thinking</span>
         {expanded ? <CaretDownIcon size={12} className="ml-auto" /> : <CaretRightIcon size={12} className="ml-auto" />}
@@ -100,10 +100,10 @@ function ReasoningBlock({ text }: { text: string }) {
 
 /** Color-coded badge for the runtime a `run` tool call dispatched on. */
 const RUNTIME_COLORS: Record<string, string> = {
-  workspace: 'bg-zinc-700/60 text-zinc-200',
+  workspace: 'bg-stone-700/60 text-stone-200',
   nimbus:    'bg-sky-700/60 text-sky-100',
   sandbox:   'bg-emerald-700/60 text-emerald-100',
-  laptop:    'bg-violet-700/60 text-violet-100',
+  laptop:    'bg-amber-700/60 text-amber-100',
 };
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
@@ -160,7 +160,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
         {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="text-red-400" /> : <CheckCircleIcon size={12} className="text-green-400" />}
         <span className="font-mono">{toolName}</span>
         {runtime && (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'bg-zinc-700/60 text-zinc-200'}`}
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'bg-stone-700/60 text-stone-200'}`}
                 title={`Runtime: ${runtime}`}>
             {runtime}
           </span>

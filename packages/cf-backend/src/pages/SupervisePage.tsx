@@ -76,7 +76,7 @@ function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () 
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {jobs.slice(0, 6).map((j) => (
               <div key={j.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${j.status === "running" ? "bg-amber-500" : j.status === "completed" ? "bg-emerald-500" : j.status === "cancelled" ? "bg-zinc-500" : "bg-red-500"}`} />
+                <span className={`size-1.5 rounded-full shrink-0 ${j.status === "running" ? "bg-amber-500" : j.status === "completed" ? "bg-emerald-500" : j.status === "cancelled" ? "bg-stone-500" : "bg-red-500"}`} />
                 <span className="font-mono p-text-2">{j.kind}</span>
                 <span className="p-text-3 truncate flex-1">{j.id.replace(/^bgjob-/, "").slice(0, 8)}</span>
                 <span className="p-text-3 shrink-0">{j.status}</span>
@@ -182,7 +182,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {runs.map((r) => (
               <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "bg-emerald-500" : r.status === "aborted" ? "bg-red-500" : "bg-zinc-500"}`} />
+                <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "bg-emerald-500" : r.status === "aborted" ? "bg-red-500" : "bg-stone-500"}`} />
                 <span className="text-[10px] px-1 rounded p-elevated p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
                 <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
                 {(r.tokensIn + r.tokensOut) > 0 && <span className="p-text-3 shrink-0 tabular-nums" title="tokens in+out">{fmtTokens(r.tokensIn + r.tokensOut)} tok</span>}
@@ -219,7 +219,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {triggers.map((t) => (
               <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${t.state === "active" ? "bg-emerald-500" : "bg-zinc-500"}`} />
+                <span className={`size-1.5 rounded-full shrink-0 ${t.state === "active" ? "bg-emerald-500" : "bg-stone-500"}`} />
                 <span className="font-mono p-text-2">{t.kind}</span>
                 <span className="p-text-3 truncate flex-1">{t.id}</span>
                 {typeof t.fire_count === "number" && t.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{t.fire_count} fires</span>}

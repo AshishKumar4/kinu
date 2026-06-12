@@ -62,7 +62,7 @@ function executorDotClass(exec: ExecutorPanelInfo): string {
   if (exec.status === "error") return "bg-red-500";
   if (exec.status === "active" || exec.active) return "bg-green-500";
   if (exec.status === "idle" || exec.configured) return "bg-sky-500";
-  return "bg-zinc-500";
+  return "bg-stone-500";
 }
 
 function executorStatusLabel(exec: ExecutorPanelInfo): string {
@@ -155,7 +155,7 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
             }`}
             title="Internal Proteus workspace and state VFS"
           >
-            <span className="size-1.5 rounded-full bg-zinc-500" />
+            <span className="size-1.5 rounded-full bg-stone-500" />
             Agent state
           </button>
         )}
@@ -714,7 +714,7 @@ function YourPcConnect() {
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {devices.map((d) => (
               <div key={d.id} className="flex items-center gap-2 px-3 py-2 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "bg-emerald-500" : "bg-zinc-500"}`} />
+                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "bg-emerald-500" : "bg-stone-500"}`} />
                 <span className="font-medium p-text">{d.label}</span>
                 {d.hostname && <span className="p-text-3 font-mono">{d.hostname}{d.os ? ` · ${d.os}` : ""}</span>}
                 <span className="p-text-3 ml-auto">{d.connected ? "connected" : "offline"}</span>

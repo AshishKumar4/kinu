@@ -19,10 +19,10 @@ import { EmptyState } from "./shared";
 const STATUS_META: Record<ProductChangeStatus, { label: string; tone: string }> = {
   draft: { label: "Draft", tone: "p-card p-text-2" },
   planning: { label: "Planning", tone: "bg-sky-500/15 text-sky-300" },
-  patching: { label: "Patching", tone: "bg-indigo-500/15 text-indigo-300" },
+  patching: { label: "Patching", tone: "bg-rose-500/15 text-rose-300" },
   validating: { label: "Validating", tone: "bg-amber-500/15 text-amber-300" },
   preview_ready: { label: "Preview ready", tone: "bg-emerald-500/15 text-emerald-300" },
-  awaiting_approval: { label: "Awaiting approval", tone: "bg-violet-500/15 text-violet-300" },
+  awaiting_approval: { label: "Awaiting approval", tone: "p-accent-subtle p-accent" },
   applying: { label: "Applying", tone: "bg-cyan-500/15 text-cyan-300" },
   deployed: { label: "Deployed", tone: "bg-green-500/15 text-green-300" },
   rejected: { label: "Rejected", tone: "bg-red-500/15 text-red-300" },

@@ -53,11 +53,11 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
       cursorBlink: true,
       convertEol: true,
       theme: {
-        background: "#0b0b0b",
-        foreground: "#e4e4e4",
-        cursor: "#e4e4e4",
-        black: "#0b0b0b", red: "#f87171", green: "#4ade80", yellow: "#facc15",
-        blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e4",
+        background: "#1A1613",
+        foreground: "#F5EFE6",
+        cursor: "#E0A458",
+        black: "#1A1613", red: "#f87171", green: "#4ade80", yellow: "#facc15",
+        blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#F5EFE6",
       },
     });
     const fit = new FitAddon();
@@ -155,7 +155,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
     if (wroteSomething) promptLine(t);
   }, [outputs]);
 
-  return <div ref={ref} className="w-full h-full rounded-lg border p-border overflow-hidden" style={{ background: "#0b0b0b" }} />;
+  return <div ref={ref} className="w-full h-full rounded-lg border p-border overflow-hidden" style={{ background: "var(--c-bg)" }} />;
 }
 
 function promptLine(t: Terminal) {

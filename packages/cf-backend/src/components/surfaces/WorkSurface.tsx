@@ -79,7 +79,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             : s === "Tasks" ? (props.runningTaskCount ?? 0)
             : s === "Brain" ? (props.changelogUnseen ?? 0) : 0;
           const badgeTone = s === "Tasks" ? "bg-amber-500/20 text-amber-300"
-            : s === "Brain" ? "bg-violet-500/20 text-violet-300"
+            : s === "Brain" ? "p-accent-subtle p-accent"
             : "bg-emerald-500/20 text-emerald-300";
           return (
             <button key={s} onClick={() => onSurface(s)}

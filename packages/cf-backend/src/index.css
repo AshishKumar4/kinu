@@ -104,6 +104,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-text-3 { color: var(--c-text-3); }
 .p-accent { color: var(--c-accent-fg); }
 
+.p-accent-bg      { background: var(--c-accent-subtle); }
+.p-accent-subtle  { background: var(--c-accent-subtle); }
+
 /* ── Status ─────────────────────────────────────────────────────── */
 .p-success { color: var(--c-success); }
 .p-warning { color: var(--c-warning); }
@@ -116,6 +119,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: border-color 0.15s;
 }
 .p-card:hover { border-color: var(--c-accent); }
+.p-card-hover:hover { background: var(--c-elevated); }
 
 /* User chat bubble */
 .p-user-bubble {

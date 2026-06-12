@@ -289,7 +289,7 @@ function GepaOptimizationCard({
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
             <div key={r.runId} className="text-[11px] p-text-3 flex items-center gap-2">
-              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'bg-green-500' : r.status === 'running' ? 'bg-amber-500' : 'bg-zinc-500'}`} />
+              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'bg-green-500' : r.status === 'running' ? 'bg-amber-500' : 'bg-stone-500'}`} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
               <span className="ml-auto">{r.stopReason ?? r.status}</span>

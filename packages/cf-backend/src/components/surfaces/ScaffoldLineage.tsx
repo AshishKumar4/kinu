@@ -53,7 +53,7 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
       <div className="rounded-md border p-border overflow-hidden text-[11px]">
         {verdict.trials.map((t) => (
           <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === "pending" ? "bg-emerald-500" : t.winner === "current" ? "bg-red-500" : "bg-zinc-500"}`} />
+            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === "pending" ? "bg-emerald-500" : t.winner === "current" ? "bg-red-500" : "bg-stone-500"}`} />
             <span className="p-text-2 truncate flex-1" title={t.task}>{t.task}</span>
             <span className="font-mono p-text-3 tabular-nums">{t.currentScore?.toFixed(2) ?? "—"}</span>
             <span className="p-text-3">vs</span>
