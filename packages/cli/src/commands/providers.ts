@@ -1,3 +1,4 @@
+import { checkClaudeAvailability } from '@proteus/cli-backend';
 import { loadConfigFile } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { authCommand } from './auth.js';
@@ -6,6 +7,7 @@ import { setupCommand } from './setup.js';
 type ProviderAction = 'list' | 'connect';
 type ProviderName =
   | 'cloudflare'
+  | 'claude'
   | 'codex'
   | 'openai'
   | 'openrouter'
@@ -14,12 +16,17 @@ type ProviderName =
 
 const PROVIDERS = new Set<ProviderName>([
   'cloudflare',
+  'claude',
   'codex',
   'openai',
   'openrouter',
   'anthropic',
   'openai-compatible',
 ]);
+
+const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
+const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
+const CLAUDE_READY = 'Claude subscription ready — use proteus create --model claude/claude-opus-4-x';
 
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
@@ -28,12 +35,12 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   const { action, provider } = parseArgs(actionOrProvider, providerArg);
 
   if (action === 'list') {
-    printProviders();
+    await printProviders();
     return;
   }
 
   if (!provider) {
-    throw new Error('Choose a provider to connect: cloudflare, codex, openai, openrouter, anthropic, or openai-compatible.');
+    throw new Error('Choose a provider to connect: cloudflare, claude, codex, openai, openrouter, anthropic, or openai-compatible.');
   }
 
   if (provider === 'cloudflare') {
@@ -45,6 +52,11 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
     return;
   }
 
+  if (provider === 'claude') {
+    await connectClaude();
+    return;
+  }
+
   await setupCommand({
     origin: opts.origin,
     provider,
@@ -52,6 +64,27 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
     localModel: true,
     skipCloud: true,
   });
+}
+
+/** Claude subscription "connect" is a status check, not a credential we store:
+ *  the official `claude` binary owns its own Claude Code login. We probe PATH +
+ *  `claude auth status` and print the next step. LOCAL ONLY — cloud agents need
+ *  an Anthropic API key (proteus provider connect anthropic), not this. */
+async function connectClaude(): Promise<void> {
+  console.log('');
+  console.log(ACCENT('Claude subscription (via Claude Code)'));
+  console.log(DIM('Drives the official `claude` binary with your Claude Code login. Local agents only.'));
+  const { binary, loggedIn } = await checkClaudeAvailability();
+  console.log('');
+  if (binary && loggedIn) {
+    console.log(`${OK('✓')} ${CLAUDE_READY}`);
+  } else if (binary) {
+    console.log(`${WARN('!')} ${CLAUDE_LOGIN_HINT}`);
+  } else {
+    console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
+    console.log(DIM('Then run `claude` once to sign in.'));
+  }
+  console.log(DIM('Cloud agents cannot use the subscription — connect an Anthropic API key for those.'));
 }
 
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): {
@@ -75,21 +108,23 @@ function normalizeProvider(value: string): ProviderName {
   const provider =
     v === 'cf' || v === 'workers-ai' || v === 'account'
       ? 'cloudflare'
-      : v === 'chatgpt' || v === 'chatgpt-codex'
-        ? 'codex'
-        : v === 'compat' || v === 'ollama'
-          ? 'openai-compatible'
-          : v;
+      : v === 'claude-code' || v === 'subscription' || v === 'claude-subscription'
+        ? 'claude'
+        : v === 'chatgpt' || v === 'chatgpt-codex'
+          ? 'codex'
+          : v === 'compat' || v === 'ollama'
+            ? 'openai-compatible'
+            : v;
 
   if (PROVIDERS.has(provider as ProviderName)) return provider as ProviderName;
-  throw new Error('Provider must be cloudflare, codex, openai, openrouter, anthropic, or openai-compatible.');
+  throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, or openai-compatible.');
 }
 
 function normalizeToken(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function printProviders(): void {
+async function printProviders(): Promise<void> {
   const config = loadConfigFile();
   const connected = (label: string, detail?: string) => {
     console.log(`  ${OK('✓')} ${ACCENT(label)}${detail ? ` ${DIM(detail)}` : ''}`);
@@ -105,9 +140,15 @@ function printProviders(): void {
   if (config.accessToken) {
     connected('Proteus account', config.user?.email);
     console.log(`    ${DIM('Cloud agents use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
+    console.log(`    ${DIM('Signed-in local agents also get free Workers AI (no key) through the proxy.')}`);
   } else {
     missing('Proteus account', 'proteus provider connect cloudflare');
   }
+
+  const claude = await checkClaudeAvailability();
+  if (claude.binary && claude.loggedIn) connected('Claude subscription', 'claude/claude-opus-4-x');
+  else if (claude.binary) missing('Claude subscription', CLAUDE_LOGIN_HINT);
+  else missing('Claude subscription', 'proteus provider connect claude');
 
   const providers = config.providers ?? {};
   if (providers.codex?.accessToken || providers.codex?.refreshToken) connected('Codex', currentModel(config.model, 'codex'));

@@ -77,6 +77,14 @@ export interface ClaudeAvailability {
   loggedIn: boolean;
 }
 
+/** Probe the local `claude` binary once: is it on PATH, and is a subscription
+ *  login present? Shares the exact spawn + `claude auth status` logic the
+ *  provider uses, so the providers command and the model resolver never drift.
+ *  Tests inject a fake `claude` through the spawn seam. */
+export function checkClaudeAvailability(spawn: ClaudeSpawn = defaultSpawn): Promise<ClaudeAvailability> {
+  return probeClaude(spawn);
+}
+
 export function createClaudeCliProvider(opts: ClaudeCliProviderOptions = {}): ModelProvider {
   const spawn = opts.spawn ?? defaultSpawn;
   const probe = opts.probe ?? (() => probeClaude(spawn));
