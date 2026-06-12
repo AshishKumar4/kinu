@@ -227,7 +227,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
       return {
         url: parsed.toString(),
-        title: extractTitle(raw) || undefined,
+        title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
         retrievedAt: new Date().toISOString(),
         markdown: markdown.trim(),
       };
@@ -316,6 +316,15 @@ function unwrapDuckUrl(href: string): string {
 function extractTitle(html: string): string {
   const m = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
   return m ? decodeText(stripTags(m[1])).trim().slice(0, 300) : '';
+}
+
+/** Title for already-markdown content (Markdown-for-Agents): YAML frontmatter
+ *  `title:` then the first `# heading`. */
+function extractMarkdownTitle(md: string): string {
+  const fm = /^---\s*[\s\S]*?\btitle:\s*["']?([^"'\n]+)["']?\s*[\s\S]*?\n---/m.exec(md);
+  if (fm) return fm[1].trim().slice(0, 300);
+  const h1 = /^#\s+(.+)$/m.exec(md);
+  return h1 ? h1[1].trim().slice(0, 300) : '';
 }
 
 function stripTags(s: string): string {

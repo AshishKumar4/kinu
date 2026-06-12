@@ -179,8 +179,17 @@ describe('web provider — fetch', () => {
     const provider = createDefaultWebSearchProvider({ fetch });
     const res = await provider.fetch('https://example.com/md');
     expect(res.markdown).toBe('# Already Markdown\n\nclean');
+    expect(res.title).toBe('Already Markdown'); // first heading when no HTML <title>
     // Markdown-for-Agents Accept header is sent.
     expect((calls[0].init?.headers as Record<string, string>).accept).toContain('text/markdown');
+  });
+
+  test('markdown frontmatter title is extracted', async () => {
+    const body = '---\ntitle: Durable Objects\ndescription: x\n---\n\n# Heading\n\nbody';
+    const { fetch } = stubFetch(() => ({ body, headers: { 'content-type': 'text/markdown' } }));
+    const provider = createDefaultWebSearchProvider({ fetch });
+    const res = await provider.fetch('https://example.com/md');
+    expect(res.title).toBe('Durable Objects');
   });
 
   test('htmlToMarkdown override (cf env.AI.toMarkdown) is used and base64-stripped', async () => {
