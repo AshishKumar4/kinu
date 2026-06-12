@@ -20,6 +20,7 @@ import { backpropagate } from './backpropagation.js';
 import { recordNode } from './record-node.js';
 import { converge } from './convergence.js';
 import { evaluateWithMultiModelJudging } from './evaluation.js';
+import { beamPruneByStepScore } from './step-prm.js';
 import { pruneAndReflect } from './pruning.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
 import { estimateCost } from './cost.js';
@@ -42,6 +43,8 @@ export async function runMCTS(
   const judgeSamples = config.judgeSamples ?? defaults.judgeSamples;
   const maxEvalLLMCalls = config.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
   const takesEpsilon = config.takesEpsilon ?? defaults.takesEpsilon;
+  const stepPrm = config.stepPrm ?? defaults.stepPrm;
+  const stepPrmPruneThreshold = config.stepPrmPruneThreshold ?? defaults.stepPrmPruneThreshold;
   const reflectionThreshold = defaults.reflectionThreshold;
   const craftExtractionThreshold = defaults.craftExtractionThreshold;
 
@@ -138,26 +141,41 @@ export async function runMCTS(
         `;
       }
 
+      // STEP-PRM BEAM PRUNE (optional, config.stepPrm — default off). One cheap
+      // judge call per proposal; proposals below the threshold are pruned now and
+      // SKIP the expensive grounded evaluator below, scored at their step score.
+      const proposals = explorations.map(e => e.text);
+      const stepPlan = stepPrm
+        ? await abortable(
+            beamPruneByStepScore(rt.judgeModel ?? rt.llm, task, proposals, stepPrmPruneThreshold),
+            config.signal,
+            abortBranches,
+          )
+        : null;
+      throwIfAborted(config.signal);
+
       // EVALUATE — the engine-level seam every backend shares: branches only
       // explore; scoring happens HERE through the one grounded evaluator
       // (execution verdicts via rt.executor + judge ensemble via
       // rt.judgeModel ?? rt.llm, sibling-relative). Evaluation failures score
       // 0, not neutral 0.5; otherwise failed infrastructure can look like a
       // balanced optimum and converge falsely.
-      const proposals = explorations.map(e => e.text);
       const scoreResults = await abortable(
         Promise.allSettled(explorations.map((exploration, i) =>
-          evaluateWithMultiModelJudging({
-            task,
-            trajectory: exploration.text,
-            codeUsed: exploration.codeUsed,
-            siblings: proposals.filter((p, j) => j !== i && p.length > 0),
-            executor: rt.executor,
-            judge: rt.judgeModel,
-            explorer: rt.llm,
-            judgeSamples,
-            maxLLMCalls: maxEvalLLMCalls,
-          }),
+          // Pruned branches skip the grounded evaluator — their step score stands.
+          stepPlan && !stepPlan[i]!.keep
+            ? Promise.resolve({ score: stepPlan[i]!.stepScore })
+            : evaluateWithMultiModelJudging({
+                task,
+                trajectory: exploration.text,
+                codeUsed: exploration.codeUsed,
+                siblings: proposals.filter((p, j) => j !== i && p.length > 0),
+                executor: rt.executor,
+                judge: rt.judgeModel,
+                explorer: rt.llm,
+                judgeSamples,
+                maxLLMCalls: maxEvalLLMCalls,
+              }),
         )),
         config.signal,
         abortBranches,

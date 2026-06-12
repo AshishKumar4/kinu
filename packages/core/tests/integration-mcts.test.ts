@@ -180,6 +180,86 @@ describe('MCTS integration', () => {
     expect(result.winnerId).toBe(passing.id);
   });
 
+  test('#6 step-PRM gate (on): a low-scoring proposal is pruned and SKIPS the grounded evaluator', async () => {
+    // One LLM answers both judge surfaces by prompt marker: the step-PRM judge
+    // ('scoring ONE STEP') scores the bad proposal low + the good one high; the
+    // grounded evaluator ('scoring ONE candidate') always loves a candidate.
+    let stepCalls = 0;
+    let candidateCalls = 0;
+    const llm: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt: string) {
+        if (prompt.includes('scoring ONE STEP')) {
+          stepCalls++;
+          return prompt.includes('BAD approach') ? '{"score": 0.05}' : '{"score": 0.9}';
+        }
+        if (prompt.includes('scoring ONE candidate')) candidateCalls++;
+        return '{"score": 0.8}';
+      },
+    };
+    const { rt } = createTestRuntime();
+    rt.llm = llm;
+    rt.judgeModel = llm;
+    let i = 0;
+    rt.spawnBranch = async () => {
+      const idx = i++;
+      return {
+        explore: async () => ({ text: idx === 0 ? 'a BAD approach' : 'a good approach', codeUsed: null }),
+        generateReflection: async () => 'n/a',
+      };
+    };
+
+    initTables(rt);
+    await runMCTS(rt, createMockSession(), 'choose an approach', {
+      budget: 1,
+      branches: 2,
+      stepPrm: true,
+      stepPrmPruneThreshold: 0.3,
+      judgeSamples: 1,
+    });
+
+    // Both proposals were step-scored (2 step-PRM calls).
+    expect(stepCalls).toBe(2);
+    // Only the kept (good) branch reached the grounded evaluator — the pruned
+    // BAD branch skipped it entirely, the beam-search efficiency win.
+    expect(candidateCalls).toBe(1);
+
+    // The pruned branch carries its low step score; the kept branch a passing one.
+    const children = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL ORDER BY action`;
+    const bad = children.find((n) => n.action.includes('BAD'))!;
+    const good = children.find((n) => !n.action.includes('BAD'))!;
+    expect(bad.value).toBeLessThanOrEqual(0.05);
+    expect(good.value).toBeGreaterThan(bad.value);
+  });
+
+  test('#6 step-PRM gate (default off): every branch reaches the grounded evaluator', async () => {
+    let stepCalls = 0;
+    let candidateCalls = 0;
+    const llm: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt: string) {
+        if (prompt.includes('scoring ONE STEP')) stepCalls++;
+        if (prompt.includes('scoring ONE candidate')) candidateCalls++;
+        return '{"score": 0.5}';
+      },
+    };
+    const { rt } = createTestRuntime();
+    rt.llm = llm;
+    rt.judgeModel = llm;
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'prose approach', codeUsed: null }),
+      generateReflection: async () => 'n/a',
+    });
+
+    initTables(rt);
+    await runMCTS(rt, createMockSession(), 'no gate task', { budget: 1, branches: 2, judgeSamples: 1 });
+
+    // Gate off by default: no step-PRM calls, every branch judged by the evaluator.
+    expect(stepCalls).toBe(0);
+    expect(candidateCalls).toBe(2);
+  });
+
   test('judgeSamples / maxEvalLLMCalls config knobs are respected at the engine seam', async () => {
     const llm = countingLLM('{"score": 0.5}');
     const { rt } = createTestRuntime();

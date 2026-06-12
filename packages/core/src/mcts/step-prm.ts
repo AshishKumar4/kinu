@@ -5,15 +5,18 @@
 // spending the full rollout cost. Math-RL literature (Lightman 2024,
 // ThinkPRM 2025, BiRM 2025) reports substantial efficiency gains.
 //
-// STATUS: NOT wired into any production path, deliberately. Proteus branch
-// rollouts are single-step (BranchHandle.explore is one LLM call producing
-// one proposal), so there is no intermediate step to prune mid-rollout —
-// every tree level already receives the full grounded evaluator
-// (mcts/evaluation.ts) per node, and a PRM call per node would duplicate
-// that signal at extra cost. This module becomes useful only when branches
-// gain multi-step rollouts (deep tool-loop branches / checkpoint-seeded
-// searches, roadmap R6) — wire scoreStepWithJudge inside the rollout loop
-// then. Covered by unit tests only.
+// STATUS: wired into the MCTS engine's expansion as an OPTIONAL beam-prune gate
+// (`config.stepPrm`, default OFF — see beamPruneByStepScore + engine.ts). When
+// on, each branch's proposal is scored by one cheap step-PRM judge call and
+// proposals below the threshold skip the expensive grounded evaluator
+// (assertions + judge ensemble = maxEvalLLMCalls calls per branch). Default OFF
+// because Proteus branch rollouts are single-step (BranchHandle.explore is one
+// LLM call producing one proposal): at that depth the step-PRM signal duplicates
+// the grounded evaluator's per-node signal at extra cost, so it only pays off
+// when branches are wide or the grounded evaluator is expensive. Becomes
+// load-bearing once branches gain multi-step rollouts (deep tool-loop branches /
+// checkpoint-seeded searches, roadmap R6) — call scoreStepWithJudge inside the
+// rollout loop then.
 //
 // The judge model receives (task, accumulated trajectory so far, current
 // step's action+observation) and emits a [0..1] score with a short rationale.
@@ -79,4 +82,42 @@ export async function scoreStepWithJudge(judge: LLM, input: StepScoreInput): Pro
  *  Standard discounted-reward pattern from RL: V_new = (1-γ) * step + γ * V_prior. */
 export function blendStepScore(priorScore: number, stepScore: number, discount = 0.7): number {
   return (1 - discount) * stepScore + discount * priorScore;
+}
+
+/** A branch's step-PRM verdict from the beam-prune gate. */
+export interface StepPrunePlan {
+  /** Per-branch step score [0..1] from the PRM judge. */
+  readonly stepScore: number;
+  /** True → keep this branch for the (expensive) grounded evaluator.
+   *  False → prune it now; the engine scores it at `stepScore`. */
+  readonly keep: boolean;
+}
+
+/**
+ * Beam-prune one expansion's proposals by step-PRM score (THINKING-AUDIT §4 #6).
+ *
+ * Scores every proposal with one `scoreStepWithJudge` call (parallel), then
+ * marks proposals below `threshold` as pruned so the engine can skip the
+ * grounded evaluator for them — the beam-search efficiency win. Empty proposals
+ * are pruned at score 0 without a judge call. Pure over the judge; the engine
+ * owns what to do with the plan.
+ */
+export async function beamPruneByStepScore(
+  judge: LLM,
+  task: string,
+  proposals: readonly string[],
+  threshold: number,
+): Promise<StepPrunePlan[]> {
+  const scored = await Promise.all(
+    proposals.map(async (proposal): Promise<number> => {
+      if (proposal.length === 0) return 0;
+      const { score } = await scoreStepWithJudge(judge, {
+        task,
+        priorTrajectory: '',
+        step: { action: proposal, observation: '' },
+      });
+      return score;
+    }),
+  );
+  return scored.map((stepScore) => ({ stepScore, keep: stepScore >= threshold }));
 }
