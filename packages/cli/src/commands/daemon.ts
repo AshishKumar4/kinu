@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import {
-  createLocalModelResolver,
   LocalAgentSession,
   openAgentCLI,
   resolveChatModel,
@@ -16,10 +15,10 @@ import {
   createCodexAuthStore,
   ensureAgentHome,
   listAgentDirs,
-  resolveLLMConfig,
   resolveMcpServers,
   resolveProviderCredentials,
 } from '../config.js';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
 import { DIM, OK, WARN } from '../display.js';
 
 const PID_PATH = join(AGENT_HOME, 'daemon.pid');
@@ -138,10 +137,9 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
     const nextBefore = nextTriggerAt(db);
     if (nextBefore === null || nextBefore > now) return nextBefore;
 
-    const llmConfig = resolveLLMConfig();
+    const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver({ agentName: name });
     const providerCredentials = resolveProviderCredentials();
     const codexAuthStore = createCodexAuthStore();
-    const modelResolver = createLocalModelResolver({ llm: llmConfig, credentials: providerCredentials, codexAuthStore });
     const mcpServers = resolveMcpServers();
     const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
     const session = new LocalAgentSession({

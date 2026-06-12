@@ -67,7 +67,7 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
   if (!existsSync(dbPath)) {
     throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
   }
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
   const providerCredentials = resolveProviderCredentials();
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);

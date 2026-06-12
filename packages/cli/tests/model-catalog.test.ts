@@ -40,4 +40,26 @@ describe('normalizeModelEntries + contextWindowForSpec', () => {
     expect(contextWindowForSpec(rows, 'groq/llama-3.3-70b-versatile')).toBe(131072);
     expect(contextWindowForSpec(rows, 'missing/spec')).toBeUndefined();
   });
+
+  test('maps local resolver rows (provider + id) to picker entries with metadata', () => {
+    // The exact shape LocalAgentClient.listModels feeds /model: the signed-in
+    // resolver lists ModelInfo rows under their provider id.
+    const rows = normalizeModelEntries([
+      {
+        provider: 'workers-ai', id: '@cf/moonshotai/kimi-k2.6', label: 'Kimi K2.6',
+        capabilities: ['tools', 'streaming'], contextWindow: 262144,
+      },
+      { provider: 'my-gateway', id: 'openai/gpt-4.1', label: 'GPT-4.1', contextWindow: 1047576 },
+    ]);
+    expect(rows).toEqual([
+      {
+        spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
+        capabilities: ['tools', 'streaming'], contextWindow: 262144,
+      },
+      {
+        spec: 'my-gateway/openai/gpt-4.1', label: 'GPT-4.1', provider: 'my-gateway',
+        capabilities: undefined, contextWindow: 1047576,
+      },
+    ]);
+  });
 });

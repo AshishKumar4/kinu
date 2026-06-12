@@ -19,7 +19,9 @@ import {
   type OAuthCredential,
 } from '@proteus/core';
 import {
+  cloudProxyBaseURL,
   createFileCodexAuthStore,
+  type LocalCloudSession,
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
@@ -184,6 +186,18 @@ export function requireAuthConfig(): { origin: string; token: string; user?: Pro
   return { origin, token, user: config.user };
 }
 
+/** The signed-in session as a model source, or null when signed out / expired.
+ *  Non-throwing twin of requireAuthConfig for paths where being signed out
+ *  just means the cloud providers are unavailable, not an error. */
+export function resolveCloudSession(): LocalCloudSession | null {
+  try {
+    const { origin, token } = requireAuthConfig();
+    return { origin, token };
+  } catch {
+    return null;
+  }
+}
+
 export function resolveAgentRef(input: string): ProteusAgentConfig | null {
   const config = loadConfigFile();
   const canonical = config.aliases?.[input] ?? input;
@@ -324,10 +338,23 @@ export function resolveLLMConfig(opts?: {
   const derived = deriveLLMConfigFromProviderCredentials(file, model);
   if (derived) return derived;
 
+  // Signed in with no BYO keys: local agents run on the user's Cloudflare AI
+  // through the worker's /api/user/ai/v1 proxy — signed in equals working.
+  const cloud = resolveCloudSession();
+  if (cloud) {
+    return {
+      name: 'workers-ai',
+      baseURL: cloudProxyBaseURL(cloud.origin),
+      headers: { Authorization: `Bearer ${cloud.token}` },
+      model: workersAIModelId(model),
+    };
+  }
+
   if (!baseURL) {
     throw new Error(
-      'No LLM base URL configured.\n' +
-      '  Run proteus setup and configure a local provider, or pass --base-url for an advanced override.'
+      'No LLM configured.\n' +
+      '  Run proteus auth to use your Cloudflare AI, run proteus setup to configure a local provider,\n' +
+      '  or pass --base-url for an advanced override.'
     );
   }
   if (!auth) {
@@ -442,6 +469,14 @@ function preferredModelFromCredentials(file: ProteusConfig): string | undefined 
 
 function stripProvider(model: string, provider: string): string {
   return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
+}
+
+/** The Workers AI wire id for the proxy-derived config — a configured
+ *  workers-ai model is honored; anything else falls to the platform default
+ *  (non-workers-ai specs still resolve per-spec through the registry). */
+function workersAIModelId(model: string | undefined): string {
+  const id = model?.startsWith('workers-ai/') ? model.slice('workers-ai/'.length) : model;
+  return id?.startsWith('@cf/') ? id : DEFAULT_WORKERS_AI_MODEL_ID;
 }
 
 function directEndpointModelId(model: string): string {
