@@ -404,7 +404,7 @@ export class ExplorationAgent extends Agent<Env> {
           },
         }),
         execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
-          const bExh = budgetExhausted(input.budget);
+          const bExh = budgetExhausted(input.budget, capture.tokenUsage.input + capture.tokenUsage.output);
           if (bExh.exhausted) return `Cannot split: budget exhausted (${bExh.reason}).`;
           if (input.budget.maxDepth <= 0) return "Cannot split: maxDepth budget reached.";
           try {

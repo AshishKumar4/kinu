@@ -246,29 +246,50 @@ export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';
 /**
  * Split parent's budget among N children. Returns the per-child budget.
  *
- * Defaults: equal token split, full wall-clock to each (they run in parallel).
- * Depth decremented unconditionally.
+ * Defaults: equal token split. Wall-clock is bounded by the parent's REMAINING
+ * time, never the parent's full ceiling: the child resets `spawnedAt` to now, so
+ * handing it the full `maxWallClockMs` would let a recursive subtree run past the
+ * operator's wall-clock ceiling on every level it descends (a 3-deep split could
+ * triple it). We cap each child's deadline at the parent's deadline by clamping
+ * its wall-clock to the time the parent has left (THINKING-AUDIT §4 #7). Depth is
+ * decremented unconditionally.
  */
 export function deriveChildBudget(
   parent: HeadBudget,
   n: number,
   split?: BudgetSplit,
+  now: number = Date.now(),
 ): HeadBudget {
   const safeN = Math.max(1, n);
   const tokensRatio = split?.tokensRatio ?? 1 / safeN;
   const wallClockRatio = split?.wallClockRatio ?? 1;
+  const parentRemainingMs = Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt));
   return {
     maxDepth: parent.maxDepth - 1,
     maxTokens: Math.floor(parent.maxTokens * tokensRatio),
-    maxWallClockMs: Math.floor(parent.maxWallClockMs * wallClockRatio),
-    spawnedAt: Date.now(),
+    // A child can never outlive the parent's remaining wall-clock, regardless
+    // of the requested ratio — the child clock starts fresh at `now`.
+    maxWallClockMs: Math.min(
+      Math.floor(parent.maxWallClockMs * wallClockRatio),
+      parentRemainingMs,
+    ),
+    spawnedAt: now,
   };
 }
 
-/** Returns true if this budget is exhausted along any dimension. */
-export function budgetExhausted(b: HeadBudget): { exhausted: boolean; reason?: string } {
+/**
+ * Returns true if this budget is exhausted along any dimension.
+ *
+ * `consumedTokens` is the total tokens this head + descendants have spent so far;
+ * pass it from the run loop's running `capture.tokenUsage` so the token ceiling
+ * actually gates a run mid-flight. Omitted (or 0) only checks depth + wall-clock.
+ */
+export function budgetExhausted(
+  b: HeadBudget,
+  consumedTokens = 0,
+): { exhausted: boolean; reason?: string } {
   if (b.maxDepth <= 0) return { exhausted: true, reason: 'max-depth' };
-  if (b.maxTokens <= 0) return { exhausted: true, reason: 'tokens' };
+  if (consumedTokens >= b.maxTokens) return { exhausted: true, reason: 'tokens' };
   if (Date.now() - b.spawnedAt >= b.maxWallClockMs) return { exhausted: true, reason: 'wall-clock' };
   return { exhausted: false };
 }

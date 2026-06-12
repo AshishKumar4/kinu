@@ -379,24 +379,28 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       system: buildHeadSystemPrompt(input, Object.keys(deps.tools)),
       messages: buildHeadMessages(input),
       tools: deps.tools,
+      // Accumulate usage as each step finishes — fires before stopWhen is
+      // evaluated — so the token ceiling can gate the run mid-flight rather
+      // than only being noticed once the whole loop is done (THINKING-AUDIT §4 #7).
+      onStepFinish: (step) => {
+        const u = (step as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+        if (u) {
+          capture.tokenUsage.input += u.inputTokens ?? 0;
+          capture.tokenUsage.output += u.outputTokens ?? 0;
+        }
+      },
       stopWhen: ({ steps }) => {
         if (deps.isAborted()) return true;
         if (steps.length >= maxSteps) return true;
-        if (budgetExhausted(input.budget).exhausted) return true;
+        if (budgetExhausted(input.budget, usageTotal().total).exhausted) return true;
         return false;
       },
       maxOutputTokens: 2048,
     });
 
-    const usage = (result as unknown as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-    if (usage) {
-      capture.tokenUsage.input += usage.inputTokens ?? 0;
-      capture.tokenUsage.output += usage.outputTokens ?? 0;
-    }
-
     const status: HeadReport['status'] = deps.isAborted()
       ? 'aborted'
-      : budgetExhausted(input.budget).exhausted ? 'budget_exceeded' : 'completed';
+      : budgetExhausted(input.budget, usageTotal().total).exhausted ? 'budget_exceeded' : 'completed';
     const abortReason = deps.abortReason?.() ?? null;
     const summary = extractFinalText(result) || headFallbackSummary(input, status, capture, abortReason);
 
