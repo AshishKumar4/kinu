@@ -139,7 +139,7 @@ OAuth. Proteus requests these scopes so user-owned Cloudflare billing can power
 Workers AI and AI Gateway calls:
 
 ```text
-user-details.read account-settings.read ai.write aig.read aig.run offline_access
+user-details.read account-settings.read ai.write aig.write aig.run offline_access
 ```
 
 `offline_access` is required: `dash.cloudflare.com/oauth2/token` only returns
@@ -147,7 +147,7 @@ a `refresh_token` when the authorization request asked for it (and the client
 has the Refresh Token grant enabled). Without it the stored credential dies at
 access-token expiry and every visit demands a Workers AI reconnect.
 
-`aig.read` (AI Gateway Read) powers the `my-gateway` provider: listing the
+`aig.write` (AI Gateway Write — the client offers no separate Read scope) powers the `my-gateway` provider: listing the
 user's AI Gateways, their stored BYOK provider keys, and the Unified Billing
 credit balance. The OAuth client must have the scope enabled in its dashboard
 configuration, and users who connected before it was added need one re-login
