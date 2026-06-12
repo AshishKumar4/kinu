@@ -16,8 +16,8 @@ export {
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
 } from './local-session.js';
 export {
-  createLocalModelResolver,
-  type LocalModelResolver, type LocalModelResolverConfig,
+  createLocalModelResolver, cloudProxyBaseURL,
+  type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver.js';
 export { createFileCodexAuthStore, type LocalCodexAuthStore } from './codex-auth-store.js';

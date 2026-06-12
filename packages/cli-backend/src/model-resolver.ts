@@ -1,6 +1,8 @@
 import { createChatModel, type LLMProviderConfig } from '@proteus/core';
 import {
   CODEX_CRED_KEY,
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  MODEL_CAPABILITIES,
   codexAccessTokenExpiring,
   codexCredentialToHeaders,
   createCodexOAuthClient,
@@ -12,6 +14,7 @@ import {
   createProviderRegistry,
   listModelsDevProviderModels,
   type AuthResolution,
+  type ModelCapability,
   type ModelInfo,
   type ModelProvider,
   type ProviderDeps,
@@ -40,6 +43,22 @@ export interface LocalProviderCredentials {
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
 }
 
+/** The signed-in Proteus session — lets local agents run on the user's
+ *  Cloudflare AI (Workers AI + their AI Gateway) through the worker's
+ *  /api/user/ai/v1 proxy, with no Cloudflare token on this machine. */
+export interface LocalCloudSession {
+  origin: string;
+  /** CLI bearer (`ptc_…` session or `pta_…` access token with ai.proxy). */
+  token: string;
+  /** Workers AI prefix-cache pin (x-session-affinity) for this agent. */
+  sessionAffinity?: string;
+}
+
+/** The worker's signed-in OpenAI-compatible inference proxy. */
+export function cloudProxyBaseURL(origin: string): string {
+  return `${origin.replace(/\/+$/, '')}/api/user/ai/v1`;
+}
+
 export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   resolveModel(specOrNull?: string | null): LanguageModel;
@@ -51,6 +70,10 @@ export interface LocalModelResolverConfig {
   llm: LLMProviderConfig;
   credentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
+  /** Signed-in session. When present, workers-ai + my-gateway resolve through
+   *  the worker's AI proxy; when absent they list as unavailable with a
+   *  `proteus auth` hint. */
+  cloud?: LocalCloudSession;
   fetch?: typeof fetch;
   onCodexRefresh?: (credential: OAuthCredential) => void;
 }
@@ -101,8 +124,15 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     onCodexRefresh: opts.onCodexRefresh,
   });
 
+  const cloud = opts.cloud;
+  // An explicit direct endpoint (PROTEUS_BASE_URL → llm.name workers-ai) keeps
+  // precedence over the signed-in proxy; the proxy-derived llm config (its
+  // baseURL IS the proxy) registers through the cloud providers below instead.
+  const llmIsCloudProxy = cloud !== undefined
+    && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
+
   const defaultProvider = defaultProviderFor(localEndpoint);
-  if (defaultProvider === 'workers-ai') {
+  if (defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
     registry.register(createGatewayBackedProvider({
       id: 'workers-ai',
       label: 'Cloudflare Workers AI (local gateway)',
@@ -118,6 +148,32 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
     }));
+  }
+
+  if (cloud) {
+    const menu = createCloudModelMenu(cloud, opts.fetch);
+    if (!registry.get('workers-ai')) {
+      registry.register(createCloudProxyProvider({
+        id: 'workers-ai',
+        label: 'Cloudflare Workers AI (your account)',
+        cloud,
+        menu,
+        defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
+        unavailableReason: 'Connect Cloudflare in your Proteus user settings to use Workers AI.',
+      }));
+    }
+    registry.register(createCloudProxyProvider({
+      id: 'my-gateway',
+      label: 'Your AI Gateway',
+      cloud,
+      menu,
+      unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Proteus user settings.',
+    }));
+  } else {
+    if (!registry.get('workers-ai')) {
+      registry.register(createSignedOutCloudProvider('workers-ai', 'Cloudflare Workers AI (your account)'));
+    }
+    registry.register(createSignedOutCloudProvider('my-gateway', 'Your AI Gateway'));
   }
 
   registry.register(createCodexProvider());
@@ -212,6 +268,113 @@ function createGatewayBackedProvider(opts: {
         headers: opts.llm.headers,
         modelId,
       });
+    },
+  };
+}
+
+interface CloudMenuEntry {
+  spec: string;
+  label: string;
+  provider: string;
+  capabilities?: ModelCapability[];
+  contextWindow?: number;
+}
+
+const CLOUD_MENU_TTL_MS = 60_000;
+
+/** Server-driven model menu (GET /api/cli/models) shared by the cloud
+ *  providers — the worker is the source of truth for what the signed-in
+ *  account can actually serve (Cloudflare connected, gateway BYOK slugs,
+ *  Unified Billing). Failures list as empty, so availability stays honest
+ *  while explicit specs still resolve through the proxy. */
+function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): () => Promise<CloudMenuEntry[]> {
+  const baseFetch = fetchImpl ?? fetch;
+  let cached: { at: number; entries: CloudMenuEntry[] } | null = null;
+  return async () => {
+    if (cached && Date.now() - cached.at < CLOUD_MENU_TTL_MS) return cached.entries;
+    try {
+      const res = await baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
+        headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
+      });
+      if (!res.ok) return [];
+      const rows: unknown = await res.json();
+      const entries = (Array.isArray(rows) ? rows : []).flatMap((row): CloudMenuEntry[] => {
+        if (!row || typeof row !== 'object') return [];
+        const item = row as Record<string, unknown>;
+        if (typeof item.spec !== 'string' || typeof item.provider !== 'string') return [];
+        return [{
+          spec: item.spec,
+          label: typeof item.label === 'string' ? item.label : item.spec,
+          provider: item.provider,
+          capabilities: Array.isArray(item.capabilities)
+            ? MODEL_CAPABILITIES.filter((cap) => (item.capabilities as unknown[]).includes(cap))
+            : undefined,
+          contextWindow: typeof item.contextWindow === 'number' && item.contextWindow > 0
+            ? Math.floor(item.contextWindow)
+            : undefined,
+        }];
+      });
+      cached = { at: Date.now(), entries };
+      return entries;
+    } catch {
+      return [];
+    }
+  };
+}
+
+/** workers-ai / my-gateway backed by the worker's signed-in AI proxy. The
+ *  model id IS the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
+ *  match the hosted backend exactly. */
+function createCloudProxyProvider(opts: {
+  id: 'workers-ai' | 'my-gateway';
+  label: string;
+  cloud: LocalCloudSession;
+  menu: () => Promise<CloudMenuEntry[]>;
+  defaultModel?: string;
+  unavailableReason: string;
+}): ModelProvider {
+  const baseURL = cloudProxyBaseURL(opts.cloud.origin);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${opts.cloud.token}`,
+    ...(opts.cloud.sessionAffinity ? { 'x-session-affinity': opts.cloud.sessionAffinity } : {}),
+  };
+  const prefix = `${opts.id}/`;
+  return {
+    id: opts.id,
+    label: opts.label,
+    defaultModel: opts.defaultModel,
+    async isAvailable() {
+      return (await opts.menu()).some((entry) => entry.provider === opts.id);
+    },
+    unavailableReason: () => opts.unavailableReason,
+    async listModels(): Promise<ModelInfo[]> {
+      return (await opts.menu())
+        .filter((entry) => entry.provider === opts.id)
+        .map((entry) => ({
+          id: entry.spec.startsWith(prefix) ? entry.spec.slice(prefix.length) : entry.spec,
+          label: entry.label,
+          capabilities: entry.capabilities ? [...entry.capabilities] : undefined,
+          contextWindow: entry.contextWindow,
+        }));
+    },
+    createModel(modelId): LanguageModel {
+      return createChatModel({ kind: 'openai-compat', name: opts.id, baseURL, headers, modelId });
+    },
+  };
+}
+
+/** Honest placeholder when the user is not signed in: the providers stay
+ *  visible in /model with the exact step that unlocks them. */
+function createSignedOutCloudProvider(id: 'workers-ai' | 'my-gateway', label: string): ModelProvider {
+  const reason = 'Sign in with `proteus auth` to use your Cloudflare AI for local agents.';
+  return {
+    id,
+    label,
+    isAvailable: () => false,
+    unavailableReason: () => reason,
+    listModels: async () => [],
+    createModel(): LanguageModel {
+      throw new Error(reason);
     },
   };
 }

@@ -21,16 +21,19 @@ export interface ModelInfo {
 }
 
 /** The one capability vocabulary — provider catalogs populate it, prompt
- *  shaping (prompting/model-profile.ts) consumes it. */
-export type ModelCapability =
-  | 'tools'
-  | 'vision'
-  | 'reasoning'
-  | 'json-mode'
-  | 'streaming'
-  | 'structured-outputs'
-  | 'computer-use'
-  | 'prompt-caching';
+ *  shaping (prompting/model-profile.ts) consumes it. A runtime const so
+ *  trust boundaries (HTTP model menus) can narrow without casts. */
+export const MODEL_CAPABILITIES = [
+  'tools',
+  'vision',
+  'reasoning',
+  'json-mode',
+  'streaming',
+  'structured-outputs',
+  'computer-use',
+  'prompt-caching',
+] as const;
+export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
 export interface ProviderInfo {
   id: string;
