@@ -75,15 +75,17 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse: 'Do not load broad skills speculatively; they consume context and can over-constrain unrelated work.',
     result: 'Returns skill metadata, skill content, or mutation status.',
   },
-  // The think spec below is the SINGLE SOURCE of strategy doctrine — the
-  // system prompt, the UI, and the think tool's own docstring all render
-  // from it (the docstring appends only the live advertised-strategy ids).
+  // The think spec below is the SINGLE SOURCE of strategy doctrine — the think
+  // tool's docstring, the UI, AND the system prompt's Research section all
+  // render `whenToUse` from here (the docstring appends only the live
+  // advertised-strategy ids; the prompt prefixes the fan-out workflow). Keep
+  // the two strategy triggers (heads vs mcts) intact when editing.
   think: {
     name: 'think',
     summary: 'Run a deeper reasoning strategy: heads (parallel sub-agents) or mcts (approach search).',
     whenToUse:
-      'heads = 2-6 independent subtasks, each running its own full multi-step tool loop concurrently (takes minutes; may auto-background). ' +
-      'mcts = compare competing approaches when the right path is unclear — branches propose text + code and cannot run tools, but proposed code is executed when scored.',
+      'heads = ≥2 independent sub-questions, each running its own multi-step tool loop concurrently (web_search/web_fetch/exec); takes minutes, may auto-background. ' +
+      'mcts = compare competing approaches scored by execution when the right path is genuinely unclear — branches score TEXT/code and do NOT run your tool loop, but proposed code is executed when scored.',
     whenNotToUse: 'Neither is for linear work you can simply do directly, nor when branches would race on the same mutable resource.',
     result: 'Returns a strategy result with branch/head outputs, scores, and selected work.',
   },

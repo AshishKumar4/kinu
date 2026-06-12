@@ -265,10 +265,14 @@ function renderAgentStateSection(surface: PromptSurface): string {
   }
 
   if (hasTool(tools, 'think')) {
+    // Strategy triggers render from the registry think spec (single source);
+    // the fan-out workflow and the heads' durable artifact trail are the
+    // prompt-only operational doctrine the per-tool schema can't carry.
     parts.push([
-      '## Parallel sub-agents',
-      '`think({ strategy: "heads", task, heads })` heads are 2-6 real concurrent sub-agents, each with its own multi-step tool loop and a bounded recursive split depth of 3.',
-      'Heads leave durable findings under `shared/findings/` in the workspace — read them after the merge when you need detail beyond the merged summary.',
+      '## Research and experimentation',
+      'When a task needs breadth-first investigation or comparing competing approaches, do not answer inline — fan out, escalating (answer directly → heads → mcts) as uncertainty rises:',
+      `- ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
+      'Heads recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.',
     ].join('\n'));
   }
 

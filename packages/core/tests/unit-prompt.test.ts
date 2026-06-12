@@ -22,24 +22,42 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/self-evolving/i);          // general-purpose, not code-centric
   });
 
-  test('teaches the agent it spawns parallel sub-agents and persists across turns', () => {
-    // The "agent is restricted / stateless" feedback was a prompt gap: the
-    // surface never affirmed that think(heads) = real concurrent sub-agents or
-    // that storage persists between turns. These sections close that gap.
+  test('renders the research fan-out doctrine: names heads AND mcts with triggers, escalation, web loop', () => {
+    // The "research doesn't use the machinery" gap: mcts was named NOWHERE in
+    // the prompt body and the doctrine was a hardcoded heads-only blurb. The
+    // Research section now renders both strategy triggers from the registry
+    // (single source) plus the always-on fan-out workflow.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Parallel sub-agents/);
-    expect(prompt).toMatch(/2-6 real concurrent sub-agents/);
-    expect(prompt).toMatch(/depth of 3/);
-    expect(prompt).toMatch(/NOT stateless between turns/);
-    // Heads leave a readable artifact trail the model should know about.
+    expect(prompt).toMatch(/## Research and experimentation/);
+    // Both strategies named with their triggers.
+    expect(prompt).toMatch(/heads = /);
+    expect(prompt).toMatch(/mcts = /);
+    // The escalation ladder and the live-info loop are the load-bearing workflow.
+    expect(prompt).toMatch(/answer directly → heads → mcts/);
+    expect(prompt).toMatch(/loop web_search then web_fetch/);
+    // Heads' durable artifact trail + recursive depth survive the rewrite.
+    expect(prompt).toMatch(/split depth 3/);
     expect(prompt).toContain('shared/findings/');
+    expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
-  test('teaches the honest strategy doctrine: mcts branches cannot run tools, code runs at scoring', () => {
-    // The doctrine lives in the think tool's JSON-schema description (what
-    // providers weight for tool selection) — not in prompt prose.
-    expect(BUILTIN_TOOL_DESCRIPTIONS.think).toMatch(/cannot run tools/);
+  test('the research doctrine is single-sourced: the registry think spec is the only doctrine string', () => {
+    // The prompt renders the registry's whenToUse verbatim — no parallel
+    // hardcoded strategy doctrine. Editing registry.ts is the only place that
+    // changes what the model is told about heads vs mcts.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toContain(BUILTIN_TOOL_SPECS.think.whenToUse);
+    // And the schema description carries the same doctrine (also single-sourced).
+    expect(BUILTIN_TOOL_DESCRIPTIONS.think).toContain(BUILTIN_TOOL_SPECS.think.whenToUse);
+  });
+
+  test('teaches the honest strategy doctrine: mcts branches do not run the tool loop, code runs at scoring', () => {
+    // The honest framing (mcts branches score text/code, they don't run your
+    // tool loop; proposed code IS executed at scoring) lives in the single
+    // registry think spec.
+    expect(BUILTIN_TOOL_DESCRIPTIONS.think).toMatch(/do NOT run your tool loop/);
     expect(BUILTIN_TOOL_DESCRIPTIONS.think).toMatch(/code is executed when scored/);
   });
 
@@ -54,10 +72,14 @@ describe('buildSystemPromptSync', () => {
       expect(description).toContain(`Use when: ${spec.whenToUse}`);
       expect(description).toContain(`Avoid when: ${spec.whenNotToUse}`);
       expect(description).toContain(`Returns: ${spec.result}`);
-      // Prompt prose carries ONLY the summary — no duplicated doctrine.
-      expect(prompt).not.toContain(spec.whenToUse);
+      // Prompt prose carries ONLY the summary — no duplicated doctrine. The
+      // SOLE exception is `think`: its whenToUse IS the research-doctrine the
+      // prompt deliberately renders from the registry (single source), so the
+      // trigger text appears in both surfaces by design.
+      if (name !== 'think') expect(prompt).not.toContain(spec.whenToUse);
       expect(prompt).not.toContain(spec.whenNotToUse);
     }
+    // The `Use when:` / `Avoid when:` schema prefixes never leak into prose.
     expect(prompt).not.toContain('Use when:');
     expect(prompt).not.toContain('Avoid when:');
   });
@@ -263,7 +285,8 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('**fact**');
     expect(prompt).not.toContain('**execute_tools**');
     expect(prompt).not.toContain('agent.schedule');
-    expect(prompt).not.toContain('Parallel sub-agents');
+    // `think` is gated out → no Research/fan-out doctrine.
+    expect(prompt).not.toContain('Research and experimentation');
   });
 
   test('renders external tools separately from built-in tools', () => {
@@ -357,7 +380,10 @@ describe('buildSystemPromptSync', () => {
       'Persistence': 700,
       'Memory and facts': 560,
       'Code execution and learned capabilities': 1530,
-      'Parallel sub-agents': 380,
+      // Research doctrine now renders both strategy triggers from the registry
+      // (single source) plus the always-on fan-out workflow — a deliberate,
+      // load-bearing growth over the old heads-only blurb.
+      'Research and experimentation': 840,
       'Background work': 260,
       'Proteus product changes': 290,
       'Output format': 180,
@@ -393,5 +419,21 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/mcts/);
     expect(prompt).toMatch(/heads/);
     expect(prompt).not.toMatch(/single-shot/);
+  });
+
+  test('names mcts AND heads + the research workflow for BOTH a Kimi and a non-Kimi agent', () => {
+    // The core gap: for Kimi (bare tool-name index) `mcts` appeared NOWHERE.
+    // The Research section is workflow doctrine in the agent-state block, not
+    // the per-tool index, so it renders identically regardless of family — and
+    // it names BOTH strategies with their triggers from the registry.
+    const { rt } = createTestRuntime();
+    for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
+      const prompt = buildSystemPromptSync(rt, { model: { id } });
+      expect(prompt).toMatch(/## Research and experimentation/);
+      expect(prompt).toMatch(/heads = /);   // heads trigger
+      expect(prompt).toMatch(/mcts = /);    // mcts trigger — the gap this fix closes
+      expect(prompt).toMatch(/answer directly → heads → mcts/);
+      expect(prompt).toMatch(/loop web_search then web_fetch/);
+    }
   });
 });
