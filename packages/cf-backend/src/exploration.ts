@@ -56,6 +56,9 @@ import {
   runHeadInference,
   buildHeadAccumulatorTools,
   buildHeadSandboxTools,
+  buildHeadWebTools,
+  createDefaultWebSearchProvider,
+  type WebSearchProvider,
 } from "@proteus/core";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
@@ -169,6 +172,32 @@ export class ExplorationAgent extends Agent<Env> {
   getModel(modelId?: string): LanguageModel {
     const reg = this.providerRegistry();
     return reg.resolveModel(reg.normalizeSpecSync(modelId));
+  }
+
+  private _webSearchProvider: WebSearchProvider | null = null;
+  /** The head's web research provider — same key-less-by-default seam the
+   *  orchestrator's main loop uses (DuckDuckGo + Markdown-for-Agents; a stored
+   *  `tavily` credential upgrades search). Built per-facet so a head can gather
+   *  live information rather than reason from clipped inherited context. */
+  private getWebSearchProvider(): WebSearchProvider {
+    if (this._webSearchProvider) return this._webSearchProvider;
+    const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
+    const ai = (this.env as { AI?: { toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>> } }).AI;
+    this._webSearchProvider = createDefaultWebSearchProvider({
+      fetch: globalThis.fetch,
+      ...(getAuth ? { getAuth } : {}),
+      ...(ai?.toMarkdown
+        ? {
+            htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
+              const name = (opts?.url ?? 'page') + '.html';
+              const blob = new Blob([html], { type: 'text/html' });
+              const out = await ai.toMarkdown!([{ name, blob }]);
+              return out[0]?.data ?? '';
+            },
+          }
+        : {}),
+    });
+    return this._webSearchProvider;
   }
 
   async onStart() {
@@ -290,6 +319,9 @@ export class ExplorationAgent extends Agent<Env> {
       // sandbox_exec / read / write / list — shared core sandbox tools over this
       // Facet's own ephemeral SqliteFS + virtual shell.
       ...buildHeadSandboxTools(shell, vfs, capture),
+
+      // web_search / web_fetch — live research over the shared provider seam.
+      ...buildHeadWebTools(this.getWebSearchProvider(), capture),
 
       shared_write: tool({
         description:

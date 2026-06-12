@@ -274,7 +274,7 @@ export class LocalAgentSession implements BackendHost {
     initCurriculumTable(this.rt.storage.execRaw);
 
     initHeadsTables(this.rt.storage.execRaw);
-    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs });
+    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider() });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     // The EventsHub substrate (reactor source of truth). Local external
@@ -1285,7 +1285,7 @@ export class LocalAgentSession implements BackendHost {
   private rebuildModelBoundState(model: LanguageModel): void {
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
     // The agent's VFS backs the shared findings scratch sibling heads write to.
-    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs });
+    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider() });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     const rawTools = buildBuiltinTools({

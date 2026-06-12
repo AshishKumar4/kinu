@@ -18,6 +18,8 @@ import {
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
 import type { Shell } from '../types/primitives.js';
+import type { WebSearchProvider, WebSearchResponse } from '../web/index.js';
+import { WebFetchError } from '../web/index.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
 
@@ -171,8 +173,78 @@ export function buildHeadSandboxTools(shell: Shell, vfs: HeadSandboxVfs, capture
   };
 }
 
+/** web_search / web_fetch over the shared WebSearchProvider seam — the same
+ *  key-less-by-default discovery+retrieval surface the main loop gets, so a
+ *  research head can actually gather live information instead of reasoning from
+ *  clipped inherited context alone. Both backends thread their own provider
+ *  (cf: env.AI markdown + Tavily auth; cli: node fetch) through here. */
+export function buildHeadWebTools(provider: WebSearchProvider, capture: HeadCapture): ToolSet {
+  return {
+    web_search: tool({
+      description:
+        'Search the web for ranked results (title, url, snippet). Key-less by default; loop with web_fetch to read the promising URLs.',
+      inputSchema: jsonSchema<{ query: string; limit?: number }>({
+        type: 'object', required: ['query'],
+        properties: {
+          query: { type: 'string' },
+          limit: { type: 'number', description: 'Max results (default 5, max 20).' },
+        },
+      }),
+      execute: async ({ query, limit }) => {
+        try {
+          const res = await provider.search(query, limit !== undefined ? { limit } : undefined);
+          capture.recordToolCall('web_search', { query, limit }, `${res.results.length} results`);
+          return formatHeadSearchResults(res);
+        } catch (err) {
+          capture.recordToolCall('web_search', { query, limit }, 'error');
+          return headWebError(err);
+        }
+      },
+    }),
+    web_fetch: tool({
+      description: 'Fetch one absolute http(s) URL as clean markdown. Use after web_search to read a result.',
+      inputSchema: jsonSchema<{ url: string }>({
+        type: 'object', required: ['url'], properties: { url: { type: 'string' } },
+      }),
+      execute: async ({ url }) => {
+        try {
+          const res = await provider.fetch(url);
+          capture.recordToolCall('web_fetch', { url }, 'ok');
+          capture.recordArtifact({ kind: 'note', ref: res.url, description: res.title ?? res.url });
+          return `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n${res.markdown}`;
+        } catch (err) {
+          capture.recordToolCall('web_fetch', { url }, 'error');
+          return headWebError(err);
+        }
+      },
+    }),
+  };
+}
+
+/** Render search results model-ready — mirrors the main loop's web_search shape
+ *  (ranked title + url + snippet, synthesized answer first when present). */
+function formatHeadSearchResults(res: WebSearchResponse): string {
+  if (res.results.length === 0) return `No web results for "${res.query}".`;
+  const lines: string[] = [];
+  if (res.answer) lines.push(`Answer: ${res.answer}`, '');
+  for (const r of res.results) {
+    const date = r.date ? ` (${r.date})` : '';
+    lines.push(`${r.position}. ${r.title}${date}\n   ${r.url}\n   ${r.snippet}`);
+  }
+  lines.push('', `[${res.results.length} results via ${res.source}]`);
+  return lines.join('\n');
+}
+
+/** Honest, model-actionable web failure string (heads return plain strings). */
+function headWebError(err: unknown): string {
+  if (err instanceof WebFetchError) {
+    return err.retriable ? `web error (retriable): ${err.message}` : `web error: ${err.message}`;
+  }
+  return `web error: ${err instanceof Error ? err.message : String(err)}`;
+}
+
 /** The head's system prompt — task framing + the head conventions (record_*,
- *  private sandbox vs shared scratch, recursive split, isolation discipline). */
+ *  private sandbox vs shared scratch, web research, recursive split, isolation). */
 const HEAD_PROMPT_TOOL_NAMES = [
   'record_evidence',
   'record_decision',
@@ -180,6 +252,8 @@ const HEAD_PROMPT_TOOL_NAMES = [
   'sandbox_read',
   'sandbox_write',
   'sandbox_list',
+  'web_search',
+  'web_fetch',
   'shared_write',
   'shared_read',
   'shared_list',
@@ -201,6 +275,9 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   }
   if (hasHeadTool(tools, 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list')) {
     lines.push('- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can\'t see it).');
+  }
+  if (hasHeadTool(tools, 'web_search', 'web_fetch')) {
+    lines.push('- Loop web_search to gather, then web_fetch to read the promising results; record_evidence each finding worth surfacing.');
   }
   if (hasHeadTool(tools, 'shared_write', 'shared_read', 'shared_list')) {
     lines.push('- shared_write / shared_read / shared_list = the COMMON scratch (shared/findings/), visible to sibling heads and the main agent. Put results worth sharing here; your writes are head-namespaced so siblings can\'t clobber them.');

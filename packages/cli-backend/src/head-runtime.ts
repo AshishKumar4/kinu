@@ -14,9 +14,9 @@
 import { generateText, tool, jsonSchema, type LanguageModel, type ToolSet } from 'ai';
 import {
   type HeadRuntime, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
-  type MergeStrategy, type VFS,
+  type MergeStrategy, type VFS, type WebSearchProvider,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  HeadController, HeadJournal, initHeadsTables, budgetExhausted, extractJsonObject,
+  buildHeadWebTools, HeadController, HeadJournal, initHeadsTables, budgetExhausted, extractJsonObject,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { SqliteFS } from '@proteus/agent-utils/vfs';
@@ -29,6 +29,9 @@ export interface CLIHeadRuntimeDeps {
    *  All heads of a split share it (in-process), so siblings + the agent see
    *  each other's shared writes. Omit ⇒ shared_* tools are not offered. */
   sharedVfs?: VFS;
+  /** The shared web research provider — same seam the main loop uses. Omit ⇒
+   *  web_search / web_fetch are not offered to heads. */
+  webSearch?: WebSearchProvider;
 }
 
 /** Per-head abort flag — flipped by SpawnedHead.abort (wall-clock timeout). */
@@ -61,6 +64,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     const tools = filterByAllowed({
       ...buildHeadAccumulatorTools(capture),
       ...buildHeadSandboxTools(shell, sqliteFs, capture),
+      ...(deps.webSearch ? buildHeadWebTools(deps.webSearch, capture) : {}),
       ...(deps.sharedVfs ? buildSharedScratchTools(deps.sharedVfs, input.id, capture) : {}),
       ...buildSplitSubheadsTool(input, deps, capture),
     }, input.allowedTools);

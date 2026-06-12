@@ -41,6 +41,6 @@ export {
 export { extractHeadSteps, extractFinalText, synthesizeHeadSummary } from './head-summary.js';
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
+  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
   type HeadInferenceDeps, type HeadSandboxVfs,
 } from './head-inference.js';
