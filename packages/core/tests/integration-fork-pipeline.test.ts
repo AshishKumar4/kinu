@@ -15,7 +15,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { forkAgentStorage, initAllTables, readForkLineage } from '../src/index.js';
+import { forkAgentStorage, initAllTables, readForkLineage, readSoul, writeSoul } from '../src/index.js';
 import type { SqlExecutor } from '../src/types/primitives.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
@@ -30,7 +30,6 @@ interface ForkPayload {
     forkOriginCreatedAt: number;
     forkedAt: number;
   };
-  soul: { purpose: string; created_at: number };
   messages: Array<{ id: string; session_id: string; parent_id: string | null; role: string; content: string; created_at: number }>;
   conversationHistory: Array<{ session_id: string; role: string; message: string; created_at: number }>;
   vfsFiles: Array<{ path: string; chunk_index: number; parent_path: string; data: unknown; is_dir: number; size: number; mtime: number }>;
@@ -42,7 +41,6 @@ interface ForkPayload {
 /** Mirror of cf-backend/orchestrator.ts::buildForkPayload for tests. */
 function buildPayload(src: { sql: SqlExecutor }, untilMessageId: string, forkName: string): ForkPayload {
   const identity = src.sql<{ id: string; name: string }>`SELECT id, name FROM agent_identity LIMIT 1`;
-  const soul = src.sql<{ purpose: string; created_at: number }>`SELECT purpose, created_at FROM agent_soul LIMIT 1`;
   const hit = src.sql<{ created_at: number }>`
     SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
   `;
@@ -59,7 +57,7 @@ function buildPayload(src: { sql: SqlExecutor }, untilMessageId: string, forkNam
   `;
   const vfs = src.sql<ForkPayload["vfsFiles"][number]>`
     SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
-    FROM vfs_files WHERE path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
+    FROM vfs_files WHERE path = 'SOUL.md' OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
   `;
   let memChunks: ForkPayload["memoryChunks"] = [];
   try {
@@ -84,7 +82,6 @@ function buildPayload(src: { sql: SqlExecutor }, untilMessageId: string, forkNam
       forkOriginCreatedAt: forkPointMs,
       forkedAt: 88888,
     },
-    soul: soul[0] ?? { purpose: '', created_at: 0 },
     messages,
     conversationHistory: conv,
     vfsFiles: vfs,
@@ -105,7 +102,6 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
         const hit = payload.messages.find(m => m.id === wantedId);
         return hit ? [{ created_at: hit.created_at }] : [];
       }
-      if (query.startsWith('SELECT purpose, created_at FROM agent_soul')) return [payload.soul];
       if (query.startsWith('SELECT id, session_id, parent_id, role, content, created_at FROM messages')) {
         const cutoff = values[0] as number;
         return payload.messages.filter(m => m.created_at <= cutoff && m.session_id === 'default')
@@ -138,7 +134,7 @@ function fresh() {
 
 function seedSource(src: ReturnType<typeof fresh>) {
   src.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
-  src.sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${'help with testing'}, ${100})`;
+  writeSoul(src.sql, 'help with testing');
   src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m1'}, ${null}, ${'user'}, ${'hello'}, ${1000})`;
   src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m2'}, ${'m1'}, ${'assistant'}, ${'hi there'}, ${1100})`;
   src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m3'}, ${'m2'}, ${'user'}, ${'post-fork-point'}, ${1500})`;
@@ -152,20 +148,21 @@ function seedSource(src: ReturnType<typeof fresh>) {
 }
 
 describe('fork pipeline (end-to-end)', () => {
-  test('payload round-trips through JSON and replays into the fork DB', () => {
+  test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', () => {
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     // Simulate the fork DO's onStart bootstrap
     tgt.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'BOOT-ID'}, ${'fork-bootstrap'}, ${999})`;
-    tgt.sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${'default'}, ${999})`;
+    writeSoul(tgt.sql, 'default');
 
     seedSource(src);
 
     // Source side: build payload
     const rawPayload = buildPayload(src, 'm2', 'my-fork');
-    // Simulate the RPC boundary — JSON round-trip
-    const payload = JSON.parse(JSON.stringify(rawPayload));
+    // Simulate the RPC boundary — DO RPC uses structured clone, which
+    // preserves the canonical BLOB (Uint8Array/ArrayBuffer) vfs rows.
+    const payload = structuredClone(rawPayload);
 
     // Fork side: build ephemeral SqlExecutor + run forkAgentStorage
     const srcShim = buildSqlFromPayload(payload);
@@ -182,8 +179,7 @@ describe('fork pipeline (end-to-end)', () => {
     expect(ident[0]!.id).toBe('FORK-DO-ID');
     expect(ident[0]!.name).toBe('my-fork');
 
-    const soul = tgt.sql<{ purpose: string }>`SELECT purpose FROM agent_soul`;
-    expect(soul[0]!.purpose).toBe('help with testing');
+    expect(readSoul(tgt.sql)).toBe('help with testing');
 
     const msgs = tgt.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC`;
     expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 was after fork point
@@ -222,11 +218,11 @@ describe('fork pipeline (end-to-end)', () => {
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     src.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
-    src.sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${'p'}, ${100})`;
+    writeSoul(src.sql, 'p');
     src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
     const rawPayload = buildPayload(src, 'm1', 'empty-fork');
-    const payload = JSON.parse(JSON.stringify(rawPayload));
+    const payload = structuredClone(rawPayload);
     const srcShim = buildSqlFromPayload(payload);
 
     expect(() => forkAgentStorage(srcShim, tgt.sql, {
@@ -248,13 +244,13 @@ describe('fork pipeline (end-to-end)', () => {
     // Pretend a partial first run left the fork with bootstrap identity +
     // partial messages + a stale lineage row.
     tgt.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'STALE'}, ${'partial'}, ${50})`;
-    tgt.sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${'partial-soul'}, ${50})`;
+    writeSoul(tgt.sql, 'partial-soul');
     tgt.sql`INSERT INTO fork_lineage (id, source_agent_id, source_agent_name, source_message_id, source_message_created_at, forked_at)
             VALUES (${1}, ${'OLD'}, ${'old'}, ${'x'}, ${0}, ${0})`;
 
     seedSource(src);
     const rawPayload = buildPayload(src, 'm2', 'recovered-fork');
-    const payload = JSON.parse(JSON.stringify(rawPayload));
+    const payload = structuredClone(rawPayload);
     const srcShim = buildSqlFromPayload(payload);
 
     forkAgentStorage(srcShim, tgt.sql, {

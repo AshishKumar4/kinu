@@ -10,7 +10,11 @@
     "@opentui/react": "^0.1.99",
     "@proteus/cli-backend": "workspace:*",
     "@proteus/core": "workspace:*",
+    "agents": "^0.14.0",
     "react": "^19.2.5"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14"
   },
   "scripts": {
     "start": "bun run bin/cli.ts"

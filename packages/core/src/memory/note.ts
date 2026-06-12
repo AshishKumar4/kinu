@@ -2,9 +2,9 @@
  * appendMemoryNote — the single canonical "save a note to long-term memory"
  * primitive. Three callers converge here:
  *
- *   1. workspace.saveNote(content)       — codemode inline executor
- *   2. save_note(content) builtin tool   — Vercel AI SDK ToolSet
- *   3. saveNoteFromMcp(content) RPC      — MCP server bridge
+ *   1. workspace.saveNote(content)        — codemode inline executor
+ *   2. memory({action:'save'}) builtin    — Vercel AI SDK ToolSet
+ *   3. saveNoteFromMcp(content) RPC       — MCP server bridge
  *
  * All three previously inlined the same three lines:
  *   memory.append('memory/MEMORY.md', `\n### Note (${date})\n${content}\n`)

@@ -9,6 +9,10 @@
 
 import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import { resolveMaxSteps } from './config.js';
+import {
+  assertToolsSupportedByModel,
+  type PromptModelContext,
+} from './prompting/model-profile.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -22,8 +26,14 @@ export interface ChatOptions {
   system: string;
   history: ModelMessage[];
   tools: ToolSet;
+  modelContext?: PromptModelContext;
   maxSteps?: number;
   signal?: AbortSignal;
+  /** Step-boundary seam: called before each model step with the messages the
+   *  SDK is about to send; returning an array replaces them for that step.
+   *  Backends use it to drain mid-turn steering input into the running turn
+   *  at a role-alternation-safe point. */
+  prepareStepMessages?: (args: { stepNumber: number; messages: ModelMessage[] }) => ModelMessage[] | undefined;
 }
 
 /**
@@ -36,20 +46,27 @@ export interface ChatOptions {
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const maxSteps = opts.maxSteps ?? resolveMaxSteps();
+  assertToolsSupportedByModel(opts.modelContext, Object.keys(opts.tools));
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
   const pendingStepEvents: Array<{ stepIndex: number }> = [];
   let stepCount = 0;
 
+  const prepareStepMessages = opts.prepareStepMessages;
   const result = streamText({
     model: opts.model,
-    system: opts.system +
-      '\n\nAfter using any tools, always provide a brief text summary of what you did and the results.',
+    system: opts.system,
     messages: opts.history,
     tools: opts.tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
+    ...(prepareStepMessages ? {
+      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) => {
+        const next = prepareStepMessages({ stepNumber, messages });
+        return next ? { messages: next } : undefined;
+      },
+    } : {}),
     onStepFinish: () => {
       stepCount++;
       pendingStepEvents.push({ stepIndex: stepCount });

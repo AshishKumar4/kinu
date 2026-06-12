@@ -13,42 +13,63 @@ import type { OrchestratorAgent } from "./src/orchestrator.js";
 import type { ExplorationAgent } from "./src/exploration.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
+import type { NimbusSession } from "@nimbus-sh/sdk/worker";
 
-interface Env {
-  /** Workers AI direct binding. OPTIONAL — fallback is the AI Gateway. */
-  AI?: Ai;
-  LOADER: WorkerLoader;
-  OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
-  ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
-  /** Per-user DO: profile + agent registry + credentials + defaults. */
-  UserDO: DurableObjectNamespace<UserDO>;
-  /** Sandbox container DO — @cloudflare/sandbox. One per agent.
-   *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
-   *  looks up `env.Sandbox` directly. */
-  Sandbox: DurableObjectNamespace<ProteusSandbox>;
-  AI_GATEWAY_URL: string;
-  AI_GATEWAY_AUTH: string;
-  /** Hostname used by @cloudflare/sandbox to build preview URLs.
-   *  Must match a host for which Cloudflare wildcard DNS resolves.
-   *  The account's workers.dev subdomain is the simplest choice because
-   *  *.<worker>.<sub>.workers.dev resolves automatically. */
-  PREVIEW_HOSTNAME: string;
-  /** Static asset binding — required for SPA fallback when the Worker
-   *  runs first on every route (see `run_worker_first` in wrangler). */
-  ASSETS: Fetcher;
-  /** Optional shared-secret for the MCP server endpoint. When set,
-   *  `/mcp/v1/*` requests must include `Authorization: Bearer <token>`.
-   *  When unset, the MCP endpoint is open (dev / personal-account mode).
-   *  Set in prod: `echo "<long-random>" | npx wrangler secret put MCP_AUTH_TOKEN` */
-  MCP_AUTH_TOKEN?: string;
-  /** Cloudflare Access — team domain, e.g. `myteam.cloudflareaccess.com`.
-   *  Required in production; without it, all auth-protected routes 500. */
-  CF_ACCESS_TEAM_DOMAIN?: string;
-  /** CF Access application AUD claim (set in Zero Trust dashboard when you
-   *  create the Access application). The Worker verifies the JWT's `aud`
-   *  against this exact value. */
-  CF_ACCESS_AUD?: string;
-  /** Local dev backdoor — synthesize an authenticated identity for this
-   *  email without verifying CF Access. Production must leave this unset. */
-  DEV_USER_EMAIL?: string;
+// This file has top-level imports (for the DO class generics below), which
+// makes it a module — so `interface Env` here would be module-scoped, not
+// global. The Workers runtime + every DO/Worker references `Env` as a GLOBAL
+// type, so we declare it in the global scope explicitly.
+declare global {
+  interface Env {
+    /** Workers AI direct binding. OPTIONAL — fallback is the AI Gateway. */
+    AI?: Ai;
+    LOADER: WorkerLoader;
+    OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
+    ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
+    /** Per-user DO: profile + agent registry + credentials + defaults. */
+    UserDO: DurableObjectNamespace<UserDO>;
+    /** Nimbus SDK session DO — built-in lightweight dev environment. */
+    NIMBUS_SESSION: DurableObjectNamespace<NimbusSession>;
+    /** Sandbox container DO — @cloudflare/sandbox. One per agent.
+     *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
+     *  looks up `env.Sandbox` directly. */
+    Sandbox: DurableObjectNamespace<ProteusSandbox>;
+    /** D1 browser OAuth/session store. Reads use D1 Sessions for replicas. */
+    AUTH_DB: D1Database;
+    /** R2 bucket for sandbox /workspace backups (SDK localBucket mode). */
+    BACKUP_BUCKET?: R2Bucket;
+    AI_GATEWAY_URL: string;
+    AI_GATEWAY_AUTH: string;
+    /** Hostname used by Proteus to build authenticated path-style preview URLs.
+     *  No per-agent subdomain or wildcard TLS/DNS is required. */
+    PREVIEW_HOSTNAME: string;
+    /** Static asset binding — required for SPA fallback when the Worker
+     *  runs first on every route (see `run_worker_first` in wrangler). */
+    ASSETS: Fetcher;
+    /** Google OAuth client settings. Client secret must be a Wrangler secret. */
+    GOOGLE_OAUTH_CLIENT_ID?: string;
+    GOOGLE_OAUTH_CLIENT_SECRET?: string;
+    GOOGLE_OAUTH_SCOPES?: string;
+    /** GitHub OAuth client settings. Client secret must be a Wrangler secret. */
+    GITHUB_OAUTH_CLIENT_ID?: string;
+    GITHUB_OAUTH_CLIENT_SECRET?: string;
+    GITHUB_OAUTH_SCOPES?: string;
+    /** Cloudflare account OAuth client settings. Client secret must be a Wrangler secret. */
+    CLOUDFLARE_OAUTH_CLIENT_ID?: string;
+    CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
+    CLOUDFLARE_OAUTH_SCOPES?: string;
+    CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
+    /** AI Gateway id used with the user's Cloudflare OAuth token for Workers AI. */
+    CLOUDFLARE_AI_GATEWAY_ID?: string;
+    /** Local dev backdoor — synthesize an authenticated identity for this
+     *  email without an OAuth browser session. Production must leave this unset. */
+    DEV_USER_EMAIL?: string;
+    /** Public origin for unauthenticated CLI install/auth endpoints. */
+    CLI_PUBLIC_ORIGIN?: string;
+    /** Browser approval origin for CLI auth. In production this should be the
+     *  public app origin so approval uses the user's browser session. */
+    CLI_APPROVAL_ORIGIN?: string;
+  }
 }
+
+export {};

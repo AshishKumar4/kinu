@@ -17,9 +17,10 @@ import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
+import { readExecSignal } from './signal.js';
 
 interface ShellExec {
-  exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 export interface InlineExecutorDeps {
@@ -31,11 +32,9 @@ export interface InlineExecutorDeps {
   sql?: SqlExecutor;
   /**
    * Optional mid-turn notification — fires synchronously from workspace.createTool
-   * after a successful create/update. Legacy hook retained for forward
-   * compatibility; the PreambleCraftedExecutor does not need it because it
-   * reads craftStore.list() fresh on every execute. Kept in the interface
-   * so future adapters that want eager notification don't have to reshape
-   * InlineExecutorDeps.
+   * after a successful create/update. The PreambleCraftedExecutor does not need
+   * it because it reads craftStore.list() fresh on every execute; other adapters
+   * can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
 }
@@ -80,8 +79,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
     exec: {
       description: 'Execute a POSIX shell command. Supports cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq, xargs. Pipes (|) and redirects (>, >>) work.',
-      execute: async (command: unknown) => {
-        const result = await shell.exec(String(command));
+      execute: async (command: unknown, context?: unknown) => {
+        const signal = readExecSignal(context);
+        const result = await shell.exec(String(command), signal ? { signal } : undefined);
         if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
         return result.stdout || '(no output)';
       },
@@ -172,9 +172,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             scope: 'local',
             params: null,
           });
-          // Legacy hook; PreambleCraftedExecutor no longer needs it (reads
-          // craftStore.list() live). Kept as a no-op in CF; other adapters
-          // may still opt in.
+          // Optional eager notification; PreambleCraftedExecutor reads
+          // craftStore.list() live, so CF leaves this as a no-op.
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
@@ -214,5 +213,18 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     tools,
     types,
     positionalArgs: true,
+    // workspace executor runs INSIDE the Worker — no inbound TCP port
+    // surface available. The agent should use `sandbox` for anything
+    // that needs to expose an HTTP server.
+    async exposePort(port) {
+      return {
+        supported: false,
+        reason:
+          `workspace executor runs in the Worker and cannot expose inbound ports. ` +
+          `Use the 'sandbox' executor for any server you want to preview (port ${port}).`,
+      };
+    },
+    async unexposePort() { /* nothing to do */ },
+    async listExposedPorts() { return []; },
   };
 }

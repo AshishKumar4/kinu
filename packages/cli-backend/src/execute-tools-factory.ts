@@ -16,17 +16,24 @@
 
 import { tool, jsonSchema } from 'ai';
 import type { VFS, Memory } from '@proteus/core';
-import type { ExecutorProvider } from '@proteus/core';
 import { appendMemoryNote } from '@proteus/core';
 
 interface ShellLike {
-  exec(command: string, stdin?: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 export interface NodeExecuteToolFactoryDeps {
   vfs: VFS;
   memory: Memory;
   shell?: ShellLike;
+  extraProviders?: NodeCodemodeProvider[];
+}
+
+export interface NodeCodemodeProvider {
+  name: string;
+  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  types?: string;
+  positionalArgs?: boolean;
 }
 
 /**
@@ -46,18 +53,10 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
       craftedBindings[name] = entry.execute as (arg: unknown) => Promise<unknown>;
     }
 
-    // Merge registered provider tools under their namespaces too. The real
-    // codemode sandbox exposes each provider as a Proxy global; we eagerly
-    // bind because Node has no RPC layer between sandbox and host.
-    const providerBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
-    for (const p of opts.providers as Array<ExecutorProvider>) {
-      if (!p || typeof p !== 'object' || !('name' in p) || !('tools' in p)) continue;
-      const nsp: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
-      for (const [toolName, t] of Object.entries(p.tools)) {
-        nsp[toolName] = t.execute as (...a: unknown[]) => Promise<unknown>;
-      }
-      providerBindings[p.name] = nsp;
-    }
+    const providers = [
+      ...(opts.providers as NodeCodemodeProvider[]),
+      ...(deps.extraProviders ?? []),
+    ];
 
     return tool({
       description:
@@ -67,8 +66,19 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
         properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
         required: ['code'],
       }),
-      execute: async (args: { code: string }) => {
+      execute: async (args: { code: string }, options?: unknown) => {
         try {
+          const signal = readAbortSignal(options);
+          const context = signal ? { signal } : undefined;
+          const providerBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
+          for (const p of providers) {
+            if (!p || typeof p !== 'object' || !('name' in p) || !('tools' in p)) continue;
+            const nsp: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
+            for (const [toolName, t] of Object.entries(p.tools)) {
+              nsp[toolName] = (...a: unknown[]) => t.execute(...a, context);
+            }
+            providerBindings[p.name] = nsp;
+          }
           const workspaceApi = {
             readFile: async (path: string) => {
               const content = await vfs.readFile(path, { encoding: 'utf8' });
@@ -80,7 +90,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
             },
             exec: async (command: string) => {
               if (!shell) return 'Error: no shell available in this runtime.';
-              const result = await shell.exec(command);
+              const result = await shell.exec(command, signal ? { signal } : undefined);
               if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
               return result.stdout || '(no output)';
             },
@@ -95,6 +105,9 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
           // Merge workspace provider bindings over the inline workspaceApi
           // so `workspace.createTool` etc from the execution router also work.
           const workspace = { ...workspaceApi, ...(providerBindings['workspace'] ?? {}) };
+          if (providerBindings['workspace']?.exec) {
+            workspace.exec = providerBindings['workspace'].exec as typeof workspace.exec;
+          }
 
           // Build the arg names / values for the sandboxed function so every
           // registered provider namespace is accessible by name.
@@ -114,4 +127,12 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps) {
       },
     });
   };
+}
+
+function readAbortSignal(options: unknown): AbortSignal | undefined {
+  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
+  const signal = (options as { abortSignal?: unknown }).abortSignal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

@@ -19,10 +19,10 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn,
-  DEFAULT_SHADOW_CONFIG, getPendingScaffold, recordShadowEvaluation,
-  decidePromotion, applyPromotionDecision, readScaffoldVersion,
+  DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
+  recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow.js';
-import { runScaffold, type ScaffoldRunResult } from './executor.js';
+import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor.js';
 
 /** Structured judge output — compares current vs pending scaffold on the
  *  same task. Valibot schema; AI SDK's generateObject accepts it via the
@@ -45,7 +45,10 @@ export type StructuredJudgeFn = (prompt: string, schema: typeof JudgeOutputSchem
 export interface AutoJudgeConfig {
   /** Fraction of turns to evaluate (0..1). Default 0.25. */
   sampleRate: number;
-  /** Auto-apply promotion/rollback when decision is conclusive. Default false. */
+  /** Auto-apply promotion/rollback when decision is conclusive. The engine
+   *  default is false (a bare runAutoShadowEval never mutates state); both
+   *  backends pass the agent-level switch, which defaults ON
+   *  (agent_config auto_promote_scaffold, config/store.ts). */
   autoApply: boolean;
   /** Forwarded to decidePromotion. Default DEFAULT_SHADOW_CONFIG. */
   shadowConfig: ShadowConfig;
@@ -70,6 +73,24 @@ export interface RunAutoShadowEvalOpts {
   judge: StructuredJudgeFn;
   /** Optional: an llmStream for the pending scaffold's host.llmStream bridge. */
   llmStream: Parameters<typeof runScaffold>[0]['llmStream'];
+  /**
+   * Tool-call dispatcher for the pending scaffold. When provided, the
+   * pending runs with the same tool surface the live scaffold would —
+   * which is the fair comparison the judge needs. When omitted, the
+   * pending's tool calls return the "disabled" error, which
+   * unfairly penalises tool-using scaffolds.
+   *
+   * Side-effect note: enabling this lets the pending mutate VFS / SQL
+   * the same way the live did this turn (e.g., both append to memory).
+   * The pending's writes will appear in the agent's state. This is the
+   * accepted cost of accurate evaluation; every applied decision is
+   * visible and revertable in the Evolution Changelog.
+   */
+  callTool?: Parameters<typeof runScaffold>[0]['callTool'];
+  /** Default-inference bridge for the pending scaffold (host.defaultInference).
+   *  When the pending delegates to the default loop, this runs it for the
+   *  shadow task. Omitted → host.defaultInference returns an error. */
+  defaultInference?: Parameters<typeof runScaffold>[0]['defaultInference'];
   config?: Partial<AutoJudgeConfig>;
   /** Deterministic sampling override (used by tests). Default Math.random. */
   random?: () => number;
@@ -118,8 +139,10 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const pendingCode = await readScaffoldVersion(opts.rt, pending.version);
   if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };
 
-  // Run the pending scaffold against the same task. Capture all events;
-  // the FINAL text we'll compare is the concatenation of text_delta payloads.
+  // Run the pending scaffold against the same task. Capture all events; the
+  // FINAL text we'll compare concatenates text_delta payloads AND the
+  // text-deltas inside ui_chunks, so a pending that delegates to
+  // host.defaultInference is judged on its real output, not an empty string.
   const pendingEvents: string[] = [];
   let pendingResult: ScaffoldRunResult;
   try {
@@ -127,12 +150,18 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       rt: opts.rt,
       task: opts.task,
       emit: (event) => {
-        if (event.type === 'text_delta') pendingEvents.push(event.text);
+        const text = scaffoldEventText(event);
+        if (text !== null) pendingEvents.push(text);
       },
       llmStream: opts.llmStream,
-      // No callTool — shadow eval is observation-only; running the pending
-      // scaffold's tool dispatch in the live env would cause side-effects.
-      callTool: async () => ({ error: 'tool calls disabled during shadow eval' }),
+      // Pass the caller's dispatcher straight through so the pending scaffold
+      // runs against the same tool surface the live turn did. When omitted,
+      // runScaffold's own capability guard returns an unavailable-runtime
+      // error; no second stub is needed here. Side-effect note: the pending's
+      // tool calls hit the live env; promotion stays gated by decidePromotion
+      // and every applied decision is revertable from the changelog.
+      callTool: opts.callTool,
+      defaultInference: opts.defaultInference,
       scaffoldCodeOverride: pendingCode,
       timeoutMs: config.scaffoldTimeoutMs,
     });
@@ -159,7 +188,9 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   }
 
   recordShadowEvaluation(opts.rt.storage.sql, {
-    currentVersion: pending.version - 1,
+    // Derived from status — after rollback cycles the live version is NOT
+    // pending - 1 (the numbering is non-contiguous).
+    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql) ?? pending.version - 1,
     pendingVersion: pending.version,
     task: opts.task.slice(0, 1000),
     currentOutput: opts.currentOutput.slice(0, 4000),
@@ -176,8 +207,13 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   let applied: 'promote' | 'rollback' | null = null;
   if (config.autoApply && decision !== 'continue' && fresh) {
     try {
-      await applyPromotionDecision(opts.rt, fresh, decision);
-      applied = decision;
+      // Report the action ACTUALLY applied — the promotion-time misevolution
+      // recheck can convert a 'promote' into a 'rollback'.
+      const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
+      applied = outcome.action;
+      if (outcome.vetoReason) {
+        console.warn('[auto-judge] promotion vetoed:', outcome.vetoReason);
+      }
     } catch (err) {
       console.warn('[auto-judge] applyPromotionDecision failed:', err instanceof Error ? err.message : err);
     }

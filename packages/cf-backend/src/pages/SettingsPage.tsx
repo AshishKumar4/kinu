@@ -1,17 +1,19 @@
 /**
  * Per-agent settings page. Credentials + defaults live in /user/settings;
  * this page covers concerns scoped to ONE agent: identity, model choice,
- * MCTS knobs, scaffold/shadow status, shell-approval mode.
+ * MCTS knobs, shell-approval mode, GEPA optimisation, pinned skills.
+ * (Scaffold promote/rollback + the per-trial verdict live on the Brain surface.)
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, TreeStructureIcon, GitBranchIcon, KeyIcon,
+  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import { useProteus } from "@/hooks/use-proteus";
 import { listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
+import { ModelPicker } from "@/components/ModelPicker";
 
 const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
   + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
@@ -35,22 +37,18 @@ function Card({ title, icon: Icon, children }: {
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
-interface ShadowStatus {
-  hasPending: boolean;
-  pending?: {
-    version: number; writtenAt: number; rationale: string;
-    trialsSoFar: number; pendingWins: number; currentWins: number; ties: number;
-  };
-  decision?: { decision: "promote" | "rollback" | "continue"; winRate: number };
-  versions?: Array<{ version: number; status: string; rationale: string; written_at: number }>;
-}
+const DEFAULT_MCTS = { explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 };
 
 export default function SettingsPage() {
   const { agentId } = useParams();
   const state = useProteus(agentId);
+  // Stable pieces only — `state` itself is a fresh object every render, so
+  // depending on it from load/save creates a self-sustaining refetch loop
+  // that clobbers in-progress edits.
+  const { rpc, connectionStatus, agentStatus, setModel } = state;
 
   const [displayName, setDisplayName] = useState("");
-  const [purpose, setPurpose] = useState("");
+  const [soul, setSoul] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -58,49 +56,54 @@ export default function SettingsPage() {
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
   const [currentSpec, setCurrentSpec] = useState<string>("");
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("strict");
-  const [shadow, setShadow] = useState<ShadowStatus | null>(null);
-  const [mcts, setMcts] = useState({ explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 });
+  const [mcts, setMcts] = useState(DEFAULT_MCTS);
 
+  // Hydrate identity fields once — never re-set form state from the server
+  // afterwards (later snapshot refreshes would overwrite what the user types).
+  const identityHydrated = useRef(false);
   useEffect(() => {
-    if (state.agentStatus) {
-      setDisplayName(state.agentStatus.displayName || state.agentStatus.name || "");
-      setPurpose(state.agentStatus.purpose || "");
-    }
-  }, [state.agentStatus]);
+    if (!agentStatus || identityHydrated.current) return;
+    identityHydrated.current = true;
+    setDisplayName(agentStatus.displayName || agentStatus.name || "");
+    setSoul(agentStatus.soul || "");
+  }, [agentStatus]);
 
   const load = useCallback(async () => {
-    if (state.connectionStatus !== "connected") return;
     setErr(null);
     try {
-      const [m, current, mode, sh, mc] = await Promise.all([
-        listAvailableModels(),
-        state.rpc("getStoredModelSpec", []) as Promise<{ spec: string | null }>,
-        state.rpc("getShellApprovalMode", []) as Promise<{ mode: ApprovalMode }>,
-        state.rpc("getShadowStatus", []) as Promise<ShadowStatus>,
-        state.rpc("getMctsConfig", []) as Promise<typeof mcts>,
+      const [m, current, mode, mc] = await Promise.all([
+        listAvailableModels().catch(() => []),
+        rpc<{ spec: string | null }>("getStoredModelSpec", []).catch(() => ({ spec: null })),
+        rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []).catch(() => ({ mode: 'strict' as ApprovalMode })),
+        rpc<typeof DEFAULT_MCTS>("getMctsConfig", []).catch(() => DEFAULT_MCTS),
       ]);
-      setModels(m);
-      setCurrentSpec(current.spec ?? "");
-      setApprovalMode(mode.mode);
-      setShadow(sh);
-      setMcts(mc);
+      setModels(m ?? []);
+      setCurrentSpec(current?.spec ?? "");
+      setApprovalMode(mode?.mode ?? "strict");
+      if (mc) setMcts(mc);
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, [state]);
+  }, [rpc]);
 
-  useEffect(() => { void load(); }, [load]);
+  // Fetch once per agent connection — not on every render.
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (connectionStatus !== "connected" || loaded.current) return;
+    loaded.current = true;
+    void load();
+  }, [connectionStatus, load]);
 
   const save = useCallback(async () => {
     setSaving(true);
     setErr(null);
     try {
       await Promise.all([
-        state.rpc("setDisplayName", [displayName]),
-        state.rpc("setSoul", [purpose]),
-        currentSpec ? state.setModel(currentSpec) : Promise.resolve(),
-        state.rpc("setShellApprovalMode", [approvalMode]),
-        state.rpc("setMctsConfig", [mcts]),
+        rpc("setDisplayName", [displayName]),
+        rpc("setSoul", [soul]),
+        currentSpec ? setModel(currentSpec) : Promise.resolve(),
+        rpc("setShellApprovalMode", [approvalMode]),
+        rpc("setMctsConfig", [mcts]),
       ]);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -109,10 +112,10 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [state, displayName, purpose, currentSpec, approvalMode, mcts]);
+  }, [rpc, setModel, displayName, soul, currentSpec, approvalMode, mcts]);
 
-  if (state.connectionStatus !== "connected") {
-    return <div className="h-full flex items-center justify-center"><Loader size="md" /></div>;
+  if (connectionStatus !== "connected") {
+    return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
   }
 
   return (
@@ -129,6 +132,10 @@ export default function SettingsPage() {
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
                 <KeyIcon size={11} /> User settings & credentials
+              </Link>
+              <span>·</span>
+              <Link to={`/triggers/${agentId}`} className="hover:p-text inline-flex items-center gap-1">
+                <PlugIcon size={11} /> Triggers (webhooks, timers)
               </Link>
             </p>
           </div>
@@ -151,9 +158,9 @@ export default function SettingsPage() {
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs p-text-2 font-medium">Mission / purpose</label>
-            <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} rows={3}
-              className={`${inputCls} font-mono`} placeholder="What is this agent for?" />
+            <label className="text-xs p-text-2 font-medium">SOUL.md</label>
+            <textarea value={soul} onChange={(e) => setSoul(e.target.value)} rows={8}
+              className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
           </div>
         </Card>
 
@@ -164,12 +171,13 @@ export default function SettingsPage() {
               No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in user settings.
             </p>
           ) : (
-            <select value={currentSpec} onChange={(e) => setCurrentSpec(e.target.value)} className={inputCls}>
-              <option value="">(default)</option>
-              {models.map((m) => (
-                <option key={m.spec} value={m.spec}>{m.label}</option>
-              ))}
-            </select>
+            <ModelPicker
+              models={models}
+              value={currentSpec}
+              onChange={setCurrentSpec}
+              clearable
+              placeholder="(default)"
+            />
           )}
           <p className="text-[11px] p-text-3">
             Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.
@@ -199,21 +207,179 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        {/* Shadow */}
-        {shadow && (
-          <Card title="Scaffold shadow rollout" icon={GitBranchIcon}>
-            {shadow.hasPending ? (
-              <div className="text-xs space-y-2">
-                <div>Pending v{shadow.pending?.version} — {shadow.pending?.trialsSoFar} trials so far</div>
-                <div className="text-[11px] p-text-3">{shadow.pending?.rationale}</div>
-              </div>
-            ) : (
-              <p className="text-xs p-text-3">No pending scaffold.</p>
-            )}
-          </Card>
-        )}
+        {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
+            live on the agent's Brain surface (single source of truth). */}
+
+        {/* Always-active skills */}
+        <AlwaysActiveSkillsCard rpc={rpc} />
+
+        {/* GEPA offline scaffold optimisation */}
+        <GepaOptimizationCard rpc={rpc} />
       </div>
     </div>
+  );
+}
+
+// ── GEPA offline optimisation ────────────────────────────────────
+
+interface GepaRunRow {
+  runId: string;
+  status: 'running' | 'completed' | 'aborted';
+  stopReason: string | null;
+  iterations: number;
+  metricCalls: number;
+  startedAt: number;
+}
+
+function GepaOptimizationCard({
+  rpc,
+}: {
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+}) {
+  const [runs, setRuns] = useState<GepaRunRow[]>([]);
+  const [running, setRunning] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await rpc('getGepaRuns', [10]) as GepaRunRow[];
+      setRuns(Array.isArray(r) ? r : []);
+    } catch { /* table may be empty */ }
+  }, [rpc]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    setMsg('Optimising — running candidate scaffolds against recent tasks (this can take a few minutes)…');
+    try {
+      const r = await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4, evalSize: 5 }]) as {
+        ok: boolean; error?: string; proposed?: boolean; pendingVersion?: number | null;
+        skipReason?: string; bestScore?: number; seedScore?: number;
+      };
+      if (!r.ok) setMsg(`No run: ${r.error}`);
+      else if (r.proposed) {
+        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}) — it will shadow-eval, then you can promote it from the agent's Brain surface.`);
+      } else {
+        setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}).`);
+      }
+      await refresh();
+    } catch (e) {
+      setMsg(`Error: ${(e as Error).message}`);
+    } finally {
+      setRunning(false);
+    }
+  }, [rpc, refresh]);
+
+  return (
+    <Card title="Scaffold optimisation (GEPA)" icon={SparkleIcon}>
+      <p className="text-[11px] p-text-3">
+        Offline genetic-Pareto optimisation: runs candidate inference loops against your
+        agent's recent tasks, judges each, and proposes an improved scaffold for shadow eval.
+        Costs several LLM calls per run.
+      </p>
+      <button
+        type="button"
+        onClick={run}
+        disabled={running}
+        className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
+      >{running ? 'Optimising…' : 'Run optimisation'}</button>
+      {msg && <div className="text-[11px] p-text-2 mt-1">{msg}</div>}
+      {runs.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {runs.slice(0, 5).map(r => (
+            <div key={r.runId} className="text-[11px] p-text-3 flex items-center gap-2">
+              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'bg-green-500' : r.status === 'running' ? 'bg-amber-500' : 'bg-stone-500'}`} />
+              <span className="font-mono">{r.iterations} iters</span>
+              <span>· {r.metricCalls} evals</span>
+              <span className="ml-auto">{r.stopReason ?? r.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── Scaffold pending detail + promote/rollback controls ──────────
+
+// ── Always-active skills pinning ─────────────────────────────────
+
+function AlwaysActiveSkillsCard({
+  rpc,
+}: {
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+}) {
+  const [names, setNames] = useState<string[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await rpc('getAlwaysActiveSkills', []) as { names: string[] };
+      setNames(r?.names ?? []);
+    } catch (e) { setErr((e as Error).message); }
+  }, [rpc]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const save = useCallback(async (next: string[]) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await rpc('setAlwaysActiveSkills', [next]) as { names: string[] };
+      setNames(r?.names ?? []);
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  }, [rpc]);
+
+  const add = useCallback(() => {
+    const n = input.trim();
+    if (!n) return;
+    if (names.includes(n)) { setInput(''); return; }
+    setInput('');
+    void save([...names, n]);
+  }, [input, names, save]);
+
+  const remove = useCallback((n: string) => {
+    void save(names.filter(x => x !== n));
+  }, [names, save]);
+
+  return (
+    <Card title="Always-active skills" icon={KeyIcon}>
+      <p className="text-[11px] p-text-3">
+        Skills pinned here are activated every turn for this agent. Use to lock-in
+        workflow conventions (e.g., <code className="font-mono">audit-implementation</code>) without typing /name.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {names.length === 0
+          ? <span className="text-[11px] p-text-3 italic">(none pinned)</span>
+          : names.map(n => (
+            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded p-card text-[11px] font-mono">
+              {n}
+              <button type="button" onClick={() => remove(n)} className="p-text-3 hover:p-text">×</button>
+            </span>
+          ))}
+      </div>
+      <div className="flex gap-2 mt-2">
+        <input
+          type="text"
+          value={input}
+          placeholder="skill-name"
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') add(); }}
+          className={inputCls + " text-xs"}
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={busy || !input.trim()}
+          className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
+        >Pin</button>
+      </div>
+      {err && <div className="text-[11px] text-red-400 mt-1">{err}</div>}
+    </Card>
   );
 }
 

@@ -3,7 +3,7 @@
  *
  * Architecture reference: final-architecture.md §5.7
  * Paper: LATS arXiv:2310.04406 §4.2 Backpropagation
- * Formal spec: Backpropagation.lean — backprop_preserves_ids, step_preserves_valid
+ * Formal spec: MCTS/Backpropagation.lean — backprop_preserves_ids
  *
  * The running mean formula: V(sᵢ) = (V_old(sᵢ) · (N(sᵢ) - 1) + r) / N(sᵢ)
  * Implemented as: value = (value * visits + reward) / (visits + 1)
@@ -26,7 +26,7 @@ import type { SqlExecutor } from '../types/primitives.js';
  *   Step: s.id='root', s.parent_id=NULL → WHERE stops recursion
  *   ancestors = {leaf, child, root} — all correct node IDs
  *
- * Formal spec: Backpropagation.lean:backprop_preserves_ids proves IDs unchanged.
+ * Formal spec: MCTS/Backpropagation.lean:backprop_preserves_ids proves IDs unchanged.
  */
 export function backpropagate(
   sql: SqlExecutor,

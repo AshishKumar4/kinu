@@ -2,7 +2,8 @@
  * MCTS pruning — remove low-scoring branches, extract reflections first.
  *
  * Architecture reference: final-architecture.md §5.10
- * Formal spec: Convergence.lean — pruning_safety, prune_preserves_isolation
+ * Formal spec: MCTS/StorageIsolation.lean — transition_preserves_isolation
+ * (the Prune action preserves the storage-isolation invariant).
  *
  * Pruning criteria:
  * - Score below PRUNE_THRESHOLD (0.25) AND at least 2 visits

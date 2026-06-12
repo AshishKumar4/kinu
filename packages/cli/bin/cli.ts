@@ -3,13 +3,37 @@
  * proteus CLI — create, chat with, and evolve persistent AI agents.
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { createCommand } from '../src/commands/create.js';
 import { chatCommand } from '../src/commands/chat.js';
+import { execCommand, runCommand } from '../src/commands/run.js';
+import { authCommand, logoutCommand, whoamiCommand } from '../src/commands/auth.js';
+import { aliasCommand, aliasesCommand, unaliasCommand } from '../src/commands/alias.js';
+import { desktopCommand } from '../src/commands/desktop.js';
+import { daemonCommand } from '../src/commands/daemon.js';
+import { setupCommand } from '../src/commands/setup.js';
+import { providersCommand } from '../src/commands/providers.js';
+import { sessionsCommand } from '../src/commands/sessions.js';
+import { doctorCommand, uninstallCommand, updateCommand } from '../src/commands/self.js';
 import { evolveCommand } from '../src/commands/evolve.js';
 import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
+import { jobsCommand, modelCommand, toolsCommand, triggersCommand } from '../src/commands/control.js';
+import {
+  eventsCommand,
+  executorsCommand,
+  gepaCommand,
+  headsCommand,
+  mctsCommand,
+  memoryCommand,
+  productCommand,
+  stateCommand,
+  stopCommand,
+  timelineCommand,
+  webhookCommand,
+} from '../src/commands/inspect.js';
 import { exportCommand, importCommand } from '../src/commands/export-import.js';
+import { tokensCommand } from '../src/commands/tokens.js';
 import { printHelp, printError } from '../src/display.js';
 
 const program = new Command();
@@ -18,7 +42,6 @@ program
   .name('proteus')
   .description('Create, chat with, and evolve persistent AI agents')
   .version('0.1.0', '-v, --version')
-  .helpOption(false)
   .addHelpCommand(false);
 
 // Shared LLM options
@@ -29,16 +52,86 @@ const llmOpts = (cmd: Command) => cmd
 
 llmOpts(
   program
-    .command('create <name>')
+    .command('create [name]')
     .description('Create a new agent identity')
-    .option('--purpose <text>', 'Agent purpose'),
+    .option('--purpose <text>', 'Agent purpose')
+    .option('--mode <mode>', 'Agent mode: cloud or local')
+    .option('--alias <name>', 'Create an executable alias command')
+    .option('--origin <url>', 'Proteus app origin for first-use sign-in')
+    .option('--no-alias-agent', 'Do not create an alias shim'),
 ).action(wrapAction(createCommand));
+
+program
+  .command('auth')
+  .description('Sign the CLI into your Proteus account')
+  .option('--origin <url>', 'Proteus app origin')
+  .action(wrapAction(authCommand));
+
+program
+  .command('whoami')
+  .description('Show the signed-in Proteus account')
+  .option('--origin <url>', 'Proteus app origin')
+  .action(wrapAction(whoamiCommand));
+
+program
+  .command('logout')
+  .description('Sign out of the Proteus CLI')
+  .option('--origin <url>', 'Proteus app origin')
+  .action(wrapAction(logoutCommand));
+
+program
+  .command('tokens [action] [name]')
+  .description('Manage long-lived CI access tokens (list, create, revoke)')
+  .option('--name <name>', 'Token name for create')
+  .option('--scopes <scopes>', 'Comma-separated scopes: agent.exec, agent.read')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(tokensCommand));
+
+program
+  .command('setup')
+  .description('Connect your account; optionally configure local-only model credentials')
+  .option('--origin <url>', 'Proteus app origin')
+  .option('--provider <name>', 'Provider: codex, openai, openrouter, anthropic, openai-compatible, skip')
+  .option('--model <id>', 'Default model for the selected provider')
+  .option('--local-model', 'Configure credentials for local-only agents')
+  .option('-y, --yes', 'Accept recommended setup choices where possible')
+  .option('--skip-cloud', 'Skip account sign-in')
+  .addOption(new Option('--account-only', 'Only complete Proteus account sign-in').hideHelp())
+  .action(wrapAction(setupCommand));
+
+program
+  .command('provider [action] [name]')
+  .alias('providers')
+  .description('List or connect model and account providers')
+  .option('--origin <url>', 'Proteus app origin')
+  .option('--model <id>', 'Default model for the selected provider')
+  .action(wrapAction(providersCommand));
+
+llmOpts(
+  program
+    .command('run <name> [prompt...]')
+    .description('Run an agent once, or open chat when no prompt is provided')
+    .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
+    .option('-c, --continue', 'Continue the latest recorded CLI session')
+    .option('-r, --resume', 'Resume the latest recorded CLI session')
+    .option('--session <idOrPath>', 'Use a recorded CLI session')
+    .option('--fork <idOrPath>', 'Fork a recorded CLI session into a new session')
+    .option('--session-dir <dir>', 'Override CLI session storage directory')
+    .option('--no-session', 'Do not record this CLI run')
+    .option('-n, --name <label>', 'Human-readable session label'),
+).action(wrapAction(runCommand));
 
 llmOpts(
   program
     .command('chat [name]')
     .description('Interactive conversation with an agent')
-    .option('--classic', 'Use classic readline interface instead of TUI'),
+    .option('--classic', 'Use classic readline interface instead of TUI')
+    .option('-c, --continue', 'Continue the latest recorded CLI session')
+    .option('-r, --resume', 'Resume the latest recorded CLI session')
+    .option('--session <idOrPath>', 'Use a recorded CLI session')
+    .option('--fork <idOrPath>', 'Fork a recorded CLI session into a new session')
+    .option('--session-dir <dir>', 'Override CLI session storage directory')
+    .option('--no-session', 'Do not record this CLI chat'),
 ).action(wrapAction(chatCommand));
 
 llmOpts(
@@ -55,10 +148,168 @@ llmOpts(
     .description('Show agent state and evolution history'),
 ).action(wrapAction(statusCommand));
 
+llmOpts(
+  program
+    .command('model <name> [spec]')
+    .description('Show or change an agent model'),
+).action(wrapAction(modelCommand));
+
+llmOpts(
+  program
+    .command('tools <name>')
+    .description('List an agent tool surface'),
+).action(wrapAction(toolsCommand));
+
+llmOpts(
+  program
+    .command('triggers <name> [action] [value]')
+    .description('List, schedule, cancel, or create agent triggers')
+    .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
+    .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
+    .option('--content-type <type>', 'Accepted webhook content type')
+    .option('--rate-limit <n>', 'Webhook deliveries per minute'),
+).action(wrapAction(triggersCommand));
+
+llmOpts(
+  program
+    .command('jobs <name> [action] [id]')
+    .description('List or cancel background jobs'),
+).action(wrapAction(jobsCommand));
+
 program
   .command('list')
   .description('List all agents')
   .action(wrapAction(listCommand));
+
+program
+  .command('stop <name>')
+  .description('Stop current cloud work or cancel local background jobs')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(stopCommand));
+
+program
+  .command('state <name>')
+  .description('Show the durable agent state snapshot')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(stateCommand));
+
+program
+  .command('memory <name> [query...]')
+  .description('Read or search agent memory')
+  .option('--limit <n>', 'Search result limit')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(memoryCommand));
+
+program
+  .command('events <name>')
+  .description('List recent agent events')
+  .option('--variant <name>', 'Filter by event variant')
+  .option('--since <time>', 'Filter events after a timestamp or date')
+  .option('--limit <n>', 'Event limit')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(eventsCommand));
+
+program
+  .command('timeline <name>')
+  .description('List the run/evolution/MCTS timeline')
+  .option('--limit <n>', 'Timeline row limit')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(timelineCommand));
+
+program
+  .command('mcts <name> [nodeId]')
+  .description('Inspect MCTS search history')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(mctsCommand));
+
+program
+  .command('heads <name>')
+  .description('Inspect parallel reasoning branch runs')
+  .option('--limit <n>', 'Run limit')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(headsCommand));
+
+program
+  .command('gepa <name> [runId]')
+  .description('Inspect GEPA optimization runs')
+  .option('--limit <n>', 'Run limit')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(gepaCommand));
+
+program
+  .command('executors <name> [executor] [command...]')
+  .description('List executors, or run a command in one')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(executorsCommand));
+
+llmOpts(
+  program
+    .command('exec [prompt...]')
+    .description('Run one agent task headlessly and exit (CI-friendly; executor passthrough lives under `executors`)')
+    .option('-a, --agent <name>', 'Agent to run (defaults to the only configured agent)')
+    .option('--json', 'Emit line-delimited JSON events')
+    .option('--resume <sessionId>', 'Continue a recorded CLI session')
+    .option('--session-dir <dir>', 'Override CLI session storage directory')
+    .option('--no-session', 'Do not record this run')
+    .option('-n, --name <label>', 'Human-readable session label'),
+).action(wrapAction(execCommand));
+
+program
+  .command('product <name>')
+  .description('Inspect product self-customization state')
+  .option('--limit <n>', 'Change limit')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(productCommand));
+
+program
+  .command('webhook <name> <label>')
+  .description('Create a durable webhook trigger for a cloud agent')
+  .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
+  .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
+  .option('--content-type <type>', 'Accepted webhook content type')
+  .option('--rate-limit <n>', 'Webhook deliveries per minute')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(webhookCommand));
+
+program
+  .command('alias <agent> [alias]')
+  .description('Create an executable command alias for an agent')
+  .action(wrapAction(aliasCommand));
+
+program
+  .command('unalias <alias>')
+  .description('Remove an executable command alias')
+  .action(wrapAction(unaliasCommand));
+
+program
+  .command('aliases')
+  .description('List configured agent aliases')
+  .action(wrapAction(aliasesCommand));
+
+program
+  .command('sessions [agent]')
+  .description('List recorded CLI sessions')
+  .option('--session-dir <dir>', 'Override CLI session storage directory')
+  .option('--path', 'Show session file paths')
+  .option('--show <idOrPath>', 'Show a specific session path')
+  .action(wrapAction(sessionsCommand));
+
+program
+  .command('desktop [action]')
+  .description('Connect or inspect the local desktop execution daemon')
+  .option('--label <name>', 'Device label')
+  .action(wrapAction(desktopCommand));
+
+program
+  .command('daemon [action]')
+  .description('Manage the local scheduler daemon for local agent alarms')
+  .action(wrapAction(daemonCommand));
+
+program
+  .command('connect')
+  .description('Link this computer as the desktop execution daemon')
+  .option('--label <name>', 'Device label')
+  .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 
 program
   .command('export <name>')
@@ -72,8 +323,42 @@ program
   .option('-n, --name <name>', 'Agent name (default: derived from filename)')
   .action(wrapAction(importCommand));
 
-// No args or --help: show branded help
-if (process.argv.length <= 2 || process.argv.includes('--help') || process.argv.includes('-h')) {
+program
+  .command('update [target]')
+  .description('Update the installed Proteus command')
+  .option('--origin <url>', 'Proteus app origin')
+  .option('--force', 'Reinstall even if already current')
+  .action(wrapAction(updateCommand));
+
+program
+  .command('uninstall')
+  .description('Remove the installed Proteus command')
+  .option('--purge', 'Also remove ~/.proteus data')
+  .action(wrapAction(uninstallCommand));
+
+program
+  .command('doctor')
+  .description('Inspect local Proteus CLI installation state')
+  .action(wrapAction(doctorCommand));
+
+// No args in a real terminal opens the interactive agent flow. Root --help
+// remains branded help, and subcommand help is left to Commander.
+const topLevelArgs = process.argv.slice(2);
+if (topLevelArgs.length === 0) {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    try {
+      await chatCommand(undefined, {});
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  } else {
+    printHelp();
+  }
+  process.exit(0);
+}
+
+if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0] === '-h')) {
   printHelp();
   process.exit(0);
 }

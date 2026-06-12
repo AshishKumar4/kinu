@@ -1,43 +1,67 @@
-import { mkdirSync, existsSync } from 'node:fs';
-import { Database } from 'bun:sqlite';
-import {
-  createAgent,
-  initSearchTables,
-  initScaffoldTables,
-  initCraftScoreTables,
-} from '@proteus/core';
-import { agentDbPath, agentDir, ensureAgentHome, resolveLLMConfig } from '../config.js';
-import { createSpinner, printCreatedCard, printError } from '../display.js';
+import { ensureAgentHome, pathHint, type AgentMode } from '../config.js';
+import { createCliAgent } from '../agent-create.js';
+import { ACCENT, DIM, OK, createSpinner, printCreatedCard, printError } from '../display.js';
+import { ask, canPrompt } from '../prompt.js';
 
-export async function createCommand(name: string, opts: {
+export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
+  mode?: string; alias?: string; aliasAgent?: boolean; origin?: string;
 }): Promise<void> {
   ensureAgentHome();
-  const dir = agentDir(name);
-  const dbPath = agentDbPath(name);
-
-  if (existsSync(dbPath)) {
-    printError(`Agent "${name}" already exists.`, `Use a different name or delete ${dir}`);
-    process.exit(1);
+  const interactive = canPrompt() && (!name || !opts.mode);
+  if (!name) {
+    name = interactive
+      ? await ask('Agent name', 'jarvis')
+      : undefined;
   }
-
-  const llmConfig = resolveLLMConfig(opts);
+  if (!name) throw new Error('Agent name required.');
+  const mode = await resolveMode(opts.mode, interactive);
   const purpose = opts.purpose ?? `A helpful AI assistant named ${name}.`;
+  const alias = opts.aliasAgent === false
+    ? undefined
+    : opts.alias ?? (interactive ? await ask('Alias command', name) : name);
+
+  if (mode === 'cloud') {
+    const spinner = createSpinner('Creating cloud agent...');
+    spinner.start();
+    try {
+      const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
+      spinner.stop('Cloud agent created');
+      console.log(`\n${OK('✓')} ${ACCENT(name)} ${DIM('cloud agent')}`);
+      if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
+      const hint = pathHint();
+      if (hint) console.log(DIM(hint));
+      console.log(`\n${DIM('Run:')} ${ACCENT(alias || `proteus run ${name}`)} ${DIM('"do something"')}\n`);
+    } catch (err) {
+      spinner.stop('Create failed');
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    return;
+  }
 
   const spinner = createSpinner('Creating agent...');
   spinner.start();
+  try {
+    const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
+    spinner.stop('Agent created');
+    printCreatedCard(name, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
+    const hint = pathHint();
+    if (hint) console.log(DIM(hint));
+  } catch (err) {
+    spinner.stop('Create failed');
+    printError(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
 
-  mkdirSync(dir, { recursive: true });
-  const db = new Database(dbPath);
-  db.exec('PRAGMA journal_mode = WAL');
-
-  createAgent(db, { name, purpose, llm: llmConfig });
-  initSearchTables((ddl: string) => db.exec(ddl));
-  initScaffoldTables((ddl: string) => db.exec(ddl));
-  initCraftScoreTables((ddl: string) => db.exec(ddl));
-
-  db.close();
-
-  spinner.stop('Agent created');
-  printCreatedCard(name, purpose, llmConfig.model, dbPath);
+async function resolveMode(raw: string | undefined, interactive: boolean): Promise<AgentMode> {
+  if (raw) {
+    if (raw === 'local' || raw === 'cloud') return raw;
+    throw new Error('--mode must be local or cloud');
+  }
+  if (!interactive) return 'cloud';
+  const answer = (await ask('Mode (cloud/local)', 'cloud')).toLowerCase();
+  if (answer === 'local' || answer === 'l') return 'local';
+  return 'cloud';
 }

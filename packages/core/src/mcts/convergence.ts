@@ -2,7 +2,6 @@
  * MCTS convergence — committing the winning branch.
  *
  * Architecture reference: final-architecture.md §5.9
- * Formal spec: Convergence.lean — pruning_safety, first_backprop_below_threshold
  *
  * BUG-4: When winner.value < MIN_ACCEPTABLE_SCORE, converge() returns
  * { converged: false }. The architecture doc does NOT specify what happens next
@@ -15,6 +14,8 @@ import type { SearchNode } from '../types/mcts.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
+import { captureAlternateTakes } from './takes.js';
+import { selectWinnerByTest } from './test-selection.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { isoDate } from '../utils/date.js';
 
@@ -22,17 +23,29 @@ export async function converge(
   rt: AgentRuntime,
   session: SessionWriter,
   minAcceptable: number = DEFAULT_CONFIG.mcts.minAcceptableScore,
+  takesEpsilon: number = DEFAULT_CONFIG.mcts.takesEpsilon,
 ): Promise<ConvergenceResult> {
-  const winner = rt.storage.sql<SearchNode>`
+  const population = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
     WHERE status IN ('terminal', 'open')
-    ORDER BY value DESC, depth DESC
-    LIMIT 1
-  `[0];
+    ORDER BY value DESC, depth DESC`;
+  const argmaxWinner = population[0];
 
-  if (!winner) {
+  if (!argmaxWinner) {
     throw new Error('No viable nodes — all branches failed or were pruned');
   }
+
+  // DO-NOW #3: when the top candidates are within takesEpsilon the judge could
+  // not separate them, so argmax(value) is noise. Break the near-tie with a
+  // discriminating execution test over the candidates' code (same executor the
+  // EVALUATE phase used); the test-passer becomes the winner, else value order.
+  const selectedId = await selectWinnerByTest(population, argmaxWinner, takesEpsilon, {
+    executor: rt.executor,
+    judge: rt.judgeModel ?? rt.llm,
+  });
+  const winner = selectedId === argmaxWinner.id
+    ? argmaxWinner
+    : population.find((n) => n.id === selectedId) ?? argmaxWinner;
 
   // BUG-4: Below-threshold → converge reports failure, not hallucinated success
   if (winner.value < minAcceptable) {
@@ -42,6 +55,11 @@ export async function converge(
       `Task: ${winner.task.slice(0, 200)}\nAll approaches scored below ${minAcceptable}.\n`,
     );
     await rt.memory.index('memory/MEMORY.md');
+    // Close every remaining open node so the next runMCTS starts from its own
+    // fresh root: global-argmax UCT only considers status='open', and leaving
+    // these open let a later task expand under this task's nodes.
+    rt.storage.sql`UPDATE search_nodes SET status = 'failed' WHERE status = 'open'`;
+    await recordTaskOutcome(rt, winner.task, 'error', winner.value);
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -53,9 +71,6 @@ export async function converge(
   const trajectory = winner.msg_id
     ? session.getHistory(winner.msg_id)
     : [];
-
-  // Compact: store non-destructive overlay so future branches start from compressed prior
-  await session.compact();
 
   const summary = await rt.llm.complete(
     `Task: ${winner.task}\nResult: ${winner.observation.slice(0, 400)}\nScore: ${winner.value.toFixed(2)}\n\n` +
@@ -80,12 +95,28 @@ export async function converge(
     }
   }
 
-  // Mark all other open nodes as pruned
+  // Alternate Takes: capture the winner's near-tied rivals BEFORE the close
+  // below prunes them — afterwards they are indistinguishable from mid-search
+  // prunes. The host claims the set for the turn at turn end; the user's pick
+  // becomes the explicit preference signal in turn_outcomes.
+  try {
+    captureAlternateTakes(rt.storage.sql, { task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
+  } catch {
+    // alternate_takes may not exist in minimal test runtimes — non-fatal.
+  }
+
+  // Close the tree: the winner becomes terminal and every other open node is
+  // pruned. Nothing stays 'open' across tasks — otherwise global-argmax UCT
+  // would prefer this task's high-value winner over the next task's fresh root.
   rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
     WHERE status = 'open' AND id != ${winner.id}
   `;
+  rt.storage.sql`
+    UPDATE search_nodes SET status = 'terminal' WHERE id = ${winner.id}
+  `;
+  await recordTaskOutcome(rt, winner.task, 'success', winner.value);
 
   return {
     winnerId: winner.id,
@@ -93,4 +124,24 @@ export async function converge(
     converged: true,
     trajectory,
   };
+}
+
+/** Record the task outcome into task_history — the per-task ledger behind the
+ *  agent-info "Tasks" stat and scaffold error-rate monitoring. */
+async function recordTaskOutcome(
+  rt: AgentRuntime,
+  task: string,
+  outcome: 'success' | 'error',
+  score: number,
+): Promise<void> {
+  let scaffoldVersion = 0;
+  try { scaffoldVersion = await rt.identity.scaffold.version(); } catch { /* scaffold-less backend */ }
+  try {
+    rt.storage.sql`
+      INSERT INTO task_history (task, scaffold_version, outcome, score)
+      VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
+    `;
+  } catch {
+    // task_history may not exist in minimal test runtimes — non-fatal.
+  }
 }

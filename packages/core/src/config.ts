@@ -7,6 +7,10 @@
 
 /** MCTS search parameters */
 export interface MCTSDefaults {
+  /** Default search iterations when the caller doesn't supply a budget. */
+  budget: number;
+  /** Default number of parallel branches expanded per node. */
+  branches: number;
   maxDepth: number;
   explorationWeight: number;
   pruneThreshold: number;
@@ -18,6 +22,29 @@ export interface MCTSDefaults {
   reflectionThreshold: number;
   /** Score threshold above which crafted tools are extracted */
   craftExtractionThreshold: number;
+  /** Judge ensemble size per branch evaluation (median-aggregated). */
+  judgeSamples: number;
+  /** Per-branch evaluation LLM-call budget (assertion generation + judge
+   *  samples) — the operator's spend dial for grounded scoring. */
+  maxEvalLLMCalls: number;
+  /** Score gap within which a rival branch counts as a near-tied Alternate
+   *  Take at convergence (see mcts/takes.ts). */
+  takesEpsilon: number;
+  /** Step-level Process Reward gate. Off by default — at single-step rollout
+   *  depth it duplicates the grounded evaluator at extra cost (mcts/step-prm.ts). */
+  stepPrm: boolean;
+  /** Step-PRM prune threshold: proposals scoring below this skip the grounded
+   *  evaluator. Only consulted when stepPrm is on. */
+  stepPrmPruneThreshold: number;
+}
+
+/** Branching-heads parameters. The per-head grounded score reuses the MCTS
+ *  judge knobs (judgeSamples / maxEvalLLMCalls); only the merge ensemble size
+ *  is heads-specific. */
+export interface HeadsDefaults {
+  /** Independent merge-synthesis samples; the median-scored one is kept.
+   *  1 ⇒ the legacy n=1 merge. */
+  mergeSamples: number;
 }
 
 /** CraftStore quality management parameters */
@@ -57,6 +84,7 @@ export interface AgentConfig {
   /** Maximum agentic steps per LLM call (tool-call loops). Default 500. */
   maxSteps: number;
   mcts: MCTSDefaults;
+  heads: HeadsDefaults;
   craftStore: CraftStoreDefaults;
   scaffold: ScaffoldDefaults;
 }
@@ -67,6 +95,8 @@ export const DEFAULT_MAX_STEPS = 500;
 export const DEFAULT_CONFIG: AgentConfig = {
   maxSteps: DEFAULT_MAX_STEPS,
   mcts: {
+    budget: 5,
+    branches: 3,
     maxDepth: 20,
     explorationWeight: Math.SQRT2,
     pruneThreshold: 0.25,
@@ -75,6 +105,14 @@ export const DEFAULT_CONFIG: AgentConfig = {
     minVisitsForPrune: 2,
     reflectionThreshold: 0.35,
     craftExtractionThreshold: 0.8,
+    judgeSamples: 3,
+    maxEvalLLMCalls: 4,
+    takesEpsilon: 0.1,
+    stepPrm: false,
+    stepPrmPruneThreshold: 0.3,
+  },
+  heads: {
+    mergeSamples: 3,
   },
   craftStore: {
     emaAlpha: 0.3,
@@ -100,6 +138,7 @@ export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
     maxSteps: overrides.maxSteps ?? DEFAULT_CONFIG.maxSteps,
     mcts: { ...DEFAULT_CONFIG.mcts, ...overrides.mcts },
+    heads: { ...DEFAULT_CONFIG.heads, ...overrides.heads },
     craftStore: { ...DEFAULT_CONFIG.craftStore, ...overrides.craftStore },
     scaffold: { ...DEFAULT_CONFIG.scaffold, ...overrides.scaffold },
   };

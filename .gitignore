@@ -6,6 +6,11 @@ dist/
 .lake/
 .DS_Store
 
+# Local AI-agent transcripts and handoff worktrees
+.claude/
+transcript*.json
+*.transcript.json
+
 # Environment files (may contain secrets)
 .env
 .env.local
@@ -15,3 +20,9 @@ dist/
 # Reference clones (symlinked to parent repo's external/) — not part of the project
 /external
 /external/
+
+# Compiled test artifacts (sources are .ts)
+packages/core/tests/helpers.js
+packages/core/tests/helpers.js.map
+packages/core/tests/helpers.d.ts
+packages/core/tests/helpers.d.ts.map

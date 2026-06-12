@@ -87,7 +87,7 @@ echo ""
 echo -e "${BOLD}§2. Architecture Verification${NC}"
 
 # Execution layer module completeness
-EXEC_FILES="packages/core/src/execution/types.ts packages/core/src/execution/router.ts packages/core/src/execution/inline.ts packages/core/src/execution/nimbus.ts packages/core/src/execution/container.ts packages/core/src/execution/ssh.ts packages/core/src/execution/index.ts"
+EXEC_FILES="packages/core/src/execution/types.ts packages/core/src/execution/router.ts packages/core/src/execution/inline.ts packages/core/src/execution/nimbus.ts packages/core/src/execution/sandbox.ts packages/core/src/execution/ssh.ts packages/core/src/execution/index.ts"
 ALL_EXEC=true
 for f in $EXEC_FILES; do
   [ -f "$f" ] || ALL_EXEC=false
@@ -100,14 +100,14 @@ else
   ((FAIL++))
 fi
 
-# 5-tool architecture (tool construction lives in @proteus/core/tools/builtins)
-REGISTRY_TOOLS=$(grep -cE "'(execute_tools|run|explore|save_note|search_memory)'" packages/core/src/tools/registry.ts 2>/dev/null; echo 0 | head -1)
+# Canonical built-in architecture (tool construction lives in @proteus/core/tools/builtins)
+REGISTRY_TOOLS=$(grep -cE "'(execute_tools|run|skills|think|memory|fact|product_change)'" packages/core/src/tools/registry.ts 2>/dev/null; echo 0 | head -1)
 REGISTRY_TOOLS=$(printf '%s' "$REGISTRY_TOOLS" | head -n 1)
 CF_USES_FACTORY=$(grep -cE 'buildBuiltinTools\(\{' packages/cf-backend/src/orchestrator.ts 2>/dev/null || printf 0)
-CLI_USES_FACTORY=$(cat packages/cli/src/chat-loop.ts packages/cli/src/tui/chat-app.tsx 2>/dev/null | grep -cE 'buildBuiltinTools\(\{')
-LEGACY_FACTORY=$(cat packages/cf-backend/src/orchestrator.ts packages/cli/src/chat-loop.ts packages/cli/src/tui/chat-app.tsx 2>/dev/null | grep -cE 'buildAgentTools')
-if [ "${REGISTRY_TOOLS:-0}" -ge 5 ] 2>/dev/null && [ "${CF_USES_FACTORY:-0}" -ge 1 ] 2>/dev/null && [ "${CLI_USES_FACTORY:-0}" -ge 2 ] 2>/dev/null && [ "${LEGACY_FACTORY:-0}" -eq 0 ] 2>/dev/null; then
-  RESULTS+=("${GREEN}✅ PASS${NC}: 5-tool architecture (registry + CF + CLI surfaces consume buildBuiltinTools)")
+CLI_USES_FACTORY=$(grep -cE 'buildBuiltinTools\(\{' packages/cli-backend/src/local-session.ts 2>/dev/null || printf 0)
+LEGACY_FACTORY=$(cat packages/cf-backend/src/orchestrator.ts packages/cli-backend/src/local-session.ts packages/cli/src/chat-loop.ts packages/cli/src/tui/chat-app.tsx 2>/dev/null | grep -cE 'buildAgentTools')
+if [ "${REGISTRY_TOOLS:-0}" -ge 7 ] 2>/dev/null && [ "${CF_USES_FACTORY:-0}" -ge 1 ] 2>/dev/null && [ "${CLI_USES_FACTORY:-0}" -ge 1 ] 2>/dev/null && [ "${LEGACY_FACTORY:-0}" -eq 0 ] 2>/dev/null; then
+  RESULTS+=("${GREEN}✅ PASS${NC}: Built-in tool architecture (registry + CF + CLI backend consume buildBuiltinTools)")
   ((PASS++))
 else
   RESULTS+=("${RED}❌ FAIL${NC}: Tool architecture — registry=$REGISTRY_TOOLS cf=$CF_USES_FACTORY cli=$CLI_USES_FACTORY legacy=$LEGACY_FACTORY")

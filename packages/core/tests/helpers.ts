@@ -22,6 +22,8 @@ import type {
 } from '../src/types/primitives.js';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime.js';
 import type { CraftedTool } from '../src/types/craft.js';
+import { createInlineVFS } from '../src/identity/inline-primitives.js';
+import { writeVfsFileSync } from '@proteus/agent-utils/vfs';
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
 
@@ -34,10 +36,12 @@ export function makeSql(db: Database): SqlExecutor {
       (acc, s, i) => acc + s + (i < values.length ? '?' : ''),
       '',
     );
+    // bun:sqlite binds TypedArrays, not ArrayBuffers (the canonical VFS BLOB type).
+    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare(query);
-    if (isRead) return stmt.all(...values) as T[];
-    stmt.run(...values);
+    if (isRead) return stmt.all(...(bound as SqlValue[])) as T[];
+    stmt.run(...(bound as SqlValue[]));
     return [];
   } as SqlExecutor;
   return sql;
@@ -49,57 +53,10 @@ export function makeExecRaw(db: Database): RawSqlExec {
 
 // ── In-memory VFS ────────────────────────────────────────────────
 
+/** Canonical SqliteFS-backed VFS over the test database — same schema and
+ *  encoding as production, so tests catch writer/reader drift. */
 export function createMemoryVFS(db: Database): VFS {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS vfs_files (
-      path TEXT PRIMARY KEY,
-      data TEXT NOT NULL DEFAULT '',
-      is_dir INTEGER NOT NULL DEFAULT 0,
-      size INTEGER NOT NULL DEFAULT 0,
-      mtime INTEGER NOT NULL DEFAULT 0
-    )
-  `);
-
-  return {
-    async readFile(path: string, opts?: { encoding?: string }) {
-      const row = db.query('SELECT data FROM vfs_files WHERE path = ?').get(path) as { data: string } | null;
-      if (!row) throw new Error(`ENOENT: ${path}`);
-      return opts?.encoding === 'utf8' ? row.data : new TextEncoder().encode(row.data);
-    },
-    async writeFile(path: string, data: string | Uint8Array) {
-      const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
-      db.run(
-        'INSERT OR REPLACE INTO vfs_files (path, data, size, mtime) VALUES (?, ?, ?, ?)',
-        [path, text, text.length, Date.now()],
-      );
-    },
-    async readdir(path: string) {
-      const prefix = path.endsWith('/') ? path : path + '/';
-      const rows = db.query(
-        "SELECT path FROM vfs_files WHERE path LIKE ? AND path != ?",
-      ).all(prefix + '%', path) as { path: string }[];
-      return rows.map(r => r.path.slice(prefix.length).split('/')[0]!).filter(Boolean);
-    },
-    async stat(path: string) {
-      const row = db.query('SELECT size, mtime, is_dir FROM vfs_files WHERE path = ?').get(path) as
-        { size: number; mtime: number; is_dir: number } | null;
-      if (!row) return null;
-      return { size: row.size, mtime: row.mtime, isDir: !!row.is_dir };
-    },
-    async unlink(path: string) {
-      db.run('DELETE FROM vfs_files WHERE path = ?', [path]);
-    },
-    async mkdir(path: string) {
-      db.run(
-        'INSERT OR IGNORE INTO vfs_files (path, is_dir, mtime) VALUES (?, 1, ?)',
-        [path, Date.now()],
-      );
-    },
-    async exists(path: string) {
-      const row = db.query('SELECT 1 FROM vfs_files WHERE path = ?').get(path);
-      return row !== null;
-    },
-  };
+  return createInlineVFS(makeSql(db));
 }
 
 // ── In-memory Memory ─────────────────────────────────────────────
@@ -264,15 +221,12 @@ export function createTestRuntime(opts?: {
     parent_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`);
-  db.exec(`CREATE TABLE IF NOT EXISTS agent_soul (
-    purpose TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`);
   db.exec(`CREATE TABLE IF NOT EXISTS agent_identity (
-    id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    id TEXT NOT NULL, name TEXT NOT NULL, owner_user_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`);
 
-  // Initialize scaffold in VFS
-  db.run("INSERT INTO vfs_files (path, data, size, mtime) VALUES ('scaffold/agent.js', 'initial', 7, ?)", [Date.now()]);
+  // Initialize scaffold in VFS (canonical encoding)
+  writeVfsFileSync(sql, 'scaffold/agent.js', 'initial');
 
   const identity: Identity = {
     id: 'test-agent-id',
@@ -287,7 +241,6 @@ export function createTestRuntime(opts?: {
 
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'explored approach A', codeUsed: null }),
-    evaluate: async () => 0.7,
     generateReflection: async () => 'reflection: approach was suboptimal',
   };
 
@@ -328,6 +281,5 @@ export function createMockSession(): import('../src/mcts/record-node.js').Sessio
       }
       return result;
     },
-    async compact() { /* no-op in tests */ },
   };
 }

@@ -7,11 +7,16 @@ export type {
   HeadBudget,
   HeadInput,
   HeadReport,
+  HeadStep,
+  HeadStepToolCall,
+  HeadRunView,
+  HeadRunHeadView,
   Evidence,
   Decision,
   ArtifactRef,
   SplitRequest,
   MergeResult,
+  HeadScore,
   MergeStrategy,
   BudgetSplit,
   SerializedMessage,
@@ -30,13 +35,14 @@ export { MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput
 export {
   HeadController,
   type HeadRuntime,
+  type HeadGrounding,
   type SpawnedHead,
   type MergeLLMFn,
   type SplitPhaseEvent,
 } from './controller.js';
-
+export { extractHeadSteps, extractFinalText, synthesizeHeadSummary } from './head-summary.js';
 export {
-  createSplitHeadsTool,
-  type SplitHeadsInput,
-  type SplitHeadsToolDeps,
-} from './split-heads-tool.js';
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
+  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
+  type HeadInferenceDeps, type HeadSandboxVfs,
+} from './head-inference.js';

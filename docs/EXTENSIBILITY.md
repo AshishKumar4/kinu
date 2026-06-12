@@ -1,30 +1,32 @@
 # Proteus extensibility
 
-How to plug in a new agentic idea — model provider, exploration strategy,
-inference loop — without touching the orchestrator.
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-> Edited & maintained by Claude, presented as-is.
+How to plug in a new agentic idea: model provider, exploration strategy,
+inference loop, or runtime surface without touching the orchestrator.
 
-## Hardening (post-Rounds 1–10 audit)
+## Runtime hardening
 
 Production-class guarantees in the runtime today. Each item below earns its
-keep — paranoid safety mechanisms that would hurt model UX or performance
+keep: paranoid safety mechanisms that would hurt model UX or performance
 without addressing a real threat were deliberately rejected. Specifically
 rejected: agent_facts secret-pattern redaction (secrets the agent sees are
 already in conversation context — blocking remember_fact rejects legitimate
 values), crafted-tool description sanitization (tools are agent-self-authored,
 no external attacker, and the cap truncates useful "when to use" guidance).
 
-- **OAuth error sanitization.** `auth/codex-oauth.ts` strips token-shaped
+- **OAuth error sanitization.** `cf-backend/src/user/codex-oauth.ts` strips token-shaped
   substrings from upstream error bodies before they're attached to thrown
   errors — defense-in-depth against the OAuth server echoing tokens. No
   LLM-path impact (only error-log path).
 - **Refresh-on-failure preserves credential.** `ensureFreshToken` in
   `core/src/providers/codex.ts` keeps the existing credential when a refresh
   attempt fails (transient 500 / network blip) instead of wiping it.
-- **Optional MCP shared-secret auth.** Set `env.MCP_AUTH_TOKEN` and clients
-  must include `Authorization: Bearer <token>`. Timing-safe compare. Off by
-  default — zero behavior change when unset.
+- **Per-user MCP auth.** `/mcp/v1/<agentName>` authenticates every request:
+  external MCP clients send the per-user CLI bearer token
+  (`Authorization: Bearer ptc_…`, verified via `authenticateCliToken`),
+  browsers use the OAuth session, and agent ownership is enforced before any
+  tool runs. There is no shared secret.
 - **AgentConfigStore.** Typed accessors over `agent_config` (`core/src/config/store.ts`)
   with known-key getters/setters. No more scattered raw SQL — adding a new
   tunable means one new accessor, not 5 file edits.
@@ -40,7 +42,7 @@ no external attacker, and the cap truncates useful "when to use" guidance).
 - **`Last-Event-ID` validation.** SSE resume now requires a non-negative
   integer (or `-1` sentinel); malformed values replay from start instead of
   silently rewinding via `NaN`.
-- **Credential key validation.** `auth/routes.ts` restricts credential keys
+- **Credential key validation.** `cf-backend/src/user/validate.ts` restricts credential keys
   to `[a-zA-Z0-9._-]{1,128}` so path-traversal-shaped URLs can't reach the
   store.
 - **MCTS evaluation tolerates missing `task_history`.** Calibration step
@@ -231,5 +233,6 @@ tests under `packages/core/tests/`.
 - **Sleep-time compute** — `core/memory/sleep-time-compute.ts`. Background
   memory-compression: rewrite agent_facts (upsert new + decay stale),
   compress recent turn into `scratch` block, update `working_set`. Fires
-  fire-and-forget from `onChatResponse` when
-  `agent_config.sleep_time_compute = 'true'`.
+  fire-and-forget from `onChatResponse`; ON by default
+  (`agent_config.sleep_time_compute`, set `'false'` to disable). Fact
+  upserts surface in the Evolution Changelog and are revertable there.

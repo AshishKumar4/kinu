@@ -1,1 +1,1 @@
-export { normalizePath, readVfsText } from "./utils";
+export { combineAbortSignals, isAbortError, normalizePath, raceAbort, readVfsText } from "./utils";

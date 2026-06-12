@@ -37,7 +37,13 @@ export interface RunEventBase {
 }
 
 export type RunEvent =
-  | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string })
+  | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string;
+      /** What kicked off this run: 'chat' | 'webhook' | 'timer' | 'peer' | … */
+      caused_by?: string;
+      /** Ingress descriptor kind for event-triggered runs (webhook_hmac, …). */
+      ingress_kind?: string;
+      /** The trigger that fired this run, when event-driven. */
+      trigger_id?: string })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
   | (RunEventBase & { type: 'text_delta'; text: string })
   | (RunEventBase & { type: 'tool_call_start'; name: string; args: Record<string, unknown>; toolCallId: string })
@@ -50,7 +56,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
-  | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number } })
+  | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number; cached?: number } })
   | (RunEventBase & { type: 'run_end'; reason?: string });
 
 /** A new event payload sans the base fields the recorder fills in. */

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useImperativeHandle, forwardRef } from "react";
 import * as d3 from "d3";
 import type { MCTSNode } from "@/lib/protocol";
 
@@ -10,12 +10,22 @@ interface Props {
 	selectedNode?: MCTSNode | null;
 }
 
+/** Imperative zoom controls for header buttons (MCTSExplorer). */
+export interface MCTSTreeHandle {
+	zoomIn(): void;
+	zoomOut(): void;
+	/** Fit the whole tree into the viewport. */
+	fit(): void;
+}
+
 const STATUS_ICON: Record<string, string> = {
 	open: "○",
 	terminal: "★",
 	pruned: "◌",
 	failed: "✗",
 };
+
+const MARGIN = { top: 50, right: 50, bottom: 50, left: 50 };
 
 function nodeColor(value: number, status: string): string {
 	if (status === "pruned" || status === "failed") return "oklch(0.4 0 0)";
@@ -26,33 +36,100 @@ function nodeRadius(visits: number): number {
 	return Math.max(8, Math.min(24, 6 + visits * 2));
 }
 
-export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selectedNode }: Props) {
+function cleanNodeLabel(value: string | null | undefined, fallback: string): string {
+	const raw = (value || fallback || "").split("\n").find((line) => line.trim().length > 0) ?? fallback;
+	const cleaned = raw
+		.replace(/^\s{0,3}#{1,6}\s*/, "")
+		.replace(/^\s*[-*>]+\s*/, "")
+		.replace(/\*\*/g, "")
+		.replace(/`/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return cleaned.length > 0 ? cleaned : fallback;
+}
+
+type NodeSelection = d3.Selection<SVGGElement, d3.HierarchyPointNode<MCTSNode>, SVGGElement, unknown>;
+
+/** Selection highlighting as pure attribute updates — no layer rebuild, so a
+ *  node click never tears the tree down or disturbs the zoom transform. */
+function applySelection(g: d3.Selection<SVGGElement, unknown, null, undefined>, selectedId: string | null) {
+	const nodes = g.selectAll<SVGGElement, d3.HierarchyPointNode<MCTSNode>>(".node") as NodeSelection;
+	nodes.select<SVGCircleElement>("circle")
+		.attr("stroke", (d) => {
+			if (selectedId === d.data.id) return "var(--c-accent)";
+			if (d.data.status === "terminal") return "var(--c-success)";
+			return "var(--c-border)";
+		})
+		.attr("stroke-width", (d) => selectedId === d.data.id ? 3 : d.data.status === "terminal" ? 2 : 1)
+		.attr("opacity", (d) => selectedId === d.data.id ? 1 : d.data.status === "pruned" ? 0.34 : 1)
+		.attr("filter", (d) => {
+			if (selectedId === d.data.id) return "url(#selectGlow)";
+			if (d.data.status === "terminal") return "url(#glow)";
+			return "none";
+		});
+	nodes.select<SVGTextElement>("text.action-label")
+		.text((d) => {
+			const selected = selectedId === d.data.id;
+			if (!selected && d.depth > 1 && d.data.status !== "terminal") return "";
+			const label = cleanNodeLabel(d.data.action, STATUS_ICON[d.data.status] || "");
+			return label.length > (selected ? 34 : 24) ? label.slice(0, selected ? 31 : 21) + "…" : label;
+		})
+		.attr("fill", (d) => selectedId === d.data.id ? "var(--c-accent-fg)" : d.data.status === "pruned" ? "var(--c-text-3)" : "var(--c-text-2)");
+}
+
+export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
+	{ root, width = 800, height = 600, onNodeClick, selectedNode }, handleRef,
+) {
 	const svgRef = useRef<SVGSVGElement>(null);
+	const gRef = useRef<SVGGElement | null>(null);
+	const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+	const transformInitialized = useRef(false);
+	const onNodeClickRef = useRef(onNodeClick);
+	onNodeClickRef.current = onNodeClick;
+	const selectedIdRef = useRef<string | null>(selectedNode?.id ?? null);
 	const [tooltip, setTooltip] = useState<{ x: number; y: number; node: MCTSNode } | null>(null);
 
+	// One-time scaffold: glow filters, the persistent zoom/pan layer, and the
+	// zoom behavior. The transform lives on this layer and is never reset by
+	// data updates, so polling doesn't snap the user's pan/zoom back.
 	useEffect(() => {
-		const svg = d3.select(svgRef.current);
-		svg.selectAll("*").remove();
+		const svg = d3.select(svgRef.current!);
+		const defs = svg.append("defs");
+		for (const [id, blur] of [["glow", "4"], ["selectGlow", "6"]] as const) {
+			const f = defs.append("filter").attr("id", id).attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+			f.append("feGaussianBlur").attr("stdDeviation", blur).attr("result", "blur");
+			f.append("feMerge").selectAll("feMergeNode").data(["blur", "SourceGraphic"]).join("feMergeNode").attr("in", (d) => d);
+		}
+		const g = svg.append("g");
+		gRef.current = g.node();
+		const zoom = d3.zoom<SVGSVGElement, unknown>()
+			.scaleExtent([0.2, 4])
+			.on("zoom", (event) => { g.attr("transform", event.transform); });
+		zoomRef.current = zoom;
+		svg.call(zoom);
+		return () => {
+			svg.on(".zoom", null);
+			svg.selectAll("*").remove();
+			gRef.current = null;
+			zoomRef.current = null;
+			transformInitialized.current = false;
+		};
+	}, []);
 
-		const margin = { top: 50, right: 50, bottom: 50, left: 50 };
-		const innerW = width - margin.left - margin.right;
-		const innerH = height - margin.top - margin.bottom;
+	// Data render — rebuilds the link/node layer inside the persistent zoom
+	// layer when the tree (or viewport) actually changes. The hook upstream
+	// only swaps `root` identity when the row set changed, so steady-state
+	// polls don't reach here at all.
+	useEffect(() => {
+		const g = d3.select(gRef.current!);
+		g.selectAll("*").remove();
 
-		const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+		const innerW = width - MARGIN.left - MARGIN.right;
+		const innerH = height - MARGIN.top - MARGIN.bottom;
 
 		const hierarchy = d3.hierarchy(root, (d) => d.children);
 		const treeLayout = d3.tree<MCTSNode>().size([innerW, innerH]).separation((a, b) => a.parent === b.parent ? 1.2 : 1.8);
 		const treeData = treeLayout(hierarchy);
-
-		// Glow filter for terminal/selected nodes
-		const defs = svg.append("defs");
-		const glow = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
-		glow.append("feGaussianBlur").attr("stdDeviation", "4").attr("result", "blur");
-		glow.append("feMerge").selectAll("feMergeNode").data(["blur", "SourceGraphic"]).join("feMergeNode").attr("in", (d) => d);
-
-		const selectGlow = defs.append("filter").attr("id", "selectGlow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
-		selectGlow.append("feGaussianBlur").attr("stdDeviation", "6").attr("result", "blur");
-		selectGlow.append("feMerge").selectAll("feMergeNode").data(["blur", "SourceGraphic"]).join("feMergeNode").attr("in", (d) => d);
 
 		// Links — curved paths between nodes
 		g.selectAll(".link")
@@ -64,9 +141,14 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 				.y((d) => d.y) as unknown as string)
 			.attr("fill", "none")
 			.attr("stroke", (d) => {
-				if (d.target.data.status === "pruned") return "rgba(255,255,255,0.05)";
+				if (d.target.data.status === "pruned") return "var(--c-border)";
 				const v = d.target.data.value;
-				return v > 0.7 ? "rgba(74,222,128,0.3)" : v > 0.4 ? "rgba(250,204,21,0.2)" : "rgba(248,113,113,0.15)";
+				return v > 0.7 ? "var(--c-success)" : v > 0.4 ? "var(--c-warning)" : "var(--c-danger)";
+			})
+			.attr("stroke-opacity", (d) => {
+				if (d.target.data.status === "pruned") return 0.5;
+				const v = d.target.data.value;
+				return v > 0.7 ? 0.3 : v > 0.4 ? 0.22 : 0.18;
 			})
 			.attr("stroke-width", (d) => d.target.data.status === "pruned" ? 1 : Math.max(1, d.target.data.visits * 0.5))
 			.attr("stroke-dasharray", (d) => d.target.data.status === "pruned" ? "4,4" : "none");
@@ -79,22 +161,10 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.attr("transform", (d) => `translate(${d.x},${d.y})`)
 			.style("cursor", "pointer");
 
-		// Node circles
+		// Node circles (selection-dependent attrs applied below)
 		nodes.append("circle")
 			.attr("r", (d) => nodeRadius(d.data.visits))
-			.attr("fill", (d) => nodeColor(d.data.value, d.data.status))
-			.attr("stroke", (d) => {
-				if (selectedNode?.id === d.data.id) return "#a78bfa";
-				if (d.data.status === "terminal") return "#4ade80";
-				return "rgba(255,255,255,0.15)";
-			})
-			.attr("stroke-width", (d) => selectedNode?.id === d.data.id ? 3 : d.data.status === "terminal" ? 2 : 1)
-			.attr("opacity", (d) => d.data.status === "pruned" ? 0.2 : 1)
-			.attr("filter", (d) => {
-				if (selectedNode?.id === d.data.id) return "url(#selectGlow)";
-				if (d.data.status === "terminal") return "url(#glow)";
-				return "none";
-			});
+			.attr("fill", (d) => nodeColor(d.data.value, d.data.status));
 
 		// Score label inside node
 		nodes.append("text")
@@ -107,15 +177,11 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.attr("font-weight", "600")
 			.attr("opacity", (d) => d.data.status === "pruned" ? 0.25 : 0.95);
 
-		// Action label below node (truncated)
+		// Action label below node (text + fill applied by applySelection)
 		nodes.append("text")
-			.text((d) => {
-				const label = d.data.action || STATUS_ICON[d.data.status] || "";
-				return label.length > 25 ? label.slice(0, 22) + "…" : label;
-			})
+			.attr("class", "action-label")
 			.attr("text-anchor", "middle")
 			.attr("dy", (d) => nodeRadius(d.data.visits) + 14)
-			.attr("fill", (d) => d.data.status === "pruned" ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.6)")
 			.attr("font-size", "9px")
 			.attr("font-family", "var(--font-sans)");
 
@@ -125,7 +191,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.text((d) => `n=${d.data.visits}`)
 			.attr("text-anchor", "middle")
 			.attr("dy", (d) => -(nodeRadius(d.data.visits) + 6))
-			.attr("fill", "rgba(255,255,255,0.35)")
+			.attr("fill", "var(--c-text-3)")
 			.attr("font-size", "8px")
 			.attr("font-family", "var(--font-mono)");
 
@@ -135,7 +201,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.text((d) => d.data.status === "pruned" ? "╳" : "!")
 			.attr("text-anchor", "middle")
 			.attr("dy", "0.35em")
-			.attr("fill", (d) => d.data.status === "failed" ? "#f87171" : "rgba(255,255,255,0.3)")
+			.attr("fill", (d) => d.data.status === "failed" ? "var(--c-danger)" : "var(--c-text-3)")
 			.attr("font-size", "12px");
 
 		// Interactions
@@ -145,19 +211,49 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 		}).on("mouseleave", () => {
 			setTooltip(null);
 		}).on("click", (_, d) => {
-			onNodeClick?.(d.data);
+			onNodeClickRef.current?.(d.data);
 		});
 
-		// Zoom + pan
-		const zoom = d3.zoom<SVGSVGElement, unknown>()
-			.scaleExtent([0.2, 4])
-			.on("zoom", (event) => { g.attr("transform", event.transform); });
-		(svg as d3.Selection<SVGSVGElement, unknown, null, undefined>).call(zoom);
-		(svg as d3.Selection<SVGSVGElement, unknown, null, undefined>).call(
-			zoom.transform, d3.zoomIdentity.translate(margin.left, margin.top),
-		);
+		applySelection(g as d3.Selection<SVGGElement, unknown, null, undefined>, selectedIdRef.current);
 
-	}, [root, width, height, onNodeClick, selectedNode]);
+		// First render only — seed the margin offset through the zoom behavior
+		// so user pans compose with it. Never reset afterwards.
+		if (!transformInitialized.current && zoomRef.current) {
+			transformInitialized.current = true;
+			d3.select(svgRef.current!).call(
+				zoomRef.current.transform, d3.zoomIdentity.translate(MARGIN.left, MARGIN.top),
+			);
+		}
+	}, [root, width, height]);
+
+	// Selection change — attribute updates only.
+	useEffect(() => {
+		selectedIdRef.current = selectedNode?.id ?? null;
+		if (gRef.current) applySelection(d3.select(gRef.current), selectedIdRef.current);
+	}, [selectedNode]);
+
+	useImperativeHandle(handleRef, () => ({
+		zoomIn() {
+			if (!svgRef.current || !zoomRef.current) return;
+			d3.select(svgRef.current).transition().duration(200).call(zoomRef.current.scaleBy, 1.4);
+		},
+		zoomOut() {
+			if (!svgRef.current || !zoomRef.current) return;
+			d3.select(svgRef.current).transition().duration(200).call(zoomRef.current.scaleBy, 1 / 1.4);
+		},
+		fit() {
+			if (!svgRef.current || !gRef.current || !zoomRef.current) return;
+			const b = gRef.current.getBBox();
+			if (b.width === 0 || b.height === 0) return;
+			const pad = 40;
+			const scale = Math.max(0.2, Math.min(4, (width - pad * 2) / b.width, (height - pad * 2) / b.height));
+			const tx = (width - b.width * scale) / 2 - b.x * scale;
+			const ty = (height - b.height * scale) / 2 - b.y * scale;
+			d3.select(svgRef.current).transition().duration(300).call(
+				zoomRef.current.transform, d3.zoomIdentity.translate(tx, ty).scale(scale),
+			);
+		},
+	}), [width, height]);
 
 	return (
 		<div className="relative w-full h-full">
@@ -171,10 +267,10 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 				style={{ left: tooltip.x + 16, top: tooltip.y, borderColor: "var(--c-border)" }}
 			>
 				<div className="font-semibold p-text mb-2 leading-tight">
-					{STATUS_ICON[n.status]} {n.action || "(root)"}
+					{STATUS_ICON[n.status]} {cleanNodeLabel(n.action, "(root)")}
 				</div>
 				<div className="grid grid-cols-2 gap-x-4 gap-y-1 p-text-2">
-					<span>Avg Reward</span>
+					<span>Score</span>
 					<span className={`font-mono ${scoreColor}`}>{n.value.toFixed(3)}</span>
 					<span>Visits</span>
 					<span className="p-text font-mono">{n.visits}</span>
@@ -197,4 +293,4 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			})()}
 		</div>
 	);
-}
+});

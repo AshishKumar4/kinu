@@ -7,8 +7,6 @@ describe('Sleep-time compute', () => {
     const judge = createJSONLLM({
       upserts: [{ key: 'user.tz', value: 'America/Los_Angeles', confidence: 0.9, rationale: 'mentioned in turn' }],
       decay: ['stale.fact'],
-      scratchUpdate: 'User is configuring deploy targets.',
-      workingSetAdds: ['foo.workers.dev', 'stripe key'],
     });
     const update = await runSleepTimeCompute(judge, {
       task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'],
@@ -17,8 +15,6 @@ describe('Sleep-time compute', () => {
     expect(update).not.toBeNull();
     expect(update!.upserts.length).toBe(1);
     expect(update!.decay).toEqual(['stale.fact']);
-    expect(update!.scratchUpdate).toContain('deploy');
-    expect(update!.workingSetAdds?.length).toBe(2);
   });
 
   test('returns null on unparseable response', async () => {
@@ -34,20 +30,15 @@ describe('Sleep-time compute', () => {
     facts.upsert('keep.this', 'value', { confidence: 1.0 });
     facts.upsert('decay.this', 'old', { confidence: 1.0 });
 
-    const captured: Array<[string, string]> = [];
-    const setBlock = (name: string, content: string) => { captured.push([name, content]); };
-
     const summary = applySleepTimeUpdate(facts, {
       upserts: [{ key: 'new.fact', value: 42, confidence: 0.9, rationale: '' }],
       decay: ['decay.this'],
-      scratchUpdate: 'compressed summary',
-      workingSetAdds: ['item-a', 'item-b'],
-    }, setBlock);
+    });
 
     expect(summary.upserted).toBe(1);
     expect(summary.decayed).toBe(1);
-    expect(summary.blocksWritten).toBe(2);
     expect(summary.skipped).toBe(0);
+    expect(facts.recall('decay.this')!.confidence).toBeLessThan(1.0);
   });
 
   test('applySleepTimeUpdate skips non-serializable values atomically', () => {

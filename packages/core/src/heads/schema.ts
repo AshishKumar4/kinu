@@ -1,9 +1,11 @@
 /**
  * SQLite schema for branching heads.
  *
- * Two tables:
+ * Tables:
+ *   head_runs     — one row per split: the run identity (rationale + spawn time)
  *   head_journal  — one row per head, lifecycle state + final summary
  *   head_evidence — one row per piece of evidence a head considered
+ *   head_steps    — ordered per-head reasoning trace (text + tool calls)
  *
  * Schema is idempotent (IF NOT EXISTS) so this can run on every DO cold-start.
  *
@@ -15,6 +17,15 @@
 import type { RawSqlExec } from '../types/primitives.js';
 
 export function initHeadsTables(execRaw: RawSqlExec): void {
+  // The run identity: a split groups N heads under one root_id. Without this,
+  // top-level splits (synthetic root_id, every head parent_id NULL) had no row
+  // to anchor the run, so the UI saw each head as its own empty "root".
+  execRaw(`CREATE TABLE IF NOT EXISTS head_runs (
+    root_id TEXT PRIMARY KEY,
+    rationale TEXT,
+    spawned_at INTEGER NOT NULL
+  )`);
+
   execRaw(`CREATE TABLE IF NOT EXISTS head_journal (
     id TEXT PRIMARY KEY,
     parent_id TEXT,
@@ -52,6 +63,19 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
   )`);
 
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_evidence_head ON head_evidence(head_id)`);
+
+  // Ordered reasoning trace per head — one row per generateText step.
+  execRaw(`CREATE TABLE IF NOT EXISTS head_steps (
+    id TEXT PRIMARY KEY,
+    head_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    text TEXT,
+    reasoning TEXT,
+    tool_calls_json TEXT,
+    created_at INTEGER NOT NULL
+  )`);
+
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_steps_head ON head_steps(head_id)`);
 
   // Cached merge results keyed by root_id — lets the orchestrator avoid
   // re-running synthesis if the user re-asks the same split.

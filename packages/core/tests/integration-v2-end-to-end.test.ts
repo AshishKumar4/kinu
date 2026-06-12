@@ -78,7 +78,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Survey finding: 3 prior impls exist, all use the X pattern.',
         evidence: [{ id: 'e1', kind: 'fact', body: 'prior art' }],
         decisions: [{ question: 'use X pattern?', choice: 'yes', rationale: 'standard' }],
-        artifactRefs: [], childHeadIds: [], toolCalls: [],
+        artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
         tokenUsage: { input: 100, output: 80, total: 180 }, wallClockMs: 120,
       },
       'design': {
@@ -86,7 +86,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Design sketch: minimal struct, no abstractions.',
         evidence: [{ id: 'e2', kind: 'fact', body: 'simple > clever' }],
         decisions: [{ question: 'add abstraction?', choice: 'no', rationale: 'YAGNI' }],
-        artifactRefs: [], childHeadIds: [], toolCalls: [],
+        artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
         tokenUsage: { input: 120, output: 90, total: 210 }, wallClockMs: 180,
       },
       'risks': {
@@ -94,7 +94,7 @@ describe('v2 e2e: branching heads → merge', () => {
         summary: 'Failure modes: connection drops, race on init.',
         evidence: [{ id: 'e3', kind: 'fact', body: 'race condition' }],
         decisions: [{ question: 'add retry?', choice: 'yes', rationale: 'idempotent' }],
-        artifactRefs: [], childHeadIds: [], toolCalls: [],
+        artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
         tokenUsage: { input: 110, output: 75, total: 185 }, wallClockMs: 150,
       },
     };
@@ -213,29 +213,25 @@ describe('v2 e2e: scaffold shadow rollout', () => {
       currentScore: winner === 'current' ? 0.8 : 0.5,
       pendingScore: winner === 'pending' ? 0.8 : 0.5,
     });
-    for (let i = 0; i < 4; i++) {
+    // A clean win with ZERO regressions — the regression veto (maxRegressions=0)
+    // requires the pending lose no decisive trials to be promotable.
+    for (let i = 0; i < 5; i++) {
       recordShadowEvaluation(rt.storage.sql, {
         currentVersion: 0, pendingVersion: 1,
         task: `t${i}`, currentOutput: 'c', pendingOutput: 'p',
         judgeResult: judge('pending'),
       });
     }
-    for (let i = 0; i < 2; i++) {
-      recordShadowEvaluation(rt.storage.sql, {
-        currentVersion: 0, pendingVersion: 1,
-        task: `t-c${i}`, currentOutput: 'c', pendingOutput: 'p',
-        judgeResult: judge('current'),
-      });
-    }
 
     const pending = getPendingScaffold(rt.storage.sql);
     expect(pending).not.toBeNull();
-    expect(pending!.trialsSoFar).toBe(6);
-    expect(pending!.pendingWins).toBe(4);
+    expect(pending!.trialsSoFar).toBe(5);
+    expect(pending!.pendingWins).toBe(5);
+    expect(pending!.currentWins).toBe(0);
 
     const decision = decidePromotion(pending!, DEFAULT_SHADOW_CONFIG);
     expect(decision.decision).toBe('promote');
-    expect(decision.winRate).toBeCloseTo(4 / 6, 2);
+    expect(decision.winRate).toBeCloseTo(1, 2);
 
     const applied = await applyPromotionDecision(rt, pending!, 'promote');
     expect(applied.action).toBe('promote');

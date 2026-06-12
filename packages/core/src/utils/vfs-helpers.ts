@@ -2,8 +2,10 @@
 import type { VFS } from '../types/primitives.js';
 
 /** Idempotent mkdir — swallows "already exists" errors so callers don't
- *  need a try/catch around every call. Other errors propagate. */
-export async function ensureDir(vfs: VFS, dir: string): Promise<void> {
+ *  need a try/catch around every call. Other errors propagate.
+ *  Only depends on `mkdir`, so it accepts any VFS-like value that has it
+ *  (e.g. the SKILL.md export's MinimalVFS) without forcing a cast. */
+export async function ensureDir(vfs: Pick<VFS, 'mkdir'>, dir: string): Promise<void> {
   try {
     await vfs.mkdir(dir, { recursive: true });
   } catch (err) {

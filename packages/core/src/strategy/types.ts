@@ -2,12 +2,10 @@
 // score them, return the best." MCTS, Heads, Tree-of-Thoughts, Reflexion,
 // single-shot — all fit this shape.
 //
-// Today MCTS and Heads are exposed as two separate tools (`explore` and
-// `split_heads`); the LLM has to pick by name and learn each one's args. By
-// hiding them behind one `think(strategy, task, budget)` tool dispatching
-// over a strategy registry, the agent surface stays stable while new
-// strategies (ToT, GoT, Reflexion, RLM-on-subtask) drop in as registry
-// entries — no orchestrator changes.
+// All strategies hide behind one `think(strategy, task, budget)` tool
+// dispatching over a strategy registry, so the agent surface stays small and
+// stable while new strategies (ToT, GoT, Reflexion, RLM-on-subtask) drop in as
+// registry entries — no tool/UI/orchestrator changes.
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LanguageModel } from 'ai';
@@ -19,6 +17,9 @@ export interface StrategyBudget {
   wallClockMs?: number;
   /** Max recursion depth for strategies that nest (RLM, ToT). */
   depth?: number;
+  /** Max OUTPUT tokens per LLM generation (generation length — NOT the loop
+   *  count; never reuse maxIterations for this). */
+  maxOutputTokens?: number;
 }
 
 export interface StrategyContext {
@@ -63,6 +64,11 @@ export interface ExplorationStrategy {
   readonly id: string;
   readonly label?: string;
   readonly description?: string;
+  /** Default true. False = registered for programmatic/eval use (the think
+   *  tool still dispatches it by id) but omitted from the LLM-visible enum
+   *  and docstring — e.g. the single-shot baseline, which a chat model never
+   *  needs (it IS a single shot). */
+  readonly advertised?: boolean;
   explore(ctx: StrategyContext): Promise<StrategyResult>;
 }
 

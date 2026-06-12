@@ -1,335 +1,860 @@
 /**
- * TUI Chat Application — OpenTUI React-based terminal UI for Proteus.
+ * TUI Chat Application — the single OpenTUI React chat surface for both
+ * backends, parameterized by an AgentClient (LocalAgentClient over
+ * LocalAgentSession, CloudAgentClient over the OrchestratorAgent DO). The
+ * client owns transport, recording, and history; this renders its
+ * AgentClientEvent stream into scrollable message history with streaming text,
+ * tool cards, evolution markers, a status bar, model/session pickers, and the
+ * device-consent overlay.
  *
- * Replaces the raw readline chat-loop with a proper terminal UI featuring:
- * - Scrollable message history
- * - Streaming text with cursor indicator
- * - Tool call/result display
- * - Status bar with agent info
- * - Slash command support (/help, /status, /tools, /memory, /tree, /exit)
+ * Input is driven by ONE state machine (tui/input-state.ts): Enter while a
+ * turn runs STEERS it (client.steer), Tab queues the draft for after the turn,
+ * Ctrl+B runs the draft as a parallel BRANCH (client.branch — settles into
+ * Alternate Takes), Esc interrupts, and Esc-Esc opens the walk-back picker
+ * that forks the conversation before an earlier user message (client.fork)
+ * with that message pre-filled for editing.
  */
 
-import { createCliRenderer } from '@opentui/core';
-import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
-import { useState, useCallback, useRef, useEffect } from 'react';
-import type { CoreMessage, ToolSet } from 'ai';
-import type { AgentRuntime, AgentInfo, LLMProviderConfig, SearchNode } from '@proteus/core';
-import {
-  EvolutionEngine,
-  buildBuiltinTools,
-  buildSystemPromptSync,
-  createChatModel,
-  runChat,
-  resolveMaxSteps,
-  type CompletedTurn,
-  type ToolCallRecord,
-  type ChatEvent,
-} from '@proteus/core';
-import { createNodeCraftedExecute, createNodeExecuteToolFactory } from '@proteus/cli-backend';
+import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
+import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
+import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@proteus/core';
+import {
+  findForkPivot,
+  forkCandidates,
+  type AgentChangelogView,
+  type AgentClient,
+  type AgentClientEvent,
+  type AgentClientStatus,
+  type DeviceConsentDecision,
+  type ForkPoint,
+  type PendingDeviceConsent,
+} from '../agent-client.js';
+import {
+  commandsForClient,
+  describeBranchStatus,
+  describeTakePick,
+  executeSlashCommand,
+  filterCommands,
+  isBranchStatusEvent,
+  performUndo,
+  resolveCommandDraft,
+  type SlashOutcome,
+} from '../slash-commands.js';
+import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
+import { watchDeviceConsents } from '../consent-watch.js';
+import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
+import { requireInteractiveTerminal } from '../prompt.js';
+import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
-import { HelpView, StatusView } from './help-view.js';
+import { StatusView } from './help-view.js';
+import { ChangelogOverlay, CommandHintOverlay, DeviceConnectOverlay, DeviceConsentOverlay, ModelPickerOverlay, PhaseLine, TakesOverlay, WalkbackOverlay } from './overlays.js';
+import { useDeviceConnectPrompt } from './use-device-connect.js';
+import { estimateContextTokens } from './context-status.js';
+import { useStreamingBuffer } from './streaming-buffer.js';
+import { renderSessionBrowser, selectSession } from './session-browser.js';
+import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state.js';
+import { clipText } from './format.js';
+import { tuiColors } from './theme.js';
 
 export interface ChatAppOpts {
-  rt: AgentRuntime;
-  info: AgentInfo;
-  dbSize: number;
-  llmConfig: LLMProviderConfig;
-  refreshInfo: () => AgentInfo;
-  noAutoEvolve?: boolean;
+  client: AgentClient;
+  /** Seed the message list from client.history() before accepting input. */
+  hydrateHistory?: boolean;
+  initialPrompt?: string;
+  onExit?: () => void;
+  /** A cloud walk-back fork swaps in a sibling client; the host needs the
+   *  current one so exit cleanup closes the right connection. */
+  onClientChange?: (client: AgentClient) => void;
 }
 
+const STATUS_VIEW = 'STATUS_VIEW';
+
 let globalExit: (() => void) | null = null;
-let globalSessionCleanup: (() => Promise<void>) | null = null;
 
-function ChatApp({ rt, info: initialInfo, dbSize, llmConfig, refreshInfo, noAutoEvolve }: ChatAppOpts) {
-  const renderer = useRenderer();
-  const { height } = useTerminalDimensions();
-  const [messages, setMessages] = useState<DisplayMessage[]>([
-    { id: 'welcome', role: 'system', content: `Connected to ${initialInfo.name}. Type a message or /help for commands.` },
-  ]);
-  const [streamingText, setStreamingText] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [info, setInfo] = useState(initialInfo);
+export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, onExit, onClientChange }: ChatAppOpts) {
+  const { width, height } = useTerminalDimensions();
+  // The client can be swapped mid-session: a cloud walk-back fork returns a
+  // sibling client pointed at the forked agent.
+  const [client, setClient] = useState(initialClient);
+  const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
+  const [turnPhase, setTurnPhase] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [status, setStatus] = useState<AgentClientStatus | null>(null);
+  const [modelSpec, setModelSpec] = useState<string>('');
+  const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
+  const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ models: AgentModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [changelogView, setChangelogView] = useState<AgentChangelogView | null>(null);
+  const [takesView, setTakesView] = useState<AlternateTakeSet | null>(null);
+  const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
+  const [draft, setDraft] = useState('');
+  const [activeSessionId, setActiveSessionId] = useState(client.cliSession.id);
+  const [inputState, setInputState] = useState(initialInputState);
+  /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
+  const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
 
-  const historyRef = useRef<CoreMessage[]>([]);
   const msgIdRef = useRef(0);
-  const sessionTurnsRef = useRef<CompletedTurn[]>([]);
+  const inputRef = useRef<TextareaRenderable | null>(null);
+  const initialPromptSentRef = useRef(false);
+  const machineRef = useRef(initialInputState);
+  /** A fork swap re-points the message list itself — skip the next hydration. */
+  const skipHydrationRef = useRef(false);
+  /** Take sets already hinted at, so a turn without a new convergence is quiet. */
+  const hintedTakesRef = useRef<string | null>(null);
+  const commands = useMemo(() => commandsForClient(client), [client]);
+  const deviceConnect = useDeviceConnectPrompt();
 
-  const model = createChatModel({
-    kind: 'openai-compat',
-    name: llmConfig.name,
-    baseURL: llmConfig.baseURL,
-    headers: llmConfig.headers,
-    modelId: llmConfig.model,
-  });
-
-  const engineRef = useRef<EvolutionEngine | null>(null);
-  if (!engineRef.current) {
-    engineRef.current = new EvolutionEngine(rt, { enabled: !noAutoEvolve });
-    engineRef.current.onEvent((event) => {
-      addMessage({ role: 'evolution', content: `[${event.type}] ${event.message}` });
-    });
-  }
-
-  // v2.0/v2.1: same 5-tool surface as CF. CLI wires the Node execute-tools
-  // factory and the Node crafted-tool executor; codemodeLoader is a sentinel
-  // so the factory branch is selected.
-  const tools: ToolSet = buildBuiltinTools({
-    rt,
-    engine: engineRef.current,
-    craftedToolExecute: createNodeCraftedExecute(),
-    createExecuteTool: createNodeExecuteToolFactory({
-      vfs: rt.storage.vfs,
-      memory: rt.memory,
-      shell: rt.shell,
-    }) as never,
-    codemodeLoader: { __cli: true } as unknown,
-  });
+  const isProcessing = inputState.activeTurns > 0;
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
     const id = `msg-${++msgIdRef.current}`;
-    setMessages(prev => [...prev, { ...msg, id }]);
+    setMessages((prev) => [...prev, { ...msg, id }]);
   }, []);
 
-  const handleSlash = useCallback(async (input: string) => {
-    const cmd = input.split(/\s+/)[0]!.toLowerCase();
-    switch (cmd) {
-      case '/exit':
-      case '/quit':
-        globalExit?.();
+  // ── Live assistant text segments — the key to chronological interleaving.
+  // Streamed text-deltas flow into a `live` assistant message that sits at its
+  // real position in the array. A tool-call SEALS the active segment so the
+  // next text-delta opens a fresh segment AFTER the tool, giving true
+  // text → tool → text → tool order (rather than buffering all text to a
+  // trailing block that renders after every tool card).
+  const activeSegmentRef = useRef<string | null>(null);
+  /** Whether the current turn streamed any assistant text. When false at
+   *  turn-end, turn.text was synthesized server-side (no deltas) and must be
+   *  appended once so the answer isn't dropped from the live view. */
+  const turnStreamedTextRef = useRef(false);
+
+  /** Stream-buffer flush target: write coalesced text into the live segment. */
+  const writeActiveSegment = useCallback((value: string | null) => {
+    const id = activeSegmentRef.current;
+    if (!id || value === null) return;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
+  }, []);
+  const stream = useStreamingBuffer(writeActiveSegment);
+
+  /** Open a fresh live assistant segment and route streamed text into it. */
+  const beginSegment = useCallback(() => {
+    const id = `msg-${++msgIdRef.current}`;
+    activeSegmentRef.current = id;
+    setMessages((prev) => [...prev, { id, role: 'assistant', content: '', live: true }]);
+    stream.start();
+  }, [stream]);
+
+  /** Seal the live segment in place: stop streaming, keep its text, drop the
+   *  cursor. An empty segment (tool fired before any text) is removed. */
+  const sealSegment = useCallback(() => {
+    const id = activeSegmentRef.current;
+    activeSegmentRef.current = null;
+    stream.clear();
+    if (!id) return;
+    setMessages((prev) =>
+      prev.flatMap((m) => (m.id === id ? (m.content.trim() ? [{ ...m, live: false }] : []) : [m])),
+    );
+  }, [stream]);
+
+  /** All input transitions flow through the one reducer; effects come back to
+   *  the caller so client events and keypresses never race over state. */
+  const dispatchInput = useCallback((event: InputMachineEvent): InputEffect[] => {
+    const { state, effects } = reduceInput(machineRef.current, event);
+    machineRef.current = state;
+    setInputState(state);
+    return effects;
+  }, []);
+
+  const setInputText = useCallback((text: string) => {
+    inputRef.current?.setText(text);
+    setDraft(text);
+  }, []);
+
+  /** Send (or steer) one user prompt. @path mentions (plus quoted/~ path
+   *  tokens) become attachments: images and PDFs inline as file parts, other
+   *  files stay path references. */
+  const sendPrompt = useCallback(async (input: string) => {
+    const prompt = await resolvePromptAttachments(input);
+    for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
+    const steering = machineRef.current.activeTurns > 0;
+    addMessage({
+      role: 'user',
+      content: prompt.text,
+      ...(prompt.attached.length > 0 ? { attachments: prompt.attached.map(describePromptAttachment) } : {}),
+      ...(steering ? { steered: true } : {}),
+    });
+    const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
+    if (steering && client.steer(payload, { cwd: process.cwd() })) return;
+    try {
+      await client.send(payload, { cwd: process.cwd() });
+    } catch (err) {
+      // Transport/pre-flight failures never reach the event stream.
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
+  /** Run the draft as a parallel branch of the live turn — never interrupts
+   *  it; progress lands in the status bar and settles into /takes. Falls back
+   *  to a normal send when the turn just finished. */
+  const performBranch = useCallback(async (input: string) => {
+    const text = input.trim();
+    if (!text) return;
+    if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
+      addMessage({ role: 'user', content: text, branched: true });
+      return;
+    }
+    await sendPrompt(text);
+  }, [addMessage, client, sendPrompt]);
+
+  /** Fork before the picked user message, truncate the rendered transcript to
+   *  match, and put the message back in the input for editing. */
+  const performWalkback = useCallback(async (point: ForkPoint) => {
+    dispatchInput({ type: 'walkback-closed' });
+    try {
+      const result = await client.fork(point);
+      if (result.client !== client) {
+        skipHydrationRef.current = true;
+        const previous = client;
+        setClient(result.client);
+        onClientChange?.(result.client);
+        void previous.close().catch(() => {});
+      }
+      setMessages((prev) => {
+        const pivot = findForkPivot(prev, point);
+        const kept = pivot < 0 ? prev : prev.slice(0, pivot);
+        return [...kept, {
+          id: `msg-${++msgIdRef.current}`,
+          role: 'system',
+          content: `Forked ${result.label} — edit the message and press Enter to resend.`,
+        }];
+      });
+      setActiveSessionId(result.client.cliSession.id);
+      setInputText(point.text);
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client, dispatchInput, onClientChange, setInputText]);
+
+  const resumeSession = useCallback(async (input: string, available?: CliSessionInfo[]) => {
+    const sessions = available ?? client.listSessions();
+    const selected = selectSession(sessions, input);
+    if (!selected) {
+      addMessage({ role: 'system', content: `No matching session for "${input}". Type /resume to choose again.` });
+      return;
+    }
+    setSessionPicker(null);
+    setModelPicker(null);
+    setReady(false);
+    activeSegmentRef.current = null;
+    stream.clear();
+    setTurnPhase(null);
+    await client.resumeConversation(selected.info.id);
+    const history = await client.history().catch(() => []);
+    setActiveSessionId(client.cliSession.id);
+    setMessages([
+      { id: `resume-${selected.info.id}`, role: 'system', content: `Resumed ${selected.label}` },
+      ...history,
+    ]);
+    setReady(true);
+  }, [addMessage, client, stream]);
+
+  const openModelPicker = useCallback(async () => {
+    setModelPicker({ models: [], loading: true, error: null });
+    try {
+      const models = await client.listModels();
+      setModelCatalog(models);
+      setModelPicker({ models, loading: false, error: null });
+    } catch (err) {
+      setModelPicker({ models: [], loading: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }, [client]);
+
+  const selectModel = useCallback(async (model: AgentModelEntry) => {
+    try {
+      const result = await client.setModel(model.spec);
+      setModelSpec(result.spec);
+      setModelPicker(null);
+      addMessage({ role: 'system', content: `Model: ${result.spec}` });
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
+  /** Enter on a changelog line: revert revertables through the real paths,
+   *  explain informational lines; the overlay refreshes with the new digest. */
+  const revertChangelogEntry = useCallback(async (entry: ChangelogEntry) => {
+    if (!entry.revert) {
+      addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}) — nothing to revert.` });
+      return;
+    }
+    setChangelogView(null);
+    try {
+      const result = await client.revertChangelogEntry(entry.id);
+      addMessage({
+        role: 'system',
+        content: result.ok
+          ? `Reverted: ${entry.summary}\n→ ${result.detail ?? 'done'}`
+          : `Revert failed: ${result.error ?? 'unknown error'}`,
+      });
+      if (result.ok) setChangelogView(await client.changelog());
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
+  /** Enter on a take: record the pick (ledger + repoint); a changed answer
+   *  streams its continuation as the next programmatic turn. */
+  const pickTake = useCallback(async (set: AlternateTakeSet, candidate: AlternateTakeCandidate) => {
+    setTakesView(null);
+    try {
+      const index = set.candidates.findIndex((c) => c.nodeId === candidate.nodeId) + 1;
+      const result = await client.pickTake(set.id, candidate.nodeId);
+      addMessage({ role: 'system', content: describeTakePick(result, index) });
+    } catch (err) {
+      addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  }, [addMessage, client]);
+
+  const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
+    switch (outcome.kind) {
+      case 'text':
+        addMessage({ role: 'system', content: outcome.text });
         return;
-      case '/help':
-        addMessage({ role: 'system', content: 'HELP_VIEW' });
+      case 'changelog':
+        setChangelogView(outcome.view);
         return;
-      case '/status': {
-        const fresh = refreshInfo();
-        setInfo(fresh);
-        addMessage({ role: 'system', content: 'STATUS_VIEW' });
+      case 'takes':
+        setTakesView(outcome.set);
+        return;
+      case 'model-set':
+        setModelSpec(outcome.spec);
+        addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
+        return;
+      case 'status':
+        setStatus(outcome.status);
+        setModelSpec(outcome.status.model ?? '');
+        addMessage({ role: 'system', content: STATUS_VIEW });
+        return;
+      case 'exit':
+        onExit ? onExit() : globalExit?.();
+        return;
+      case 'model-picker':
+        await openModelPicker();
+        return;
+      case 'sessions': {
+        const sessions = client.listSessions();
+        if (sessions.length === 0) {
+          addMessage({ role: 'system', content: 'No recorded CLI sessions yet.' });
+          return;
+        }
+        if (outcome.mode === 'resume' && outcome.resumeRef) {
+          await resumeSession(outcome.resumeRef, sessions);
+          return;
+        }
+        if (outcome.mode === 'resume') setSessionPicker({ sessions });
+        addMessage({ role: 'system', content: renderSessionBrowser(outcome.mode, sessions) });
         return;
       }
-      case '/tools': {
-        const builtIn = Object.entries(tools).map(([name, t]) =>
-          `  ${name} — ${(t as { description?: string }).description ?? ''}`,
-        );
-        const crafted = rt.craftStore.list();
-        const craftedLines = crafted.map(t => `  ${t.name} — ${t.description.slice(0, 50)}`);
-        const lines = ['Built-in:', ...builtIn];
-        if (craftedLines.length > 0) lines.push('', 'Crafted:', ...craftedLines);
-        addMessage({ role: 'system', content: lines.join('\n') });
+      case 'device-connect':
+        await deviceConnect.open();
         return;
-      }
-      case '/memory': {
-        const content = await rt.memory.read('memory/MEMORY.md');
-        addMessage({ role: 'system', content: content ? `Memory:\n${content.slice(0, 1500)}` : 'Memory is empty.' });
+      case 'queue':
+      case 'fork':
+      case 'undo':
+        // Surface-owned outcomes — handleSubmit intercepts them before this.
         return;
-      }
-      case '/tree': {
-        const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
-        if (nodes.length === 0) {
-          addMessage({ role: 'system', content: 'No MCTS nodes yet. Use /evolve or ask complex questions.' });
+      case 'cancel':
+        if (modelPicker) {
+          setModelPicker(null);
+          addMessage({ role: 'system', content: 'Model selection cancelled.' });
+        } else if (changelogView) {
+          setChangelogView(null);
+          addMessage({ role: 'system', content: 'Changelog closed — everything kept.' });
+        } else if (takesView) {
+          setTakesView(null);
+          addMessage({ role: 'system', content: 'Takes closed — the answered take stays.' });
+        } else if (sessionPicker) {
+          setSessionPicker(null);
+          addMessage({ role: 'system', content: 'Resume cancelled.' });
         } else {
-          const lines = nodes.map(n => {
-            const prefix = '  '.repeat(n.depth) + (n.status === 'pruned' ? '◌' : n.status === 'terminal' ? '★' : '○');
-            return `${prefix} ${n.value.toFixed(3)} n=${n.visits} ${n.action?.slice(0, 40) ?? ''}`;
-          });
-          addMessage({ role: 'system', content: `MCTS Tree (${nodes.length} nodes):\n${lines.join('\n')}` });
+          addMessage({ role: 'system', content: 'Nothing to cancel.' });
         }
         return;
-      }
-      default:
-        addMessage({ role: 'system', content: `Unknown command: ${cmd}. Type /help` });
+      case 'unknown':
+        addMessage({ role: 'system', content: `Unknown command: ${outcome.command}. Type /help` });
+        return;
     }
-  }, [addMessage, refreshInfo, rt, tools]);
+  }, [addMessage, changelogView, client, deviceConnect.open, modelPicker, onExit, openModelPicker, resumeSession, sessionPicker, takesView]);
+
+  const runInputEffects = useCallback((effects: InputEffect[]) => {
+    // Steers accepted mid-turn but never delivered come back to the composer
+    // on interrupt — the same restore contract as the Tab queue (a queue
+    // restore in the same batch merges behind them instead of clobbering).
+    let droppedSteers: string[] = [];
+    for (const effect of effects) {
+      switch (effect.kind) {
+        case 'interrupt':
+          droppedSteers = client.stop();
+          addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
+          break;
+        case 'exit':
+          onExit ? onExit() : globalExit?.();
+          break;
+        case 'clear-input':
+          setInputText('');
+          break;
+        case 'set-input':
+          setInputText([...droppedSteers.splice(0), effect.text].filter(Boolean).join('\n'));
+          break;
+        case 'hint':
+          addMessage({ role: 'system', content: effect.text });
+          break;
+        case 'send-queued':
+          void sendPrompt(effect.text);
+          break;
+        case 'send-branch':
+          void performBranch(effect.text);
+          break;
+      }
+    }
+    if (droppedSteers.length > 0) {
+      setInputText([...droppedSteers, inputRef.current?.plainText ?? ''].filter(Boolean).join('\n'));
+    }
+  }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
     if (!text) return;
-
-    if (text.startsWith('/')) {
-      await handleSlash(text);
+    if (!ready) {
+      addMessage({ role: 'system', content: 'Still connecting.' });
       return;
     }
-
-    addMessage({ role: 'user', content: text });
-    setIsProcessing(true);
-    setStreamingText('');
-
-    const turnStart = Date.now();
-    const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
-    const executorNames = (rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const systemPrompt = buildSystemPromptSync(rt, {
-      extraKnowledge: knowledge || undefined,
-      registeredExecutors: executorNames,
-    });
-
-    historyRef.current.push({ role: 'user', content: text });
-
-    const turnToolCalls: ToolCallRecord[] = [];
-    let fullText = '';
-    let stepCount = 0;
-    let hadError = false;
-
-    try {
-      for await (const event of runChat({
-        model,
-        system: systemPrompt,
-        history: historyRef.current,
-        tools,
-        maxSteps: resolveMaxSteps(),
-      })) {
-        switch (event.type) {
-          case 'text-delta':
-            fullText += event.delta;
-            setStreamingText(fullText);
-            break;
-          case 'tool-call':
-            addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
-            turnToolCalls.push({ name: event.toolName, args: event.args, result: null });
-            break;
-          case 'tool-result': {
-            addMessage({ role: 'tool_result', content: event.result });
-            const lastCall = turnToolCalls.findLast(tc => tc.name === event.toolName && tc.result === null);
-            if (lastCall) lastCall.result = event.result;
-            break;
-          }
-          case 'done':
-            for (const msg of (event as any).responseMessages ?? []) {
-              historyRef.current.push(msg);
-            }
-            if (!fullText.trim() && event.text.trim()) fullText = event.text;
-            break;
+    if (sessionPicker && !text.startsWith('/')) {
+      try {
+        await resumeSession(text, sessionPicker.sessions);
+      } catch (err) {
+        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      }
+      return;
+    }
+    const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
+    if (submitted.startsWith('/')) {
+      try {
+        const outcome = await executeSlashCommand(client, submitted);
+        if (outcome.kind === 'queue') {
+          if (outcome.text) runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
+          else addMessage({ role: 'system', content: 'Usage: /queue <text> — it sends after the running turn (or immediately when idle).' });
+          return;
         }
+        if (outcome.kind === 'branch') {
+          if (outcome.text) await performBranch(outcome.text);
+          else addMessage({ role: 'system', content: 'Usage: /branch <text> (or Ctrl+B on a draft) — runs the redirect as a parallel branch of the running turn.' });
+          return;
+        }
+        if (outcome.kind === 'fork') {
+          const candidates = forkCandidates(messages);
+          if (candidates.length === 0) {
+            addMessage({ role: 'system', content: 'No user messages to walk back to.' });
+            return;
+          }
+          if (!outcome.ref) {
+            dispatchInput({ type: 'open-walkback' });
+            return;
+          }
+          const index = Number.parseInt(outcome.ref, 10) - 1;
+          const picked = Number.isInteger(index) ? candidates[index] : undefined;
+          if (!picked) {
+            addMessage({ role: 'system', content: `No walk-back candidate "${outcome.ref}". Esc-Esc (or /fork) lists them.` });
+            return;
+          }
+          await performWalkback(picked);
+          return;
+        }
+        if (outcome.kind === 'undo') {
+          const undone = await performUndo(client, outcome.ref);
+          addMessage({ role: 'system', content: undone.text });
+          if (undone.restored && forkCandidates(messages).length > 0) {
+            // opencode parity: files + conversation together — reuse the
+            // Esc-Esc walk-back picker for the conversation half.
+            addMessage({ role: 'system', content: 'Pick a message to also walk back the conversation, or Esc to keep it.' });
+            dispatchInput({ type: 'open-walkback' });
+          }
+          return;
+        }
+        await applySlashOutcome(outcome);
+      } catch (err) {
+        addMessage({ role: 'system', content: `Error: ${err instanceof Error ? err.message : String(err)}` });
       }
-    } catch (err) {
-      hadError = true;
-      addMessage({ role: 'system', content: `Error: ${(err as Error).message}` });
+      return;
     }
+    await sendPrompt(submitted);
+  }, [addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, resumeSession, runInputEffects, sendPrompt, sessionPicker]);
 
-    setStreamingText(null);
-    setIsProcessing(false);
-
-    if (fullText.trim()) {
-      addMessage({ role: 'assistant', content: fullText.trim() });
-    }
-
-    // Store in DB
-    const msgId = crypto.randomUUID();
-    const sessionId = 'tui-' + Date.now();
-    rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${msgId}, ${sessionId}, ${'user'}, ${text})`;
-    rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${sessionId}, ${msgId}, ${'assistant'}, ${fullText})`;
-
-    const turn: CompletedTurn = {
-      userMessage: text, assistantResponse: fullText, toolCalls: turnToolCalls,
-      steps: stepCount, durationMs: Date.now() - turnStart, feedback: null, hadError,
-    };
-    sessionTurnsRef.current.push(turn);
-    await engineRef.current?.onTurnComplete(turn);
-  }, [addMessage, handleSlash, model, rt, tools]);
-
-  // Register session cleanup so the exit handler can fire session evolution
-  const sessionStartRef = useRef(Date.now());
-  useEffect(() => {
-    globalSessionCleanup = async () => {
-      if (sessionTurnsRef.current.length > 0 && engineRef.current) {
-        await engineRef.current.onSessionComplete({
-          sessionId: `tui-${sessionStartRef.current}`,
-          turns: sessionTurnsRef.current,
-          startedAt: sessionStartRef.current,
-          endedAt: Date.now(),
+  const handleClientEvent = useCallback((event: AgentClientEvent) => {
+    switch (event.type) {
+      case 'turn-start': {
+        runInputEffects(dispatchInput({ type: 'turn-start' }));
+        // A new segment opens lazily on the first text-delta — start clean.
+        sealSegment();
+        turnStreamedTextRef.current = false;
+        setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
+        if (event.kind === 'programmatic') {
+          addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
+        }
+        break;
+      }
+      case 'text-delta':
+        if (!event.delta) break;
+        turnStreamedTextRef.current = true;
+        if (!activeSegmentRef.current) beginSegment();
+        stream.append(event.delta);
+        setTurnPhase((current) => current === 'writing' ? current : 'writing');
+        break;
+      case 'tool-call':
+        // Seal the preceding text run so this tool — and any text that follows
+        // it — lands at its true chronological position.
+        sealSegment();
+        setTurnPhase(`calling ${event.toolName}`);
+        addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+        break;
+      case 'tool-result':
+        setTurnPhase(`finished ${event.toolName}`);
+        addMessage({ role: 'tool_result', content: event.result });
+        break;
+      case 'step-finish':
+        setTurnPhase(`step ${event.stepIndex}`);
+        break;
+      case 'evolution':
+        addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
+        break;
+      case 'error':
+        // Informational: the lifecycle settles through the paired turn-end.
+        sealSegment();
+        addMessage({ role: 'system', content: `Error: ${event.message}` });
+        break;
+      case 'turn-end': {
+        // Flush the trailing streamed text into the live segment, then seal it.
+        // The streamed segments ARE the transcript — re-appending turn.text here
+        // would duplicate the text after the tool cards (the old regrouping bug).
+        if (activeSegmentRef.current) stream.finish();
+        sealSegment();
+        // Synthesized-text fallback: when the backend produced text without
+        // streaming deltas (ended on a tool call, server-built summary), no
+        // live segment captured it — surface it once.
+        if (!turnStreamedTextRef.current && event.turn.text.trim()) {
+          addMessage({ role: 'assistant', content: event.turn.text.trim() });
+        }
+        runInputEffects(dispatchInput({ type: 'turn-settled' }));
+        if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+        // A think run may have converged on near-tied approaches — hint once
+        // per new take set so the comparison is one /takes away.
+        if (event.turn.toolCalls.some((call) => call.name === 'think')) {
+          void client.latestTakes().then((set) => {
+            if (!set || set.candidates.length < 2 || set.chosenNodeId) return;
+            if (hintedTakesRef.current === set.id) return;
+            hintedTakesRef.current = set.id;
+            addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
+          }).catch(() => {});
+        }
+        break;
+      }
+      case 'broadcast': {
+        if (!isBranchStatusEvent(event.event)) break;
+        const status = event.event;
+        setBranchTasks((prev) => {
+          const next = { ...prev };
+          if (status.status === 'running') next[status.branchId] = status.task;
+          else delete next[status.branchId];
+          return next;
         });
+        // The settle/error line IS the takes affordance (the running state
+        // lives in the status bar).
+        if (status.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(status) });
+        break;
       }
+    }
+  }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, stream]);
+
+  // Connect once per client: event subscription, startup resources, initial
+  // hydration. Re-runs when a walk-back fork swaps in a sibling client.
+  useEffect(() => {
+    const unsubscribe = client.subscribe(handleClientEvent);
+    let cancelled = false;
+    void (async () => {
+      if (hydrateHistory && !skipHydrationRef.current) {
+        try {
+          const history = await client.history();
+          if (!cancelled && history.length > 0) {
+            setMessages([welcomeMessage(client.agentName), ...history]);
+          }
+        } catch { /* hydration is best effort; the welcome message stands */ }
+      }
+      skipHydrationRef.current = false;
+      await client.connect();
+      if (cancelled) return;
+      setReady(true);
+      // Natural device access: a cloud chat with no connected PC offers to
+      // connect this one (at most once per CLI invocation).
+      if (client.mode === 'cloud') void deviceConnect.offerIfUnconnected();
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
     };
-    return () => { globalSessionCleanup = null; };
+  }, [client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.status()
+      .then((next) => {
+        if (cancelled) return;
+        setStatus(next);
+        setModelSpec((current) => current || (next.model ?? ''));
+      })
+      .catch(() => {});
+    void client.listModels()
+      .then((models) => { if (!cancelled) setModelCatalog(models); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [client]);
+
+  // Watch pending device consents while a turn is processing (cloud agents).
+  // The shared watcher presents each consent once (no re-show when a poll tick
+  // races the resolution) and cancels the overlay when the turn settles.
+  const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
+  useEffect(() => {
+    const consents = client.consents;
+    if (!consents || !isProcessing) {
+      setPendingConsent(null);
+      return;
+    }
+    const watcher = watchDeviceConsents(consents, {
+      present: (consent, signal) => new Promise((resolve) => {
+        const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
+          consentDecisionRef.current = null;
+          setPendingConsent(null);
+          resolve(outcome);
+        };
+        consentDecisionRef.current = settle;
+        setPendingConsent(consent);
+        signal.addEventListener('abort', () => settle('cancelled'), { once: true });
+      }),
+      note: (kind, message) => {
+        addMessage({ role: 'system', content: kind === 'error' ? `Error: ${message}` : message });
+      },
+    });
+    return () => watcher.stop();
+  }, [addMessage, client, isProcessing]);
+
+  const resolvePendingConsent = useCallback((decision: DeviceConsentDecision) => {
+    consentDecisionRef.current?.(decision);
   }, []);
 
-  // Escape to exit
+  useEffect(() => {
+    if (!ready || initialPromptSentRef.current) return;
+    const prompt = initialPrompt?.trim();
+    if (!prompt) return;
+    initialPromptSentRef.current = true;
+    void handleSubmit(prompt);
+  }, [handleSubmit, initialPrompt, ready]);
+
   useKeyboard((key) => {
-    if (key.name === 'escape') {
-      globalExit?.();
+    if (deviceConnect.handleKey(key)) return;
+    if (pendingConsent) {
+      if (key.name === 'o' || key.name === 'y' || key.name === 'return') {
+        resolvePendingConsent('once');
+        return;
+      }
+      if (key.name === 'a') {
+        resolvePendingConsent('always');
+        return;
+      }
+      if (key.name === 'n' || key.name === 'escape') {
+        resolvePendingConsent('deny');
+        return;
+      }
     }
+    const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+    if (key.name === 'b' && key.ctrl) {
+      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (key.name === 'tab') {
+      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'tab', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (key.name === 'backspace') {
+      if (!overlayOpen) runInputEffects(dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' }));
+      return;
+    }
+    if (key.name !== 'escape') return;
+    if (modelPicker) {
+      setModelPicker(null);
+      return;
+    }
+    if (changelogView) {
+      setChangelogView(null); // keep everything — the default
+      return;
+    }
+    if (takesView) {
+      setTakesView(null); // keep the answered take — the default
+      return;
+    }
+    runInputEffects(dispatchInput({
+      type: 'escape',
+      now: Date.now(),
+      draft: inputRef.current?.plainText ?? '',
+      hasUserMessages: messages.some((msg) => msg.role === 'user'),
+    }));
   });
 
-  const scrollHeight = Math.max(1, height - 7);
+  const onInputSubmit = useCallback(() => {
+    const value = inputRef.current?.plainText ?? '';
+    if (!value.trim()) return;
+    setInputText('');
+    void handleSubmit(value);
+  }, [handleSubmit, setInputText]);
+
+  const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
+  const commandHints = !modelPicker && !changelogView && !takesView && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
+  const contextTokens = estimateContextTokens(messages);
+  const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
+  const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
   return (
-    <box flexDirection="column" style={{ height: '100%' }}>
+    <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <StatusBar
-        info={info}
-        model={llmConfig.model}
-        toolCount={Object.keys(tools).length}
-        autoEvolve={!noAutoEvolve}
-        connected={true}
+        name={status?.name ?? client.agentName}
+        mode={client.mode}
+        model={modelSpec}
+        connected={ready}
+        scaffoldVersion={status?.scaffoldVersion}
+        toolCount={status?.toolCount}
+        autoEvolve={status?.autoEvolve}
+        contextTokens={contextTokens}
+        contextWindow={contextWindow}
+        branchCount={Object.keys(branchTasks).length}
       />
 
       <scrollbox
         focused={!isProcessing}
+        stickyScroll={true}
+        stickyStart="bottom"
         style={{
           flexGrow: 1,
-          height: scrollHeight,
-          rootOptions: { backgroundColor: '#0f0f23' },
-          viewportOptions: { backgroundColor: '#0f0f23' },
-          contentOptions: { backgroundColor: '#0f0f23' },
+          rootOptions: { backgroundColor: tuiColors.bg },
+          viewportOptions: { backgroundColor: tuiColors.bg },
+          contentOptions: { backgroundColor: tuiColors.bg },
           scrollbarOptions: {
-            trackOptions: { foregroundColor: '#4a4a6a', backgroundColor: '#1a1a2e' },
+            trackOptions: { foregroundColor: tuiColors.borderMuted, backgroundColor: tuiColors.panelStrong },
           },
         }}
       >
-        {messages.map((msg) => {
-          if (msg.role === 'system' && msg.content === 'HELP_VIEW') return <HelpView key={msg.id} />;
-          if (msg.role === 'system' && msg.content === 'STATUS_VIEW') return <StatusView key={msg.id} info={info} dbSize={dbSize} />;
-          return null;
-        })}
+        {status && messages.some((msg) => msg.role === 'system' && msg.content === STATUS_VIEW)
+          ? <StatusView status={status} />
+          : null}
         <MessageList
-          messages={messages.filter(m => !(m.role === 'system' && (m.content === 'HELP_VIEW' || m.content === 'STATUS_VIEW')))}
-          streamingText={streamingText}
+          messages={messages.filter((msg) => !(msg.role === 'system' && msg.content === STATUS_VIEW))}
         />
-        {isProcessing && streamingText === '' && (
-          <box style={{ paddingLeft: 2 }}>
-            <text><span fg="#7c3aed">⟳ thinking…</span></text>
-          </box>
-        )}
+        <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>
+
+      {inputState.queue.length > 0 && (
+        <box flexDirection="column" style={{ paddingLeft: 2, paddingRight: 2 }}>
+          {inputState.queue.map((text, i) => (
+            <text key={`queued-${i}`}>
+              <span fg={tuiColors.amberDeep}>⧗ </span>
+              <span fg={tuiColors.muted}>{i + 1} · </span>
+              <span fg={tuiColors.text}>{clipText(text.replace(/\s+/g, ' '), Math.max(8, width - 12))}</span>
+            </text>
+          ))}
+          <text><span fg={tuiColors.muted}>queued — sends after this turn · Backspace (empty input) edits the last</span></text>
+        </box>
+      )}
 
       <box
         style={{
-          height: 3,
+          height: draftLines + 2,
           border: true,
           borderStyle: 'single',
-          borderColor: isProcessing ? '#4a4a6a' : '#3b3b5c',
-          backgroundColor: '#1a1a2e',
+          borderColor: isProcessing ? tuiColors.borderMuted : tuiColors.border,
+          backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing…' : `${info.name} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
       >
-        <input
-          focused={!isProcessing}
-          placeholder={isProcessing ? 'Waiting for response…' : 'Type a message or /help'}
-          onSubmit={handleSubmit}
+        <textarea
+          ref={(value) => { inputRef.current = value; }}
+          focused={ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen}
+          placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues · Ctrl+B branches)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
+          wrapMode="word"
+          keyBindings={[
+            { name: 'return', action: 'submit' },
+            { name: 'return', shift: true, action: 'newline' },
+            { name: 'return', meta: true, action: 'newline' },
+            { name: 'j', ctrl: true, action: 'newline' },
+          ]}
+          onContentChange={() => setDraft(inputRef.current?.plainText ?? '')}
+          onSubmit={onInputSubmit}
         />
       </box>
+
+      {modelPicker ? (
+        <ModelPickerOverlay
+          models={modelPicker.models}
+          currentSpec={modelSpec}
+          terminal={{ width, height }}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={(model) => { void selectModel(model); }}
+        />
+      ) : changelogView ? (
+        <ChangelogOverlay
+          view={changelogView}
+          terminal={{ width, height }}
+          onSelect={(entry) => { void revertChangelogEntry(entry); }}
+        />
+      ) : takesView ? (
+        <TakesOverlay
+          set={takesView}
+          terminal={{ width, height }}
+          onSelect={(candidate) => { void pickTake(takesView, candidate); }}
+        />
+      ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
+        <WalkbackOverlay
+          candidates={walkbackList}
+          terminal={{ width, height }}
+          onSelect={(point) => { void performWalkback(point); }}
+        />
+      ) : (
+        <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
+      )}
+      {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width, height }} />}
+      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
     </box>
   );
 }
 
+function welcomeMessage(agentName: string): DisplayMessage {
+  return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
+}
+
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
+  requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   const root = createRoot(renderer);
+  let currentClient = opts.client;
 
   const cleanup = async () => {
-    // Fire session-level evolution before exit
-    try { await globalSessionCleanup?.(); } catch { /* best effort */ }
+    try { await currentClient.close(); } catch { /* best effort */ }
     root.render(<box />);
-    renderer.cleanup();
+    renderer.destroy();
     console.log('\n  Goodbye.\n');
     process.exit(0);
   };
 
-  globalExit = cleanup;
-  process.on('SIGINT', cleanup);
+  globalExit = () => { void cleanup(); };
+  process.on('SIGINT', () => { void cleanup(); });
 
-  root.render(<ChatApp {...opts} />);
+  root.render(<ChatApp {...opts} onClientChange={(client) => { currentClient = client; }} />);
 
   // Keep the process alive
   await new Promise<void>(() => {});

@@ -3,6 +3,8 @@
  * evolution events, and system messages.
  */
 
+import { markdownSyntax, tuiColors } from './theme.js';
+
 export interface DisplayMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'evolution' | 'system';
@@ -10,38 +12,73 @@ export interface DisplayMessage {
   toolName?: string;
   args?: string;
   timestamp?: string;
+  /** Attachment chip labels (file mentions resolved at submit). */
+  attachments?: string[];
+  /** User message injected into a running turn (mid-turn steer). */
+  steered?: boolean;
+  /** User redirect run as a parallel branch (Steer-as-Branch). */
+  branched?: boolean;
+  /** Assistant text segment still streaming — renders with the live cursor.
+   *  Sealed (set false / removed) when a tool call or turn-end follows. */
+  live?: boolean;
 }
 
-function UserMessage({ content }: { content: string }) {
+function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
   return (
-    <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text>
-        <strong fg="#60a5fa">You ›</strong>{' '}
-        <span fg="#e2e8f0">{content}</span>
-      </text>
+    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box
+        flexDirection="column"
+        style={{
+          maxWidth: '82%',
+          backgroundColor: tuiColors.bubbleBg,
+          border: true,
+          borderStyle: 'single',
+          borderColor: steered || branched ? tuiColors.amberDeep : tuiColors.bubbleBorder,
+          paddingLeft: 1,
+          paddingRight: 1,
+          paddingTop: 0,
+          paddingBottom: 0,
+        }}
+      >
+        <text>
+          <strong fg={tuiColors.blue}>You</strong>
+          {steered ? <span fg={tuiColors.amber}> ↪ steering</span> : null}
+          {branched ? <span fg={tuiColors.amber}> ⎇ branching</span> : null}
+        </text>
+        <text><span fg={tuiColors.textBright}>{content}</span></text>
+        {attachments?.map((label, i) => (
+          <text key={i}><span fg={tuiColors.muted}>📎 {label}</span></text>
+        ))}
+      </box>
     </box>
   );
 }
 
-function AssistantMessage({ content }: { content: string }) {
+function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   return (
-    <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text>
-        <strong fg="#c4b5fd">Agent ›</strong>{' '}
-        <span fg="#d1d5db">{content}</span>
-      </text>
-    </box>
-  );
-}
-
-function StreamingMessage({ content }: { content: string }) {
-  return (
-    <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text>
-        <strong fg="#c4b5fd">Agent ›</strong>{' '}
-        <span fg="#d1d5db">{content}</span>
-        <span fg="#7c3aed">▌</span>
-      </text>
+    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      <box
+        flexDirection="column"
+        style={{
+          width: '92%',
+          backgroundColor: tuiColors.bg,
+          paddingLeft: 1,
+          paddingRight: 1,
+        }}
+      >
+        <text><strong fg={tuiColors.accentStrong}>Agent</strong></text>
+        <markdown
+          width="100%"
+          syntaxStyle={markdownSyntax}
+          streaming={live ?? false}
+          internalBlockMode="top-level"
+          tableOptions={{ style: 'grid', widthMode: 'content' }}
+          content={live ? (content || ' ') : content}
+          fg={tuiColors.text}
+          bg={tuiColors.bg}
+        />
+        {live ? <text><span fg={tuiColors.borderActive}>▌</span></text> : null}
+      </box>
     </box>
   );
 }
@@ -50,9 +87,9 @@ function ToolCallMessage({ toolName, args }: { toolName: string; args?: string }
   return (
     <box style={{ paddingLeft: 4, marginBottom: 0 }}>
       <text>
-        <span fg="#f59e0b">⚡ </span>
-        <span fg="#fbbf24">{toolName}</span>
-        {args ? <span fg="#6b7280"> {args.slice(0, 80)}{args.length > 80 ? '…' : ''}</span> : null}
+        <span fg={tuiColors.amberDeep}>⚡ </span>
+        <span fg={tuiColors.amber}>{toolName}</span>
+        {args ? <span fg={tuiColors.muted}> {args.slice(0, 80)}{args.length > 80 ? '…' : ''}</span> : null}
       </text>
     </box>
   );
@@ -63,7 +100,7 @@ function ToolResultMessage({ content }: { content: string }) {
   return (
     <box style={{ paddingLeft: 6, marginBottom: 1 }}>
       <text>
-        <span fg="#6b7280">↳ {truncated}</span>
+        <span fg={tuiColors.muted}>↳ {truncated}</span>
       </text>
     </box>
   );
@@ -73,8 +110,8 @@ function EvolutionMessage({ content }: { content: string }) {
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <span fg="#a78bfa">✦ </span>
-        <span fg="#8b5cf6">{content}</span>
+        <span fg={tuiColors.accent}>✦ </span>
+        <span fg={tuiColors.accentDeep}>{content}</span>
       </text>
     </box>
   );
@@ -84,7 +121,7 @@ function SystemMessage({ content }: { content: string }) {
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <span fg="#6b7280">{content}</span>
+        <span fg={tuiColors.muted}>{content}</span>
       </text>
     </box>
   );
@@ -92,18 +129,17 @@ function SystemMessage({ content }: { content: string }) {
 
 interface Props {
   messages: DisplayMessage[];
-  streamingText: string | null;
 }
 
-export function MessageList({ messages, streamingText }: Props) {
+export function MessageList({ messages }: Props) {
   return (
     <>
       {messages.map((msg) => {
         switch (msg.role) {
           case 'user':
-            return <UserMessage key={msg.id} content={msg.content} />;
+            return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} steered={msg.steered} branched={msg.branched} />;
           case 'assistant':
-            return <AssistantMessage key={msg.id} content={msg.content} />;
+            return <AssistantMessage key={msg.id} content={msg.content} live={msg.live} />;
           case 'tool_call':
             return <ToolCallMessage key={msg.id} toolName={msg.toolName ?? ''} args={msg.args} />;
           case 'tool_result':
@@ -116,7 +152,6 @@ export function MessageList({ messages, streamingText }: Props) {
             return null;
         }
       })}
-      {streamingText !== null && <StreamingMessage content={streamingText} />}
     </>
   );
 }

@@ -145,6 +145,11 @@ export interface Identity {
  * host-native shell bridge satisfy this. Optional on AgentRuntime; tools that
  * need shell access (e.g. `run`) read it and fall back to the executionRouter.
  */
+export interface ShellExecOptions {
+  stdin?: string;
+  signal?: AbortSignal;
+}
+
 export interface Shell {
-  exec(command: string, stdin?: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, stdinOrOptions?: string | ShellExecOptions): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }

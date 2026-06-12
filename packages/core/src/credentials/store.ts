@@ -20,11 +20,12 @@ export interface BearerCredential {
   token: string;
 }
 
-/** OAuth tokens with refresh. `expiresAt` is unix-ms; null if unknown. */
+/** OAuth access token. Some providers issue a refresh token, some do not.
+ *  `expiresAt` is unix-ms; null if unknown. */
 export interface OAuthCredential {
   kind: 'oauth';
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string;
   /** Unix-ms when the access token expires. May be null/undefined. */
   expiresAt?: number;
   /** Provider-specific metadata (account id, scope, etc.). */

@@ -64,7 +64,6 @@ function createFullCLIRuntime() {
     judgeModel: llm,
     spawnBranch: async () => ({
       explore: async () => ({ text: 'cli branch explored', codeUsed: null }),
-      evaluate: async () => 0.75,
       generateReflection: async () => 'cli branch reflection',
     }),
     abortBranch: async () => {},
@@ -112,8 +111,10 @@ describe('CLI smoke test', () => {
     const { rt } = createFullCLIRuntime();
     initScaffoldTables(rt.storage.execRaw);
 
-    // Remove the default scaffold (simulate cold start)
-    await rt.storage.vfs.unlink('scaffold/agent.js');
+    // Ensure no scaffold exists (simulate cold start)
+    if (await rt.storage.vfs.exists('scaffold/agent.js')) {
+      await rt.storage.vfs.unlink('scaffold/agent.js');
+    }
 
     await bootstrapScaffold(rt);
 

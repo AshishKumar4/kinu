@@ -6,6 +6,7 @@
  * ~20 tables in one SQLite file = one agent.
  */
 
+import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
 import type { RawSqlExec } from '../types/primitives.js';
 
 const DDL = [
@@ -13,21 +14,10 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS agent_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
-
-  // Immutable purpose — the agent cannot rewrite this. owner_user_id is set
-  // once by the Worker when the agent is first claimed by a logged-in user
-  // (sha256(email) form). Subsequent requests verify the caller's userId
-  // matches before any RPC runs.
-  `CREATE TABLE IF NOT EXISTS agent_soul (
-    purpose       TEXT NOT NULL,
-    created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    owner_user_id TEXT NOT NULL DEFAULT ''
-  )`,
-  // Idempotent ALTER for agents that exist from before owner_user_id was
-  // introduced — DO SQL ignores the error if the column already exists.
-  `ALTER TABLE agent_soul ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE agent_identity ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
 
   // ── MCTS search tree ───────────────────────────────────────────
   // BUG-1 FIX: value defaults to 0, NOT 0.5
@@ -94,17 +84,8 @@ const DDL = [
     created_at INTEGER NOT NULL
   )`,
 
-  // ── Virtual filesystem (SqliteFS-compatible chunked storage) ────
-  `CREATE TABLE IF NOT EXISTS vfs_files (
-    path        TEXT    NOT NULL,
-    chunk_index INTEGER NOT NULL DEFAULT 0,
-    parent_path TEXT    NOT NULL DEFAULT '',
-    data        BLOB,
-    is_dir      INTEGER NOT NULL DEFAULT 0,
-    size        INTEGER NOT NULL DEFAULT 0,
-    mtime       INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (path, chunk_index)
-  )`,
+  // ── Virtual filesystem — canonical DDL owned by SqliteFS (agent-utils) ──
+  ...VFS_SCHEMA_DDL,
 
   // ── Conversation messages (simplified session tree) ────────────
   `CREATE TABLE IF NOT EXISTS messages (

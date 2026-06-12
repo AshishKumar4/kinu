@@ -9,7 +9,7 @@
  * Uses real Agent SDK APIs for infrastructure:
  *   Fibers   → Agent.runFiber() (durable, checkpoint/resume via stash)
  *   Branches → Agent.subAgent() (Facets — co-located child DOs)
- *   LLM      → Workers AI binding or AI Gateway fallback
+ *   LLM      → provider registry (Workers AI uses the user's Cloudflare OAuth)
  */
 
 import type {
@@ -22,7 +22,8 @@ import type {
 } from "@proteus/core";
 import {
   DefaultExecutionRouter, createInlineExecutor,
-  createSandboxExecutor, createSSHTunnelExecutor,
+  createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
+  createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
   createAgentConfigStore,
@@ -30,6 +31,7 @@ import {
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
+import { Nimbus } from "@nimbus-sh/sdk";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
@@ -39,41 +41,65 @@ import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
+import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { agentAffinityKey, diversityDirective } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
+import {
+  nimbusSandboxConfig,
+  nimbusSandboxIdForAgent,
+  nimbusSubjectForAgent,
+  nimbusTenantForUser,
+} from "./nimbus-route.js";
 
-/** Read owner_user_id from the orchestrator's agent_soul. Empty/missing → null. */
-function readOwnerUserId(agent: Think<Env>): string | null {
+/**
+ * The agent surface these runtime builders need. `env`/`ctx` are `protected`
+ * on the DurableObject base (not reachable by these free functions), but the
+ * runtime is conceptually an extension of the agent and legitimately needs
+ * them. The orchestrator (a subclass that DOES have access) passes `this`
+ * cast to this view — so the access is sound, just opened to these helpers.
+ */
+type AgentHost = Think<Env> & {
+  readonly env: Env;
+  readonly ctx: DurableObjectState;
+};
+
+/** Read owner_user_id from the orchestrator's agent_identity. Empty/missing -> null. */
+function readOwnerUserId(agent: AgentHost): string | null {
   try {
-    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_soul LIMIT 1`;
+    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_identity LIMIT 1`;
     const v = rows[0]?.owner_user_id;
     return v && v !== '' ? v : null;
   } catch { return null; }
 }
 
-function userDOStubFor(agent: Think<Env>): DurableObjectStub<UserDO> | null {
+function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
   const userId = readOwnerUserId(agent);
   if (!userId) return null;
   return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
 }
 
 /** Extended runtime that exposes the raw SqliteFS for shell emulation, the
- *  SSH executor for tunnel socket management, and the Vectorize-backed
- *  vector store for semantic memory. */
+ *  device transport for per-turn laptop-status refreshes, and the Vectorize-
+ *  backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   sqliteFS: SqliteFS;
-  sshExecutor: ReturnType<typeof createSSHTunnelExecutor>;
+  /** The laptop runtime's hub transport. `refreshStatus()` is awaited at turn
+   *  start so the turn's context reflects the CURRENT device state. */
+  deviceTransport: DeviceTransport;
   /** Vectorize-backed semantic memory. Noop fallback when no binding. */
   vectorStore: import("@proteus/core").VectorStore;
+  /** The live sandbox container handle (for /workspace backup/restore), or null
+   *  when no Sandbox binding / preview host. Single source for the orchestrator. */
+  sandboxHandle: SandboxHandle | null;
 };
 
 /** Optional hooks the orchestrator can inject into the CF runtime. */
 export interface CFRuntimeHooks {
   /**
    * Fires synchronously from workspace.createTool after a successful
-   * create/update. Legacy hook: PreambleCraftedExecutor doesn't need it
-   * (reads craftStore.list() live). Retained for adapters that want eager
-   * notification.
+   * create/update. PreambleCraftedExecutor does not need it because it reads
+   * craftStore.list() live; other adapters can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
 }
@@ -81,7 +107,7 @@ export interface CFRuntimeHooks {
 /**
  * Build a full AgentRuntime from a Think agent's DO context.
  */
-export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): CFRuntime {
+export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): CFRuntime {
   const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
@@ -123,7 +149,7 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
     // sql is used by workspace.listTools() to look up EMA craft_scores.
     // Cast because adaptVFS returns core's SqlExecutor shape.
     sql: sql as unknown as import("@proteus/core").SqlExecutor,
-    // Legacy hook — PreambleCraftedExecutor ignores it (live-reads craftStore).
+    // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
@@ -136,13 +162,17 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
     ? env.PREVIEW_HOSTNAME
     : undefined;
   const sandboxId = `proteus-${agent.name}`;
+  let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
-      const handle = getSandbox(
+      const rawHandle = getSandbox(
         env.Sandbox as Parameters<typeof getSandbox>[0],
         sandboxId,
         { normalizeId: true },
       ) as unknown as SandboxHandle;
+      const configStore = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
+      const handle = createRestoringSandboxHandle(rawHandle, configStore);
+      sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
       console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
     } catch (err) {
@@ -154,10 +184,40 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
     executionRouter.register(createSandboxExecutor());
   }
 
-  // Register SSH tunnel executor — always available as a target, but only
-  // "connected" when a user's tunnel WebSocket attaches via setSocket().
-  const sshExecutor = createSSHTunnelExecutor();
-  executionRouter.register(sshExecutor);
+  // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
+  // official SDK against the local NIMBUS_SESSION binding, so there are no
+  // endpoint/token secrets. The handle is lazy: no session is touched until
+  // the agent actually calls nimbus.*.
+  if (env.NIMBUS_SESSION) {
+    try {
+      executionRouter.register(createNimbusExecutor({
+        box: createAgentNimbusHandle(agent),
+      }));
+      console.log('[proteus] NimbusExecutor registered (NIMBUS_SESSION binding)');
+    } catch (err) {
+      console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
+    }
+  } else {
+    executionRouter.register(createNimbusExecutor());
+  }
+
+  // Register the laptop executor. The device socket lives on the user's UserDO
+  // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
+  // one connected device serves all of the user's agents.
+  const deviceTransport = createHubDeviceTransport({
+    hub: () => userDOStubFor(agent),
+    agentName: agent.name,
+    cliCwd: () =>
+      typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
+        ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
+        : null,
+    checkpointMeta: () => {
+      const host = agent as unknown as { getCheckpointMetaForDevice?: () => { turnId: string; sessionId: string } | null };
+      return typeof host.getCheckpointMetaForDevice === 'function' ? host.getCheckpointMetaForDevice() : null;
+    },
+  });
+  void deviceTransport.refreshStatus();
+  executionRouter.register(createSSHTunnelExecutor(deviceTransport));
 
   // Vectorize-backed semantic memory. Only constructs when both
   // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
@@ -189,13 +249,115 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
   return {
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
+    judgeModel: createJudgeLLM(agent),
     spawnBranch: createFacetSpawner(agent),
     abortBranch: createFacetAborter(agent),
     executionRouter,
     shell,
     sqliteFS,
-    sshExecutor,
+    deviceTransport,
     vectorStore,
+    sandboxHandle,
+  };
+}
+
+
+function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
+  if (typeof env.CLI_PUBLIC_ORIGIN === "string" && env.CLI_PUBLIC_ORIGIN.length > 0) {
+    return env.CLI_PUBLIC_ORIGIN.replace(/\/+$/, "");
+  }
+  if (typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0) {
+    return `https://${env.PREVIEW_HOSTNAME}`;
+  }
+  return "https://proteus.local";
+}
+
+function createAgentNimbusHandle(agent: AgentHost): NimbusSandboxHandle {
+  let cachedKey = "";
+  let cachedBox: any = null;
+
+  const current = () => {
+    const env = agent.env as Env & Record<string, unknown>;
+    const tenant = nimbusTenantForUser(readOwnerUserId(agent));
+    const subject = nimbusSubjectForAgent(agent.name);
+    const sessionId = nimbusSandboxIdForAgent(agent.name);
+    const origin = publicOriginForNimbus(env);
+    const key = `${origin}|${tenant}|${subject}|${sessionId}`;
+    if (!cachedBox || cachedKey !== key) {
+      cachedKey = key;
+      cachedBox = Nimbus.fromEnv(
+        env as Record<string, unknown>,
+        nimbusSandboxConfig(origin, tenant, subject),
+        { binding: "NIMBUS_SESSION" },
+      ).sandbox(sessionId, {
+        tenant,
+        subject,
+        root: "/home/user",
+      });
+    }
+    return cachedBox;
+  };
+
+  return {
+    ready: () => current().ready(),
+    exec: (command, options) => current().exec(command, options),
+    startProcess: (command, options) => current().startProcess(command, options),
+    runCode: (code, options) => current().runCode(code, options),
+    files: {
+      read: (path) => current().files.read(path),
+      write: (path, content) => current().files.write(path, content),
+      list: (path) => current().files.list(path),
+      exists: (path) => current().files.exists(path),
+      mkdir: (path) => current().files.mkdir(path),
+      delete: (path, options) => current().files.delete(path, options),
+    },
+    runtimes: {
+      ensure: (specs, options) => current().runtimes.ensure(specs, options),
+      install: (spec, options) => current().runtimes.install(spec, options),
+      list: () => current().runtimes.list(),
+    },
+    processes: {
+      list: () => current().processes.list(),
+      kill: (pid) => current().processes.kill(pid),
+      logs: (pid, options) => current().processes.logs(pid, options),
+    },
+    ports: {
+      expose: (port) => current().ports.expose(port),
+      unexpose: (port) => current().ports.unexpose(port),
+      list: () => current().ports.list(),
+      url: (port) => current().ports.url(port),
+    },
+  };
+}
+
+function createRestoringSandboxHandle(
+  handle: SandboxHandle,
+  config: ReturnType<typeof createAgentConfigStore>,
+): SandboxHandle {
+  let restored = false;
+  const restoreOnce = async () => {
+    if (restored) return;
+    restored = true;
+    const backup = config.getWorkspaceBackup();
+    if (!backup) return;
+    try { await handle.restoreBackup(backup); }
+    catch (err) { console.warn('[proteus] workspace restore failed:', (err as Error).message); }
+  };
+  const before = async <T>(fn: () => Promise<T>): Promise<T> => {
+    await restoreOnce();
+    return fn();
+  };
+  return {
+    exec: (command, opts) => before(() => handle.exec(command, opts)),
+    readFile: (path) => before(() => handle.readFile(path)),
+    writeFile: (path, content) => before(() => handle.writeFile(path, content)),
+    listFiles: (path, opts) => before(() => handle.listFiles(path, opts)),
+    deleteFile: (path) => before(() => handle.deleteFile(path)),
+    exposePort: (port, opts) => before(() => handle.exposePort(port, opts)),
+    unexposePort: (port) => before(() => Promise.resolve(handle.unexposePort(port))),
+    getExposedPorts: (hostname) => before(() => handle.getExposedPorts(hostname)),
+    createBackup: (opts) => handle.createBackup(opts),
+    restoreBackup: (backup) => handle.restoreBackup(backup),
   };
 }
 
@@ -203,7 +365,9 @@ export function createCFRuntime(agent: Think<Env>, hooks: CFRuntimeHooks = {}): 
 
 function adaptVFS(fs: SqliteFS): CoreVFS {
   return {
-    readFile: (path, opts) => fs.readFile(path, opts),
+    // SqliteFS narrows encoding to the "utf8" literal; CoreVFS allows any
+    // string. Only "utf8" selects text mode — anything else is binary.
+    readFile: (path, opts) => fs.readFile(path, opts?.encoding === 'utf8' ? { encoding: 'utf8' } : undefined),
     writeFile: (path, data) => fs.writeFile(path, data),
     readdir: (path) => fs.readdir(path),
     async stat(path) {
@@ -292,14 +456,14 @@ function createExecutor(loader: unknown): Executor {
 // LLM for evolution reflections. Uses the agent's configured provider via
 // the registry — picks up Codex/OpenRouter/etc. automatically when the user
 // has switched providers.
-function readStoredModelSpec(agent: Think<Env>): string | null {
+function readStoredModelSpec(agent: AgentHost): string | null {
   // Single canonical path through the typed config store — no raw SQL.
   return createAgentConfigStore(
     agent.sql.bind(agent) as unknown as CoreSqlExecutor,
   ).getModel();
 }
 
-function createDualPathLLM(agent: Think<Env>): LLM {
+function createDualPathLLM(agent: AgentHost): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
@@ -308,6 +472,7 @@ function createDualPathLLM(agent: Think<Env>): LLM {
           env: agent.env,
           userDOStub: userDOStubFor(agent),
           appTitle: 'Proteus',
+          workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
         const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
         const result = await generateText({
@@ -320,9 +485,42 @@ function createDualPathLLM(agent: Think<Env>): LLM {
   };
 }
 
+/**
+ * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
+ * operator's review_model (Settings → setAgentConfig('review_model')) at call
+ * time so judging can run on a DIFFERENT model from the explorer — the
+ * self-enhancement-bias fix. When no review_model is set this resolves the
+ * agent's chat model: same-model judging is the documented fallback, not a
+ * separate code path. Errors propagate — the evaluator's judge ensemble
+ * drops failed samples instead of misreading them as scores.
+ */
+function createJudgeLLM(agent: AgentHost): LLM {
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      const config = createAgentConfigStore(
+        agent.sql.bind(agent) as unknown as CoreSqlExecutor,
+      );
+      const reg = createAgentProviderRegistry({
+        env: agent.env,
+        userDOStub: userDOStubFor(agent),
+        appTitle: 'Proteus (judge)',
+        workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+      });
+      const spec = config.getReviewModel() ?? config.getModel();
+      const model = reg.resolveModel(reg.normalizeSpecSync(spec));
+      const result = await generateText({
+        model, prompt, maxOutputTokens: 1024,
+        ...effortFor('judge'),
+      });
+      return result.text.trim();
+    },
+  };
+}
+
 // ── Schedule: real runFiber from Agent base class ────────────────
 
-function createRealSchedule(agent: Think<Env>): Schedule {
+function createRealSchedule(agent: AgentHost): Schedule {
   return {
     after: async (ms, fn) => { setTimeout(fn, ms); },
     cron: async () => {},
@@ -336,7 +534,7 @@ function createRealSchedule(agent: Think<Env>): Schedule {
 
 // ── Identity ─────────────────────────────────────────────────────
 
-function createIdentity(agent: Think<Env>, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
+function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
   return {
     id: agent.ctx.id.toString(),
     name: agent.name,
@@ -352,15 +550,14 @@ function createIdentity(agent: Think<Env>, vfs: CoreVFS, sql: CoreSqlExecutor): 
 
 // ── MCTS branches via real Facets (subAgent) ─────────────────────
 
-function createFacetSpawner(agent: Think<Env>): (branchId: string) => Promise<BranchHandle> {
+function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
       const stub = await agent.subAgent(ExplorationAgent, branchId);
       const owner = readOwnerUserId(agent);
       if (owner) await stub.setOwner(owner);
       return {
-        explore: async (history, tools) => stub.explore(history, tools),
-        evaluate: async (task) => stub.evaluate(task),
+        explore: async (history, tools, siblings) => stub.explore(history, tools, siblings ?? []),
         generateReflection: async (task) => stub.generateReflection(task),
       };
     } catch (err) {
@@ -370,7 +567,7 @@ function createFacetSpawner(agent: Think<Env>): (branchId: string) => Promise<Br
   };
 }
 
-function createFacetAborter(agent: Think<Env>): (branchId: string) => Promise<void> {
+function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
   return async (branchId: string) => {
     try { agent.abortSubAgent(ExplorationAgent, branchId); } catch {}
   };
@@ -379,48 +576,39 @@ function createFacetAborter(agent: Think<Env>): (branchId: string) => Promise<vo
 /**
  * Inline branch fallback — used when Facets are unavailable.
  *
- * Formal spec: DistributedModel.lean requires StorageIsolation (branch storageIds
- * disjoint from orchestrator storageId). The inline branch enforces this
- * STRUCTURALLY by capturing only the LLM config, never the agent reference
- * or its storage. The closure has no path to agent.sql or agent.ctx.storage.
+ * Storage isolation (lean/Proteus/MCTS/StorageIsolation.lean: branch storage
+ * disjoint from the orchestrator's) is enforced STRUCTURALLY by capturing only
+ * the LLM config, never the agent reference or its storage. The closure has
+ * no path to agent.sql or agent.ctx.storage.
  */
-function createInlineBranch(agent: Think<Env>): BranchHandle {
+function createInlineBranch(agent: AgentHost): BranchHandle {
   // Capture only env (not agent.sql / agent.ctx.storage) so the branch
   // closure satisfies StorageIsolation. Stored credentials are not available
-  // here — inline branches use the env-bound providers (workers-ai or
-  // ai-gateway) only, which need no credential reads.
+  // here — with a null UserDO stub the registry's sync default skips the
+  // credential-gated workers-ai and uses the env-bound ai-gateway, which
+  // needs no credential reads.
   const reg = createAgentProviderRegistry({
     env: agent.env,
     userDOStub: null,
     appTitle: 'Proteus (inline branch)',
+    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });
   const spec = reg.normalizeSpecSync(null);
   const getModel = () => reg.resolveModel(spec);
 
   return {
-    explore: async (history, _tools) => {
+    explore: async (history, _tools, siblings = []) => {
       const context = history.map((m: { role: string; content: string }) =>
         `${m.role}: ${m.content}`).join("\n").slice(-800);
       const result = await generateText({
         model: getModel(),
         system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
-        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.` }],
+        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
         maxOutputTokens: 512,
       });
       const text = result.text.trim();
       const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
       return { text, codeUsed: codeMatch?.[1]?.trim() ?? null };
-    },
-    evaluate: async (task) => {
-      const result = await generateText({
-        model: getModel(),
-        messages: [{ role: "user" as const, content: `Rate this approach (0-1): ${task.slice(0, 500)}\nRespond ONLY: {"score": <float>}` }],
-        maxOutputTokens: 100,
-      });
-      try {
-        const m = result.text.match(/\{[^}]+\}/);
-        return Math.min(1, Math.max(0, Number(JSON.parse(m?.[0] ?? '{"score":0.5}').score)));
-      } catch { return 0.5; }
     },
     generateReflection: async (task) => {
       const result = await generateText({

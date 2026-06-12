@@ -8,23 +8,28 @@
  * output; the pending runs silently). A judge LLM compares per-turn quality.
  *
  * After enough trials (default N=5), we aggregate:
- *   - if pending wins ≥ promoteThreshold (default 0.6 = 3/5 → promote)
- *   - else (default 0.4 = 2/5 → rollback)
+ *   - any decisive trial the pending LOSES beyond maxRegressions (default 0) →
+ *     rollback (the hard regression veto — gates promotion regardless of win-rate)
+ *   - else if ≥ minDecisiveTrials decisive trials and win-rate ≥ promoteThreshold
+ *     (default 0.6) → promote
  *   - else (in between → keep observing, extend trial window)
  *
  * Schema:
  *   scaffold_evaluations         — one row per shadow turn
  *   scaffold_versions.status     — 'current' | 'pending' | 'rolled_back' | 'historical'
  *
- * Auto-promotion is off by default — agent shows the evaluation results in
- * memory + UI and the user manually promotes via the RPC. To enable
- * autopilot, set AgentConfig.scaffold.autoPromote = true.
+ * Auto-promotion is ON by default at the agent level (agent_config
+ * auto_promote_scaffold, config/store.ts): the misevolution gate + shadow
+ * veto + archive are the safety net, and every promotion lands in the
+ * Evolution Changelog where the operator can revert it. Set the key to
+ * 'false' to require manual promotion via the RPC instead.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { nowMs } from '../utils/date.js';
 import { nanoid } from '../utils/nanoid.js';
+import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
 
 export type ScaffoldStatus = 'current' | 'pending' | 'rolled_back' | 'historical';
 
@@ -74,6 +79,12 @@ export interface ShadowConfig {
   maxTrials: number;
   /** Auto-promote/rollback without user confirmation. Default false. */
   autoPromote: boolean;
+  /** Max decisive trials the pending may LOSE before it's rolled back. 0 =
+   *  any regression rolls it back (the safe default for auto-promotion). */
+  maxRegressions: number;
+  /** Minimum decisive (non-tie) trials required before a promote — guards
+   *  against promoting on one lucky trial. Default 3. */
+  minDecisiveTrials: number;
 }
 
 export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
@@ -82,6 +93,8 @@ export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
   rollbackThreshold: 0.4,
   maxTrials: 12,
   autoPromote: false,
+  maxRegressions: 0,
+  minDecisiveTrials: 3,
 };
 
 export function initShadowTables(execRaw: RawSqlExec): void {
@@ -141,19 +154,102 @@ export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
   }
 }
 
-/** Read the scaffold code for a specific version (from the versioned backup file). */
+/**
+ * The LIVE scaffold version — the highest status='current' row. Derived from
+ * status, never from arithmetic on the pending version: after rollback
+ * cycles the numbering is non-contiguous (e.g. current=v2 while pending=v5),
+ * so `pending - 1` points at a rolled_back/historical row.
+ */
+export function getCurrentScaffoldVersion(sql: SqlExecutor): number | null {
+  try {
+    const rows = sql<{ version: number }>`
+      SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
+    return rows[0]?.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ShadowVerdictTrial {
+  id: string;
+  task: string;
+  currentScore: number | null;
+  pendingScore: number | null;
+  winner: 'current' | 'pending' | 'tie' | null;
+  rationale: string | null;
+  evaluatedAt: number;
+}
+
+export interface ShadowVerdict {
+  version: number | null;
+  trials: ShadowVerdictTrial[];
+  summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number };
+}
+
+/**
+ * The per-trial shadow-eval verdict for a pending version — the data behind the
+ * promote/rollback decision grid. Reads `scaffold_evaluations` (the table
+ * shadow-mode actually populates), ordered regressions-first (current beat
+ * pending → top) so the operator sees risk first. `winRate` is over decisive
+ * (non-tie) trials. Returns an empty verdict when no pending version is given.
+ */
+export function readShadowVerdict(sql: SqlExecutor, version: number | null): ShadowVerdict {
+  if (version == null) {
+    return { version: null, trials: [], summary: { trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 } };
+  }
+  type Row = {
+    id: string; task: string; current_score: number | null; pending_score: number | null;
+    winner: 'current' | 'pending' | 'tie' | null; judge_rationale: string | null; evaluated_at: number;
+  };
+  const rows = sql<Row>`
+    SELECT id, task, current_score, pending_score, winner, judge_rationale, evaluated_at
+    FROM scaffold_evaluations WHERE pending_version = ${version}
+    ORDER BY CASE winner WHEN 'current' THEN 0 WHEN 'tie' THEN 1 ELSE 2 END, evaluated_at DESC`;
+  let pendingWins = 0, currentWins = 0, ties = 0;
+  for (const r of rows) {
+    if (r.winner === 'pending') pendingWins++;
+    else if (r.winner === 'current') currentWins++;
+    else if (r.winner === 'tie') ties++;
+  }
+  const decisive = pendingWins + currentWins;
+  return {
+    version,
+    trials: rows.map((r) => ({
+      id: r.id, task: r.task,
+      currentScore: r.current_score, pendingScore: r.pending_score,
+      winner: r.winner, rationale: r.judge_rationale, evaluatedAt: r.evaluated_at,
+    })),
+    summary: { trials: rows.length, pendingWins, currentWins, ties, winRate: decisive === 0 ? 0 : pendingWins / decisive },
+  };
+}
+
+/** Read the scaffold code for a specific version.
+ *
+ * Prefers the versioned backup file `scaffold/agent.js.v{N}` because it's the
+ * canonical per-version source — the live `scaffold/agent.js` is just an
+ * alias for whatever version currently has status='current'. Falls back to
+ * the live file only when no versioned backup exists (cold-start v0). This
+ * ordering matters: after `modifyScaffold` writes a pending v{N+1}, the live
+ * file still holds the current's content, so `readScaffoldVersion(rt, N+1)`
+ * MUST read the versioned file to recover the pending code (used by
+ * `applyPromotionDecision('promote')` to swap the live file).
+ */
 export async function readScaffoldVersion(
   rt: AgentRuntime,
   version: number,
 ): Promise<string | null> {
   try {
-    if (version === (await rt.identity.scaffold.version())) {
-      return await rt.identity.scaffold.read();
-    }
-    // Versioned backups live at scaffold/agent.js.v{N}
     const content = await rt.storage.vfs.readFile(`scaffold/agent.js.v${version}`, { encoding: 'utf8' });
     return typeof content === 'string' ? content : new TextDecoder().decode(content);
   } catch {
+    // No versioned backup — happens for v0 (the bootstrap writes the live
+    // file but not a versioned backup). Fall back to live ONLY when the
+    // requested version matches what `rt.identity.scaffold.version()` reports.
+    try {
+      if (version === (await rt.identity.scaffold.version())) {
+        return await rt.identity.scaffold.read();
+      }
+    } catch { /* nop */ }
     return null;
   }
 }
@@ -209,12 +305,22 @@ export function decidePromotion(
     return { decision: 'continue', winRate: 0.5 };
   }
   const winRate = pending.pendingWins / decisiveTrials;
-  if (pending.trialsSoFar >= config.minTrials) {
+
+  // Regression veto (hard, checked first): if the pending has LOST more decisive
+  // trials than allowed, roll it back immediately. With maxRegressions=0 (the
+  // safe default) a single loss is decisive — the owner's "auto-rollback on
+  // regression". This gates promotion no matter how high the win-rate is.
+  if (pending.currentWins > config.maxRegressions) {
+    return { decision: 'rollback', winRate };
+  }
+
+  if (pending.trialsSoFar >= config.minTrials && decisiveTrials >= config.minDecisiveTrials) {
     if (winRate >= config.promoteThreshold) return { decision: 'promote', winRate };
     if (winRate <= config.rollbackThreshold) return { decision: 'rollback', winRate };
   }
   if (pending.trialsSoFar >= config.maxTrials) {
-    // Force a decision — ties → rollback (safety bias: strict > 0.5 only).
+    // Hard ceiling. The regression veto already passed (currentWins ≤
+    // maxRegressions), so promote iff genuinely ahead, else rollback.
     return { decision: winRate > 0.5 ? 'promote' : 'rollback', winRate };
   }
   return { decision: 'continue', winRate };
@@ -226,33 +332,54 @@ export function decidePromotion(
  * removed from disk and marked rolled_back; the agent's scaffold/agent.js
  * is restored from the version before the pending was written.
  *
- * Returns the new current version number.
+ * Returns the new current version and the action ACTUALLY applied: a
+ * 'promote' request is converted to 'rollback' (with `vetoReason` set) when
+ * the on-disk pending code fails the fixed misevolution criteria — the
+ * version file lives in the agent-writable VFS, so promotion must re-check
+ * what acceptance checked. Callers must report `action`, not their request.
  */
 export async function applyPromotionDecision(
   rt: AgentRuntime,
   pending: PendingScaffold,
   decision: 'promote' | 'rollback',
-): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback' }> {
+): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   const sql = rt.storage.sql;
   if (decision === 'promote') {
-    // The pending version's code is already at scaffold/agent.js (it was
-    // written by modifyScaffold's gate 4). Its predecessor was archived at
-    // scaffold/agent.js.v{pending-1}. Just flip statuses.
+    // Copy the pending version's code (versioned file written by
+    // modifyScaffold gate 4) into the live `scaffold/agent.js`. The previous
+    // current's content is already archived at `scaffold/agent.js.v{pending-1}`,
+    // so rollback can recover.
+    const pendingCode = await readScaffoldVersion(rt, pending.version);
+    if (pendingCode == null) {
+      throw new Error(`promote failed: no scaffold code found for v${pending.version}`);
+    }
+    const misevolution = checkMisevolution(pendingCode);
+    if (!misevolution.ok) {
+      recordMisevolutionVeto(sql, {
+        surface: 'scaffold', violation: misevolution,
+        detail: `promotion of v${pending.version} vetoed; rolled back instead`,
+      });
+      const result = await applyPromotionDecision(rt, pending, 'rollback');
+      return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+    }
+    await rt.identity.scaffold.write(pendingCode);
     sql`UPDATE scaffold_versions SET status = 'historical'
         WHERE status = 'current' AND version != ${pending.version}`;
     sql`UPDATE scaffold_versions SET status = 'current'
         WHERE version = ${pending.version}`;
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
-  // Rollback: restore the previous version's code into scaffold/agent.js.
-  const prevVersion = pending.version - 1;
-  const prev = await readScaffoldVersion(rt, prevVersion);
-  if (prev != null) {
-    await rt.identity.scaffold.write(prev);
+  // Rollback: the live `scaffold/agent.js` already holds the current version's
+  // code (modifyScaffold no longer overwrites it on proposal), so flipping the
+  // pending to rolled_back reverts the user-visible behaviour.
+  const currentVersion = getCurrentScaffoldVersion(sql) ?? (pending.version - 1);
+  // Re-write the live file from the current version defensively, in case it
+  // was tampered with mid-trial.
+  const currentCode = await readScaffoldVersion(rt, currentVersion);
+  if (currentCode != null) {
+    await rt.identity.scaffold.write(currentCode);
   }
   sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE version = ${pending.version}`;
-  sql`UPDATE scaffold_versions SET status = 'current'
-      WHERE version = ${prevVersion}`;
-  return { newCurrentVersion: prevVersion, action: 'rollback' };
+  return { newCurrentVersion: currentVersion, action: 'rollback' };
 }

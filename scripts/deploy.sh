@@ -2,8 +2,9 @@
 # Proteus deploy pipeline.
 #
 # Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
-# SANDBOX DO + Container binding. Nimbus has been shelved; the legacy
-# SKIP_NIMBUS flag is accepted for backward compat but does nothing.
+# Sandbox DO + Container binding, the NimbusSession DO, and the local-device
+# executor routes. Pipeline: e2e verification → vite build → CLI source
+# archive → wrangler deploy → smoke test.
 #
 # Usage:
 #   bash scripts/deploy.sh
@@ -19,7 +20,7 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ── Locate Proteus root + Nimbus path ────────────────────────────
+# ── Locate Proteus root ──────────────────────────────────────────
 PROTEUS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROTEUS_ROOT" || { echo -e "${RED}Cannot cd to Proteus root${NC}"; exit 1; }
 
@@ -69,12 +70,6 @@ else
   fi
 fi
 
-# Legacy: SKIP_NIMBUS is accepted for backward compat but is a no-op now
-# (Nimbus has been shelved in favor of @cloudflare/sandbox).
-if [ "${SKIP_NIMBUS:-0}" = "1" ]; then
-  echo -e "${YELLOW}SKIP_NIMBUS=1 ignored — Nimbus has been shelved.${NC}"
-fi
-
 # ── Step 2: Deploy Proteus ───────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 2: Deploying Proteus${NC}"
@@ -94,6 +89,9 @@ else
   echo "Running: bunx vite build"
   bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
 fi
+
+echo "Building CLI source archive"
+bash "$PROTEUS_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
 
 PROTEUS_DEPLOY_LOG="$(mktemp -t proteus-deploy.XXXXXX.log)"
 echo ""
@@ -148,6 +146,44 @@ else
   echo -e "${RED}❌ Proteus live site content missing 'Proteus'${NC}"
   SMOKE_FAIL=1
 fi
+
+CLI_SHIM=$(curl -s --max-time 15 "${PROTEUS_URL}downloads/proteus" 2>/dev/null)
+if echo "$CLI_SHIM" | grep -q 'downloads/proteus-source.tar.gz' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
+  echo -e "${GREEN}✅ Proteus CLI shim uses deployed source archive${NC}"
+else
+  echo -e "${RED}❌ Proteus CLI shim is not using the deployed source archive${NC}"
+  SMOKE_FAIL=1
+fi
+
+CLI_ARCHIVE_TMP="$(mktemp -t proteus-cli-source.XXXXXX.tar.gz)"
+CLI_ARCHIVE_LIST="$(mktemp -t proteus-cli-source.XXXXXX.list)"
+CLI_ARCHIVE_OK=0
+for attempt in 1 2 3 4 5 6; do
+  if curl -fsSL --max-time 30 "${PROTEUS_URL}downloads/proteus-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
+    && tar -tzf "$CLI_ARCHIVE_TMP" > "$CLI_ARCHIVE_LIST" \
+    && grep -Fq 'proteus/packages/cli/src/commands/setup.ts' "$CLI_ARCHIVE_LIST"; then
+    CLI_ARCHIVE_OK=1
+    break
+  fi
+  [ "$attempt" = "6" ] || sleep 5
+done
+if [ "$CLI_ARCHIVE_OK" = "1" ]; then
+  echo -e "${GREEN}✅ Proteus CLI source archive is downloadable${NC}"
+  # The CLI shim verifies this checksum by default — a stale/missing .sha256
+  # bricks installs and updates, so the deploy gate checks it too.
+  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
+  ACTUAL_SHA="$(sha256sum "$CLI_ARCHIVE_TMP" | awk '{print $1}')"
+  if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
+    echo -e "${GREEN}✅ Proteus CLI source checksum matches the published .sha256${NC}"
+  else
+    echo -e "${RED}❌ Published source checksum is missing or does not match the archive${NC}"
+    SMOKE_FAIL=1
+  fi
+else
+  echo -e "${RED}❌ Proteus CLI source archive is missing or invalid${NC}"
+  SMOKE_FAIL=1
+fi
+rm -f "$CLI_ARCHIVE_TMP" "$CLI_ARCHIVE_LIST"
 
 if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo ""

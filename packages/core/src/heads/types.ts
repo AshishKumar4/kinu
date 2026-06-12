@@ -71,7 +71,7 @@ export interface SerializedMessage {
   readonly toolName?: string;
 }
 
-/** Everything a HeadAgent needs to start working. */
+/** Everything a branching head needs to start working. */
 export interface HeadInput {
   readonly id: HeadId;
   readonly rootId: HeadId;                 // root of the split tree (== id if this is a root)
@@ -121,6 +121,21 @@ export interface ArtifactRef {
   readonly description?: string;
 }
 
+/** One tool call within a head step — name + (digested) input/output. */
+export interface HeadStepToolCall {
+  readonly name: string;
+  readonly input?: unknown;
+  readonly output?: unknown;
+}
+
+/** One reasoning step of a head's run — the ordered trace the UI replays so the
+ *  user can see what each branch actually did, turn by turn. */
+export interface HeadStep {
+  readonly text: string;
+  readonly reasoning?: string;
+  readonly toolCalls: readonly HeadStepToolCall[];
+}
+
 /** What a head reports back to its parent on completion. */
 export interface HeadReport {
   readonly id: HeadId;
@@ -135,10 +150,41 @@ export interface HeadReport {
   readonly childHeadIds: readonly HeadId[];
   /** Tool calls the head made — for telemetry. */
   readonly toolCalls: readonly ToolCallRecord[];
+  /** Ordered per-step trace (text + reasoning + tool calls) — drives the live
+   *  expandable head timeline in the Reasoning surface. */
+  readonly steps: readonly HeadStep[];
   readonly tokenUsage: { input: number; output: number; total: number };
   readonly wallClockMs: number;
   /** Free-form failure message if status != 'completed'. */
   readonly errorMessage?: string;
+}
+
+/** One head as the Reasoning surface renders it — lifecycle + the ordered
+ *  trace. Assembled by HeadJournal.listRuns; returned verbatim by getHeadRuns. */
+export interface HeadRunHeadView {
+  readonly id: HeadId;
+  readonly task: string;
+  readonly rationale: string;
+  readonly status: string;
+  readonly summary: string | null;
+  readonly errorMessage: string | null;
+  readonly tokenInput: number;
+  readonly tokenOutput: number;
+  readonly wallClockMs: number;
+  readonly toolCalls: ReadonlyArray<{ name: string; status: string }>;
+  readonly decisions: ReadonlyArray<{ question: string; choice: string; rationale: string }>;
+  readonly steps: readonly HeadStep[];
+}
+
+/** One split (a run): its identity + grouped heads + the merge synthesis. */
+export interface HeadRunView {
+  readonly rootId: HeadId;
+  readonly task: string;
+  readonly rationale: string;
+  readonly status: string;
+  readonly spawnedAt: number;
+  readonly heads: readonly HeadRunHeadView[];
+  readonly merge: { narrative: string; headCount: number; totalTokens: number } | null;
 }
 
 /** What the parent asks the controller to run. */
@@ -179,12 +225,36 @@ export interface MergeResult {
   readonly evidenceAggregate: readonly Evidence[];
   /** The ids of every head spawned in this split (root-level only — not recursive). */
   readonly headIds: readonly HeadId[];
+  /** Per-head outcome score in [0,1] + the head's text — one entry per head,
+   *  surfaced as Alternate-Takes and reported to the preference ledger. When
+   *  `grounded`, the score is execution-banded (mcts/evaluation.ts); otherwise a
+   *  neutral 0.5 (no grounding seam wired). A failed/unresolved head scores below
+   *  a head whose work ran and held up. */
+  readonly headScores: readonly HeadScore[];
+  /** True when headScores carry a real grounded verdict (the controller had a
+   *  grounding seam); false when they are neutral placeholders. */
+  readonly grounded: boolean;
   readonly costSummary: {
     readonly headCount: number;
     readonly totalTokens: number;
     readonly totalWallClockMs: number;
     readonly maxDepth: number;
   };
+}
+
+/** A single head's execution-grounded outcome score, mirroring the MCTS
+ *  BranchEvaluation shape (evaluation.ts) so heads and branches report the same
+ *  grounded signal. Carries the head's summary so the backend can build the
+ *  Alternate-Takes set (the comparable answer of each thread) without re-reading
+ *  the journal. */
+export interface HeadScore {
+  readonly id: HeadId;
+  /** The head's finding (its report summary) — the take candidate's text. */
+  readonly text: string;
+  readonly status: HeadReport['status'];
+  /** [0,1] — grounded outcome (execution band when the head ran code, else judge). */
+  readonly score: number;
+  readonly grounding: 'execution' | 'judge';
 }
 
 /** Default budget for a fresh root head if the parent doesn't specify. */
@@ -200,29 +270,50 @@ export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';
 /**
  * Split parent's budget among N children. Returns the per-child budget.
  *
- * Defaults: equal token split, full wall-clock to each (they run in parallel).
- * Depth decremented unconditionally.
+ * Defaults: equal token split. Wall-clock is bounded by the parent's REMAINING
+ * time, never the parent's full ceiling: the child resets `spawnedAt` to now, so
+ * handing it the full `maxWallClockMs` would let a recursive subtree run past the
+ * operator's wall-clock ceiling on every level it descends (a 3-deep split could
+ * triple it). We cap each child's deadline at the parent's deadline by clamping
+ * its wall-clock to the time the parent has left (THINKING-AUDIT §4 #7). Depth is
+ * decremented unconditionally.
  */
 export function deriveChildBudget(
   parent: HeadBudget,
   n: number,
   split?: BudgetSplit,
+  now: number = Date.now(),
 ): HeadBudget {
   const safeN = Math.max(1, n);
   const tokensRatio = split?.tokensRatio ?? 1 / safeN;
   const wallClockRatio = split?.wallClockRatio ?? 1;
+  const parentRemainingMs = Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt));
   return {
     maxDepth: parent.maxDepth - 1,
     maxTokens: Math.floor(parent.maxTokens * tokensRatio),
-    maxWallClockMs: Math.floor(parent.maxWallClockMs * wallClockRatio),
-    spawnedAt: Date.now(),
+    // A child can never outlive the parent's remaining wall-clock, regardless
+    // of the requested ratio — the child clock starts fresh at `now`.
+    maxWallClockMs: Math.min(
+      Math.floor(parent.maxWallClockMs * wallClockRatio),
+      parentRemainingMs,
+    ),
+    spawnedAt: now,
   };
 }
 
-/** Returns true if this budget is exhausted along any dimension. */
-export function budgetExhausted(b: HeadBudget): { exhausted: boolean; reason?: string } {
+/**
+ * Returns true if this budget is exhausted along any dimension.
+ *
+ * `consumedTokens` is the total tokens this head + descendants have spent so far;
+ * pass it from the run loop's running `capture.tokenUsage` so the token ceiling
+ * actually gates a run mid-flight. Omitted (or 0) only checks depth + wall-clock.
+ */
+export function budgetExhausted(
+  b: HeadBudget,
+  consumedTokens = 0,
+): { exhausted: boolean; reason?: string } {
   if (b.maxDepth <= 0) return { exhausted: true, reason: 'max-depth' };
-  if (b.maxTokens <= 0) return { exhausted: true, reason: 'tokens' };
+  if (consumedTokens >= b.maxTokens) return { exhausted: true, reason: 'tokens' };
   if (Date.now() - b.spawnedAt >= b.maxWallClockMs) return { exhausted: true, reason: 'wall-clock' };
   return { exhausted: false };
 }

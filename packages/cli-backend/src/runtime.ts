@@ -9,23 +9,36 @@
 import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
 import type { Storage, Schedule, Memory, VFS, SqlExecutor, SqlValue, RawSqlExec } from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
+import type { ExecutorProvider } from '@proteus/core';
+import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import {
-  createVercelAILLM, type LLMProviderConfig, buildRuntime,
+  type LLMProviderConfig, buildRuntime,
   DefaultExecutionRouter, createInlineExecutor,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
-import { createShell } from '@proteus/agent-utils/shell';
 import { createSandboxedExecutor } from './executor.js';
+import { createHostCheckpoints } from './checkpoints.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
+import { createLocalProviderLLM, type LocalProviderCredentials } from './model-resolver.js';
+import type { LocalCodexAuthStore } from './codex-auth-store.js';
+import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
   llm: LLMProviderConfig;
   judge?: LLMProviderConfig;
   agentName?: string;
+  providerCredentials?: LocalProviderCredentials;
+  codexAuthStore?: LocalCodexAuthStore;
+  codexConfigPath?: string;
+  onCodexRefresh?: (credential: OAuthCredential) => void;
+  /** Shadow-git checkpoints kept per working directory (the one retention knob). */
+  checkpointKeep?: number;
 }
 
 export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void } }): SqlExecutor {
@@ -34,10 +47,13 @@ export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]):
     ...values: SqlValue[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
+    // SqliteFS encodes BLOBs as ArrayBuffer (Cloudflare DO storage.sql's native
+    // type); bun:sqlite only binds TypedArrays, so coerce ArrayBuffer → Uint8Array.
+    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare(query);
-    if (isRead) return stmt.all(...values) as T[];
-    stmt.run(...values);
+    if (isRead) return stmt.all(...bound) as T[];
+    stmt.run(...bound);
     return [];
   } as SqlExecutor;
   return sql;
@@ -53,7 +69,9 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  */
 function adaptVFS(sqliteFs: SqliteFS): VFS {
   return {
-    readFile: (path, opts) => sqliteFs.readFile(path, opts),
+    // core VFS encoding is the looser `string`; SqliteFS wants the `'utf8'`
+    // literal. Only utf8 is meaningful — narrow it; anything else = binary.
+    readFile: (path, opts) => sqliteFs.readFile(path, opts?.encoding ? { encoding: 'utf8' } : undefined),
     writeFile: (path, data) => sqliteFs.writeFile(path, data),
     readdir: (path) => sqliteFs.readdir(path),
     async stat(path) {
@@ -65,7 +83,7 @@ function adaptVFS(sqliteFs: SqliteFS): VFS {
       }
     },
     unlink: (path) => sqliteFs.unlink(path),
-    mkdir: (path) => sqliteFs.mkdir(path),
+    mkdir: (path, opts) => sqliteFs.mkdir(path, opts),
     exists: (path) => sqliteFs.exists(path),
   };
 }
@@ -168,8 +186,19 @@ export function createCLIRuntime(
     sql`INSERT INTO agent_identity (id, name) VALUES (${agentId}, ${agentName})`;
   }
 
-  const llm = createVercelAILLM(config.llm);
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : llm;
+  const llm = createLocalProviderLLM({
+    llm: config.llm,
+    credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore,
+    onCodexRefresh: config.onCodexRefresh,
+  });
+  // Cross-model judge only when one is actually configured. Leaving this
+  // undefined lets consumers apply their documented same-model fallback
+  // (mcts/evaluation.ts judge ensemble, local-session auto-judge) instead of
+  // hiding it here.
+  const judgeModel = config.judge
+    ? createLocalProviderLLM({ llm: config.judge, credentials: config.providerCredentials, codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh })
+    : undefined;
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
@@ -178,7 +207,11 @@ export function createCLIRuntime(
   };
 
   const basePath = config.dbPath.replace(/\.db$/, '');
-  const { spawn, abort } = createBranchSpawner(basePath);
+  const { spawn, abort } = createBranchSpawner(basePath, {
+    llm: config.llm,
+    providerCredentials: config.providerCredentials,
+    codexConfigPath: config.codexConfigPath,
+  });
 
   // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
   const sqliteFs = new SqliteFS(sql);
@@ -195,17 +228,143 @@ export function createCLIRuntime(
   const craftStore = adaptCraftStore(craftStoreImpl);
 
   // v2.0: shell + executionRouter so the canonical `run` tool in core has a
-  // workspace provider and a bound POSIX shell. Same set the CF backend
-  // exposes — CLI only registers the inline executor (no Nimbus/Container/SSH
-  // bindings are relevant in a local Bun process).
-  const shell: Shell = createShell(sqliteFs);
+  // workspace provider and a bound POSIX shell. In CLI/local mode the shell is
+  // the user's real machine, rooted at the process cwd where `proteus` or an
+  // alias was invoked. Durable agent memory still lives in SQLite/VFS.
+  // Shadow-git checkpoints: every host-FS mutation path (the bound shell — the
+  // run tool + laptop.exec — and laptop.writeFile) snapshots its target dir
+  // before the first mutation of each turn. Invisible until /undo.
+  const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
+  const shell: Shell = withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd());
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints));
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel,
     spawnBranch: spawn, abortBranch: abort,
-    executionRouter, shell,
+    executionRouter, shell, checkpoints,
   });
+}
+
+export function createHostShell(cwd: string): Shell {
+  return {
+    exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
+      return new Promise((resolve) => {
+        const stdin = typeof stdinOrOptions === 'string' ? stdinOrOptions : stdinOrOptions?.stdin;
+        const signal = typeof stdinOrOptions === 'string' ? undefined : stdinOrOptions?.signal;
+        let settled = false;
+        const child = spawn('/bin/sh', ['-lc', command], {
+          cwd,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: process.env,
+          detached: true,
+        });
+        let stdout = '';
+        let stderr = '';
+        const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener('abort', onAbort);
+          resolve(result);
+        };
+        const onAbort = () => {
+          const pid = child.pid;
+          if (!pid) return;
+          try { process.kill(-pid, 'SIGTERM'); } catch {}
+          setTimeout(() => {
+            if (!settled) {
+              try { process.kill(-pid, 'SIGKILL'); } catch {}
+            }
+          }, 1500).unref();
+        };
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
+        child.on('close', (code, signalName) => {
+          const aborted = signal?.aborted || signalName === 'SIGTERM' || signalName === 'SIGKILL';
+          finish({
+            stdout,
+            stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
+            exitCode: code ?? (aborted ? 130 : 0),
+          });
+        });
+        if (stdin) child.stdin.end(stdin);
+        else child.stdin.end();
+      });
+    },
+  };
+}
+
+/** Snapshot before any shell command — a command may mutate anything in the
+ *  cwd; the engine dedupes to one snapshot per turn and skips no-op trees. */
+export function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: string): Shell {
+  return {
+    async exec(command, stdinOrOptions) {
+      await checkpoints.ensureCheckpoint(cwd, 'shell exec');
+      return shell.exec(command, stdinOrOptions);
+    },
+  };
+}
+
+function createLocalLaptopExecutor(cwd: string, shell: Shell, checkpoints: FileCheckpoints): ExecutorProvider {
+  const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
+  return {
+    name: 'laptop',
+    kind: 'laptop',
+    capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
+    positionalArgs: true,
+    isAvailable: () => true,
+    connect: async () => {},
+    disconnect: async () => {},
+    tools: {
+      exec: {
+        description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
+        execute: async (command: unknown, context?: unknown) => {
+          const signal = readAbortSignal(context);
+          const result = await shell.exec(String(command), signal ? { signal } : undefined);
+          if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
+          return result.stdout || '(no output)';
+        },
+      },
+      readFile: {
+        description: 'Read a UTF-8 file from the local machine.',
+        execute: async (path: unknown) => fs.readFile(toHostPath(path), 'utf-8'),
+      },
+      writeFile: {
+        description: 'Write a UTF-8 file on the local machine. Parent directories are created.',
+        execute: async (path: unknown, content: unknown) => {
+          const p = toHostPath(path);
+          await checkpoints.ensureCheckpoint(checkpoints.workdirForPath(p), 'file write');
+          await fs.mkdir(resolvePath(p, '..'), { recursive: true });
+          await fs.writeFile(p, String(content), 'utf-8');
+          return `Written ${String(content).length} bytes to ${p}`;
+        },
+      },
+      listFiles: {
+        description: 'List local directory entries as {name,type}.',
+        execute: async (path: unknown = '.') => {
+          const entries = await fs.readdir(toHostPath(path), { withFileTypes: true });
+          return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
+        },
+      },
+    },
+    types: `declare const laptop: {
+  exec(command: string): Promise<string>;
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<string>;
+  listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;
+};`,
+  };
+}
+
+function readAbortSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
+  const signal = (context as { signal?: unknown }).signal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

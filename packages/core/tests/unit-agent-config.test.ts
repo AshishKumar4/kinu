@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
+  DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
 } from '../src/index.ts';
 import { createTestSql } from '@proteus/test-utils';
 
@@ -26,6 +27,70 @@ describe('AgentConfigStore — generic get/set/delete', () => {
     const c = setup();
     c.set('a', '1'); c.set('b', '2');
     expect(c.all()).toEqual({ a: '1', b: '2' });
+  });
+});
+
+describe('AgentConfigStore — lastActiveExecutor', () => {
+  test('round-trips a valid executor name', () => {
+    const c = setup();
+    expect(c.getLastActiveExecutor()).toBeNull();
+    c.setLastActiveExecutor('sandbox');
+    expect(c.getLastActiveExecutor()).toBe('sandbox');
+    c.setLastActiveExecutor('workspace');
+    expect(c.getLastActiveExecutor()).toBe('workspace');
+  });
+
+  test('rejects values that are not plausible executor namespaces', () => {
+    const c = setup();
+    c.setLastActiveExecutor('sandbox');
+    c.setLastActiveExecutor('; DROP TABLE agent_config; --');
+    c.setLastActiveExecutor('');
+    c.setLastActiveExecutor('a'.repeat(40));
+    expect(c.getLastActiveExecutor()).toBe('sandbox'); // unchanged by the bad writes
+  });
+});
+
+describe('AgentConfigStore — workspace backup handle', () => {
+  test('round-trips a DirectoryBackup and stamps the time', () => {
+    const c = setup();
+    expect(c.getWorkspaceBackup()).toBeNull();
+    expect(c.getWorkspaceBackupAt()).toBe(0);
+    c.setWorkspaceBackup({ id: 'abc-123', dir: '/workspace', localBucket: true });
+    expect(c.getWorkspaceBackup()).toEqual({ id: 'abc-123', dir: '/workspace', localBucket: true });
+    expect(c.getWorkspaceBackupAt()).toBeGreaterThan(0);
+  });
+
+  test('returns null on malformed / partial handle', () => {
+    const c = setup();
+    c.set('workspace_backup', 'not json');
+    expect(c.getWorkspaceBackup()).toBeNull();
+    c.set('workspace_backup', JSON.stringify({ id: 'x' })); // missing dir
+    expect(c.getWorkspaceBackup()).toBeNull();
+  });
+});
+
+describe('AgentConfigStore — auto-GEPA cadence', () => {
+  test('unset defaults to the autonomous cadence; explicit values stick', () => {
+    const c = setup();
+    expect(c.getAutoGepaEveryNTurns()).toBe(DEFAULT_AUTO_GEPA_EVERY_N_TURNS); // default ON
+    c.setAutoGepaEveryNTurns(40);
+    expect(c.getAutoGepaEveryNTurns()).toBe(40);
+  });
+
+  test('explicit disable (0/negative) persists and beats the default', () => {
+    const c = setup();
+    c.setAutoGepaEveryNTurns(0);
+    expect(c.getAutoGepaEveryNTurns()).toBe(0); // stored '0', not unset
+    expect(c.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns)).toBe('0');
+    c.setAutoGepaEveryNTurns(20);
+    c.setAutoGepaEveryNTurns(-5); // disables
+    expect(c.getAutoGepaEveryNTurns()).toBe(0);
+  });
+
+  test('an agent that explicitly configured a cadence keeps it', () => {
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, '7'); // pre-flip explicit config
+    expect(c.getAutoGepaEveryNTurns()).toBe(7);
   });
 });
 
@@ -58,20 +123,31 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalMode()).toBe('strict');
   });
 
-  test('sleepTimeCompute: boolean coerces "true" / "false" strings', () => {
+  test('sleepTimeCompute: defaults ON; explicit false sticks', () => {
     const c = setup();
-    expect(c.getSleepTimeComputeEnabled()).toBe(false);
+    expect(c.getSleepTimeComputeEnabled()).toBe(true); // autonomy default ON
+    c.setSleepTimeComputeEnabled(false);
+    expect(c.getSleepTimeComputeEnabled()).toBe(false); // explicit opt-out wins
     c.setSleepTimeComputeEnabled(true);
     expect(c.getSleepTimeComputeEnabled()).toBe(true);
-    c.setSleepTimeComputeEnabled(false);
-    expect(c.getSleepTimeComputeEnabled()).toBe(false);
   });
 
-  test('autoPromoteScaffold: boolean from "true"/"false"', () => {
+  test('autoPromoteScaffold: defaults ON; explicit false sticks', () => {
     const c = setup();
-    expect(c.getAutoPromoteScaffold()).toBe(false);
+    expect(c.getAutoPromoteScaffold()).toBe(true); // autonomy default ON
+    c.set(AGENT_CONFIG_KEYS.autoPromoteScaffold, 'false');
+    expect(c.getAutoPromoteScaffold()).toBe(false); // explicit opt-out wins
     c.set(AGENT_CONFIG_KEYS.autoPromoteScaffold, 'true');
     expect(c.getAutoPromoteScaffold()).toBe(true);
+  });
+
+  test('changelogSeenAt: 0 until marked, then sticks', () => {
+    const c = setup();
+    expect(c.getChangelogSeenAt()).toBe(0);
+    c.setChangelogSeenAt(1_750_000_000_000);
+    expect(c.getChangelogSeenAt()).toBe(1_750_000_000_000);
+    c.setChangelogSeenAt(Number.NaN); // ignored
+    expect(c.getChangelogSeenAt()).toBe(1_750_000_000_000);
   });
 
   test('shadowSampleRate: defaults 0.25, parses + clamps', () => {
@@ -93,5 +169,50 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getToolSurfacingMode()).toBe('relevant');
     c.set(AGENT_CONFIG_KEYS.toolSurfacingMode, 'bogus');
     expect(c.getToolSurfacingMode()).toBe('all');
+  });
+});
+
+describe('AgentConfigStore — MCTS overrides', () => {
+  test('empty when nothing stored (engine defaults apply at call sites)', () => {
+    const c = setup();
+    expect(c.getMctsOverrides()).toEqual({});
+  });
+
+  test('round-trips only the explicitly set knobs', () => {
+    const c = setup();
+    c.setMctsOverrides({ explorationWeight: 1.2, branches: 4 });
+    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 1.2, branches: 4 });
+    c.setMctsOverrides({ budget: 8, maxDepth: 6 });
+    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 1.2, budget: 8, maxDepth: 6, branches: 4 });
+  });
+
+  test('floors integer knobs and rejects non-positive values', () => {
+    const c = setup();
+    c.setMctsOverrides({ budget: 3.7 });
+    expect(c.getMctsOverrides()).toEqual({ budget: 3 });
+    expect(() => c.setMctsOverrides({ branches: 0 })).toThrow(/invalid MCTS setting/);
+    expect(() => c.setMctsOverrides({ explorationWeight: Number.NaN })).toThrow(/invalid MCTS setting/);
+  });
+
+  test('garbage stored values are ignored on read', () => {
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.mctsBudget, 'lots');
+    c.set(AGENT_CONFIG_KEYS.mctsBranches, '-2');
+    expect(c.getMctsOverrides()).toEqual({});
+  });
+});
+
+describe('AgentConfigStore — GEPA eval budget', () => {
+  test('defaults to 8, reads stored values, clamps to 2..20, ignores garbage', () => {
+    const c = setup();
+    expect(c.getGepaEvalBudget()).toBe(8);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '12');
+    expect(c.getGepaEvalBudget()).toBe(12);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '500');
+    expect(c.getGepaEvalBudget()).toBe(20);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '1');
+    expect(c.getGepaEvalBudget()).toBe(8);
+    c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, 'many');
+    expect(c.getGepaEvalBudget()).toBe(8);
   });
 });

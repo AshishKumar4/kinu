@@ -4,45 +4,79 @@
 //
 // Strategies plug into the StrategyRegistry; adding a new one = registering
 // it, no tool/UI changes.
+//
+// Host-injected infrastructure (a MCTS SessionWriter, the HeadController,
+// inherited conversation context, an onPhase event sink) flows in via
+// `defaultOptions()`. The LLM never supplies these — it only supplies task
+// parameters (head specs, merge strategy, tuning knobs). The two are combined
+// with a one-level deep merge so caller tuning can sit alongside injected
+// infra without clobbering it.
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
+import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry.js';
 import type { StrategyRegistry, StrategyContext } from './types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LanguageModel } from 'ai';
+import type { MergeStrategy } from '../heads/types.js';
 
 export interface ThinkToolDeps {
   registry: StrategyRegistry;
   rt: AgentRuntime;
   model: LanguageModel;
-  /** Build per-strategy options when the LLM doesn't supply them.
-   *  e.g. supply HeadController + SessionWriter automatically. */
+  /** Build per-strategy infrastructure options the LLM must not set —
+   *  e.g. `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`.
+   *  Called once per `think` invocation and deep-merged (one level) under the
+   *  caller's options so injected infra survives caller-supplied tuning. */
   defaultOptions?: () => Record<string, unknown>;
+}
+
+/** A single reasoning head spec for the `heads` strategy. Mirrors
+ *  SplitRequest['heads'][number] minus the infra the host injects. */
+interface ThinkHeadSpec {
+  task: string;
+  rationale: string;
+  /** Per-head model spec (e.g. `codex/gpt-5.5`). Omit to inherit the agent's. */
+  model?: string;
+  allowedSandboxes?: string[];
+  allowedTools?: string[];
 }
 
 interface ThinkInput {
   strategy: string;
   task: string;
-  /** Max iterations / branches / sub-calls. Default 10. */
+  /** Max iterations / branches / sub-calls. Unset = the strategy's own
+   *  default (which the host may override from stored agent config). */
   budget?: number;
   /** Wall-clock budget in ms. Default 60s. */
   wall_clock_ms?: number;
-  /** Strategy-specific options (model id overrides, head specs, etc.). */
+  /** strategy=heads: the parallel reasoning heads to spawn (2–6). */
+  heads?: ThinkHeadSpec[];
+  /** strategy=heads: how to combine head findings. Default 'synthesize'. */
+  merge_strategy?: MergeStrategy;
+  /** strategy=heads: model spec for the merge LLM. Omit to inherit the agent's. */
+  merge_model?: string;
+  /** Advanced per-strategy tuning (e.g. mcts branches/maxDepth). Deep-merged
+   *  under injected infra. Most callers never set this. */
   options?: Record<string, unknown>;
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
-  const strategies = deps.registry.list().map(s => s.id);
-  const descriptions = deps.registry.list()
-    .map(s => `  - **${s.id}** — ${s.description ?? s.label ?? s.id}`)
-    .join('\n');
+  // Only advertised strategies appear in the enum + docstring; the dispatch
+  // below still resolves any registered id (eval harnesses use the baseline).
+  const advertised = deps.registry.list().filter(s => s.advertised !== false);
+  const strategies = advertised.map(s => s.id);
 
   return tool({
+    // Single source: the registry's think spec carries the strategy doctrine;
+    // only the live advertised-strategy id list is appended here. Parameter
+    // contracts (heads specs, merge_strategy) live in the input schema.
     description:
-      'Run an exploration strategy over the task and return the best candidate.\n' +
-      'Strategies available:\n' + descriptions + '\n\n' +
-      'Pick the cheapest strategy that fits: single-shot for simple tasks, mcts for ' +
-      'multi-step planning, heads for distinct sub-questions. Strategies share ONE ' +
-      'agent surface — no need to remember per-strategy tool names.',
+      BUILTIN_TOOL_DESCRIPTIONS.think +
+      (strategies.length > 0 ? `\nStrategies available this turn: ${strategies.join(', ')}.` : ''),
     inputSchema: jsonSchema<ThinkInput>({
       type: 'object',
       required: ['strategy', 'task'],
@@ -51,23 +85,78 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
         task: { type: 'string', description: 'Concrete task to explore.' },
         budget: { type: 'integer', minimum: 1, maximum: 200, description: 'Max iterations.' },
         wall_clock_ms: { type: 'integer', minimum: 1000, description: 'Wall-clock cap in ms.' },
-        options: { type: 'object', description: 'Strategy-specific options.' },
+        heads: {
+          type: 'array',
+          minItems: 2,
+          maxItems: 6,
+          description: 'strategy=heads only: the parallel reasoning heads to spawn.',
+          items: {
+            type: 'object',
+            required: ['task', 'rationale'],
+            properties: {
+              task: { type: 'string', description: 'What this head explores. Be concrete.' },
+              rationale: { type: 'string', description: 'Why this angle matters.' },
+              model: { type: 'string', description: "Per-head model spec (e.g. 'codex/gpt-5.5'). Omit to inherit." },
+              allowedSandboxes: { type: 'array', items: { type: 'string' }, description: 'Sandbox namespaces this head may use.' },
+              allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this head may invoke.' },
+            },
+          },
+        },
+        merge_strategy: {
+          type: 'string',
+          enum: ['synthesize', 'best_of', 'consensus'],
+          description: 'strategy=heads only: how to combine head findings. Default synthesize.',
+        },
+        merge_model: {
+          type: 'string',
+          description: 'strategy=heads only: model spec for the merge LLM. Omit to inherit.',
+        },
+        options: { type: 'object', description: 'Advanced per-strategy tuning. Most callers leave unset.' },
       },
     }),
-    execute: async (input: ThinkInput) => {
+    execute: async (input: ThinkInput, toolOptions?: unknown) => {
       const strat = deps.registry.get(input.strategy);
       if (!strat) {
         return { error: `Unknown strategy "${input.strategy}". Available: ${strategies.join(', ')}` };
       }
+
+      // One-level deep merge: caller tuning sits alongside injected infra
+      // (session / controller / onPhase) instead of replacing the whole
+      // per-strategy bag.
+      const defaults = deps.defaultOptions?.() ?? {};
+      const callerOpts = input.options ?? {};
+      const options: Record<string, unknown> = { ...defaults };
+      for (const [k, v] of Object.entries(callerOpts)) {
+        const d = options[k];
+        options[k] = isPlainObject(d) && isPlainObject(v) ? { ...d, ...v } : v;
+      }
+
+      // Ergonomic heads input: fold the typed top-level fields into
+      // options.heads, preserving the injected controller/context/onPhase.
+      if (input.heads) {
+        options.heads = {
+          ...(isPlainObject(options.heads) ? options.heads : {}),
+          heads: input.heads,
+          ...(input.merge_strategy ? { mergeStrategy: input.merge_strategy } : {}),
+          ...(input.merge_model ? { mergeModel: input.merge_model } : {}),
+        };
+      }
+
       const ctx: StrategyContext = {
         task: input.task,
         rt: deps.rt,
         model: deps.model,
+        signal: readAbortSignal(toolOptions),
         budget: {
-          maxIterations: input.budget ?? 10,
-          wallClockMs: input.wall_clock_ms ?? 60_000,
+          // Unset = strategy default (lets stored agent-config overrides apply).
+          maxIterations: input.budget,
+          // Only set a wall-clock bound when the caller explicitly asks for one.
+          // A blanket 60s default silently killed heads mid-work (each head's
+          // sub-agent cold-start alone could eat it); leaving it undefined lets
+          // heads fall through to DEFAULT_HEAD_BUDGET (5 min).
+          wallClockMs: input.wall_clock_ms,
         },
-        options: { ...(deps.defaultOptions?.() ?? {}), ...(input.options ?? {}) },
+        options,
       };
       try {
         const result = await strat.explore(ctx);
@@ -83,4 +172,12 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
       }
     },
   });
+}
+
+function readAbortSignal(options: unknown): AbortSignal | undefined {
+  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
+  const signal = (options as { abortSignal?: unknown }).abortSignal;
+  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
+    ? signal as AbortSignal
+    : undefined;
 }

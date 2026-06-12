@@ -8,6 +8,8 @@ on:
       - 'packages/core/src/execution/types.ts'
       - 'packages/core/src/evolution/types.ts'
       - 'packages/core/src/config.ts'
+      - 'scripts/verify-lean.sh'
+      - '.github/workflows/lean-verify.yml'
   pull_request:
     paths:
       - 'lean/**'
@@ -15,6 +17,8 @@ on:
       - 'packages/core/src/execution/types.ts'
       - 'packages/core/src/evolution/types.ts'
       - 'packages/core/src/config.ts'
+      - 'scripts/verify-lean.sh'
+      - '.github/workflows/lean-verify.yml'
 
 jobs:
   verify:
@@ -33,49 +37,6 @@ jobs:
           path: ~/.elan
           key: lean-${{ hashFiles('lean/lean-toolchain') }}
 
-      - name: Check TS interface drift
+      - name: Verify Lean proofs and TS drift
         shell: bash
-        run: |
-          set -euo pipefail
-          # Hash the TypeScript interfaces that Lean types are generated from.
-          # If these change, the generated Lean types may be stale.
-          MANIFEST=lean/generated/.ts-checksums
-          CURRENT=$(cat \
-            packages/core/src/types/primitives.ts \
-            packages/core/src/types/agent-runtime.ts \
-            packages/core/src/types/craft.ts \
-            packages/core/src/evolution/types.ts \
-            packages/core/src/config.ts \
-            2>/dev/null | sha256sum | cut -d' ' -f1)
-
-          if [ -f "$MANIFEST" ]; then
-            STORED=$(cat "$MANIFEST")
-            if [ "$CURRENT" != "$STORED" ]; then
-              echo "::warning::TypeScript interfaces changed since Lean types were last generated."
-              echo "::warning::Run 'bun run verify:lean' locally to regenerate and update proofs."
-              echo "TS checksum: $CURRENT"
-              echo "Stored:      $STORED"
-              # Don't fail — just warn. Generated types may still be compatible.
-            else
-              echo "TS interface checksums match."
-            fi
-          else
-            echo "No checksum manifest found. Creating one."
-            mkdir -p lean/generated
-            echo "$CURRENT" > "$MANIFEST"
-          fi
-
-      - name: Build and verify
-        working-directory: lean
-        run: lake build
-
-      - name: Check for sorry
-        working-directory: lean
-        run: |
-          SORRIES=$(grep -rn '\bsorry\b' Proteus/ --include='*.lean' | grep -v '^\-\-' | grep -v '0 sorry' | wc -l)
-          echo "Sorries found: $SORRIES"
-          if [ "$SORRIES" -gt 0 ]; then
-            echo "::warning::Found $SORRIES sorry placeholder(s) in proofs"
-            grep -rn '\bsorry\b' Proteus/ --include='*.lean' | grep -v '^\-\-' | grep -v '0 sorry'
-          fi
-          echo "Lean verification complete."
+        run: bash scripts/verify-lean.sh

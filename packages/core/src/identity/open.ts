@@ -3,7 +3,7 @@
  *
  * Resume protocol:
  * 1. Read agent_identity → get stable UUID + name
- * 2. Read agent_soul → get immutable purpose
+ * 2. Read SOUL.md → get agent identity text (migrates legacy agent_soul DBs)
  * 3. Read scaffold_versions → get current version
  * 4. Read scaffold/agent.js from VFS → current agentic loop
  * 5. Read craft_scores → quality metrics
@@ -12,9 +12,12 @@
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLMProviderConfig } from '../llm.js';
-import { createAgent, wrapDatabase, type AgentDatabase } from './create.js';
 import { initAllTables } from './schema.js';
-import { readSoul } from './soul.js';
+import { readSoul, summarizeSoul } from './soul.js';
+import {
+  createInlineCraftStore, createInlineExecutor, createInlineMemory,
+  createInlineSchedule, createInlineVFS, wrapDatabase, type AgentDatabase,
+} from './inline-primitives.js';
 import { createVercelAILLM } from '../llm.js';
 import { buildRuntime } from '../runtime-builder.js';
 
@@ -27,6 +30,7 @@ export interface AgentInfo {
   id: string;
   name: string;
   purpose: string;
+  soul: string;
   scaffoldVersion: number;
   craftedToolCount: number;
   searchNodeCount: number;
@@ -51,9 +55,9 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
   `[0];
   if (!identity) throw new Error('No agent identity found. Use createAgent() to create one.');
 
-  // Step 2: Read soul
-  const purpose = readSoul(sql);
-  if (!purpose) throw new Error('No agent soul found. Database may be corrupted.');
+  // Step 2: Read SOUL.md (migrates pre-SOUL.md agent_soul databases)
+  const soul = readSoul(sql);
+  if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Step 3: Scaffold version
   const scaffoldVersion = sql<{ v: number }>`
@@ -85,24 +89,23 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
     }
   }
 
-  // Build runtime with real bun:sqlite primitives
-  // We reuse createAgent's internal component builders via a shim
-  const vfs = createBunVFS(db);
-  const memory = createBunMemory(db, vfs);
-  const craftStore = createBunCraftStore(db);
+  const vfs = createInlineVFS(sql);
+  const memory = createInlineMemory(db, vfs);
+  const craftStore = createInlineCraftStore(db);
 
   const llm = createVercelAILLM(config.llm);
-  const judgeModel = config.judge ? createVercelAILLM(config.judge) : llm;
+  // Cross-model judge only when configured — consumers document their own
+  // same-model fallback (mcts/evaluation.ts: judge ?? explorer).
+  const judgeModel = config.judge ? createVercelAILLM(config.judge) : undefined;
 
-  const schedule = createBunSchedule(sql);
+  const schedule = createInlineSchedule(sql);
 
   const rt = buildRuntime({
-    sql, execRaw, vfs, llm, executor: createBunExecutor(), schedule,
+    sql, execRaw, vfs, llm, executor: createInlineExecutor(), schedule,
     agentId: identity.id, agentName: identity.name,
     memory, craftStore, judgeModel,
     spawnBranch: async () => ({
       explore: async () => ({ text: 'exploration', codeUsed: null }),
-      evaluate: async () => 0.5,
       generateReflection: async () => 'reflection',
     }),
     abortBranch: async () => {},
@@ -113,134 +116,14 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
     info: {
       id: identity.id,
       name: identity.name,
-      purpose,
+      purpose: summarizeSoul(soul),
+      soul,
       scaffoldVersion,
       craftedToolCount,
       searchNodeCount,
       taskCount,
       memorySize,
       createdAt: identity.created_at,
-    },
-  };
-}
-
-// ── Re-export the bun:sqlite primitive builders from create.ts ────
-// These are identical — we factor them here to avoid import cycles.
-
-import type { VFS, Memory, Executor, Schedule, SqlExecutor, FiberCtx } from '../types/primitives.js';
-import type { CraftStore } from '../types/agent-runtime.js';
-import type { CraftedTool } from '../types/craft.js';
-import { nanoid } from '../utils/nanoid.js';
-
-function createBunVFS(db: AgentDatabase): VFS {
-  return {
-    async readFile(path: string, opts?: { encoding?: string }) {
-      const row = db.query('SELECT data FROM vfs_files WHERE path = ?').get(path) as { data: string } | null;
-      if (!row) throw new Error(`ENOENT: ${path}`);
-      return opts?.encoding === 'utf8' ? row.data : new TextEncoder().encode(row.data);
-    },
-    async writeFile(path: string, data: string | Uint8Array) {
-      const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
-      db.run('INSERT OR REPLACE INTO vfs_files (path, data, size, mtime) VALUES (?, ?, ?, ?)',
-        [path, text, text.length, Date.now()]);
-    },
-    async readdir(path: string) {
-      const prefix = path.endsWith('/') ? path : path + '/';
-      const rows = db.query('SELECT path FROM vfs_files WHERE path LIKE ? AND path != ?')
-        .all(prefix + '%', path) as { path: string }[];
-      const names = new Set<string>();
-      for (const r of rows) { const n = r.path.slice(prefix.length).split('/')[0]; if (n) names.add(n); }
-      return [...names];
-    },
-    async stat(path: string) {
-      const row = db.query('SELECT size, mtime, is_dir FROM vfs_files WHERE path = ?').get(path) as
-        { size: number; mtime: number; is_dir: number } | null;
-      if (!row) return null;
-      return { size: row.size, mtime: row.mtime, isDir: !!row.is_dir };
-    },
-    async unlink(path: string) { db.run('DELETE FROM vfs_files WHERE path = ?', [path]); },
-    async mkdir(path: string) {
-      db.run('INSERT OR IGNORE INTO vfs_files (path, is_dir, mtime) VALUES (?, 1, ?)', [path, Date.now()]);
-    },
-    async exists(path: string) {
-      return db.query('SELECT 1 FROM vfs_files WHERE path = ?').get(path) !== null;
-    },
-  };
-}
-
-function createBunMemory(db: AgentDatabase, vfs: VFS): Memory {
-  // Create the simplified memory_chunks table locally. The production
-  // MemoryStore (agent-utils) creates its own richer schema with FTS5.
-  // This inline version is only used by openAgent() from core (E2E tests).
-  db.exec(`CREATE TABLE IF NOT EXISTS memory_chunks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL
-  )`);
-  return {
-    async write(path, content) { await vfs.writeFile(path, content); },
-    async append(path, content) {
-      try {
-        const existing = await vfs.readFile(path, { encoding: 'utf8' }) as string;
-        await vfs.writeFile(path, existing + content);
-      } catch { await vfs.writeFile(path, content); }
-    },
-    async index(path) {
-      try {
-        const content = await vfs.readFile(path, { encoding: 'utf8' }) as string;
-        db.run('INSERT INTO memory_chunks (path, content) VALUES (?, ?)', [path, content]);
-      } catch {}
-    },
-    async search(query, limit = 10) {
-      const rows = db.query('SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?')
-        .all(`%${query}%`, limit) as { path: string; content: string }[];
-      return rows.map((r, i) => ({ path: r.path, startLine: 0, endLine: 0, snippet: r.content.slice(0, 200), score: 1 - i * 0.1 }));
-    },
-    async read(path) {
-      try { return await vfs.readFile(path, { encoding: 'utf8' }) as string; } catch { return null; }
-    },
-  };
-}
-
-function createBunCraftStore(db: AgentDatabase): CraftStore {
-  return {
-    create(tool) {
-      db.run('INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [tool.name, tool.description, tool.params ? JSON.stringify(tool.params) : null, tool.code, tool.scope, Date.now(), Date.now()]);
-    },
-    update(name, patch) {
-      if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
-      if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
-    },
-    get(name) { return db.query('SELECT * FROM crafted_tools WHERE name = ?').get(name) as CraftedTool | undefined; },
-    delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
-    list() { return db.query('SELECT * FROM crafted_tools').all() as CraftedTool[]; },
-    search(query, limit = 10) {
-      const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const all = db.query('SELECT * FROM crafted_tools').all() as CraftedTool[];
-      return all.filter(t => words.some(w => t.description.toLowerCase().includes(w))).slice(0, limit);
-    },
-    getAll() { return db.query('SELECT * FROM crafted_tools').all() as CraftedTool[]; },
-  };
-}
-
-function createBunExecutor(): Executor {
-  return {
-    async execute(code) {
-      try { new Function(code); return { result: true }; }
-      catch (e) { return { result: undefined, error: (e as Error).message }; }
-    },
-  };
-}
-
-function createBunSchedule(sql: SqlExecutor): Schedule {
-  return {
-    after: async (_ms, fn) => { await fn(); },
-    cron: async () => {},
-    fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
-      const id = nanoid();
-      sql`INSERT INTO fibers (id, name, snapshot, created_at) VALUES (${id}, ${name}, ${null}, ${Date.now()})`;
-      const stash = (data: unknown) => { sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)} WHERE id = ${id}`; };
-      try { return await fn({ stash, snapshot: null }); }
-      finally { sql`DELETE FROM fibers WHERE id = ${id}`; }
     },
   };
 }

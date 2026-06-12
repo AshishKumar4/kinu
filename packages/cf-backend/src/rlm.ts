@@ -22,7 +22,17 @@
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
 import type { AgentProviderRegistry } from './providers/agent-registry.js';
-import type { ResolvedProvider } from '@proteus/core';
+
+/** A codemode sandbox provider: a named namespace of callable tools plus the
+ *  TypeScript declaration the LLM sees. This is the shape `createCodeTool`
+ *  consumes (NOT core's `ResolvedProvider`, which is the executor-side
+ *  `{name, fns}` form). */
+export interface CodemodeProvider {
+  name: string;
+  types: string;
+  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  positionalArgs?: boolean;
+}
 
 export interface RLMOptions {
   /** Override model for this query (e.g. `openrouter/anthropic/claude-3.5-sonnet`).
@@ -42,7 +52,7 @@ export interface RLMOptions {
 export function createRLMProvider(
   registry: AgentProviderRegistry,
   currentSpec: () => string,
-): ResolvedProvider {
+): CodemodeProvider {
   return {
     name: 'llm',
     types: 'export declare const llm: {\n' +
@@ -90,5 +100,5 @@ export function createRLMProvider(
     // codemode passes args positionally to the executor fn — our execute
     // already destructures from args[0]/args[1] above.
     positionalArgs: true,
-  } as ResolvedProvider;
+  };
 }

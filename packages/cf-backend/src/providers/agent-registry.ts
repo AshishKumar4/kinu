@@ -2,12 +2,16 @@
 //
 // Composes:
 //   1. Cloudflare-specific providers from cf-backend/src/providers/
-//      (workers-ai env.AI binding, ai-gateway env vars)
+//      (workers-ai + my-gateway via the logged-in user's Cloudflare OAuth
+//       credential, ai-gateway env vars)
 //   2. Runtime-agnostic providers from @proteus/core
 //      (codex, openai, openrouter, openai-compat, anthropic)
+//   3. The models.dev dynamic catalog source — any other catalog provider
+//      with a stored `<id>.bearer` key resolves through the openai-compat
+//      wire path. Static providers stay authoritative for their ids.
 //
 // Ordering is also the preference order for `defaultSpec()`:
-//   workers-ai → ai-gateway → codex → openai → anthropic → openrouter → openai-compat
+//   workers-ai → my-gateway → ai-gateway → codex → openai → anthropic → openrouter → openai-compat → catalog
 //
 // Auth flows through the UserDO stub passed in opts.userDOStub — getAuth /
 // hasCredential are thin wrappers over its RPCs. No credential material ever
@@ -15,10 +19,12 @@
 import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
+  createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
 } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js';
+import { createMyGatewayProvider } from './my-gateway.js';
 import { createAIGatewayProvider } from './ai-gateway.js';
 import type { UserDO } from '../user/user-do.js';
 
@@ -28,8 +34,8 @@ export interface AgentProviderDeps {
    *  allowed for short-lived "env-bound providers only" contexts (e.g. the
    *  inline-branch fallback in runtime.ts, where the spawn closure cannot
    *  reach the user's UserDO). In that case getAuth always returns null
-   *  and hasCredential always returns false — only workers-ai / ai-gateway
-   *  end up usable. */
+ *  and hasCredential always returns false — only env-bound providers end up
+ *  usable. */
   userDOStub?: DurableObjectStub<UserDO> | null;
   fetch?: typeof fetch;
   refererURL?: string;
@@ -48,10 +54,27 @@ export interface AgentProviderRegistry {
   resolveSpec(specOrNull?: string | null): Promise<string>;
 }
 
+/** Auth resolver proxying to UserDO — getAuth is a thin wrapper over its
+ *  RPCs, so no credential material ever touches the caller's layer. The DO
+ *  event loop serializes concurrent refreshes for the same credential. With a
+ *  null stub (inline-branch context) every lookup returns null, leaving only
+ *  env-bound providers usable. Shared by the registry below and the
+ *  /api/user/ai/v1 proxy. */
+export function createUserDOAuthResolver(stub: DurableObjectStub<UserDO> | null): AuthResolver {
+  return async (key, opts) => {
+    if (!stub) return null;
+    const headers = await stub.getAuthHeaders(key, opts);
+    if (!headers) return null;
+    const baseURL = await stub.getCredentialBaseURL(key);
+    return baseURL ? { headers, baseURL } : { headers };
+  };
+}
+
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
   registry.register(createWorkersAIProvider(opts.workersAI));
+  registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
@@ -61,23 +84,13 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     appTitle: opts.appTitle,
   }));
   registry.register(createOpenAICompatProvider());
+  // models.dev id `cloudflare-workers-ai` aliases the bespoke workers-ai
+  // provider (and its endpoint needs an account-id template anyway) — exclude
+  // it so workers-ai never grows a second resolution path.
+  registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
-  // Auth resolver — proxies to UserDO. The DO event loop serializes
-  // concurrent refreshes for the same credential, so we don't need to
-  // dedupe at this layer. When userDOStub is null (inline-branch context),
-  // every lookup returns null so only env-bound providers remain usable.
   const stub = opts.userDOStub ?? null;
-  const getAuth: AuthResolver = async (key, opts2) => {
-    if (!stub) return null;
-    const headers = await stub.getAuthHeaders(key, opts2);
-    if (!headers) return null;
-    if (key.startsWith('openai-compat.')) {
-      const baseURL = await stub.getCredentialBaseURL(key);
-      if (!baseURL) return null;
-      return { headers, baseURL };
-    }
-    return { headers };
-  };
+  const getAuth = createUserDOAuthResolver(stub);
 
   const hasCredential = async (key: string) => {
     if (!stub) return false;
@@ -89,16 +102,23 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     env: opts.env,
     getAuth,
     hasCredential,
+    listCredentialKeys: async () => {
+      if (!stub) return [];
+      return (await stub.listCredentials()).map((c) => c.key);
+    },
     fetch: opts.fetch,
   };
 
-  // Sync-resolvable provider = needs no credential read to construct.
-  // workers-ai (env.AI binding) and ai-gateway (env vars) qualify.
+  // Sync model construction does not mean sync credential access: providers
+  // that need user credentials resolve them inside custom fetch wrappers.
+  // workers-ai resolves the user's Cloudflare OAuth credential through the
+  // UserDO stub — without a stub every request is a guaranteed 401, so the
+  // sync default must skip it and fall back to the env-bound ai-gateway.
   function syncDefaultProvider(): string {
-    if (opts.env.AI && typeof opts.env.AI !== 'string') return 'workers-ai';
+    if (stub && registry.get('workers-ai')) return 'workers-ai';
     if (typeof opts.env.AI_GATEWAY_URL === 'string' && opts.env.AI_GATEWAY_URL
      && typeof opts.env.AI_GATEWAY_AUTH === 'string' && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
-    throw new Error('No sync-resolvable provider (need env.AI or AI_GATEWAY_AUTH).');
+    throw new Error('No sync-resolvable provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');
   }
   function syncDefaultModelId(provider: string): string {
     const fallback = registry.get('workers-ai')?.defaultModel ?? '';
@@ -124,7 +144,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
       if (s.includes('/')) {
         const first = s.slice(0, s.indexOf('/'));
-        if (registry.get(first)) return s;
+        // canResolve is optimistic for catalog-shaped ids — a typo'd provider
+        // surfaces a clear models.dev error at request time instead of here
+        // (the catalog cannot be consulted synchronously).
+        if (registry.canResolve(first)) return s;
         if (first === 'workers-ai') return s;   // canonical form pre-existed
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }
@@ -143,7 +166,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
       if (s.includes('/')) {
         const first = s.slice(0, s.indexOf('/'));
-        if (registry.get(first)) return s;
+        if (registry.canResolve(first)) return s;
         if (first === 'workers-ai') return s;
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }

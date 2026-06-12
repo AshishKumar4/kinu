@@ -1,0 +1,109 @@
+// Cancellation must actually propagate from the `run` tool / executor exec
+// tools. Previously the whole AbortSignal chain was a silent no-op: createShell
+// dropped the signal and every remote executor ignored the trailing options.
+import { describe, test, expect } from 'bun:test';
+import { buildBuiltinTools } from '../src/tools/builtins.js';
+import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox.js';
+import { createSSHTunnelExecutor, type DeviceTransport } from '../src/execution/ssh.js';
+import { createNimbusExecutor, type NimbusSandboxHandle } from '../src/execution/nimbus.js';
+import { createTestRuntime } from './helpers.js';
+import type { AgentRuntime } from '../src/types/agent-runtime.js';
+
+type RunTool = { execute: (args: { command: string; runtime?: string }, options?: unknown) => Promise<string> };
+
+function hangingPromise<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
+
+describe('run tool — workspace shell abort', () => {
+  test('a long-running command list terminates on abort (exit 130, later commands skipped)', async () => {
+    const { rt } = createTestRuntime();
+    const controller = new AbortController();
+    const executed: string[] = [];
+    const shell = {
+      exec: async (command: string, opts?: string | { stdin?: string; signal?: AbortSignal }) => {
+        const signal = typeof opts === 'object' ? opts?.signal : undefined;
+        executed.push(command);
+        // Simulate the agent-utils shell contract: aborted → exit 130.
+        if (signal?.aborted) return { stdout: '', stderr: 'aborted', exitCode: 130 };
+        return { stdout: 'done', stderr: '', exitCode: 0 };
+      },
+    };
+    const rtWithShell = { ...rt, shell } as AgentRuntime;
+    const tools = buildBuiltinTools({ rt: rtWithShell });
+    const run = tools.run as unknown as RunTool;
+
+    controller.abort();
+    const result = await run.execute({ command: 'cat big.txt && cat big2.txt' }, { abortSignal: controller.signal });
+    expect(result).toContain('exit 130');
+    expect(executed).toEqual(['cat big.txt && cat big2.txt']);
+  });
+});
+
+describe('remote executor exec abort', () => {
+  test('sandbox exec stops waiting and throws AbortError on abort', async () => {
+    const handle = {
+      exec: () => hangingPromise(),
+    } as unknown as SandboxHandle;
+    const provider = createSandboxExecutor(handle, 'preview.example.com', 'sb-1');
+    const controller = new AbortController();
+
+    const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  test('laptop exec stops waiting and throws AbortError on abort', async () => {
+    const transport: DeviceTransport = {
+      rpc: () => hangingPromise(),
+      isConnected: () => true,
+    };
+    const provider = createSSHTunnelExecutor(transport);
+    const controller = new AbortController();
+
+    const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  test('nimbus exec stops waiting and throws AbortError on abort', async () => {
+    const box = {
+      ready: async () => {},
+      exec: () => hangingPromise(),
+      files: {
+        read: async () => null, write: async () => {}, list: async () => [],
+        exists: async () => false, delete: async () => {},
+      },
+    } as unknown as NimbusSandboxHandle;
+    const provider = createNimbusExecutor({ box });
+    const controller = new AbortController();
+
+    const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  test('pre-aborted signal rejects before dispatching to the remote', async () => {
+    const calls: string[] = [];
+    const transport: DeviceTransport = {
+      rpc: async (method) => { calls.push(method); return { stdout: '', stderr: '', exitCode: 0 }; },
+      isConnected: () => true,
+    };
+    const provider = createSSHTunnelExecutor(transport);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls).toEqual([]);
+  });
+
+  test('without a signal, exec resolves normally', async () => {
+    const transport: DeviceTransport = {
+      rpc: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
+      isConnected: () => true,
+    };
+    const provider = createSSHTunnelExecutor(transport);
+    expect(await provider.tools.exec.execute('ls')).toBe('ok');
+  });
+});

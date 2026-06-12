@@ -1,58 +1,66 @@
-import { existsSync, statSync } from 'node:fs';
-import * as readline from 'node:readline';
-import { Database } from 'bun:sqlite';
-import { openAgentCLI } from '@proteus/cli-backend';
-import { agentDbPath, listAgentDirs, resolveLLMConfig } from '../config.js';
-import { runTuiChat } from '../tui/chat-app.js';
+import { existsSync } from 'node:fs';
+import { agentDbPath, resolveAgentRef } from '../config.js';
+import { resolveAgentTarget } from '../agent-target.js';
+import { createAgentClient } from '../client-factory.js';
 import { runChatLoop } from '../chat-loop.js';
+import { ensureLocalDaemonRunning } from './daemon.js';
 import { printError, ACCENT, DIM } from '../display.js';
+import { listKnownAgents } from '../agent-list.js';
+import { ask } from '../prompt.js';
 
 export async function chatCommand(name: string | undefined, opts: {
-  model?: string; baseUrl?: string; auth?: string; classic?: boolean;
+  model?: string; baseUrl?: string; auth?: string; classic?: boolean; initialPrompt?: string;
+  continue?: boolean; resume?: boolean; session?: string; sessionDir?: string; noSession?: boolean; fork?: string;
 }): Promise<void> {
   // No name: let user pick from existing agents
   if (!name) {
-    const agents = listAgentDirs();
+    if (!opts.classic && process.stdin.isTTY && process.stdout.isTTY) {
+      // Lazy: opentui captures the terminal — it must never load on
+      // non-TUI command paths (e.g. the installer's setup prompts).
+      const { runHomeTui } = await import('../tui/home-app.js');
+      const action = await runHomeTui(opts);
+      if (action.type === 'open-agent') {
+        await chatCommand(action.name, { ...opts, initialPrompt: action.initialPrompt });
+      }
+      return;
+    }
+    const agents = listKnownAgents();
     if (agents.length === 0) {
-      printError('No agents found.', 'Create one with: proteus create <name>');
+      printError('No agents found.', 'Run proteus in a terminal to create one from a mission.');
       process.exit(1);
     }
     if (agents.length === 1) {
-      name = agents[0]!;
+      name = agents[0]!.name;
     } else {
       console.log(`\n${DIM('Select an agent:')}`);
-      agents.forEach((a, i) => console.log(`  ${ACCENT(String(i + 1))} ${a}`));
+      agents.forEach((a, i) => console.log(`  ${ACCENT(String(i + 1))} ${a.label}`));
       console.log('');
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>(resolve => rl.question(`${DIM('Agent #: ')}`, resolve));
-      rl.close();
+      const answer = await ask('Agent #');
       const idx = parseInt(answer, 10) - 1;
       if (idx < 0 || idx >= agents.length) {
         printError('Invalid selection.');
         process.exit(1);
       }
-      name = agents[idx]!;
+      name = agents[idx]!.name;
     }
   }
 
-  const dbPath = agentDbPath(name);
-  if (!existsSync(dbPath)) {
+  if (!resolveAgentRef(name) && !existsSync(agentDbPath(name))) {
     printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
     process.exit(1);
   }
 
-  const llmConfig = resolveLLMConfig(opts);
-  const db = new Database(dbPath);
-  const { rt, info } = openAgentCLI(db, dbPath, { llm: llmConfig });
-  const dbSize = statSync(dbPath).size;
-  const refreshInfo = () => openAgentCLI(db, dbPath, { llm: llmConfig }).info;
+  const target = resolveAgentTarget(name);
+  if (target.mode === 'local') ensureLocalDaemonRunning();
+  const client = createAgentClient(target, opts);
+  const hydrateHistory = target.mode === 'cloud'
+    ? !opts.initialPrompt
+    : Boolean(opts.session || opts.continue || opts.resume || opts.fork);
 
-  // Use TUI by default, fall back to classic readline with --classic flag
-  // or when stdin is not a TTY (piped input)
-  if (opts.classic || !process.stdin.isTTY) {
-    await runChatLoop({ rt, info, dbSize, llmConfig, refreshInfo });
+  if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
+    await runChatLoop({ client, initialPrompt: opts.initialPrompt });
   } else {
-    await runTuiChat({ rt, info, dbSize, llmConfig, refreshInfo, noAutoEvolve: false });
+    const { runTuiChat } = await import('../tui/chat-app.js');
+    await runTuiChat({ client, hydrateHistory, initialPrompt: opts.initialPrompt });
   }
-  db.close();
 }

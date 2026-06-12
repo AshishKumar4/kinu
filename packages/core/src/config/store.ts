@@ -7,6 +7,7 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { DirectoryBackup } from '../execution/sandbox.js';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -15,12 +16,44 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
   displayName: 'display_name',
+  /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
+  nameOrigin: 'name_origin',
   shellApprovalMode: 'shell_approval_mode',
   sleepTimeCompute: 'sleep_time_compute',
   autoPromoteScaffold: 'auto_promote_scaffold',
   shadowSampleRate: 'shadow_sample_rate',
+  /** Fraction of scaffold proposals that branch from an archived variant
+   *  instead of the live current (DGM archive exploration). */
+  scaffoldExploreShare: 'scaffold_explore_share',
   toolSurfacingMode: 'tool_surfacing_mode',
   reviewModel: 'review_model',
+  /** Comma-separated list of skill names the operator wants always-on. */
+  alwaysActiveSkills: 'always_active_skills',
+  /** The executor namespace the agent most recently ran a tool in — so the UI
+   *  (diff / file manager) defaults to where work actually happened. */
+  lastActiveExecutor: 'last_active_executor',
+  /** Serialized DirectoryBackup handle for the agent's /workspace snapshot. */
+  workspaceBackup: 'workspace_backup',
+  /** Epoch ms of the last successful /workspace backup (backup debounce). */
+  workspaceBackupAt: 'workspace_backup_at',
+  /** Run GEPA self-optimization after this many turns of new execution traces
+   *  (0 = off; unset = the autonomous default cadence). Trace-driven, not
+   *  clock-driven. */
+  autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
+  /** Epoch ms of the operator's last Evolution Changelog view — entries newer
+   *  than this drive the unseen badge. */
+  changelogSeenAt: 'changelog_seen_at',
+  /** Total outcome-labeled instances a GEPA run draws into its train/val
+   *  split (buildOutcomeEvalSplit). Default 8, clamped 2..20. */
+  gepaEvalBudget: 'gepa_eval_budget',
+  /** Operator-tuned MCTS knobs (Settings UI / setMctsConfig). Unset = engine
+   *  defaults (DEFAULT_CONFIG.mcts) at the call site. */
+  mctsExplorationWeight: 'mcts_c',
+  mctsBudget: 'mcts_iterations',
+  mctsMaxDepth: 'mcts_depth',
+  mctsBranches: 'mcts_branches',
+  mctsJudgeSamples: 'mcts_judge_samples',
+  mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -40,15 +73,65 @@ export interface AgentConfigStore {
   setModel(spec: string): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
+  getNameOrigin(): 'user' | 'auto' | null;
+  setNameOrigin(origin: 'user' | 'auto'): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getAutoPromoteScaffold(): boolean;
   getShadowSampleRate(): number;
+  /** Archive-exploration share for proposal base selection (0..1, default 0.2). */
+  getScaffoldExploreShare(): number;
   getToolSurfacingMode(): 'all' | 'relevant';
   getReviewModel(): string | null;
+  /** Skills the operator has pinned as always-active for this agent. */
+  getAlwaysActiveSkills(): string[];
+  setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
+  /** The executor namespace the agent last ran a tool in, or null. */
+  getLastActiveExecutor(): string | null;
+  /** Record the last-active executor. Ignores values that aren't a plausible
+   *  executor namespace (defense against a poisoned config value). */
+  setLastActiveExecutor(name: string): void;
+  /** The persisted /workspace backup handle, or null if none / malformed. */
+  getWorkspaceBackup(): DirectoryBackup | null;
+  /** Persist the latest /workspace backup handle and stamp the backup time. */
+  setWorkspaceBackup(backup: DirectoryBackup): void;
+  /** Epoch ms of the last successful /workspace backup, or 0. */
+  getWorkspaceBackupAt(): number;
+  /** Turns-of-new-traces between auto-GEPA passes (0 = disabled; unset
+   *  defaults to DEFAULT_AUTO_GEPA_EVERY_N_TURNS). */
+  getAutoGepaEveryNTurns(): number;
+  /** Set the auto-GEPA cadence (turns). 0 / negative explicitly disables. */
+  setAutoGepaEveryNTurns(n: number): void;
+  /** Epoch ms of the last changelog view (0 = never seen). */
+  getChangelogSeenAt(): number;
+  setChangelogSeenAt(ms: number): void;
+  /** GEPA eval budget — labeled instances per run (default 8, clamp 2..20). */
+  getGepaEvalBudget(): number;
+  /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
+   *  into runMCTS call sites so unset knobs keep engine defaults. */
+  getMctsOverrides(): MctsOverrides;
+  /** Persist MCTS overrides; undefined fields are left untouched. */
+  setMctsOverrides(overrides: MctsOverrides): void;
 }
+
+export interface MctsOverrides {
+  explorationWeight?: number;
+  budget?: number;
+  maxDepth?: number;
+  branches?: number;
+  /** Judge ensemble size per branch evaluation (median-aggregated). */
+  judgeSamples?: number;
+  /** Per-branch evaluation LLM-call budget (assertions + judge samples). */
+  maxEvalLLMCalls?: number;
+}
+
+/** Default auto-GEPA cadence when the agent has no explicit setting: one
+ *  pass per 25 turns of new traces. Frequent enough to keep learning from
+ *  fresh outcome labels, sparse enough that each pass sees a genuinely new
+ *  eval split (the trace-driven counter pauses it on idle agents anyway). */
+export const DEFAULT_AUTO_GEPA_EVERY_N_TURNS = 25;
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
@@ -84,29 +167,134 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
+    getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
+    setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
     setShellApprovalMode(mode) { set(AGENT_CONFIG_KEYS.shellApprovalMode, mode); },
+    // Autonomy switches default ON (the "unleash, don't cap" flip): the
+    // Evolution Changelog makes every self-change visible and revertable,
+    // and the misevolution gate + shadow veto + archive are the safety net.
+    // Only an explicit 'false' opts out — stored values always win.
     getSleepTimeComputeEnabled() {
-      return get(AGENT_CONFIG_KEYS.sleepTimeCompute) === 'true';
+      return get(AGENT_CONFIG_KEYS.sleepTimeCompute) !== 'false';
     },
     setSleepTimeComputeEnabled(enabled) {
       set(AGENT_CONFIG_KEYS.sleepTimeCompute, enabled ? 'true' : 'false');
     },
     getAutoPromoteScaffold() {
-      return get(AGENT_CONFIG_KEYS.autoPromoteScaffold) === 'true';
+      return get(AGENT_CONFIG_KEYS.autoPromoteScaffold) !== 'false';
     },
     getShadowSampleRate() {
       const v = get(AGENT_CONFIG_KEYS.shadowSampleRate);
       const n = v ? Number(v) : 0.25;
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.25;
     },
+    getScaffoldExploreShare() {
+      const v = get(AGENT_CONFIG_KEYS.scaffoldExploreShare);
+      const n = v ? Number(v) : 0.2;
+      return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
+    },
     getToolSurfacingMode() {
       const v = get(AGENT_CONFIG_KEYS.toolSurfacingMode);
       return v === 'relevant' ? 'relevant' : 'all';
     },
     getReviewModel() { return get(AGENT_CONFIG_KEYS.reviewModel); },
+    getAlwaysActiveSkills() {
+      const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+      if (!v) return [];
+      return v.split(',').map(s => s.trim()).filter(Boolean);
+    },
+    setAlwaysActiveSkills(names) {
+      const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
+      if (v.length === 0) sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.alwaysActiveSkills}`;
+      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
+    },
+    getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
+    setLastActiveExecutor(name) {
+      // Provider namespaces are short identifiers; reject anything else so a
+      // bad value can't poison the UI default. Not a fixed allow-list (executors
+      // are registered dynamically) — just a shape check.
+      if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
+    },
+    getWorkspaceBackup() {
+      const v = get(AGENT_CONFIG_KEYS.workspaceBackup);
+      if (!v) return null;
+      try {
+        const o = JSON.parse(v) as Partial<DirectoryBackup>;
+        if (typeof o?.id === 'string' && typeof o?.dir === 'string') {
+          return { id: o.id, dir: o.dir, localBucket: o.localBucket };
+        }
+      } catch { /* malformed → treat as no backup */ }
+      return null;
+    },
+    setWorkspaceBackup(backup) {
+      set(AGENT_CONFIG_KEYS.workspaceBackup, JSON.stringify({ id: backup.id, dir: backup.dir, localBucket: backup.localBucket }));
+      set(AGENT_CONFIG_KEYS.workspaceBackupAt, String(Date.now()));
+    },
+    getWorkspaceBackupAt() {
+      const n = Number(get(AGENT_CONFIG_KEYS.workspaceBackupAt));
+      return Number.isFinite(n) ? n : 0;
+    },
+    getAutoGepaEveryNTurns() {
+      const raw = get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns);
+      if (raw == null) return DEFAULT_AUTO_GEPA_EVERY_N_TURNS;
+      const n = Math.floor(Number(raw));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    setAutoGepaEveryNTurns(n) {
+      // Persist 0 explicitly — unset now means "autonomous default", so a
+      // deliberate disable must stick as a stored value.
+      const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+      set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));
+    },
+    getGepaEvalBudget() {
+      const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.gepaEvalBudget)));
+      return Number.isFinite(n) && n >= 2 ? Math.min(n, 20) : 8;
+    },
+    getChangelogSeenAt() {
+      const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+    setChangelogSeenAt(ms) {
+      if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
+    },
+    getMctsOverrides() {
+      const positive = (key: string): number | undefined => {
+        const raw = get(key);
+        if (raw == null) return undefined;
+        const n = Number(raw);
+        return Number.isFinite(n) && n > 0 ? n : undefined;
+      };
+      const out: MctsOverrides = {};
+      const w = positive(AGENT_CONFIG_KEYS.mctsExplorationWeight);
+      const budget = positive(AGENT_CONFIG_KEYS.mctsBudget);
+      const maxDepth = positive(AGENT_CONFIG_KEYS.mctsMaxDepth);
+      const branches = positive(AGENT_CONFIG_KEYS.mctsBranches);
+      const judgeSamples = positive(AGENT_CONFIG_KEYS.mctsJudgeSamples);
+      const maxEvalLLMCalls = positive(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls);
+      if (w !== undefined) out.explorationWeight = w;
+      if (budget !== undefined) out.budget = Math.floor(budget);
+      if (maxDepth !== undefined) out.maxDepth = Math.floor(maxDepth);
+      if (branches !== undefined) out.branches = Math.floor(branches);
+      if (judgeSamples !== undefined) out.judgeSamples = Math.floor(judgeSamples);
+      if (maxEvalLLMCalls !== undefined) out.maxEvalLLMCalls = Math.floor(maxEvalLLMCalls);
+      return out;
+    },
+    setMctsOverrides(overrides) {
+      const write = (key: string, value: number | undefined, integer: boolean) => {
+        if (value === undefined) return;
+        if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
+        set(key, String(integer ? Math.floor(value) : value));
+      };
+      write(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false);
+      write(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
+      write(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
+      write(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
+      write(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
+      write(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
+    },
   };
 }

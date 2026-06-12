@@ -17,6 +17,94 @@ import type { VFSError } from "./types";
 // 1.8 MB per chunk
 const CHUNK_SIZE = 1800 * 1024;
 
+/**
+ * Canonical vfs_files schema — the single source of truth, owned by SqliteFS.
+ * Embedders that bootstrap all tables up front (core's initAllTables) run
+ * these same statements; SqliteFS.init() also runs them unconditionally so
+ * databases created before the indexes existed self-heal.
+ */
+export const VFS_SCHEMA_DDL: readonly string[] = [
+	`CREATE TABLE IF NOT EXISTS vfs_files (
+		path        TEXT    NOT NULL,
+		chunk_index INTEGER NOT NULL DEFAULT 0,
+		parent_path TEXT    NOT NULL DEFAULT '',
+		data        BLOB,
+		is_dir      INTEGER NOT NULL DEFAULT 0,
+		size        INTEGER NOT NULL DEFAULT 0,
+		mtime       INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (path, chunk_index)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_vfs_files_parent ON vfs_files(parent_path, path)`,
+	`CREATE INDEX IF NOT EXISTS idx_vfs_files_is_dir ON vfs_files(is_dir, path)`,
+	// Root directory row — readdir('') and stat('') depend on it.
+	`INSERT OR IGNORE INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
+		VALUES ('', 0, '', NULL, 1, 0, (unixepoch() * 1000))`,
+];
+
+/** Idempotently create the vfs_files table, its indexes, and the root row. */
+export function ensureVfsSchema(sql: SqlExecutor): void {
+	for (const statement of VFS_SCHEMA_DDL) {
+		// SqlExecutor only speaks tagged templates; wrap each constant DDL
+		// statement (no bindings) as a single-part template.
+		const strings = Object.assign([statement], { raw: [statement] });
+		void sql(strings);
+	}
+}
+
+/**
+ * Write a file synchronously through the canonical encoding (BLOB chunks,
+ * chunk-0 metadata, parent directory rows). SqliteFS.writeFile delegates
+ * here; raw-SQL writers (core's identity seeds) MUST use this instead of
+ * hand-rolled INSERTs so every vfs_files row stays SqliteFS-readable.
+ */
+export function writeVfsFileSync(sql: SqlExecutor, path: string, data: Uint8Array | string): void {
+	const normalized = normalizePath(path);
+	if (!normalized) throw new Error("Cannot write to root");
+
+	const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+
+	const existing = sql<{ is_dir: number }>`
+		SELECT is_dir FROM vfs_files WHERE path = ${normalized} AND chunk_index = 0
+	`;
+	if (existing[0]?.is_dir === 1) {
+		throw makeErrno(
+			`EISDIR: illegal operation on a directory, open '${path}'`,
+			"EISDIR", -21, path,
+		);
+	}
+
+	const parts = normalized.split("/");
+	const parentPath = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+
+	if (parts.length > 1) {
+		const now = Date.now();
+		for (let i = 0; i < parts.length - 1; i++) {
+			const dirPath = parts.slice(0, i + 1).join("/");
+			const dirParent = i === 0 ? "" : parts.slice(0, i).join("/");
+			void sql`INSERT OR IGNORE INTO vfs_files
+				(path, chunk_index, parent_path, data, is_dir, mtime)
+				VALUES (${dirPath}, 0, ${dirParent}, NULL, 1, ${now})`;
+		}
+	}
+
+	void sql`DELETE FROM vfs_files WHERE path = ${normalized}`;
+
+	const totalSize = bytes.length;
+	const chunkCount = Math.max(1, Math.ceil(totalSize / CHUNK_SIZE));
+	const now = Date.now();
+
+	for (let i = 0; i < chunkCount; i++) {
+		const start = i * CHUNK_SIZE;
+		const end = Math.min(start + CHUNK_SIZE, totalSize);
+		const chunkBuf = toBuffer(bytes.slice(start, end));
+
+		// Chunk 0 carries metadata; subsequent chunks carry only data
+		void sql`INSERT INTO vfs_files
+			(path, chunk_index, parent_path, data, is_dir, size, mtime)
+			VALUES (${normalized}, ${i}, ${i === 0 ? parentPath : ""}, ${chunkBuf}, 0, ${i === 0 ? totalSize : 0}, ${now})`;
+	}
+}
+
 function makeErrno(message: string, code: string, errno: number, path: string): VFSError {
 	const err: VFSError = new Error(message);
 	err.code = code;
@@ -34,12 +122,7 @@ export class SqliteFS implements VFS {
 	}
 
 	init() {
-		const cols = this.sql<{ name: string }>`PRAGMA table_info(vfs_files)`;
-
-		if (cols.length === 0) {
-			this.createSchema();
-		}
-		// else: already on current schema
+		ensureVfsSchema(this.sql);
 
 		Object.defineProperty(this, "promises", {
 			value: this,
@@ -47,25 +130,6 @@ export class SqliteFS implements VFS {
 			writable: false,
 			configurable: false,
 		});
-	}
-
-	private createSchema() {
-		void this.sql`
-			CREATE TABLE vfs_files (
-				path        TEXT    NOT NULL,
-				chunk_index INTEGER NOT NULL DEFAULT 0,
-				parent_path TEXT    NOT NULL DEFAULT '',
-				data        BLOB,
-				is_dir      INTEGER NOT NULL DEFAULT 0,
-				size        INTEGER NOT NULL DEFAULT 0,
-				mtime       INTEGER NOT NULL,
-				PRIMARY KEY (path, chunk_index)
-			)
-		`;
-		void this.sql`CREATE INDEX idx_vfs_files_parent ON vfs_files(parent_path, path)`;
-		void this.sql`CREATE INDEX idx_vfs_files_is_dir ON vfs_files(is_dir, path)`;
-		void this
-			.sql`INSERT OR IGNORE INTO vfs_files (path, chunk_index, parent_path, data, is_dir, mtime) VALUES ('', 0, '', NULL, 1, ${Date.now()})`;
 	}
 
 	async readFile(
@@ -103,51 +167,7 @@ export class SqliteFS implements VFS {
 	}
 
 	async writeFile(path: string, data: Uint8Array | string): Promise<void> {
-		const normalized = normalizePath(path);
-		if (!normalized) throw new Error("Cannot write to root");
-
-		const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
-
-		const existing = this.sql<{ is_dir: number }>`
-			SELECT is_dir FROM vfs_files WHERE path = ${normalized} AND chunk_index = 0
-		`;
-		if (existing[0]?.is_dir === 1) {
-			throw makeErrno(
-				`EISDIR: illegal operation on a directory, open '${path}'`,
-				"EISDIR", -21, path,
-			);
-		}
-
-		const parts = normalized.split("/");
-		const parentPath = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
-
-		if (parts.length > 1) {
-			const now = Date.now();
-			for (let i = 0; i < parts.length - 1; i++) {
-				const dirPath = parts.slice(0, i + 1).join("/");
-				const dirParent = i === 0 ? "" : parts.slice(0, i).join("/");
-				void this.sql`INSERT OR IGNORE INTO vfs_files
-					(path, chunk_index, parent_path, data, is_dir, mtime)
-					VALUES (${dirPath}, 0, ${dirParent}, NULL, 1, ${now})`;
-			}
-		}
-
-		void this.sql`DELETE FROM vfs_files WHERE path = ${normalized}`;
-
-		const totalSize = bytes.length;
-		const chunkCount = Math.max(1, Math.ceil(totalSize / CHUNK_SIZE));
-		const now = Date.now();
-
-		for (let i = 0; i < chunkCount; i++) {
-			const start = i * CHUNK_SIZE;
-			const end = Math.min(start + CHUNK_SIZE, totalSize);
-			const chunkBuf = toBuffer(bytes.slice(start, end));
-
-			// Chunk 0 carries metadata; subsequent chunks carry only data
-			void this.sql`INSERT INTO vfs_files
-				(path, chunk_index, parent_path, data, is_dir, size, mtime)
-				VALUES (${normalized}, ${i}, ${i === 0 ? parentPath : ""}, ${chunkBuf}, 0, ${i === 0 ? totalSize : 0}, ${now})`;
-		}
+		writeVfsFileSync(this.sql, path, data);
 	}
 
 	async unlink(path: string): Promise<void> {

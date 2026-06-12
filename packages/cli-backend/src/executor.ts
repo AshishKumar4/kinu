@@ -1,9 +1,10 @@
 /**
- * Sandboxed code executor for CLI backend using Bun subprocess.
+ * Local code executor for CLI backend using Bun subprocess.
  *
  * Runs user code in a separate Bun process with a 30-second timeout.
- * The subprocess inherits no environment variables and has no access
- * to the parent's file system or network by default.
+ * This is a local convenience boundary, not a security sandbox: code executes
+ * with the user's OS permissions. Tool-backed execution runs in-process because
+ * provider functions cannot be passed across process boundaries.
  */
 
 import type { Executor, ExecuteResult, ResolvedProvider } from '@proteus/core';
@@ -39,13 +40,7 @@ function addImplicitReturn(code: string): string {
 export function createSandboxedExecutor(): Executor {
   return {
     async execute(code, providers): Promise<ExecuteResult> {
-      // For simple validation (no providers), use Function constructor
-      const providerList: ResolvedProvider[] = Array.isArray(providers)
-        ? providers
-        : [{
-            name: 'codemode',
-            fns: providers as Record<string, (...args: unknown[]) => Promise<unknown>>,
-          }];
+      const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
       // If providers are needed, we can't pass functions across process
       // boundaries. Fall back to in-process vm for tool-backed execution.
@@ -58,7 +53,7 @@ export function createSandboxedExecutor(): Executor {
   };
 }
 
-/** Execute in a Bun subprocess with timeout — fully isolated */
+/** Execute in a Bun subprocess with timeout. */
 async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   const tmpFile = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
   // LLMs often send bare expressions (e.g., "7 * 13") without return.
@@ -110,6 +105,14 @@ async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   } finally {
     try { unlinkSync(tmpFile); } catch { /* cleanup best-effort */ }
   }
+}
+
+function normalizeProviders(
+  providers?: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
+): ResolvedProvider[] {
+  if (!providers) return [];
+  if (Array.isArray(providers)) return providers;
+  return [{ name: 'codemode', fns: providers }];
 }
 
 /** In-process execution for when tool providers are needed */

@@ -29,7 +29,9 @@ export function createTestSql(): TestSql {
   // SqlExecutor signature: `sql<Row>\`SELECT ...\``.
   const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] => {
     const q = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    return db.prepare(q).all(...(values as never[])) as T[];
+    // bun:sqlite binds TypedArrays, not ArrayBuffers (the canonical VFS BLOB type).
+    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
+    return db.prepare(q).all(...(bound as never[])) as T[];
   }) as unknown as SqlExecutor;
 
   return { sql, execRaw, db, close: () => db.close() };

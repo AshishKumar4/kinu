@@ -39,6 +39,9 @@
 
 import type { CraftedTool } from '../types/craft.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
+import {
+  parseMarkdownFrontmatter, stringifyMarkdownFrontmatter, MarkdownFrontmatterError,
+} from '../utils/markdown-frontmatter.js';
 
 export interface SkillMdParseResult {
   /** The crafted-tool fields we recognized. */
@@ -64,40 +67,35 @@ export function craftedToolToSkillMd(
   tool: CraftedTool,
   bodySections?: { whenToUse?: string; notes?: string },
 ): string {
-  const fm: string[] = ['---'];
-  fm.push(`name: ${tool.name}`);
-  fm.push(`description: ${escapeYamlString(tool.description)}`);
-  fm.push(`scope: ${tool.scope}`);
-  fm.push(`created_at: ${tool.createdAt}`);
-  fm.push(`updated_at: ${tool.updatedAt}`);
-  if (tool.params) {
-    fm.push('params:');
-    for (const [k, v] of Object.entries(tool.params)) {
-      fm.push(`  ${k}: ${escapeYamlString(v)}`);
-    }
-  }
-  fm.push('---');
-  fm.push('');
-  fm.push(`# ${tool.name}`);
-  fm.push('');
+  // Frontmatter goes through the shared serializer (single source of truth
+  // for quoting/escaping). Body sections are hand-built markdown.
+  const frontmatter: Record<string, unknown> = {
+    name: tool.name,
+    description: tool.description,
+    scope: tool.scope,
+    created_at: tool.createdAt,
+    updated_at: tool.updatedAt,
+  };
+  if (tool.params) frontmatter.params = tool.params;
 
   const whenToUse = bodySections?.whenToUse ?? autoWhenToUse(tool);
-  fm.push('## When to use');
-  fm.push(whenToUse);
-  fm.push('');
-
-  fm.push('## Code');
-  fm.push('```typescript');
-  fm.push(tool.code);
-  fm.push('```');
-
+  const body: string[] = [
+    `# ${tool.name}`,
+    '',
+    '## When to use',
+    whenToUse,
+    '',
+    '## Code',
+    '```typescript',
+    tool.code,
+    '```',
+  ];
   if (bodySections?.notes && bodySections.notes.trim().length > 0) {
-    fm.push('');
-    fm.push('## Notes');
-    fm.push(bodySections.notes);
+    body.push('', '## Notes', bodySections.notes);
   }
-  fm.push('');
-  return fm.join('\n');
+  body.push('');
+
+  return stringifyMarkdownFrontmatter({ frontmatter, body: body.join('\n') });
 }
 
 /**
@@ -108,14 +106,19 @@ export function craftedToolToSkillMd(
  * Throws if no ```typescript fence in body — the code block is required.
  */
 export function parseSkillMd(source: string): SkillMdParseResult {
-  const fmMatch = source.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!fmMatch) {
+  let doc;
+  try { doc = parseMarkdownFrontmatter(source); }
+  catch (err) {
+    if (err instanceof MarkdownFrontmatterError) {
+      throw new Error(`SKILL.md front-matter parse error at line ${err.detail.line}: ${err.detail.message}`);
+    }
+    throw err;
+  }
+  if (Object.keys(doc.frontmatter).length === 0) {
     throw new Error('SKILL.md missing YAML frontmatter (must start with ---)');
   }
-  const fmBlock = fmMatch[1];
-  const body = source.slice(fmMatch[0].length);
-
-  const parsedFm = parseSimpleYaml(fmBlock);
+  const parsedFm = doc.frontmatter;
+  const body = doc.body;
 
   const known = new Set([
     'name', 'description', 'scope', 'created_at', 'updated_at', 'version', 'params', 'tags',
@@ -173,63 +176,8 @@ export function parseSkillMd(source: string): SkillMdParseResult {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-function escapeYamlString(s: string): string {
-  // Use double-quotes if string contains : # newlines or starts with - { [
-  if (/[\n":#\[\]{}!*&|>'%@`]/.test(s) || /^[-?]/.test(s)) {
-    return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
-  }
-  return s;
-}
-
 function autoWhenToUse(tool: CraftedTool): string {
   return tool.description || `Use ${tool.name} when you need its specific behavior.`;
-}
-
-/**
- * Tiny YAML subset parser: supports flat scalar fields + one level of
- * nested object (for `params:`). Doesn't try to be general — we
- * round-trip the exact shape `craftedToolToSkillMd` writes.
- */
-function parseSimpleYaml(text: string): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  const lines = text.split('\n');
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim() || line.trim().startsWith('#')) { i++; continue; }
-    const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
-    if (!m) { i++; continue; }
-    const key = m[1];
-    let val = m[2].trim();
-    if (val === '' && lines[i + 1] && lines[i + 1].startsWith('  ')) {
-      // Nested object: collect indented children.
-      const nested: Record<string, unknown> = {};
-      i++;
-      while (i < lines.length && lines[i].startsWith('  ')) {
-        const childLine = lines[i].slice(2);
-        const childMatch = childLine.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
-        if (childMatch) nested[childMatch[1]] = unquoteScalar(childMatch[2]);
-        i++;
-      }
-      out[key] = nested;
-      continue;
-    }
-    out[key] = unquoteScalar(val);
-    i++;
-  }
-  return out;
-}
-
-function unquoteScalar(s: string): string | number | boolean {
-  const t = s.trim();
-  if (t === 'true') return true;
-  if (t === 'false') return false;
-  if (/^-?\d+$/.test(t)) return Number(t);
-  if (/^-?\d+\.\d+$/.test(t)) return Number(t);
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
-    return t.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
-  }
-  return t;
 }
 
 /** Split markdown body by `## ` headings; returns lowercase-keyed map. */

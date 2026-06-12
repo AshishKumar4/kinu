@@ -27,13 +27,14 @@ import {
   type SessionWriter,
   type SessionMessage,
   runMCTS,
+  readSoul,
 } from '../packages/core/src/index.js';
 
 const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || 'https://gateway.ai.cloudflare.com/v1/fc895c5670cff9268b310a6a86bb6c35/orange-build-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.5',
+  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
+  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
+  model: '@cf/moonshotai/kimi-k2.6',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-' + Date.now());
@@ -46,7 +47,7 @@ async function chatTurn(
   userMessage: string,
 ): Promise<CompletedTurn> {
   const start = Date.now();
-  const soul = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`[0]?.purpose ?? '';
+  const soul = readSoul(rt.storage.sql) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const tcRecords: ToolCallRecord[] = [];
@@ -135,11 +136,11 @@ describe('E2E Lifecycle', () => {
 
   test('agent created with correct tables', () => {
     const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(t => t.name);
-    expect(tables).toContain('agent_soul');
+    expect(tables).toContain('vfs_files');
     expect(tables).toContain('messages');
     expect(tables).toContain('search_nodes');
-    const soul = db.query('SELECT purpose FROM agent_soul LIMIT 1').get() as { purpose: string };
-    expect(soul.purpose).toContain('TypeScript');
+    const soul = readSoul(rt.storage.sql) ?? '';
+    expect(soul).toContain('TypeScript');
   });
 
   test('5-turn conversation with native tool calling', async () => {
@@ -190,7 +191,8 @@ describe('E2E Lifecycle', () => {
     db.close();
     const db2 = new Database(DB_PATH, { readonly: true });
     const msgsAfter = (db2.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
-    const soul = (db2.query('SELECT purpose FROM agent_soul LIMIT 1').get() as { purpose: string }).purpose;
+    const soulRow = db2.query("SELECT data FROM vfs_files WHERE path = 'SOUL.md' LIMIT 1").get() as { data: string | Uint8Array } | null;
+    const soul = typeof soulRow?.data === 'string' ? soulRow.data : soulRow?.data ? new TextDecoder().decode(soulRow.data) : '';
     db2.close();
     expect(msgsAfter).toBe(msgsBefore);
     expect(soul).toContain('TypeScript');

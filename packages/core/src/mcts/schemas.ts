@@ -2,7 +2,7 @@
  * MCTS SQL schemas — exact DDL from final-architecture.md §5.2.
  *
  * BUG-1 FIX: value defaults to 0, NOT 0.5.
- * Formal spec: Backpropagation.lean proves initial_valid requires value=0.
+ * Formal spec: MCTS/Backpropagation.lean:initial_valid (the value=0 initial state is Valid).
  *
  * NOTE: This DDL must stay in sync with packages/core/src/identity/schema.ts
  * (the unified schema). Both are safe to run because of IF NOT EXISTS. The

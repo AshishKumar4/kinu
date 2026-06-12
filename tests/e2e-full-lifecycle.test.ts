@@ -3,7 +3,7 @@
  * real bun:sqlite, native AI SDK tool calling.
  *
  * Covers: agent creation, tool building, multi-turn chat with tool use,
- * close/reopen via openAgent, identity/soul/scaffold persistence.
+ * close/reopen via openAgent, identity/SOUL.md/scaffold persistence.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -24,6 +24,7 @@ import {
   initSearchTables,
   initScaffoldTables,
   initCraftScoreTables,
+  readSoul,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -34,9 +35,9 @@ import {
 
 const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || 'https://gateway.ai.cloudflare.com/v1/fc895c5670cff9268b310a6a86bb6c35/orange-build-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.5',
+  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
+  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
+  model: '@cf/moonshotai/kimi-k2.6',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-full-' + Date.now());
@@ -60,7 +61,7 @@ async function chatTurn(
   userMessage: string,
 ): Promise<CompletedTurn> {
   const start = Date.now();
-  const soul = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`[0]?.purpose ?? '';
+  const soul = readSoul(rt.storage.sql) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const tcRecords: ToolCallRecord[] = [];
@@ -149,12 +150,11 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 1: Verify creation ──────────────────────────────────
 
-  test('1. agent created with correct tables, soul, and identity', () => {
+  test('1. agent created with correct tables, SOUL.md, and identity', () => {
     const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[])
       .map(t => t.name);
 
     expect(tables).toContain('agent_identity');
-    expect(tables).toContain('agent_soul');
     expect(tables).toContain('messages');
     expect(tables).toContain('vfs_files');
     expect(tables).toContain('search_nodes');
@@ -162,8 +162,8 @@ describe('E2E Full Lifecycle', () => {
     expect(tables).toContain('crafted_tools');
     expect(tables).toContain('fibers');
 
-    const soul = db.query('SELECT purpose FROM agent_soul LIMIT 1').get() as { purpose: string };
-    expect(soul.purpose).toContain('JavaScript');
+    const soul = readSoul(rt.storage.sql) ?? '';
+    expect(soul).toContain('JavaScript');
 
     const identity = db.query('SELECT id, name FROM agent_identity LIMIT 1').get() as { id: string; name: string };
     expect(identity.id).toBeTruthy();
@@ -171,7 +171,7 @@ describe('E2E Full Lifecycle', () => {
 
     console.log(`  Tables: ${tables.length}`);
     console.log(`  Identity: ${identity.id} (${identity.name})`);
-    console.log(`  Soul: ${soul.purpose.slice(0, 60)}`);
+    console.log(`  Soul: ${soul.slice(0, 60)}`);
   });
 
   // ── Step 2: Verify tools ─────────────────────────────────────
@@ -258,9 +258,8 @@ describe('E2E Full Lifecycle', () => {
     const msgCount = (db2.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
     expect(msgCount).toBeGreaterThanOrEqual(2); // at least 1 turn completed
 
-    // Soul survived
-    const soul = (db2.query('SELECT purpose FROM agent_soul LIMIT 1').get() as { purpose: string });
-    expect(soul.purpose).toContain('JavaScript');
+    // SOUL.md survived
+    expect(info.soul).toContain('JavaScript');
 
     console.log(`  Reopened agent: ${info.id} (${info.name})`);
     console.log(`  Purpose: ${info.purpose.slice(0, 60)}`);
@@ -294,8 +293,8 @@ describe('E2E Full Lifecycle', () => {
     const identity = db.query('SELECT * FROM agent_identity').get() as Record<string, unknown>;
     console.log(`\n  Identity: ${JSON.stringify(identity)}`);
 
-    const soul = db.query('SELECT * FROM agent_soul').get() as Record<string, unknown>;
-    console.log(`  Soul: ${JSON.stringify(soul)}`);
+    const soul = readSoul(rt.storage.sql) ?? '';
+    console.log(`  SOUL.md: ${JSON.stringify(soul.slice(0, 120))}`);
 
     const vfsFiles = (db.query('SELECT path, size FROM vfs_files ORDER BY path').all() as { path: string; size: number }[]);
     console.log(`\n  VFS files:`);

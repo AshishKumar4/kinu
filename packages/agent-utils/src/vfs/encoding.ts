@@ -17,10 +17,12 @@ export function concatBuffers(chunks: Uint8Array[]): Uint8Array {
 
 /**
  * Convert SQL row data to Uint8Array.
- * Handles ArrayBuffer (BLOB), string (legacy base64 from v1 schema), and null.
+ * Handles ArrayBuffer (Cloudflare DO storage.sql BLOBs), Uint8Array (bun:sqlite
+ * BLOBs), string (legacy base64 from v1 schema), and null.
  */
-export function rowDataToBytes(data: SqlValue | undefined): Uint8Array {
+export function rowDataToBytes(data: SqlValue | Uint8Array | undefined): Uint8Array {
 	if (data == null) return new Uint8Array(0);
+	if (data instanceof Uint8Array) return data;
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
 	if (typeof data === "string") {
 		// Legacy base64-encoded data from v1 schema

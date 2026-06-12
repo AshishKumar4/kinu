@@ -10,7 +10,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { forkAgentStorage, readForkLineage, initAllTables } from '../src/index.js';
+import { forkAgentStorage, readForkLineage, initAllTables, readSoul, writeSoul } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 /** Build a fresh in-memory DB with the full production schema applied. */
@@ -22,7 +22,7 @@ function fresh() {
   return { db, sql, execRaw };
 }
 
-/** Seed a source DB with identity, soul, N messages, and some crafted tools. */
+/** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools. */
 function seedSource(
   { sql, execRaw }: ReturnType<typeof fresh>,
   opts: {
@@ -33,7 +33,7 @@ function seedSource(
   },
 ) {
   sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
-  sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${opts.purpose}, ${100})`;
+  writeSoul(sql, opts.purpose);
   for (const m of opts.messages) {
     sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
         VALUES (${m.id}, ${'default'}, ${m.parent_id ?? null}, ${m.role}, ${m.content}, ${m.created_at})`;
@@ -52,10 +52,10 @@ function seedSource(
 }
 
 function seedTargetBootstrap({ sql, execRaw }: ReturnType<typeof fresh>) {
-  // Simulate what the fork DO's onStart path inserts: default soul + identity.
+  // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
   // forkAgentStorage should purge these before writing the real fork rows.
   sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
-  sql`INSERT INTO agent_soul (purpose, created_at) VALUES (${'default bootstrap purpose'}, ${200})`;
+  writeSoul(sql, 'default bootstrap purpose');
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 }
 
@@ -94,6 +94,7 @@ describe('forkAgentStorage', () => {
     expect(targetMsgs[0]!.parent_id).toBeNull();
     expect(targetMsgs[1]!.parent_id).toBe('msg-1');
     expect(targetMsgs[2]!.parent_id).toBe('msg-2');
+    expect(readSoul(tgt.sql)).toBe('original purpose');
   });
 
   test('2. copies crafted_tools verbatim', () => {

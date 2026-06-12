@@ -20,7 +20,7 @@ for (const line of devVars.split("\n")) {
 
 const GATEWAY_URL = vars.AI_GATEWAY_URL;
 const GATEWAY_AUTH = vars.AI_GATEWAY_AUTH;
-const MODEL = "@cf/moonshotai/kimi-k2.5";
+const MODEL = "@cf/moonshotai/kimi-k2.6";
 const FAST_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 if (!GATEWAY_URL || !GATEWAY_AUTH) {

@@ -7,19 +7,24 @@
  * parallel-spawn infrastructure.
  */
 
-import { generateObject } from "ai";
 import type {
-  HeadRuntime, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
+  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
 } from "@proteus/core";
-import { MergeOutputSchema, type MergeOutput, effortFor, createAgentConfigStore } from "@proteus/core";
+import { type MergeOutput, MergeOutputSchema, effortFor, createAgentConfigStore } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
+import { agentAffinityKey } from "@proteus/core";
+import { generateJson } from "../lib/generate-json.js";
 import type { UserDO } from "../user/user-do.js";
 
-export function createCFHeadRuntime(orchestrator: Think<Env>, ownerUserId: string): HeadRuntime {
+/** Agent surface this head runtime needs — `env` is protected on the DO base
+ *  but the orchestrator (a subclass) passes `this` cast to this view. */
+type HeadHost = Think<Env> & { readonly env: Env };
+
+export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string, grounding?: HeadGrounding): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
-  // is read once from agent_soul by the orchestrator and threaded down.
+  // is read once from agent_identity by the orchestrator and threaded down.
   const userDOStub = orchestrator.env.UserDO.get(
     orchestrator.env.UserDO.idFromName(ownerUserId),
   ) as DurableObjectStub<UserDO>;
@@ -27,28 +32,30 @@ export function createCFHeadRuntime(orchestrator: Think<Env>, ownerUserId: strin
     env: orchestrator.env,
     userDOStub,
     appTitle: 'Proteus (heads)',
+    workersAI: { sessionAffinity: agentAffinityKey(orchestrator.name) },
   });
 
   const config = createAgentConfigStore(
     orchestrator.sql.bind(orchestrator) as unknown as import('@proteus/core').SqlExecutor,
   );
-  const mergeLLM: MergeLLMFn = async (prompt, schema): Promise<MergeOutput> => {
+  const mergeLLM: MergeLLMFn = async (prompt): Promise<MergeOutput> => {
     const stored = config.getModel();
     const model = reg.resolveModel(reg.normalizeSpecSync(stored));
-    const { object } = await generateObject({
+    return generateJson({
       model,
-      schema: schema as typeof MergeOutputSchema,
+      schema: MergeOutputSchema,
       prompt,
       maxOutputTokens: 4096,
-      ...effortFor('head_merge'),
+      providerOptions: effortFor('head_merge').providerOptions,
     });
-    return object as MergeOutput;
   };
 
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
       await stub.setOwner(ownerUserId);
+      // The root orchestrator is the shared point for head findings.
+      await stub.setSharedParent(orchestrator.name);
       await stub.initHead(input);
       return {
         id: input.id,
@@ -62,5 +69,6 @@ export function createCFHeadRuntime(orchestrator: Think<Env>, ownerUserId: strin
       };
     },
     mergeLLM,
+    ...(grounding ? { grounding } : {}),
   };
 }

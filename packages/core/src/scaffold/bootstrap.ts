@@ -14,26 +14,19 @@ import { nowMs } from '../utils/date.js';
 
 export const INITIAL_SCAFFOLD_SOURCE = `\
 // scaffold/agent.js — v0 (initial bootstrap)
-// This is the agent's mutable agentic loop.
-// It runs inside rt.executor.execute() and receives rt via Proxy globals.
+//
+// This is the agent's mutable agentic loop. It runs inside the codemode
+// sandbox and talks to the host ONLY through the \`host.*\` bridge (the live
+// runtime object can't cross the sandbox boundary). The task is the 2nd arg.
+//
+// The default loop delegates to host.defaultInference(), which runs the
+// agent's standard inference (full tools + multi-step) and streams the
+// response to the user. An evolved scaffold can replace this delegation with
+// its own strategy (MCTS, branching heads, reflection passes, …) while still
+// reaching the model + tools via host.llmStream / host.callTool.
 
 async function* run(rt, task) {
-  const knowledge = (await codemode.readMemory({ path: "memory/MEMORY.md" })) ?? "";
-  const messages = [{ role: "user", content: task }];
-
-  for await (const chunk of rt.llm.stream({
-    system: "You are a helpful agent.\\n\\n" + knowledge,
-    messages,
-    tools: {},
-    maxSteps: 500,
-  })) {
-    yield { type: "chunk", data: chunk };
-  }
-
-  await codemode.appendMemory({
-    path: "memory/logs/" + new Date().toISOString().slice(0, 10) + ".md",
-    content: "\\nTask: " + task.slice(0, 80) + "\\n",
-  });
+  await host.defaultInference();
 }
 `;
 

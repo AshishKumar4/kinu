@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
+import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, TreeStructureIcon, ArrowsOutIcon, MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon } from "@phosphor-icons/react";
-import { MCTSTree } from "@/components/mcts-tree";
+import { MCTSTree, type MCTSTreeHandle } from "@/components/mcts-tree";
+import { EmptyState, EMPTY_HINTS } from "@/components/surfaces/shared";
 import { useProteus } from "@/hooks/use-proteus";
 import type { MCTSNode } from "@/lib/protocol";
 
@@ -18,6 +19,7 @@ export default function MCTSExplorer() {
   const { agentId } = useParams();
   const state = useProteus(agentId);
   const containerRef = useRef<HTMLDivElement>(null);
+  const treeRef = useRef<MCTSTreeHandle>(null);
   const [dims, setDims] = useState({ w: 1200, h: 700 });
   const [selected, setSelected] = useState<MCTSNode | null>(null);
 
@@ -44,9 +46,9 @@ export default function MCTSExplorer() {
           {state.agentStatus && <span className="text-xs p-text-2">- {state.agentStatus.name}</span>}
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" shape="square" size="sm" icon={<MagnifyingGlassMinusIcon size={16} />} aria-label="Zoom out" />
-          <Button variant="ghost" shape="square" size="sm" icon={<MagnifyingGlassPlusIcon size={16} />} aria-label="Zoom in" />
-          <Button variant="ghost" shape="square" size="sm" icon={<ArrowsOutIcon size={16} />} aria-label="Fit" />
+          <Button variant="ghost" shape="square" size="sm" icon={<MagnifyingGlassMinusIcon size={16} />} aria-label="Zoom out" disabled={!tree} onClick={() => treeRef.current?.zoomOut()} />
+          <Button variant="ghost" shape="square" size="sm" icon={<MagnifyingGlassPlusIcon size={16} />} aria-label="Zoom in" disabled={!tree} onClick={() => treeRef.current?.zoomIn()} />
+          <Button variant="ghost" shape="square" size="sm" icon={<ArrowsOutIcon size={16} />} aria-label="Fit" disabled={!tree} onClick={() => treeRef.current?.fit()} />
         </div>
       </div>
       <div className="flex items-center gap-4 px-5 py-2 border-b p-border text-xs p-text-2">
@@ -59,8 +61,16 @@ export default function MCTSExplorer() {
       </div>
       <div ref={containerRef} className="flex-1 relative overflow-hidden">
         {!tree ? (
-          <div className="flex items-center justify-center h-full"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree...</div></div>
-        ) : dims.w > 0 && <MCTSTree root={tree} width={dims.w} height={dims.h} onNodeClick={setSelected} />}
+          // The workspace snapshot resolves agentStatus — once it's here with
+          // no tree, the agent genuinely has no MCTS data (not still loading).
+          state.agentStatus ? (
+            <div className="h-full flex items-center justify-center">
+              <EmptyState icon={<TreeStructureIcon size={28} />} title="No exploration tree yet" hint={EMPTY_HINTS.mcts} />
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree...</div></div>
+          )
+        ) : dims.w > 0 && <MCTSTree ref={treeRef} root={tree} width={dims.w} height={dims.h} onNodeClick={setSelected} selectedNode={selected} />}
       </div>
       <div className="flex items-center justify-between px-5 py-2.5 border-t p-border">
         <div className="flex items-center gap-6 text-xs">

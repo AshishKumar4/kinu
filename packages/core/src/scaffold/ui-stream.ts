@@ -1,0 +1,117 @@
+/**
+ * ScaffoldEvent → AI-SDK UI message stream adapter.
+ *
+ * `runScaffold` reports progress through an `emit(ScaffoldEvent)` callback.
+ * The Think chat path consumes an AI-SDK UI message stream
+ * (`toUIMessageStream()` chunks). This adapter bridges the two: it runs a
+ * scaffold and yields a well-formed `UIMessageChunk` stream.
+ *
+ * Envelope discipline — the adapter owns exactly one `start` + one `finish`:
+ *   - It emits `{type:'start'}` before any content.
+ *   - For `ui_chunk` events (produced by `host.defaultInference()`, which runs
+ *     the real `streamText().toUIMessageStream()`), it passes the inner chunk
+ *     through verbatim EXCEPT the inner `start`/`finish` (the envelope is
+ *     ours), so a default scaffold's output is byte-identical to standard
+ *     inference apart from the single outer envelope.
+ *   - For `text_delta` events (from `host.llmStream`), it synthesises a text
+ *     block (`text-start` / `text-delta…` / `text-end`).
+ *   - `tool_call` → `tool-input-available`; `tool_result` → `tool-output-available`.
+ *   - `error` → `error`; `done` closes any open text block then `finish`.
+ *
+ * No live model needed to test it — feed a fake run function that emits a
+ * scripted event sequence and assert the chunk stream.
+ */
+
+import type { UIMessageChunk } from 'ai';
+import type { ScaffoldEvent, ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
+
+/** Run a scaffold (via the supplied runner) and yield a UI message stream. */
+export async function* scaffoldEventsToUIStream(
+  run: (emit: ScaffoldEmitFn) => Promise<ScaffoldRunResult>,
+  opts: { messageId?: string; idPrefix?: string } = {},
+): AsyncGenerator<UIMessageChunk> {
+  const queue: ScaffoldEvent[] = [];
+  let resolveNext: (() => void) | null = null;
+  let finished = false;
+
+  const emit: ScaffoldEmitFn = (event) => {
+    queue.push(event);
+    if (resolveNext) { const r = resolveNext; resolveNext = null; r(); }
+  };
+
+  // Kick off the scaffold; mark finished when it settles (so the drain loop
+  // terminates even if the scaffold never emits a 'done').
+  const runPromise = run(emit).finally(() => {
+    finished = true;
+    if (resolveNext) { const r = resolveNext; resolveNext = null; r(); }
+  });
+
+  const idPrefix = opts.idPrefix ?? 'sc';
+  let textId: string | null = null;
+  let textSeq = 0;
+  let finishEmitted = false;
+  let sawDone = false;
+
+  function* openTextIfNeeded(): Generator<UIMessageChunk> {
+    if (textId == null) {
+      textId = `${idPrefix}-text-${textSeq++}`;
+      yield { type: 'text-start', id: textId };
+    }
+  }
+  function* closeTextIfOpen(): Generator<UIMessageChunk> {
+    if (textId != null) {
+      yield { type: 'text-end', id: textId };
+      textId = null;
+    }
+  }
+
+  yield { type: 'start', ...(opts.messageId ? { messageId: opts.messageId } : {}) };
+
+  while (!sawDone) {
+    if (queue.length === 0) {
+      if (finished) break;
+      await new Promise<void>((resolve) => { resolveNext = resolve; });
+      continue;
+    }
+    const ev = queue.shift()!;
+    switch (ev.type) {
+      case 'ui_chunk': {
+        const chunk = ev.chunk as UIMessageChunk | undefined;
+        if (chunk && typeof chunk === 'object' && 'type' in chunk) {
+          // Strip the inner envelope — we own start/finish.
+          if (chunk.type !== 'start' && chunk.type !== 'finish') yield chunk;
+        }
+        break;
+      }
+      case 'text_delta':
+        yield* openTextIfNeeded();
+        yield { type: 'text-delta', id: textId!, delta: ev.text };
+        break;
+      case 'tool_call':
+        yield* closeTextIfOpen();
+        yield { type: 'tool-input-available', toolCallId: ev.toolCallId, toolName: ev.name, input: ev.args };
+        break;
+      case 'tool_result':
+        yield { type: 'tool-output-available', toolCallId: ev.toolCallId, output: ev.result };
+        break;
+      case 'step_finish':
+        yield* closeTextIfOpen();
+        yield { type: 'finish-step' };
+        break;
+      case 'error':
+        yield { type: 'error', errorText: ev.message };
+        break;
+      case 'done':
+        sawDone = true;
+        break;
+    }
+  }
+
+  // Close out: emit any failure the runner surfaced, then a single finish.
+  const result = await runPromise;
+  if (!result.ok && result.error) {
+    yield { type: 'error', errorText: result.error };
+  }
+  yield* closeTextIfOpen();
+  if (!finishEmitted) { yield { type: 'finish' }; finishEmitted = true; }
+}

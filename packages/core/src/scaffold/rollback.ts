@@ -2,7 +2,7 @@
  * Scaffold rollback — restore a prior version.
  *
  * Architecture reference: final-architecture.md §4
- * Formal spec: ScaffoldSafety.lean — rollback_restores_code, rollback_nonexistent_is_none
+ * Formal spec: Evolution/Scaffold.lean — rollback_nonexistent_is_none
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

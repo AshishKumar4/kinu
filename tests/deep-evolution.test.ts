@@ -20,6 +20,7 @@ import {
   initSearchTables,
   initScaffoldTables,
   initCraftScoreTables,
+  readSoul,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
@@ -29,9 +30,9 @@ import {
 
 const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
-  baseURL: process.env.PROTEUS_BASE_URL || 'https://gateway.ai.cloudflare.com/v1/fc895c5670cff9268b310a6a86bb6c35/orange-build-gateway/workers-ai/v1',
-  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.5',
+  baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
+  headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
+  model: '@cf/moonshotai/kimi-k2.6',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-deep-' + Date.now());
@@ -63,7 +64,7 @@ async function solveProblem(
   problem: Problem,
 ): Promise<{ response: string; turn: CompletedTurn; toolNames: string[] }> {
   const start = Date.now();
-  const soul = rt.storage.sql<{ purpose: string }>`SELECT purpose FROM agent_soul LIMIT 1`[0]?.purpose ?? '';
+  const soul = readSoul(rt.storage.sql) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const toolNames: string[] = [];

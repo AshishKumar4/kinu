@@ -71,6 +71,27 @@ describe('UCT selection', () => {
     expect(node!.id).toBe('high');
   });
 
+  test('#5: root keeps a non-zero exploration term so it can re-widen across iterations', () => {
+    const { sql } = setup();
+    // After iteration 1: root visited, children already expanded. Under the old
+    // ln(N(parent))=ln(1)=0 the root's UCT collapsed to its value and it could
+    // never be re-selected to add MORE breadth (frozen at N=branches). With the
+    // synthetic root parent-visit it retains a strictly-positive exploration
+    // bonus and becomes selectable once its children are well-visited.
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('root', NULL, 't', 0.5, 2, 'open')`;
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('c1', 'root', 't', 0.5, 1, 'open')`;
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('c2', 'root', 't', 0.5, 1, 'open')`;
+
+    // Fresh children deepen first, but once they are well-visited the root's
+    // surviving exploration term makes it the UCT-max → the tree re-widens.
+    sql`UPDATE search_nodes SET visits = 50 WHERE id IN ('c1','c2')`;
+    const reselect = selectNode(sql)!;
+    expect(reselect.id).toBe('root');
+  });
+
   test('exploration bonus favors less-visited nodes', () => {
     const { sql } = setup();
     // Root with many visits

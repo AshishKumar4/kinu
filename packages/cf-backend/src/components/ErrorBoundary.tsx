@@ -38,13 +38,16 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="h-full flex items-center justify-center p-6">
-        <div className="max-w-md text-center space-y-3">
+      <div className="h-full overflow-y-auto flex items-start justify-center p-6">
+        <div className="max-w-2xl w-full text-left space-y-3">
           <div className="text-sm font-medium p-text">
-            Something went wrong rendering this view.
+            Something went wrong rendering this view{this.props.label ? ` (${this.props.label})` : ''}.
           </div>
           <div className="text-xs p-text-3 font-mono break-words p-elevated rounded p-3 border p-border text-left">
-            {this.state.error.message || String(this.state.error)}
+            <div className="font-bold mb-2">{this.state.error.message || String(this.state.error)}</div>
+            {this.state.error.stack && (
+              <pre className="text-[10px] whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
+            )}
           </div>
           <button
             onClick={this.reset}

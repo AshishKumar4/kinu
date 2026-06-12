@@ -1,5 +1,7 @@
 # Proteus — Agent Development Guide
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## Project Overview
 
 Self-evolving agent framework with MCTS parallel exploration, mutable scaffolding,
@@ -21,6 +23,10 @@ bun run dev                              # Vite dev server (cf-backend)
 
 No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
 
+## Working Style
+
+- Avoid loading skills unless they are concretely needed for the task. Keep context focused and prefer direct source inspection for routine repo work.
+
 ## Package Structure
 
 ```
@@ -35,7 +41,7 @@ tests/          E2E tests (run from repo root)
 
 ### cf-backend Architecture
 
-- `OrchestratorAgent extends Think<Env>` — chat, 5-tool system, evolution hooks
+- `OrchestratorAgent extends Think<Env>` — chat, the 9 builtin tools, evolution hooks
 - `ExplorationAgent extends Agent` — MCTS branch sub-agent via Facets
 - `runtime.ts` — `createCFRuntime()` bridges Think DO context to `AgentRuntime`
 - `wrangler.jsonc` — DO bindings, worker_loaders, AI Gateway, SPA assets
@@ -97,9 +103,9 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 - OrchestratorAgent extends `Think<Env>` from `@cloudflare/think`
 - Think wraps AIChatAgent and provides tool lifecycle, sessions, fibers
-- `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.5`
-- `getTools()` builds 5-tool ToolSet; results are cached per CraftStore version
-- `getSystemPrompt()` reads from `agent_soul` table
+- `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.6` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
+- `getTools()` builds the 9-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `skills`, `think`, `memory`, `fact`, `web_search`, `web_fetch`, `product_change`; results are cached per CraftStore version
+- `getSystemPrompt()` reads `SOUL.md` from VFS
 - `onChatResponse()` fires evolution async (never blocks TurnQueue)
 - `beforeTurn()` resets per-turn state counters
 - `configureSession()` adds memory context + cached prompt
@@ -108,7 +114,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 ## Architecture Invariants
 
-- The agent_soul table holds a single-row purpose; user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
+- `SOUL.md` in VFS is the canonical agent identity/purpose file; user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
 - agent_identity holds a single row with stable UUID
 - Scaffold is versioned in VFS (`scaffold/agent.js`) + `scaffold_versions` table
 - Memory lives in VFS under `memory/` prefix

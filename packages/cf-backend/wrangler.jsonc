@@ -9,9 +9,9 @@
   // by its real flag name (e.g. `streaming_subrequests`).
   "compatibility_flags": ["nodejs_compat"],
   "worker_loaders": [{ "binding": "LOADER" }],
-  // Main site served by the custom domain. Sandbox preview URLs use the
-  // workers.dev subdomain (see PREVIEW_HOSTNAME) because workers.dev
-  // auto-resolves *.<worker>.<sub>.workers.dev without needing zone DNS.
+  // Main site served by the custom domain. Sandbox and Nimbus previews use
+  // authenticated path-style URLs on this same domain, so Proteus does not
+  // need per-agent subdomains or wildcard TLS/DNS.
   // custom_domain: true tells wrangler to auto-create the DNS record on
   // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
   // proxied DNS record on the zone (manual setup via the dashboard).
@@ -33,8 +33,12 @@
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
-      // Keyed by sha256(email) so the same user always lands on the same DO.
+      // Keyed by stable Proteus userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
+      // Nimbus SDK session DO. Used directly through Nimbus.fromEnv() — no
+      // endpoint/token secrets are required for Proteus's built-in Nimbus
+      // executor.
+      { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -49,7 +53,7 @@
   "containers": [
     {
       "class_name": "ProteusSandbox",
-      "image": "docker.io/cloudflare/sandbox:0.8.11",
+      "image": "docker.io/cloudflare/sandbox:0.11.0",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -59,19 +63,16 @@
     }
   ],
   "migrations": [
+    // Production's DO classes were registered together under v1 before launch.
+    // Keep this sequence stable; named environments below declare their own
+    // deployed class-registration history.
     {
       "tag": "v1",
-      "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"]
+      "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent", "ProteusSandbox", "UserDO"]
     },
     {
       "tag": "v2",
-      "new_sqlite_classes": ["ProteusSandbox"]
-    },
-    // Head mode + background review run inside the existing
-    // ExplorationAgent + EvolutionEngine — no additional DO classes.
-    {
-      "tag": "v3",
-      "new_sqlite_classes": ["UserDO"]
+      "new_sqlite_classes": ["NimbusSession"]
     }
   ],
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
@@ -89,19 +90,114 @@
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
     "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
-    // Cloudflare Access. Set both to the values from the Access application
-    // in your Zero Trust dashboard. Leave unset for local dev — DEV_USER_EMAIL
-    // (in .dev.vars) takes over.
-    // "CF_ACCESS_TEAM_DOMAIN": "<your-team>.cloudflareaccess.com",
-    // "CF_ACCESS_AUD":         "<application-aud-tag>"
+    "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
+    "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
+    "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
+    // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
+    // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
+    "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
+    "CLOUDFLARE_AI_GATEWAY_ID": "default",
+    // OAuth provider visibility is config-driven. A provider appears on
+    // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
+    // Set ids as vars and secrets via `wrangler secret put`:
+    //   GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET
+    //   GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET
+    //   CLOUDFLARE_OAUTH_CLIENT_ID / CLOUDFLARE_OAUTH_CLIENT_SECRET
+    // ── Nimbus — built-in lightweight sandbox ────────────────────────
+    // Uses the NIMBUS_SESSION Durable Object binding above through the
+    // official @nimbus-sh/sdk. No endpoint/token secrets are required.
   },
-  // Workers AI binding — the orchestrator's LLM resolver tries this FIRST,
-  // falling back to AI_GATEWAY_URL + AI_GATEWAY_AUTH only when env.AI is
-  // absent. With this binding present, no secret is required; Workers AI
-  // bills against the account directly. Powers chat LLM calls (Kimi K2.6,
-  // Llama 4 Scout) AND semantic-memory embeddings (bge-small-en-v1.5)
-  // when the Vectorize index below is also enabled.
-  "ai": { "binding": "AI" }
+  // Workers AI binding — used for platform-side embeddings. Chat model calls
+  // use the logged-in user's Cloudflare OAuth credential so Workers AI usage
+  // bills to that user's Cloudflare account/quota.
+  "ai": { "binding": "AI" },
+  // R2 bucket for sandbox /workspace backups (squashfs archives). The SDK's
+  // localBucket backup mode moves bytes straight through this binding — no
+  // presigned R2 credentials needed. Bucket: `wrangler r2 bucket create
+  // proteus-backups` (already created). Set an R2 lifecycle rule on the
+  // `backups/` prefix to GC expired archives.
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+  ],
+  // D1 auth/session store. Browser auth reads use D1 Sessions API so Cloudflare
+  // can route read-only verification queries to read replicas when replication
+  // is enabled on this database.
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "proteus-auth",
+      "database_id": "87ca0567-04e5-4c66-b0da-86442eb77bf6",
+      "migrations_dir": "migrations/auth"
+    }
+  ],
+  // ── Staging environment (headless testing) ──────────────────────
+  // A second deployment on *.workers.dev for testing think/tools directly
+  // without production OAuth secrets in the way. Differences from prod: a distinct
+  // worker name (`proteus-staging`) — which gives it ISOLATED Durable Object
+  // namespaces, so staging never touches prod data — no custom-domain route,
+  // and `DEV_USER_EMAIL` set, so authenticateRequest() (auth/session.ts)
+  // synthesizes a fixed dev identity and the worker is reachable headlessly.
+  // Fully specified because wrangler does not inherit
+  // bindings/vars into named environments. Deploy: `wrangler deploy --env staging`.
+  "env": {
+    "staging": {
+      "name": "proteus-staging",
+      "workers_dev": true,
+      "routes": [],
+      "main": "src/server.ts",
+      "compatibility_date": "2025-12-01",
+      "compatibility_flags": ["nodejs_compat"],
+      "worker_loaders": [{ "binding": "LOADER" }],
+      "assets": {
+        "directory": "dist/client",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/*", "!/assets/*"]
+      },
+      "durable_objects": {
+        "bindings": [
+          { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
+          { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
+          { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
+          { "class_name": "ProteusSandbox", "name": "Sandbox" }
+        ]
+      },
+      "containers": [
+        {
+          "class_name": "ProteusSandbox",
+          "image": "docker.io/cloudflare/sandbox:0.11.0",
+          "max_instances": 5,
+          "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+        }
+      ],
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
+        { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
+        { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["NimbusSession"] }
+      ],
+      "ai": { "binding": "AI" },
+      "r2_buckets": [
+        { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }
+      ],
+      "d1_databases": [
+        {
+          "binding": "AUTH_DB",
+          "database_name": "proteus-auth-staging",
+          "database_id": "f81423fd-ece5-41ea-a217-b9540ebea502",
+          "migrations_dir": "migrations/auth"
+        }
+      ],
+      "vars": {
+        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+        "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
+        "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
+        "CLI_APPROVAL_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
+        "DEV_USER_EMAIL": "staging-tester@proteus.dev"
+      }
+    }
+  }
   // ── OPTIONAL: Vectorize binding for semantic memory ─────────────
   //
   // First create the index:

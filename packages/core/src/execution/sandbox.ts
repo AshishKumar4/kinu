@@ -16,7 +16,9 @@
  *   sandbox.listPorts()
  */
 
+import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
+import { readExecSignal } from './signal.js';
 
 /**
  * Duck-typed handle — matches the subset of @cloudflare/sandbox's getSandbox()
@@ -56,6 +58,71 @@ export interface SandboxHandle {
    */
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; status?: string }>>;
+  /** Snapshot a directory to R2 (squashfs). Returns a small serializable handle
+   *  to store and later pass to restoreBackup. (SDK createBackup.) */
+  createBackup(opts: BackupOptions): Promise<DirectoryBackup>;
+  /** Restore a previously-created backup into its directory. (SDK restoreBackup.) */
+  restoreBackup(backup: DirectoryBackup): Promise<RestoreBackupResult>;
+}
+
+/** Options for SandboxHandle.createBackup (subset of the SDK's BackupOptions). */
+export interface BackupOptions {
+  /** Absolute directory to back up (e.g. '/workspace'). */
+  dir: string;
+  /** Move bytes via the BACKUP_BUCKET R2 binding directly (no presigned creds). */
+  localBucket?: boolean;
+  /** Honor .gitignore when archiving. */
+  gitignore?: boolean;
+  /** Wildcard excludes passed to mksquashfs (e.g. ['node_modules','*.log']). */
+  excludes?: readonly string[];
+  /** Backup lifetime in seconds (enforced on restore). */
+  ttl?: number;
+  /** Optional label. */
+  name?: string;
+}
+
+/** Serializable backup handle — store it, pass it back to restoreBackup. */
+export interface DirectoryBackup {
+  readonly id: string;
+  readonly dir: string;
+  readonly localBucket?: boolean;
+}
+
+export interface RestoreBackupResult {
+  readonly success: boolean;
+  readonly dir: string;
+  readonly id: string;
+}
+
+// ── /workspace backup policy (pure; the orchestrator owns the I/O) ──
+
+export const WORKSPACE_BACKUP_DIR = '/workspace';
+/** Min gap between /workspace backups — debounces per-turn mksquashfs storms. */
+export const BACKUP_MIN_INTERVAL_MS = 60_000;
+/** Backup lifetime (R2). 30 days — pair with an R2 lifecycle GC rule. */
+export const BACKUP_TTL_SECONDS = 30 * 24 * 60 * 60;
+const WORKSPACE_BACKUP_EXCLUDES = ['node_modules', '.git', '*.log', '.cache'] as const;
+
+/** Back up only when the sandbox was used this turn AND the debounce window has
+ *  elapsed since the last successful backup. Pure → unit-testable. */
+export function shouldBackupWorkspace(
+  usedSandbox: boolean,
+  lastBackupAt: number,
+  now: number,
+  minIntervalMs: number = BACKUP_MIN_INTERVAL_MS,
+): boolean {
+  return usedSandbox && now - lastBackupAt >= minIntervalMs;
+}
+
+/** Canonical createBackup options for /workspace (localBucket + excludes). */
+export function workspaceBackupOptions(): BackupOptions {
+  return {
+    dir: WORKSPACE_BACKUP_DIR,
+    localBucket: true,
+    gitignore: true,
+    excludes: WORKSPACE_BACKUP_EXCLUDES,
+    ttl: BACKUP_TTL_SECONDS,
+  };
 }
 
 /**
@@ -121,11 +188,12 @@ const TRANSIENT_MARKERS = [
   'container suddenly disconnected',
   'container is starting',
   'no container instance',
+  'internal error in durable object storage caused object to be reset',
   // 0.8.11 SDK started classifying this as transient; cover us either way:
   'http error! status: 500',
 ];
 
-function isTransient(err: unknown): boolean {
+export function isSandboxTransientError(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return TRANSIENT_MARKERS.some(m => msg.includes(m));
 }
@@ -143,7 +211,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isTransient(err) || i === attempts - 1) throw err;
+      if (!isSandboxTransientError(err) || i === attempts - 1) throw err;
       await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
     }
   }
@@ -183,16 +251,29 @@ export function createSandboxExecutor(
   const connected = handle != null
     && typeof hostname === 'string' && hostname.length > 0
     && typeof sandboxId === 'string' && sandboxId.length > 0;
+  let active = false;
+  const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
+    active = true;
+    return fn();
+  };
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the sandbox container.',
-      execute: async (command: unknown): Promise<string> => {
+      execute: async (command: unknown, options?: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const signal = readExecSignal(options);
         try {
-          const res = await withRetry(() => handle.exec(String(command), { timeout: 60_000 }));
+          // The sandbox SDK has no kill for an in-flight exec — abort stops
+          // the wait; the container-side command runs to its own timeout.
+          const res = await raceAbort(
+            () => withRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000 }))),
+            signal,
+            'sandbox exec aborted — the command may still finish inside the container',
+          );
           return normalize(res);
         } catch (err) {
+          if (isAbortError(err)) throw err;
           return `exec error: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
@@ -202,7 +283,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          const r = await withRetry(() => handle.readFile(String(path)));
+          const r = await withRetry(() => touch(() => handle.readFile(String(path))));
           if (r.exitCode && r.exitCode !== 0) return `read error: exit ${r.exitCode}`;
           return r.content ?? '';
         } catch (err) {
@@ -215,7 +296,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown, content: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          await withRetry(() => handle.writeFile(String(path), String(content)));
+          await withRetry(() => touch(() => handle.writeFile(String(path), String(content))));
           return `wrote ${String(path)}`;
         } catch (err) {
           return `write error: ${err instanceof Error ? err.message : String(err)}`;
@@ -227,7 +308,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          const r = await withRetry(() => handle.listFiles(String(path ?? '/'), { recursive: false }));
+          const r = await withRetry(() => touch(() => handle.listFiles(String(path ?? '/'), { recursive: false })));
           if (!r?.files?.length) return '';
           return r.files
             .map(f => {
@@ -252,7 +333,7 @@ export function createSandboxExecutor(
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          await withRetry(() => Promise.resolve(handle.deleteFile(String(path))));
+          await withRetry(() => touch(() => Promise.resolve(handle.deleteFile(String(path)))));
           return `deleted ${String(path)}`;
         } catch (err) {
           return `delete error: ${err instanceof Error ? err.message : String(err)}`;
@@ -263,23 +344,66 @@ export function createSandboxExecutor(
       description: 'Check if a path exists — uses shell test.',
       execute: async (path: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
-        const res = await withRetry(() => handle.exec(`test -e ${JSON.stringify(String(path))} && echo true || echo false`));
+        const res = await withRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(String(path))} && echo true || echo false`)));
         const out = (res.stdout ?? res.output ?? '').trim();
         return out.includes('true') ? 'true' : 'false';
       },
     },
     exposePort: {
-      description: 'Expose a TCP port from the sandbox. Returns the public preview URL. Optional name.',
+      description:
+        'Expose a TCP port from the sandbox and return the public preview URL. ' +
+        'PRE-REQUISITE: a server must already be listening on the port BEFORE you call this. ' +
+        'The call verifies the port is responsive (HTTP HEAD against localhost) and returns a ' +
+        'clear error if nothing is listening — at which point start your server first ' +
+        '(e.g. `nohup python3 -m http.server <port> --directory /workspace/<app> > /tmp/srv.log 2>&1 &` ' +
+        'for static sites, or `nohup node server.js > /tmp/srv.log 2>&1 &` for Node) and retry.',
       execute: async (port: unknown, name?: unknown): Promise<string> => {
         if (!handle || !hostname || !sandboxId) return NOT_CONFIGURED;
+        const p = Number(port);
+        if (!Number.isFinite(p) || p <= 0 || p > 65535) {
+          return `expose error: invalid port ${port}`;
+        }
+        // Pre-flight: verify a server is listening on the port inside the
+        // container. Without this we hand back a preview URL that 502s
+        // because nothing answers — the failure mode the agent (and user)
+        // actually hit. We try HEAD then GET; either responding (any HTTP
+        // status, even 4xx/5xx) means a server is up. Connection refused
+        // means no listener.
         try {
-          const p = Number(port);
-          // Generate our own token so we can build the path URL without
-          // parsing the SDK result (and it survives across listPorts calls).
+          const probe = await withRetry(() => touch(() => handle.exec(
+            `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
+            `--head http://127.0.0.1:${p}/ 2>&1 || true`,
+          )));
+          const out = (probe.stdout ?? probe.output ?? '').toString().trim();
+          // Parse "<code>|<exit>" where exit=7 (CURLE_COULDNT_CONNECT) means
+          // nothing is listening. Any non-zero HTTP code means a server
+          // answered — even a 404 or 503 counts.
+          const [codeStr, exitStr] = out.split('|');
+          const httpCode = parseInt(codeStr ?? '0', 10);
+          const curlExit = parseInt(exitStr ?? '0', 10);
+          if (curlExit === 7 || httpCode === 0) {
+            return (
+              `expose error: nothing is listening on port ${p} inside the sandbox. ` +
+              `Start your server FIRST, then call sandbox.exposePort. Examples:\n` +
+              `  • Static site (HTML/CSS/JS): ` +
+              `await sandbox.exec("cd /workspace/<app-dir> && nohup python3 -m http.server ${p} > /tmp/srv-${p}.log 2>&1 &")\n` +
+              `  • Node:                       ` +
+              `await sandbox.exec("cd /workspace/<app-dir> && nohup node server.js > /tmp/srv-${p}.log 2>&1 &")\n` +
+              `Then wait ~1s (await new Promise(r=>setTimeout(r,1000))) and call sandbox.exposePort(${p}) again.`
+            );
+          }
+        } catch (err) {
+          // Probe failed for a non-listener reason (sandbox exec errored).
+          // Continue — the SDK exposePort call below will surface its own
+          // error if exposure can't be set up; we don't want to gate the
+          // happy path on a probe glitch.
+          console.warn(`[sandbox.exposePort] port probe failed (continuing): ${(err as Error).message}`);
+        }
+        try {
           const token = generatePortToken(p);
           const opts: { hostname: string; name?: string; token?: string } = { hostname, token };
           if (name != null) opts.name = String(name);
-          await withRetry(() => handle.exposePort(p, opts));
+          await withRetry(() => touch(() => handle.exposePort(p, opts)));
           return buildPathPreviewUrl(hostname, p, sandboxId, token);
         } catch (err) {
           return `expose error: ${err instanceof Error ? err.message : String(err)}`;
@@ -291,7 +415,7 @@ export function createSandboxExecutor(
       execute: async (port: unknown): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
         try {
-          await withRetry(() => Promise.resolve(handle.unexposePort(Number(port))));
+          await withRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
           return `unexposed ${port}`;
         } catch (err) {
           return `unexpose error: ${err instanceof Error ? err.message : String(err)}`;
@@ -305,7 +429,7 @@ export function createSandboxExecutor(
         try {
           // SDK method is getExposedPorts — the tool we expose is still
           // named listPorts for backward compat with the codemode namespace.
-          const ports = await withRetry(() => handle.getExposedPorts(hostname));
+          const ports = await withRetry(() => touch(() => handle.getExposedPorts(hostname)));
           // Rewrite SDK hostname-style URLs into Proteus path-style URLs
           // so the UI iframe (which lives on the main domain) can load
           // them without a wildcard DNS record.
@@ -355,10 +479,98 @@ declare namespace sandbox {
     kind: 'sandbox',
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
+    getStatus: () => ({
+      configured: connected,
+      available: connected,
+      active,
+      status: connected ? (active ? 'active' : 'idle') : 'not_configured',
+      ...(connected ? {} : { reason: NOT_CONFIGURED }),
+    }),
     connect: async () => { /* sandbox starts on first RPC */ },
-    disconnect: async () => { /* sandbox DO persists; no explicit close */ },
+    disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
+      filesystem does NOT — the container sleeps after ~10m idle and /workspace
+      is lost. Durability is provided by the orchestrator's backup/restore of
+      /workspace to R2 (createBackup/restoreBackup), not by this no-op close. */ },
     tools,
     types,
     positionalArgs: true,
+
+    // ── Generic ExecutorProvider port surface ────────────────────
+    //
+    // Mirrors the namespaced `sandbox.exposePort` codemode tool, but at
+    // the ExecutorProvider abstraction so any caller can ask any executor
+    // to expose a port without knowing it's "sandbox" specifically.
+    async exposePort(port, opts) {
+      if (!handle || !hostname || !sandboxId) {
+        return { supported: false, reason: 'sandbox not configured (no handle/hostname/sandboxId)' };
+      }
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        return { supported: false, reason: `invalid port ${port}` };
+      }
+      // Pre-flight: verify a server is responsive on the port. Without
+      // this the caller gets a preview URL that 502s.
+      let verified_listening = false;
+      try {
+        const probe = await withRetry(() => touch(() => handle.exec(
+          `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 ` +
+          `--head http://127.0.0.1:${port}/ 2>&1 || true`,
+        )));
+        const out = (probe.stdout ?? probe.output ?? '').toString().trim();
+        const [codeStr, exitStr] = out.split('|');
+        const httpCode = parseInt(codeStr ?? '0', 10);
+        const curlExit = parseInt(exitStr ?? '0', 10);
+        if (curlExit === 7 || httpCode === 0) {
+          return {
+            supported: false,
+            reason:
+              `nothing is listening on port ${port} inside the sandbox. ` +
+              `Start a server first (e.g. \`nohup python3 -m http.server ${port} --directory /workspace/<app> > /tmp/srv-${port}.log 2>&1 &\` for static sites, ` +
+              `or \`nohup node server.js > /tmp/srv-${port}.log 2>&1 &\` for Node), wait ~1s for it to bind, then call exposePort again.`,
+          };
+        }
+        verified_listening = true;
+      } catch {
+        // Probe glitch — proceed; SDK call will surface its own error.
+      }
+      try {
+        const token = generatePortToken(port);
+        const sdkOpts: { hostname: string; name?: string; token?: string } = { hostname, token };
+        if (opts?.name) sdkOpts.name = opts.name;
+        await withRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
+        return {
+          supported: true,
+          url: buildPathPreviewUrl(hostname, port, sandboxId, token),
+          port,
+          name: opts?.name,
+          verified_listening,
+        };
+      } catch (err) {
+        return { supported: false, reason: (err as Error).message };
+      }
+    },
+
+    async unexposePort(port) {
+      if (!handle) return;
+      try { await withRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port))))); }
+      catch { /* idempotent */ }
+    },
+
+    async listExposedPorts() {
+      if (!handle || !hostname || !sandboxId) return [];
+      try {
+        const ports = await withRetry(() => touch(() => handle.getExposedPorts(hostname)));
+        return (ports ?? []).map(p => {
+          const token = extractTokenFromSdkUrl(p.url);
+          return {
+            port: p.port,
+            url: token ? buildPathPreviewUrl(hostname, p.port, sandboxId, token) : p.url,
+            name: (p as { name?: string }).name,
+            status: 'unknown' as const,
+          };
+        });
+      } catch {
+        return [];
+      }
+    },
   };
 }

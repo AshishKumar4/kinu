@@ -4,7 +4,7 @@
  * Forks a source agent's SQLite state into a target agent's SQLite state.
  * The fork semantics are "clean-slate messages-only" (per plan doc §6):
  *
- *   Copy:   agent_soul, messages+conversation_history (≤ forkPointMs),
+ *   Copy:   SOUL.md, messages+conversation_history (≤ forkPointMs),
  *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
  *   Reset:  search_nodes, scaffold_versions, task_history, craft_scores,
  *           fibers, evolution_events, executor_output, activity_log,
@@ -14,7 +14,7 @@
  *
  * The target DB MUST already have been initialized via initAllTables() — the
  * caller is responsible for that (typically via Think's onStart path, which
- * auto-bootstraps a default soul/identity that this helper then overwrites).
+ * auto-bootstraps a default identity that this helper then overwrites).
  *
  * This helper is backend-agnostic: it uses only SqlExecutor tagged-template
  * queries, no DO-specific APIs. The CF backend drives it from inside a
@@ -25,6 +25,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives.js';
+import { SOUL_PATH } from './soul.js';
 
 export interface ForkOpts {
   /** Message id from source's `messages` table; the fork includes messages
@@ -67,10 +68,10 @@ export function forkAgentStorage(
   }
   const forkPointMs = hit[0]!.created_at;
 
-  // 2. Purge any default-bootstrap soul/identity rows the target's onStart
+  // 2. Purge any default-bootstrap identity/SOUL.md rows the target's onStart
   //    may have inserted. This makes the helper idempotent across retries.
-  target`DELETE FROM agent_soul`;
   target`DELETE FROM agent_identity`;
+  target`DELETE FROM vfs_files WHERE path = ${SOUL_PATH}`;
 
   // 3. Rewrite agent_identity — new id, new name, fresh created_at.
   target`
@@ -78,18 +79,7 @@ export function forkAgentStorage(
     VALUES (${opts.targetAgentId}, ${opts.targetAgentName}, ${now})
   `;
 
-  // 4. Copy agent_soul verbatim.
-  const soul = source<{ purpose: string; created_at: number }>`
-    SELECT purpose, created_at FROM agent_soul LIMIT 1
-  `;
-  if (soul.length > 0) {
-    target`
-      INSERT INTO agent_soul (purpose, created_at)
-      VALUES (${soul[0]!.purpose}, ${soul[0]!.created_at})
-    `;
-  }
-
-  // 5. Copy messages <= forkPointMs, preserving PKs.
+  // 4. Copy messages <= forkPointMs, preserving PKs.
   const msgs = source<{
     id: string; session_id: string; parent_id: string | null;
     role: string; content: string; created_at: number;
@@ -106,7 +96,7 @@ export function forkAgentStorage(
     `;
   }
 
-  // 6. Copy conversation_history <= forkPointMs. `id` is auto-increment so
+  // 5. Copy conversation_history <= forkPointMs. `id` is auto-increment so
   //    fresh rowids are fine; role/message/created_at preserved.
   const conv = source<{ session_id: string; role: string; message: string; created_at: number }>`
     SELECT session_id, role, message, created_at
@@ -121,7 +111,7 @@ export function forkAgentStorage(
     `;
   }
 
-  // 6b. Copy assistant_messages — this is the table Think's Session module
+  // 5b. Copy assistant_messages — this is the table Think's Session module
   //     persists UIMessages into (via appendMessage). The chat UI hydrates
   //     from here via this.messages (→ session.getHistory()). Without this
   //     copy the fork's chat pane shows "empty state" despite our own
@@ -166,7 +156,7 @@ export function forkAgentStorage(
     }
   } catch { /* assistant_messages may not exist in pure-test source DBs — non-fatal */ }
 
-  // 7. Copy memory/* VFS rows. Scaffold rows are intentionally excluded so
+  // 6. Copy SOUL.md and memory/* VFS rows. Scaffold rows are intentionally excluded so
   //    the fork's onStart re-bootstraps v0 scaffold fresh.
   const vfs = source<{
     path: string; chunk_index: number; parent_path: string; data: unknown;
@@ -174,7 +164,7 @@ export function forkAgentStorage(
   }>`
     SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
     FROM vfs_files
-    WHERE path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
+    WHERE path = ${SOUL_PATH} OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
   `;
   for (const f of vfs) {
     target`
@@ -185,7 +175,7 @@ export function forkAgentStorage(
     `;
   }
 
-  // 8. Copy memory_chunks (FTS content table). Schema is owned by MemoryStore
+  // 7. Copy memory_chunks (FTS content table). Schema is owned by MemoryStore
   //    in agent-utils — if the target hasn't called ensureSchema() yet, we
   //    skip silently (the copy is an optimization; the text itself lives in
   //    vfs_files/memory/*.md already, so reindexing on next write will rebuild).
@@ -204,7 +194,7 @@ export function forkAgentStorage(
     }
   } catch { /* target has no memory_chunks yet — non-fatal */ }
 
-  // 9. Copy crafted_tools (snapshot — independent evolution from this point).
+  // 8. Copy crafted_tools (snapshot — independent evolution from this point).
   const tools = source<{
     name: string; description: string; params: string | null; code: string;
     scope: string; created_at: number; updated_at: number;
@@ -219,7 +209,7 @@ export function forkAgentStorage(
     `;
   }
 
-  // 10. Copy agent_config (model preference, MCTS knobs, etc). Overwrite
+  // 9. Copy agent_config (model preference, MCTS knobs, etc). Overwrite
   //     display_name with the fork's name so the UI shows the fork identity.
   try {
     const cfg = source<{ key: string; value: string }>`
@@ -231,7 +221,7 @@ export function forkAgentStorage(
     target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.targetAgentName})`;
   } catch { /* agent_config may not exist in source — non-fatal */ }
 
-  // 11. Lineage — single row.
+  // 10. Lineage — single row.
   const srcIdent = source<{ id: string; name: string }>`
     SELECT id, name FROM agent_identity LIMIT 1
   `;
@@ -245,7 +235,7 @@ export function forkAgentStorage(
     (1, ${srcId}, ${srcName}, ${opts.untilMessageId}, ${forkPointMs}, ${now})
   `;
 
-  // 12. Synthetic system-role message inserted at the fork point. Served
+  // 11. Synthetic system-role message inserted at the fork point. Served
   //     two purposes:
   //     (a) LLM coherence — written to conversation_history so the next
   //         model turn sees the fork context and knows to ignore tools/

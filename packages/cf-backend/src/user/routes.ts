@@ -1,10 +1,11 @@
 /**
  * `/api/user/*` HTTP routes. All operations are user-scoped — the auth
- * middleware injects the caller's `userId` (sha256(email) from CF Access
- * JWT) before any of these handlers run.
+ * middleware resolves the caller's Proteus `userId` before any of these
+ * handlers run.
  *
  * Routes:
  *   GET    /api/user/profile                       — user info
+ *   GET    /api/user/cli                           — CLI setup commands
  *   GET    /api/user/agents                        — agent registry
  *   POST   /api/user/agents                        — register new agent
  *   POST   /api/user/agents/:name/touch            — update last_visited
@@ -21,21 +22,21 @@
  *   PUT    /api/user/config/:key                   — set default
  *   GET    /api/user/models                        — union of available models
  *   GET    /api/user/providers                     — connected provider summary
+ *   GET    /api/user/providers/catalog             — connectable providers (BYO key)
+ *   GET    /api/user/cloudflare/gateways           — the user's AI Gateways + selection
+ *   PUT    /api/user/cloudflare/gateway            — select an AI Gateway (or null)
+ *   GET    /api/user/mcp/servers                   — list configured MCP servers
+ *   POST   /api/user/mcp/servers                   — add a new MCP server
+ *   DELETE /api/user/mcp/servers/:id               — remove an MCP server
+ *   PATCH  /api/user/mcp/servers/:id               — edit name / headers / allowed_tools
+ *   GET    /api/user/mcp/callback                  — OAuth 2.1 redirect handler
  */
-import type { AccessIdentity } from '../auth/access.js';
+import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
-import { listAvailableModels } from './available-models.js';
-
-function json(body: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) },
-  });
-}
-
-function err(status: number, message: string): Response {
-  return json({ error: message }, { status });
-}
+import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
+import { listAvailableModels, listProviderCatalog } from './available-models.js';
+import { handleCreateAgentRequest, notifyAgentsCredentialsChanged } from './agent-access.js';
+import { err, json, safeJson } from '../lib/http.js';
 
 function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
   return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
@@ -44,7 +45,8 @@ function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
 export async function handleUserRequest(
   request: Request,
   env: Env,
-  identity: AccessIdentity,
+  identity: AuthIdentity,
+  ctx?: ExecutionContext,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/user')) return null;
@@ -53,11 +55,20 @@ export async function handleUserRequest(
 
   const stub = getUserDOStub(env, identity.userId);
   // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
-  await stub.ensureProfile(identity.email);
+  await stub.ensureProfile(identity.email, identity.displayName ?? undefined);
 
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {
     return json(await stub.getProfile());
+  }
+  if (path === '/cli' && method === 'GET') {
+    const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+    return json({
+      publicOrigin: cliOrigin,
+      installCommand: buildCliInstallCommand({ origin: cliOrigin }),
+      setupCommand: buildCliSetupCommand(cliOrigin),
+      authCommand: buildCliAuthCommand(cliOrigin),
+    });
   }
 
   // ── Agents ─────────────────────────────────────────────────────────
@@ -65,14 +76,7 @@ export async function handleUserRequest(
     return json(await stub.listAgents());
   }
   if (path === '/agents' && method === 'POST') {
-    const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
-    if (!body) return err(400, 'Body must be JSON');
-    if (typeof body.name !== 'string' || !body.name) return err(400, 'name required');
-    if (typeof body.displayName !== 'string' || !body.displayName) return err(400, 'displayName required');
-    try {
-      const entry = await stub.registerAgent(body.name, body.displayName, body.purpose);
-      return json(entry, { status: 201 });
-    } catch (e) { return err(400, (e as Error).message); }
+    return handleCreateAgentRequest(request, env, identity.userId, stub, ctx);
   }
   const agentTouchMatch = path.match(/^\/agents\/([^/]+)\/touch$/);
   if (agentTouchMatch && method === 'POST') {
@@ -81,7 +85,28 @@ export async function handleUserRequest(
   }
   const agentMatch = path.match(/^\/agents\/([^/]+)$/);
   if (agentMatch && method === 'DELETE') {
-    try { await stub.removeAgent(decodeURIComponent(agentMatch[1])); return json({ ok: true }); }
+    try { await stub.removeAgent(decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
+    catch (e) { return err(400, (e as Error).message); }
+  }
+
+  // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
+  if (path === '/devices' && method === 'GET') {
+    return json(await stub.listDevices());
+  }
+  if (path === '/devices' && method === 'POST') {
+    const body = await safeJson<{ label?: string }>(request);
+    const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+    const installCommand = buildCliInstallCommand({
+      origin: cliOrigin,
+      setup: false,
+      connect: true,
+      label: body?.label,
+    });
+    return json({ origin: cliOrigin, installCommand }, { status: 201 });
+  }
+  const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
+  if (deviceMatch && method === 'DELETE') {
+    try { await stub.revokeDevice(decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
 
@@ -95,12 +120,16 @@ export async function handleUserRequest(
     if (method === 'POST') {
       const body = await safeJson(request);
       if (body === null) return err(400, 'Body must be JSON');
-      try { await stub.setCredential(key, body); return json({ ok: true }); }
+      try { await stub.setCredential(key, body); }
       catch (e) { return err(400, (e as Error).message); }
+      notifyAgentsCredentialsChanged(env, stub, ctx);
+      return json({ ok: true });
     }
     if (method === 'DELETE') {
-      try { await stub.deleteCredential(key); return json({ ok: true }); }
+      try { await stub.deleteCredential(key); }
       catch (e) { return err(400, (e as Error).message); }
+      notifyAgentsCredentialsChanged(env, stub, ctx);
+      return json({ ok: true });
     }
   }
 
@@ -110,6 +139,7 @@ export async function handleUserRequest(
   }
   if (path === '/codex' && method === 'DELETE') {
     await stub.disconnectCodex();
+    notifyAgentsCredentialsChanged(env, stub, ctx);
     return json({ ok: true });
   }
   if (path === '/codex/start' && method === 'POST') {
@@ -117,8 +147,11 @@ export async function handleUserRequest(
     catch (e) { return err(502, (e as Error).message); }
   }
   if (path === '/codex/poll' && method === 'POST') {
-    try { return json(await stub.pollCodexDeviceFlow()); }
-    catch (e) { return err(502, (e as Error).message); }
+    try {
+      const status = await stub.pollCodexDeviceFlow();
+      if (status.connected) notifyAgentsCredentialsChanged(env, stub, ctx);
+      return json(status);
+    } catch (e) { return err(502, (e as Error).message); }
   }
 
   // ── Config (defaults) ──────────────────────────────────────────────
@@ -143,13 +176,79 @@ export async function handleUserRequest(
   if (path === '/providers' && method === 'GET') {
     return json(await stub.listConnectedProviders());
   }
+  if (path === '/providers/catalog' && method === 'GET') {
+    return json(await listProviderCatalog(env, identity.userId));
+  }
   if (path === '/models' && method === 'GET') {
     return json(await listAvailableModels(env, identity.userId));
+  }
+
+  // ── Cloudflare AI Gateway (the user's own gateway) ──────────────────
+  if (path === '/cloudflare/gateways' && method === 'GET') {
+    return json(await stub.listAIGateways());
+  }
+  if (path === '/cloudflare/gateway' && method === 'PUT') {
+    const body = await safeJson<{ id?: string | null }>(request);
+    if (!body || (body.id !== null && typeof body.id !== 'string')) {
+      return err(400, 'id (string | null) required');
+    }
+    try { await stub.selectAIGateway(body.id); }
+    catch (e) { return err(400, (e as Error).message); }
+    notifyAgentsCredentialsChanged(env, stub, ctx);
+    return json({ ok: true });
+  }
+
+  // ── MCP servers ────────────────────────────────────────────────────
+  if (path === '/mcp/servers' && method === 'GET') {
+    try { return json(await stub.userMcp_list()); }
+    catch (e) { return err(500, (e as Error).message); }
+  }
+  if (path === '/mcp/servers' && method === 'POST') {
+    const body = await safeJson(request);
+    if (body === null) return err(400, 'Body must be JSON');
+    const origin = publicOrigin(request);
+    try { return json(await stub.userMcp_add(body, origin), { status: 201 }); }
+    catch (e) { return err(400, (e as Error).message); }
+  }
+  const mcpIdMatch = path.match(/^\/mcp\/servers\/([^/]+)$/);
+  if (mcpIdMatch) {
+    const id = decodeURIComponent(mcpIdMatch[1]);
+    if (method === 'DELETE') {
+      try { await stub.userMcp_remove(id); return json({ ok: true }); }
+      catch (e) { return err(400, (e as Error).message); }
+    }
+    if (method === 'PATCH') {
+      const body = await safeJson(request);
+      if (body === null) return err(400, 'Body must be JSON');
+      try { await stub.userMcp_update(id, body); return json({ ok: true }); }
+      catch (e) { return err(400, (e as Error).message); }
+    }
+  }
+  if (path === '/mcp/callback' && method === 'GET') {
+    // The OAuth provider stamps `<nonce>.<serverId>` in `state`; we don't
+    // need to extract it here — `userMcp_handleOAuthCallback` does the validation
+    // inside UserDO. The Worker's browser auth middleware (above) already
+    // resolved the caller's identity, so we know which UserDO to dispatch to.
+    const result = await stub.userMcp_handleOAuthCallback(request.url);
+    // Redirect the browser back to the settings page regardless of outcome.
+    // The page polls userMcp_list and the per-server status surfaces the
+    // result. We include `?mcp_auth=ok|failed&error=...` for UX clarity.
+    const settingsUrl = new URL('/user/settings/mcp', publicOrigin(request));
+    settingsUrl.searchParams.set('mcp_auth', result.ok ? 'ok' : 'failed');
+    if (result.error) settingsUrl.searchParams.set('error', result.error.slice(0, 200));
+    if (result.serverId) settingsUrl.searchParams.set('server_id', result.serverId);
+    return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
   }
 
   return err(404, `No such user route: ${method} ${path}`);
 }
 
-async function safeJson<T = unknown>(request: Request): Promise<T | null> {
-  try { return (await request.json()) as T; } catch { return null; }
+/** Derive the public origin the client sees. CF puts the canonical host
+ *  in the Host header for direct-zone routes; the Worker's own URL is
+ *  also a fine fallback (it matches the publicly-exposed origin). */
+function publicOrigin(request: Request): string {
+  // CF-Connecting-IP and similar headers don't help; the safest source is
+  // the request URL itself because Workers preserves the visitor's scheme
+  // and host in `request.url` for proxied requests.
+  return new URL(request.url).origin;
 }

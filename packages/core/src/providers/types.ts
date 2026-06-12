@@ -20,7 +20,20 @@ export interface ModelInfo {
   contextWindow?: number;
 }
 
-export type ModelCapability = 'tools' | 'vision' | 'reasoning' | 'json-mode' | 'streaming';
+/** The one capability vocabulary — provider catalogs populate it, prompt
+ *  shaping (prompting/model-profile.ts) consumes it. A runtime const so
+ *  trust boundaries (HTTP model menus) can narrow without casts. */
+export const MODEL_CAPABILITIES = [
+  'tools',
+  'vision',
+  'reasoning',
+  'json-mode',
+  'streaming',
+  'structured-outputs',
+  'computer-use',
+  'prompt-caching',
+] as const;
+export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
 export interface ProviderInfo {
   id: string;
@@ -60,6 +73,11 @@ export interface ProviderDeps {
   /** Synchronous-friendly "is there a credential for this key" check used by
    *  isAvailable(). Implementations can be cached for cheap repeated reads. */
   hasCredential: (key: string) => Promise<boolean>;
+  /** Enumerate stored credential keys (no secret material). Lets the dynamic
+   *  catalog source discover connected providers in one call instead of
+   *  probing hasCredential per catalog entry. Optional — without it the
+   *  dynamic source lists nothing (resolution still works). */
+  listCredentialKeys?: () => Promise<string[]>;
   fetch?: typeof fetch;
 }
 

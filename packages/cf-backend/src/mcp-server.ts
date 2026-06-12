@@ -3,6 +3,15 @@
  *
  *   GET /mcp/v1/<agentName> / POST / DELETE → MCP streamable-HTTP transport
  *
+ * Auth (handled here, before the transport — server.ts routes /mcp/v1/*
+ * straight to this handler, bypassing the browser-session gate external
+ * clients can never pass):
+ *   • `Authorization: Bearer ptc_…` — the caller's CLI token (the per-user
+ *     credential external MCP clients obtain via `proteus auth`).
+ *   • Otherwise the browser session / DEV_USER_EMAIL identity.
+ * Every request then runs the same ownership claim as the rest of the
+ * per-agent API (registry membership + claimOwner).
+ *
  * Stateless server per request (per the @modelcontextprotocol/sdk
  * "WebStandardStreamableHTTPServerTransport" pattern in
  * external/agents/examples/mcp-server). Each request:
@@ -35,7 +44,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { getAgentByName } from "agents";
+import type { ScaffoldRunResult } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
+import { AuthError, authenticateRequest } from "./auth/session.js";
+import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
+import { claimOwnedAgent } from "./user/agent-access.js";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -45,17 +58,6 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Expose-Headers": "mcp-session-id",
   "Access-Control-Max-Age": "86400",
 };
-
-/** Constant-time string comparison — guards against timing-side-channel
- *  enumeration of MCP_AUTH_TOKEN by attackers. */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
 
 function withCors(response: Response): Response {
   for (const [k, v] of Object.entries(corsHeaders)) response.headers.set(k, v);
@@ -164,7 +166,11 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ task, useShadowOverride }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        const result = await agent.runScaffoldOnce(task, useShadowOverride ? { useShadowOverride: true } : undefined);
+        // The agents-SDK stub doesn't resolve the @callable's return type, so
+        // annotate from the source-of-truth ScaffoldRunResult shape.
+        const result: ScaffoldRunResult = await agent.runScaffoldOnce(
+          task, useShadowOverride ? { useShadowOverride: true } : undefined,
+        );
         const summary = [
           `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
           result.error ? `error: ${result.error}` : '',
@@ -261,6 +267,28 @@ function buildServer(env: Env, agentName: string): McpServer {
   return server;
 }
 
+/** Resolve the calling user: CLI bearer token first (the external-client
+ *  path), then browser session / DEV_USER_EMAIL. */
+async function authenticateMcpCaller(request: Request, env: Env): Promise<{ userId: string } | Response> {
+  if (readBearer(request)) {
+    const result = await authenticateCliToken(request, env);
+    if (!result.ok) return withCors(Response.json({ error: result.error }, { status: 401 }));
+    if (result.identity.kind !== 'session') {
+      // Scoped CI access tokens are CLI-API-only; the MCP surface stays
+      // bound to interactive session tokens.
+      return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: proteus auth' }, { status: 403 }));
+    }
+    return { userId: result.identity.userId };
+  }
+  try {
+    return { userId: (await authenticateRequest(request, env)).userId };
+  } catch (e) {
+    const status = e instanceof AuthError ? e.status : 500;
+    const message = e instanceof Error ? e.message : String(e);
+    return withCors(Response.json({ error: message }, { status }));
+  }
+}
+
 export async function handleMcpRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/mcp/v1/")) return null;
@@ -269,27 +297,21 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Optional shared-secret auth. If env.MCP_AUTH_TOKEN is set, require it.
-  // When unset (dev mode / personal account), the endpoint is open — same
-  // behaviour as before. Set the secret in prod:
-  //   echo "<long-random>" | npx wrangler secret put MCP_AUTH_TOKEN
-  const required = (env as { MCP_AUTH_TOKEN?: string }).MCP_AUTH_TOKEN;
-  if (required) {
-    const provided = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-    // Timing-safe compare so an attacker can't byte-iterate the secret.
-    if (!timingSafeEqual(provided, required)) {
-      return withCors(Response.json({ error: 'Unauthorized' }, { status: 401 }));
-    }
-  }
-
   // /mcp/v1/<agentName>[/...] — agentName is the second segment after /mcp/v1/
   const segments = url.pathname.replace(/^\/mcp\/v1\//, "").split("/").filter(Boolean);
-  const agentName = segments[0];
+  const agentName = segments[0] ? decodeURIComponent(segments[0]) : '';
   if (!agentName) {
     return withCors(Response.json(
       { error: "missing agent name in MCP path; use /mcp/v1/<agentName>" },
       { status: 400 },
     ));
+  }
+
+  const caller = await authenticateMcpCaller(request, env);
+  if (caller instanceof Response) return caller;
+  const owned = await claimOwnedAgent(env, caller.userId, agentName);
+  if (!owned.ok) {
+    return withCors(Response.json({ error: owned.error }, { status: owned.status }));
   }
 
   try {

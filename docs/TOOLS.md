@@ -1,6 +1,8 @@
-# Agent Tools — 5-Tool Architecture
+# Agent Tools — Built-in Tool Architecture
 
-The agent exposes exactly **5 top-level tools** to the LLM. All filesystem operations are available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`).
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
+The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts`). All filesystem operations are available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`).
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@proteus/core/tools` — see
@@ -10,13 +12,17 @@ chat loop hand-builds tools anymore.
 
 ## Top-Level Tools
 
-| Tool | Purpose | Implementation |
-|------|---------|----------------|
-| `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*` and `codemode.*` APIs | `createExecuteTool({ tools: craftedToolSet, providers, loader })` |
-| `run` | POSIX shell command with optional executor routing | `shell.exec(command)` or routed via `ExecutionRouter` |
-| `explore` | MCTS tree search for complex subproblems | `runFiber` → `engine.onLifetimeEvolution` → `runMCTS` |
-| `save_note` | Quick memory persist (FTS-indexed) | `memory.append("memory/MEMORY.md")` + `memory.index()` |
-| `search_memory` | Full-text search over long-term memory | `memory.search(query, limit)` via FTS5 BM25 |
+| Tool | Purpose |
+|------|---------|
+| `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, and `tools.<name>` crafted-tool APIs |
+| `run` | One shell command in one explicitly selected runtime |
+| `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
+| `think` | Deeper reasoning strategy — `heads` (parallel sub-agents) or `mcts` (approach search) |
+| `memory` | Save/search durable prose memory; recall past session transcripts (`action=sessions`) |
+| `fact` | Remember/recall/forget typed keyed facts (preferences, project state, URLs) |
+| `web_search` | Search the live web; ranked results (title, url, snippet, date). Key-less via DuckDuckGo; a stored `tavily` credential upgrades to ranked Tavily results |
+| `web_fetch` | Fetch one URL as clean, citation-ready markdown (Cloudflare markdown service, with a local HTML→markdown fallback) |
+| `product_change` | Governed lane for changing the Proteus product/UI itself |
 
 ## execute_tools — Codemode Sandbox
 
@@ -132,6 +138,6 @@ Crafted tools are discovered, scored, and retired automatically:
 | Architecture | Tools | Estimated tokens |
 |-------------|-------|-----------------|
 | Old (13 tools) | read, write, edit, list, find, grep, delete, shell_exec, execute, explore, save_note, search_memory, list_tools | ~5000 |
-| **Current (5 tools)** | execute_tools, run, explore, save_note, search_memory | **~400** |
+| **Current** | execute_tools, run, skills, think, memory, fact, web_search, web_fetch, product_change | **~700** |
 
-12x reduction in tool schema context window usage.
+A large reduction in tool schema context window usage versus the old flat per-operation roster, while folding filesystem work into the `execute_tools` codemode sandbox.

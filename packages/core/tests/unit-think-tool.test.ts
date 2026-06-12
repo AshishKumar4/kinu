@@ -4,6 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createStrategyRegistry, createSingleShotStrategy, createThinkTool,
+  BUILTIN_TOOL_DESCRIPTIONS,
   type StrategyContext,
 } from '../src/index.ts';
 import { createTestRuntime, createTestStrategy } from '@proteus/test-utils';
@@ -55,7 +56,7 @@ describe('createThinkTool — strategy dispatch', () => {
     expect(result.error).toMatch(/kaboom/);
   });
 
-  test('merges defaultOptions with caller-supplied options', async () => {
+  test('deep-merges caller options under injected infra (host deps survive)', async () => {
     const reg = createStrategyRegistry();
     let observedOpts: StrategyContext['options'] | undefined;
     reg.register({
@@ -71,17 +72,57 @@ describe('createThinkTool — strategy dispatch', () => {
       },
     });
     const { rt } = createTestRuntime();
+    const controller = { __infra: true };
     const tool = createThinkTool({
       registry: reg, rt, model: rt.llm as never,
-      defaultOptions: () => ({ mcts: { iterations: 7 }, heads: { count: 3 } }),
+      defaultOptions: () => ({ mcts: { iterations: 7 }, heads: { controller, count: 3 } }),
     });
     await tool.execute(
       { strategy: 'inspect', task: 't', options: { heads: { count: 5 } } },
       {} as never,
     );
-    // defaultOptions is spread first; caller options override per-key
+    // Untouched strategy bag passes through verbatim.
     expect(observedOpts?.mcts).toEqual({ iterations: 7 });
-    expect(observedOpts?.heads).toEqual({ count: 5 });
+    // One-level deep merge: caller's `count` overrides, but the host-injected
+    // `controller` is NOT clobbered. This is the bug the shallow spread had.
+    expect(observedOpts?.heads).toEqual({ controller, count: 5 });
+  });
+
+  test('folds typed heads / merge_strategy input into options.heads', async () => {
+    const reg = createStrategyRegistry();
+    let observedOpts: StrategyContext['options'] | undefined;
+    reg.register({
+      id: 'heads',
+      async explore(ctx) {
+        observedOpts = ctx.options;
+        return {
+          strategy: 'heads',
+          best: { text: '', score: 1, source: '' },
+          all: [],
+          cost: { durationMs: 0 },
+        };
+      },
+    });
+    const { rt } = createTestRuntime();
+    const controller = { __infra: true };
+    const tool = createThinkTool({
+      registry: reg, rt, model: rt.llm as never,
+      defaultOptions: () => ({ heads: { controller } }),
+    });
+    const specs = [
+      { task: 'survey prior art', rationale: 'establish baseline' },
+      { task: 'sketch design', rationale: 'exercise constraints' },
+    ];
+    await tool.execute(
+      { strategy: 'heads', task: 't', heads: specs, merge_strategy: 'consensus' },
+      {} as never,
+    );
+    // Injected controller + LLM-supplied specs coexist under options.heads.
+    expect(observedOpts?.heads).toEqual({
+      controller,
+      heads: specs,
+      mergeStrategy: 'consensus',
+    });
   });
 
   test('passes through budget to strategy context', async () => {
@@ -109,14 +150,39 @@ describe('createThinkTool — strategy dispatch', () => {
     expect(observedBudget?.wallClockMs).toBe(999);
   });
 
-  test('inputSchema enum is built from the registry at construction time', () => {
+  test('docstring is single-sourced from the registry think spec + live strategy ids', () => {
     const reg = createStrategyRegistry();
-    reg.register(createSingleShotStrategy());
+    reg.register(createTestStrategy({ id: 'heads' }));
+    reg.register(createTestStrategy({ id: 'mcts' }));
+    const { rt } = createTestRuntime();
+    const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
+    // The strategy doctrine comes verbatim from the canonical tool registry —
+    // no parallel description assembly.
+    expect(tool.description!.startsWith(BUILTIN_TOOL_DESCRIPTIONS.think)).toBe(true);
+    expect(tool.description).toContain('Strategies available this turn: heads, mcts.');
+  });
+
+  test('inputSchema enum lists only ADVERTISED strategies', () => {
+    const reg = createStrategyRegistry();
+    reg.register(createSingleShotStrategy());   // advertised: false (eval baseline)
     reg.register(createTestStrategy({ id: 'custom' }));
     const { rt } = createTestRuntime();
     const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
-    // Schema's strategy field enum should list both ids.
     const schema = tool.inputSchema as { jsonSchema: { properties: { strategy: { enum: string[] } } } };
-    expect(schema.jsonSchema.properties.strategy.enum).toEqual(['single-shot', 'custom']);
+    expect(schema.jsonSchema.properties.strategy.enum).toEqual(['custom']);
+    expect(tool.description).not.toContain('single-shot');
+  });
+
+  test('non-advertised strategies stay dispatchable by id (eval harness path)', async () => {
+    const reg = createStrategyRegistry();
+    reg.register({ ...createTestStrategy({ id: 'baseline', answer: 'from baseline' }), advertised: false });
+    const { rt } = createTestRuntime();
+    const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
+    const result = await tool.execute(
+      { strategy: 'baseline', task: 'x' },
+      {} as never,
+    ) as { strategy: string; text: string };
+    expect(result.strategy).toBe('baseline');
+    expect(result.text).toBe('from baseline');
   });
 });

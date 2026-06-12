@@ -1,19 +1,16 @@
-// Workers AI provider — uses the `env.AI` binding (Cloudflare-billed, no API key).
-// CF-specific: depends on the `Ai` global from @cloudflare/workers-types, which
-// is why this lives in cf-backend rather than core.
-import { createWorkersAI } from 'workers-ai-provider';
+// Workers AI provider — uses the logged-in user's Cloudflare OAuth credential.
+// The model is constructed synchronously; the account-scoped base URL and
+// bearer token are resolved from UserDO inside customFetch on each request.
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
-
-const MODELS: ModelInfo[] = [
-  { id: '@cf/moonshotai/kimi-k2.6',                       label: 'Kimi K2.6',            capabilities: ['tools', 'streaming'] },
-  { id: '@cf/meta/llama-4-scout-17b-16e-instruct',        label: 'Llama 4 Scout',        capabilities: ['tools', 'streaming', 'vision'] },
-  { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',       label: 'Llama 3.3 70B (fast)', capabilities: ['tools', 'streaming'] },
-  { id: '@cf/openai/gpt-oss-120b',                        label: 'GPT-OSS 120B',         capabilities: ['tools', 'streaming'] },
-  { id: '@cf/openai/gpt-oss-20b',                         label: 'GPT-OSS 20B',          capabilities: ['tools', 'streaming'] },
-  { id: '@cf/qwen/qwen2.5-coder-32b-instruct',            label: 'Qwen 2.5 Coder 32B',   capabilities: ['tools', 'streaming'] },
-  { id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',   label: 'DeepSeek R1 Distill',  capabilities: ['streaming', 'reasoning'] },
-];
+import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@proteus/core';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
+import { createCloudflareAIFetch } from './cloudflare-ai-fetch.js';
+import {
+  WORKERS_AI_FALLBACK_MODEL_CATALOG,
+  WORKERS_AI_PREFERRED_MODEL_IDS,
+} from './workers-ai-catalog.js';
 
 export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */
@@ -24,19 +21,34 @@ export function createWorkersAIProvider(opts: WorkersAIOptions = {}): ModelProvi
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
-    defaultModel: '@cf/moonshotai/kimi-k2.6',
-    isAvailable: deps => !!deps.env.AI && typeof deps.env.AI !== 'string',
-    unavailableReason: () => 'env.AI binding missing (`"ai": { "binding": "AI" }` in wrangler.jsonc).',
-    listModels: () => MODELS,
+    defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
+    async isAvailable(deps) {
+      const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
+      return !!auth?.baseURL;
+    },
+    unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
+    listModels: (deps): Promise<ModelInfo[]> => listModelsDevProviderModels('cloudflare-workers-ai', deps, {
+      fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
+      preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
+    }),
     createModel(modelId, deps): LanguageModel {
-      const binding = deps.env.AI;
-      if (!binding || typeof binding === 'string') {
-        throw new Error('Workers AI provider invoked without env.AI binding.');
-      }
-      // `binding` is the Cloudflare `Ai` runtime object — structurally what
-      // workers-ai-provider's factory accepts as its `binding` parameter.
-      const factory = createWorkersAI({ binding: binding as Ai });
-      return factory(modelId, opts.sessionAffinity ? { sessionAffinity: opts.sessionAffinity } : {});
+      const placeholder = 'https://proteus-workers-ai.invalid';
+      const customFetch = createCloudflareAIFetch({
+        credKey: CLOUDFLARE_OAUTH_CRED_KEY,
+        getAuth: deps.getAuth,
+        fetch: deps.fetch,
+        placeholder,
+        missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
+        // Replica pinning for the server-side prefix cache — without this
+        // header same-agent turns route randomly and the cache never hits.
+        requestHeaders: opts.sessionAffinity ? { 'x-session-affinity': opts.sessionAffinity } : undefined,
+      });
+
+      return createOpenAICompatible({
+        name: 'workers-ai',
+        baseURL: placeholder,
+        fetch: customFetch,
+      }).chatModel(modelId);
     },
   };
 }

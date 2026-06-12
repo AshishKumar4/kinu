@@ -1,0 +1,227 @@
+/**
+ * `agent_log` — the single append-only ledger for every event, phase,
+ * step, tool call, tool result, reactor decision, and reply attempt in
+ * an agent's lifetime. Discriminated by `kind`.
+ *
+ * Partial indexes per kind are mandatory — without them recovery scans
+ * regress to table-scans on the hot path.
+ *
+ * Sibling table `reply_channels` carries durable reply-channel rows.
+ *
+ * Sibling table `triggers` carries registered triggers.
+ *
+ * Sibling table `peer_outbox` carries pending outbound peer-agent
+ * deliveries (sender side).
+ *
+ * The DDL is idempotent. Safe to call on every DO boot.
+ */
+
+interface SqlExec {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
+}
+
+const AGENT_LOG_DDL = `
+CREATE TABLE IF NOT EXISTS agent_log (
+  id                  TEXT    PRIMARY KEY,
+  kind                TEXT    NOT NULL
+                              CHECK(kind IN (
+                                'event', 'phase', 'step', 'tool_call',
+                                'tool_result', 'reactor_decision', 'reply_attempt'
+                              )),
+  turn_id             TEXT,
+  step_idx            INTEGER,
+  parent_id           TEXT,
+  trace_id            TEXT    NOT NULL,
+  ingress             TEXT,
+  variant             TEXT,
+  trust               TEXT    CHECK(trust IS NULL OR trust IN ('external', 'authenticated', 'owner', 'self')),
+  priority            TEXT    CHECK(priority IS NULL OR priority IN ('urgent', 'normal', 'background')),
+  payload_visibility  TEXT    CHECK(payload_visibility IS NULL OR payload_visibility IN ('full', 'redact', 'hash', 'hmac', 'opaque_handle')),
+  payload             TEXT    NOT NULL DEFAULT 'null',
+  received_at         INTEGER NOT NULL,
+  schema_version      INTEGER NOT NULL DEFAULT 1,
+  dedupe_key          TEXT
+)`;
+
+const INDEXES: ReadonlyArray<string> = [
+  // Recovery hot path: pending events ordered by priority desc, received_at asc.
+  // Partial index keyed on (kind='event' AND turn_id IS NULL).
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_events_pending
+   ON agent_log (priority, received_at)
+   WHERE kind = 'event' AND turn_id IS NULL`,
+
+  // Phase lookups: latest phase row per turn.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_phase_current
+   ON agent_log (turn_id, id DESC)
+   WHERE kind = 'phase'`,
+
+  // Steps per turn: ordered traversal for SSE replay + recovery.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_steps_per_turn
+   ON agent_log (turn_id, step_idx)
+   WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')`,
+
+  // Unique dedupe key. NULL values do not participate in uniqueness.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_log_dedupe
+   ON agent_log (dedupe_key)
+   WHERE dedupe_key IS NOT NULL`,
+
+  // Per-trace event counting for trace-budget checks.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_trace_events
+   ON agent_log (trace_id, received_at)
+   WHERE kind = 'event'`,
+
+  // Reply attempt audit: by event.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_reply_attempts
+   ON agent_log (parent_id)
+   WHERE kind = 'reply_attempt'`,
+
+  // Generic by-trace scan.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_by_trace
+   ON agent_log (trace_id, id)`,
+
+  // Recent rows ordered by receipt (operator UI timeline).
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_received_at
+   ON agent_log (received_at DESC)`,
+];
+
+const VIEWS: ReadonlyArray<string> = [
+  // Events only. Used by the operator UI's events sidebar and the LLM-facing
+  // `recent_events` tool.
+  `CREATE VIEW IF NOT EXISTS events_v AS
+   SELECT id, turn_id, parent_id AS caused_by, trace_id, ingress, variant, trust,
+          priority, payload_visibility, payload, received_at, schema_version, dedupe_key
+   FROM agent_log
+   WHERE kind = 'event'`,
+
+  // Run-event trace (steps + tool calls + tool results + reactor decisions).
+  // SSE streamer reads from this. eventIndex semantics: row id ordering.
+  `CREATE VIEW IF NOT EXISTS run_event_v AS
+   SELECT id, turn_id, step_idx, kind, parent_id, payload, received_at
+   FROM agent_log
+   WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
+   ORDER BY turn_id, step_idx, id`,
+
+  // Phase transition log.
+  `CREATE VIEW IF NOT EXISTS turn_phase_log_v AS
+   SELECT id, turn_id, payload, received_at
+   FROM agent_log
+   WHERE kind = 'phase'
+   ORDER BY received_at`,
+];
+
+const REPLY_CHANNELS_DDL = `
+CREATE TABLE IF NOT EXISTS reply_channels (
+  id                  TEXT    PRIMARY KEY,
+  event_id            TEXT    NOT NULL,
+  kind                TEXT    NOT NULL
+                              CHECK(kind IN ('ws_session', 'http_pending', 'peer_back', 'mcp_pending', 'none')),
+  holder_addr         TEXT    NOT NULL DEFAULT '',
+  ttl_expires_at      INTEGER NOT NULL,
+  payload_policy      TEXT    NOT NULL DEFAULT 'full',
+  state               TEXT    NOT NULL DEFAULT 'open'
+                              CHECK(state IN ('open', 'replied', 'expired', 'aborted')),
+  reply_payload       TEXT,
+  attempt_count       INTEGER NOT NULL DEFAULT 0,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+)`;
+
+const REPLY_CHANNELS_INDEXES: ReadonlyArray<string> = [
+  `CREATE INDEX IF NOT EXISTS idx_reply_channels_open
+   ON reply_channels (state, ttl_expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_reply_channels_event
+   ON reply_channels (event_id)`,
+];
+
+const TRIGGERS_DDL = `
+CREATE TABLE IF NOT EXISTS triggers (
+  id                  TEXT    PRIMARY KEY,
+  kind                TEXT    NOT NULL
+                              CHECK(kind IN (
+                                'webhook_durable', 'webhook_ephemeral',
+                                'timer_oneshot', 'timer_cron',
+                                'process_watch', 'file_watch',
+                                'peer_inbox', 'mcp_route'
+                              )),
+  spec                TEXT    NOT NULL DEFAULT '{}',
+  creator_trust       TEXT    NOT NULL
+                              CHECK(creator_trust IN ('external', 'authenticated', 'owner', 'self')),
+  fork_policy         TEXT
+                              CHECK(fork_policy IS NULL OR fork_policy IN ('copy', 'sever', 'share')),
+  state               TEXT    NOT NULL DEFAULT 'active'
+                              CHECK(state IN ('active', 'paused', 'revoked')),
+  rate_limit_per_min  INTEGER NOT NULL DEFAULT 60,
+  created_at          INTEGER NOT NULL,
+  paused_at           INTEGER,
+  revoked_at          INTEGER,
+  next_fire_at        INTEGER,
+  last_fire_at        INTEGER,
+  fire_count          INTEGER NOT NULL DEFAULT 0
+)`;
+
+const TRIGGERS_INDEXES: ReadonlyArray<string> = [
+  `CREATE INDEX IF NOT EXISTS idx_triggers_active_fire
+   ON triggers (next_fire_at)
+   WHERE state = 'active' AND next_fire_at IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_triggers_by_kind
+   ON triggers (kind, state)`,
+];
+
+const PEER_OUTBOX_DDL = `
+CREATE TABLE IF NOT EXISTS peer_outbox (
+  id                  TEXT    PRIMARY KEY,
+  receiver_agent_name TEXT    NOT NULL,
+  receiver_user_id    TEXT    NOT NULL,
+  payload             TEXT    NOT NULL,
+  causality_event_id  TEXT,
+  state               TEXT    NOT NULL DEFAULT 'pending'
+                              CHECK(state IN ('pending', 'delivered', 'failed', 'dlq')),
+  attempt_count       INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at     INTEGER NOT NULL,
+  created_at          INTEGER NOT NULL,
+  delivered_at       INTEGER,
+  last_error          TEXT
+)`;
+
+const PEER_OUTBOX_INDEXES: ReadonlyArray<string> = [
+  `CREATE INDEX IF NOT EXISTS idx_peer_outbox_pending
+   ON peer_outbox (next_attempt_at)
+   WHERE state = 'pending'`,
+];
+
+const BUDGET_DDL = `
+CREATE TABLE IF NOT EXISTS reactor_budget_log (
+  id                  TEXT    PRIMARY KEY,
+  turn_id             TEXT,
+  trace_id            TEXT    NOT NULL,
+  source_key          TEXT    NOT NULL,
+  invoked_at          INTEGER NOT NULL,
+  outcome             TEXT    NOT NULL
+                              CHECK(outcome IN ('decided', 'fallback_defer', 'budget_exhausted'))
+)`;
+
+const BUDGET_INDEXES: ReadonlyArray<string> = [
+  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_hour
+   ON reactor_budget_log (invoked_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_turn
+   ON reactor_budget_log (turn_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_trace
+   ON reactor_budget_log (trace_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_source
+   ON reactor_budget_log (turn_id, source_key)`,
+];
+
+/** Initialize all hub tables, indexes, and views. Idempotent. */
+export function initEventsHubTables(sql: SqlExec): void {
+  sql.exec(AGENT_LOG_DDL);
+  for (const ix of INDEXES) sql.exec(ix);
+  for (const v of VIEWS) sql.exec(v);
+  sql.exec(REPLY_CHANNELS_DDL);
+  for (const ix of REPLY_CHANNELS_INDEXES) sql.exec(ix);
+  sql.exec(TRIGGERS_DDL);
+  for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
+  sql.exec(PEER_OUTBOX_DDL);
+  for (const ix of PEER_OUTBOX_INDEXES) sql.exec(ix);
+  sql.exec(BUDGET_DDL);
+  for (const ix of BUDGET_INDEXES) sql.exec(ix);
+}

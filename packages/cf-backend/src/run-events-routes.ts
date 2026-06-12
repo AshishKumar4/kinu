@@ -28,15 +28,6 @@ const ALLOWED_TYPES: ReadonlySet<RunEventType> = new Set<RunEventType>([
   'turn_end', 'run_end',
 ]);
 
-function corsHeaders(extra: Record<string, string> = {}): Headers {
-  return new Headers({
-    'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET, OPTIONS',
-    'access-control-allow-headers': 'content-type, last-event-id',
-    ...extra,
-  });
-}
-
 async function resolveAgent(env: Env, agentName: string) {
   // routeAgentRequest expects /agents/<class>/<name>; we use getAgentByName.
   // Class name is hardcoded to "OrchestratorAgent" (only one Think class).
@@ -59,10 +50,6 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   const path = url.pathname;
 
   if (!path.startsWith('/api/agents/')) return null;
-
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsHeaders() });
-  }
   if (request.method !== 'GET') return null;
 
   // /api/agents/<name>/runs
@@ -73,9 +60,9 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
     try {
       const stub = await resolveAgent(env, agentName);
       const runs = await stub.listRuns(limit);
-      return Response.json(runs, { headers: corsHeaders() });
+      return Response.json(runs);
     } catch (err) {
-      return Response.json({ error: (err as Error).message }, { status: 500, headers: corsHeaders() });
+      return Response.json({ error: (err as Error).message }, { status: 500 });
     }
   }
 
@@ -91,9 +78,9 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
     try {
       const stub = await resolveAgent(env, agentName);
       const events = await stub.getRunEvents(runId, opts);
-      return Response.json(events, { headers: corsHeaders() });
+      return Response.json(events);
     } catch (err) {
-      return Response.json({ error: (err as Error).message }, { status: 500, headers: corsHeaders() });
+      return Response.json({ error: (err as Error).message }, { status: 500 });
     }
   }
 
@@ -110,19 +97,30 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
       const n = Number(lastEventId);
       if (Number.isFinite(n) && n >= -1 && Number.isInteger(n)) sinceIndex = n;
     }
-    return streamRunEvents(env, agentName, runId, sinceIndex);
+    return streamRunEvents(env, agentName, runId, sinceIndex, request.signal);
   }
 
   return null;
 }
 
-function streamRunEvents(env: Env, agentName: string, runId: string, sinceIndex: number): Response {
+function streamRunEvents(
+  env: Env,
+  agentName: string,
+  runId: string,
+  sinceIndex: number,
+  signal: AbortSignal,
+): Response {
   const encoder = new TextEncoder();
+  // Stop polling the DO the moment the client goes away — via stream
+  // cancel() (reader released) or the request abort signal — instead of
+  // burning DO requests for up to 5 minutes against a dead connection.
+  let closed = false;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const startedAt = Date.now();
       let cursor = sinceIndex;
       let heartbeatAt = Date.now();
+      signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
       const stub = await resolveAgent(env, agentName);
 
@@ -144,11 +142,12 @@ function streamRunEvents(env: Env, agentName: string, runId: string, sinceIndex:
         let backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: 500 });
         for (const ev of backlog) send(ev);
 
-        // Poll loop until run_end or timeout. Cloudflare Workers can hold
-        // a single SSE connection for up to several minutes; the client's
-        // EventSource will auto-reconnect on disconnect with Last-Event-ID.
-        while (Date.now() - startedAt < SSE_TIMEOUT_MS) {
+        // Poll loop until run_end, client disconnect, or timeout. Cloudflare
+        // Workers can hold a single SSE connection for up to several minutes;
+        // the client's EventSource auto-reconnects with Last-Event-ID.
+        while (!closed && Date.now() - startedAt < SSE_TIMEOUT_MS) {
           await new Promise((r) => setTimeout(r, SSE_POLL_MS));
+          if (closed) break;
           backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: 200 });
           for (const ev of backlog) send(ev);
           const hasRunEnd = backlog.some((e) => e.type === 'run_end');
@@ -158,23 +157,28 @@ function streamRunEvents(env: Env, agentName: string, runId: string, sinceIndex:
             heartbeatAt = Date.now();
           }
         }
-        controller.close();
+        if (!closed) controller.close();
       } catch (err) {
-        controller.enqueue(encoder.encode(
-          `event: error\ndata: ${JSON.stringify({ error: (err as Error).message })}\n\n`,
-        ));
-        controller.close();
+        if (!closed) {
+          controller.enqueue(encoder.encode(
+            `event: error\ndata: ${JSON.stringify({ error: (err as Error).message })}\n\n`,
+          ));
+          controller.close();
+        }
       }
+    },
+    cancel() {
+      closed = true;
     },
   });
 
   return new Response(stream, {
     status: 200,
-    headers: corsHeaders({
+    headers: {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
       'connection': 'keep-alive',
       'x-accel-buffering': 'no',
-    }),
+    },
   });
 }

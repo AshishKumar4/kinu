@@ -48,6 +48,7 @@ function fakeReport(id: string, overrides: Partial<HeadReport> = {}): HeadReport
     artifactRefs: [],
     childHeadIds: [],
     toolCalls: [],
+    steps: [],
     tokenUsage: { input: 100, output: 80, total: 180 },
     wallClockMs: 250,
     ...overrides,
@@ -290,6 +291,83 @@ describe('HeadController.run', () => {
     expect(promptsSeen[0]).toContain('synthesize');
     expect(promptsSeen[1]).toContain('best_of');
     expect(promptsSeen[2]).toContain('consensus');
+  });
+
+  test('records the per-head step trace; listRuns round-trips it', async () => {
+    const { journal } = newJournal();
+    // Report id must match the spawned input.id for recordReport to land, so
+    // build the report from input.id with an injected step trace.
+    const runtime: HeadRuntime = {
+      async spawnHead(input) {
+        return {
+          id: input.id,
+          async run() {
+            return fakeReport(input.id, {
+              steps: [
+                { text: 'Reading the spec.', reasoning: 'start here', toolCalls: [] },
+                { text: '', toolCalls: [{ name: 'sandbox_read', input: { path: '/x' }, output: 'contents' }] },
+              ],
+            });
+          },
+          async abort() {},
+        };
+      },
+      mergeLLM: async () => fakeMergeOutput('ok'),
+    };
+    const controller = new HeadController(runtime, journal);
+    await controller.run({
+      parentHeadId: null, rootId: 'r-steps',
+      inheritedContext: baseContext,
+      request: { rationale: 'trace test', heads: [{ task: 'angle A', rationale: 'a' }] },
+    });
+
+    const run = journal.listRuns(10).find((r) => r.rootId === 'r-steps');
+    expect(run).toBeDefined();
+    expect(run!.heads).toHaveLength(1);
+    expect(run!.heads[0].steps).toHaveLength(2);
+    expect(run!.heads[0].steps[1].toolCalls[0]).toEqual({ name: 'sandbox_read', input: { path: '/x' }, output: 'contents' });
+  });
+});
+
+describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
+  test('a top-level split (synthetic root, all heads parent_id NULL) is ONE run, not N', async () => {
+    const { journal } = newJournal();
+    // Default reports (no override) → fakeReport(input.id) so recordReport lands.
+    const runtime = buildRuntime({ mergeOutput: fakeMergeOutput('Merged A+B.') });
+    const controller = new HeadController(runtime, journal);
+    await controller.run({
+      parentHeadId: null, rootId: 'top-root',
+      inheritedContext: baseContext,
+      request: { rationale: 'Explore two angles', heads: baseRequest.heads },
+    });
+
+    const runs = journal.listRuns(10);
+    // The quirk: this used to be 2 "roots" with empty heads. Now: ONE run.
+    expect(runs).toHaveLength(1);
+    const run = runs[0];
+    expect(run.rootId).toBe('top-root');
+    expect(run.heads).toHaveLength(2);
+    expect(run.heads.every((h) => h.status === 'completed')).toBe(true);
+    expect(run.rationale).toBe('Explore two angles'); // from head_runs
+    expect(run.task).toBe('Explore two angles');      // synthetic root → label from rationale
+    expect(run.merge?.narrative).toBe('Merged A+B.');
+    expect(run.status).toBe('completed');
+  });
+
+  test('runs are ordered newest-first and limited', async () => {
+    const { journal } = newJournal();
+    const controller = new HeadController(buildRuntime({}), journal);
+    for (const root of ['run-1', 'run-2', 'run-3']) {
+      await controller.run({
+        parentHeadId: null, rootId: root,
+        inheritedContext: baseContext,
+        request: { rationale: `r-${root}`, heads: [{ task: `t-${root}`, rationale: 'x' }] },
+      });
+    }
+    const runs = journal.listRuns(2);
+    expect(runs).toHaveLength(2);
+    // newest-first by MIN(spawned_at); all share ~same spawnedAt so just assert count + distinctness
+    expect(new Set(runs.map((r) => r.rootId)).size).toBe(2);
   });
 
   test('child budget is derived from parent (depth-1, tokens split equally)', async () => {

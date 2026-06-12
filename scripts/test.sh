@@ -31,8 +31,10 @@ if [ ${#PATTERNS[@]} -gt 0 ]; then
   exec bun test "${FLAGS[@]}" "${PATTERNS[@]}"
 fi
 
-# Default: run core + cf-backend (the two packages with tests today)
+# Default: run the package test suites that do not require live LLM credentials.
 # Run them as one bun-test invocation so coverage aggregates across packages.
 exec bun test "${FLAGS[@]}" \
   packages/core/tests \
-  packages/cf-backend/tests
+  packages/cf-backend/tests \
+  packages/cli-backend/tests \
+  packages/cli/tests

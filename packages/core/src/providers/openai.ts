@@ -7,18 +7,21 @@
 // the AuthResolver.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps } from './types.js';
-import { asFetchFunction } from './fetch-shim.js';
+import type { ModelProvider, ModelInfo } from './types.js';
+import { createAuthedFetch } from './util.js';
+import { listModelsDevProviderModels } from './models-dev.js';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
+export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 
-const MODELS: ModelInfo[] = [
-  { id: 'gpt-5.5',    label: 'GPT-5.5',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'] },
-  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'] },
-  { id: 'gpt-5-mini', label: 'GPT-5 mini', capabilities: ['tools', 'streaming', 'json-mode'] },
-  { id: 'gpt-4.1',    label: 'GPT-4.1',    capabilities: ['tools', 'streaming', 'json-mode', 'vision'] },
-  { id: 'o4-mini',    label: 'o4-mini',    capabilities: ['streaming', 'reasoning'] },
+const FALLBACK_MODELS: ModelInfo[] = [
+  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
+  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
+  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000 },
 ];
+
+const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];
 
 export interface OpenAIOptions {
   /** Use the Responses API (default) vs Chat Completions. */
@@ -30,23 +33,17 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
   return {
     id: 'openai',
     label: 'OpenAI (direct API)',
-    defaultModel: 'gpt-5.5',
+    defaultModel: OPENAI_DEFAULT_MODEL,
     async isAvailable(deps) { return deps.hasCredential(OPENAI_CRED_KEY); },
     unavailableReason() { return 'No OpenAI API key (cred key: `openai.bearer`).'; },
-    listModels: () => MODELS,
+    listModels: (deps) => listModelsDevProviderModels('openai', deps, {
+      fallback: FALLBACK_MODELS,
+      preferredIds: PREFERRED_MODEL_IDS,
+    }),
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = deps.fetch ?? fetch;
-      const customFetch = asFetchFunction(async (input, init) => {
-        const auth = await deps.getAuth(OPENAI_CRED_KEY);
-        if (!auth) {
-          return new Response(
-            JSON.stringify({ error: 'OpenAI API key not configured' }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } },
-          );
-        }
-        const headers = new Headers(init?.headers);
-        for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
-        return baseFetch(input, { ...init, headers });
+      const customFetch = createAuthedFetch(deps, {
+        credKey: OPENAI_CRED_KEY,
+        missingCredentialError: 'OpenAI API key not configured',
       });
       const provider = createOpenAI({ apiKey: 'placeholder', fetch: customFetch });
       return useResponses ? provider.responses(modelId) : provider.chat(modelId);

@@ -1,12 +1,15 @@
 /**
- * Union of models available to a user: always-on Workers AI + any
- * credential-gated providers they have connected.
- *
- * UserDO knows which credentials exist; this module knows what models each
- * provider exposes. We don't construct any LanguageModel — we just describe
- * the menu for the UI's model picker.
+ * Union of models available to a user, plus the connectable-provider catalog.
+ * The provider registry is the source of truth for models; models.dev is the
+ * source of truth for which providers a BYO API key can connect. This module
+ * only shapes that data for HTTP clients.
  */
+import {
+  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
+  type ModelsDevProviderInfo,
+} from '@proteus/core';
 import type { UserDO } from './user-do.js';
+import { createAgentProviderRegistry } from '../providers/agent-registry.js';
 
 export interface ModelMenuEntry {
   /** Full spec — `<provider>/<modelId>`, used as the agent_config.model value. */
@@ -17,57 +20,29 @@ export interface ModelMenuEntry {
   provider: string;
   /** Capabilities — used by the UI to badge models. */
   capabilities?: string[];
+  /** Provider-reported context window, when known. */
+  contextWindow?: number;
 }
-
-const WORKERS_AI_MODELS: ModelMenuEntry[] = [
-  { spec: 'workers-ai/@cf/moonshotai/kimi-k2.6',           label: 'Kimi K2.6',         provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  { spec: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',     label: 'Llama 4 Scout',     provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  { spec: 'workers-ai/@cf/meta/llama-4-maverick-17b-128e-instruct', label: 'Llama 4 Maverick',  provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-  { spec: 'workers-ai/@cf/qwen/qwen2.5-coder-32b-instruct',         label: 'Qwen 2.5 Coder',    provider: 'workers-ai', capabilities: ['tools', 'streaming'] },
-];
-
-const CODEX_MODELS: ModelMenuEntry[] = [
-  { spec: 'codex/gpt-5.5',      label: 'GPT-5.5 (Codex)',      provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'codex/gpt-5',        label: 'GPT-5 (Codex)',        provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'codex/gpt-5-codex',  label: 'GPT-5 Codex',          provider: 'codex', capabilities: ['tools', 'streaming', 'reasoning'] },
-  { spec: 'codex/gpt-5.5-mini', label: 'GPT-5.5 mini (Codex)', provider: 'codex', capabilities: ['tools', 'streaming'] },
-];
-
-const OPENAI_MODELS: ModelMenuEntry[] = [
-  { spec: 'openai/gpt-5',      label: 'GPT-5',      provider: 'openai', capabilities: ['tools', 'streaming', 'reasoning'] },
-  { spec: 'openai/gpt-5-mini', label: 'GPT-5 mini', provider: 'openai', capabilities: ['tools', 'streaming'] },
-  { spec: 'openai/o3',         label: 'o3',         provider: 'openai', capabilities: ['tools', 'reasoning'] },
-];
-
-const ANTHROPIC_MODELS: ModelMenuEntry[] = [
-  { spec: 'anthropic/claude-opus-4-7',     label: 'Claude Opus 4.7',  provider: 'anthropic', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'anthropic/claude-sonnet-4-6',   label: 'Claude Sonnet 4.6', provider: 'anthropic', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'anthropic/claude-haiku-4-5',    label: 'Claude Haiku 4.5',  provider: 'anthropic', capabilities: ['tools', 'streaming'] },
-];
-
-// OpenRouter has too many models to enumerate. Top picks; users can also
-// type any model id manually in the picker.
-const OPENROUTER_MODELS: ModelMenuEntry[] = [
-  { spec: 'openrouter/anthropic/claude-opus-4-7', label: 'Claude Opus 4.7 (OR)', provider: 'openrouter', capabilities: ['tools', 'streaming', 'reasoning', 'vision'] },
-  { spec: 'openrouter/openai/gpt-5',              label: 'GPT-5 (OR)',           provider: 'openrouter', capabilities: ['tools', 'streaming', 'reasoning'] },
-  { spec: 'openrouter/google/gemini-3-pro',       label: 'Gemini 3 Pro (OR)',    provider: 'openrouter', capabilities: ['tools', 'streaming', 'reasoning'] },
-  { spec: 'openrouter/x-ai/grok-4',               label: 'Grok 4 (OR)',          provider: 'openrouter', capabilities: ['tools', 'streaming'] },
-];
 
 export async function listAvailableModels(env: Env, userId: string): Promise<ModelMenuEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-  const creds = await stub.listCredentials();
-  const keys = new Set(creds.map((c) => c.key));
+  const { registry, deps } = createAgentProviderRegistry({
+    env,
+    userDOStub: stub,
+    fetch,
+  });
 
-  const out: ModelMenuEntry[] = [];
-  // Workers AI is always on (binding present at the worker level).
-  if (env.AI) out.push(...WORKERS_AI_MODELS);
-  if (keys.has('codex.oauth'))      out.push(...CODEX_MODELS);
-  if (keys.has('openai.bearer'))    out.push(...OPENAI_MODELS);
-  if (keys.has('anthropic.bearer')) out.push(...ANTHROPIC_MODELS);
-  if (keys.has('openrouter.bearer'))out.push(...OPENROUTER_MODELS);
+  const out = (await registry.listAllModels(deps)).map((model): ModelMenuEntry => ({
+    spec: `${model.provider}/${model.id}`,
+    label: model.label ?? model.id,
+    provider: model.provider,
+    capabilities: model.capabilities ? [...model.capabilities] : undefined,
+    contextWindow: model.contextWindow,
+  }));
+
   // openai-compat: user-named — we surface each as a single generic entry.
   // The agent_config.model can be set to `openai-compat:<name>/<modelId>`.
+  const creds = await stub.listCredentials();
   for (const c of creds) {
     if (c.key.startsWith('openai-compat.')) {
       const name = c.key.slice('openai-compat.'.length);
@@ -80,4 +55,56 @@ export async function listAvailableModels(env: Env, userId: string): Promise<Mod
     }
   }
   return out;
+}
+
+/** One connectable provider for the credential UX (BYO API key). */
+export interface ProviderCatalogEntry {
+  /** Provider id — also the model-spec prefix (`<id>/<modelId>`). */
+  id: string;
+  /** Credential key the API key is stored under. */
+  credKey: string;
+  name: string;
+  doc?: string;
+  /** Conventional env var name for the key (models.dev metadata). */
+  envVar?: string;
+  connected: boolean;
+}
+
+/** All providers a stored API key can connect: every models.dev provider the
+ *  openai-compat path can drive, plus catalog providers a bespoke static
+ *  provider serves under the same id/credKey (openai, anthropic, openrouter).
+ *  OAuth-connected providers (workers-ai, codex) have their own flows. */
+export function buildProviderCatalog(
+  providers: readonly ModelsDevProviderInfo[],
+  staticIds: ReadonlySet<string>,
+  storedKeys: ReadonlySet<string>,
+): ProviderCatalogEntry[] {
+  return providers
+    .filter((p) => modelsDevCompatBaseURL(p) !== null || staticIds.has(p.id))
+    .map((p): ProviderCatalogEntry => {
+      const credKey = catalogCredKey(p.id);
+      return {
+        id: p.id,
+        credKey,
+        name: p.name,
+        doc: p.doc,
+        envVar: p.env[0],
+        connected: storedKeys.has(credKey),
+      };
+    })
+    .sort((a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name));
+}
+
+export async function listProviderCatalog(env: Env, userId: string): Promise<ProviderCatalogEntry[]> {
+  const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  const { registry } = createAgentProviderRegistry({ env, userDOStub: stub, fetch });
+  const [providers, creds] = await Promise.all([
+    listModelsDevProviders({ fetch }),
+    stub.listCredentials(),
+  ]);
+  return buildProviderCatalog(
+    providers,
+    new Set(registry.list().map((p) => p.id)),
+    new Set(creds.map((c) => c.key)),
+  );
 }

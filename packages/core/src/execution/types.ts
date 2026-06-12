@@ -5,7 +5,7 @@
  * namespaced APIs: workspace.readFile(), nimbus.exec(), sandbox.startProcess().
  *
  * Architecture: docs/EXECUTION-LAYER-SPEC.md
- * Lean formalization: lean/Proteus/Execution.lean
+ * Lean formalization: lean/Proteus/Execution/{Capabilities,ToolSystem}.lean
  */
 
 export type ExecutorCapability =
@@ -28,6 +28,24 @@ export type ExecutorCapability =
 
 export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop';
 
+export type ExecutorLifecycleStatus =
+  | 'not_configured'
+  | 'idle'
+  | 'active'
+  | 'disconnected'
+  | 'error';
+
+export interface ExecutorStatus {
+  /** Binding/config exists, so the executor can be selected/provisioned. */
+  configured: boolean;
+  /** Callable right now from the agent's perspective. */
+  available: boolean;
+  /** A real remote session/container/device has been touched this activation. */
+  active: boolean;
+  status: ExecutorLifecycleStatus;
+  reason?: string;
+}
+
 /**
  * An executor that participates in the codemode sandbox as a named provider.
  *
@@ -48,6 +66,12 @@ export interface ExecutorProvider {
   /** Check if this executor is currently reachable */
   isAvailable(): boolean;
 
+  /**
+   * Rich lifecycle state for UI/status surfaces. This must be cheap and must
+   * not perform remote RPCs; dashboard loads must not provision sandboxes.
+   */
+  getStatus?(): ExecutorStatus;
+
   /** Lifecycle: set up the connection */
   connect(): Promise<void>;
 
@@ -60,6 +84,13 @@ export interface ExecutorProvider {
    *
    * This matches codemode's SimpleToolRecord shape so it can be passed
    * directly as a ToolProvider to createExecuteTool({ providers: [...] }).
+   *
+   * Cancellation contract: in-process callers (the `run` tool) pass a
+   * trailing `{ signal }` options argument to `exec`. Implementations honor
+   * it at the strongest level their transport supports — the workspace shell
+   * stops between commands; remote executors stop waiting and throw an
+   * AbortError that says the remote command may still finish (their
+   * protocols expose no kill for an in-flight exec). See execution/signal.ts.
    */
   readonly tools: Record<string, {
     description: string;
@@ -74,6 +105,49 @@ export interface ExecutorProvider {
 
   /** Whether tool functions take positional args vs single object */
   readonly positionalArgs?: boolean;
+
+  /**
+   * Generic port-exposure surface. Returns the public preview URL when
+   * supported, or a `{supported: false}` rejection with a clear reason
+   * for executors that can't open inbound ports (workspace, nimbus,
+   * laptop).
+   *
+   * Real implementation: sandbox (via @cloudflare/sandbox SDK).
+   *
+   * Pre-flight: the sandbox impl verifies a server is responsive on the
+   * port BEFORE returning the URL — exposing a port with no listener
+   * yields a clear error pointing to `start a server first`, not a
+   * broken-iframe failure mode.
+   */
+  exposePort?(port: number, opts?: { name?: string }): Promise<PortExposureResult>;
+
+  /** Stop exposing a port. No-op if the port wasn't exposed. */
+  unexposePort?(port: number): Promise<void>;
+
+  /** List currently-exposed ports for this executor. */
+  listExposedPorts?(): Promise<ExposedPortInfo[]>;
+}
+
+/** Result of attempting to expose a port. Discriminated by `supported`. */
+export type PortExposureResult =
+  | {
+      supported: true;
+      url: string;
+      port: number;
+      name?: string;
+      /** True if a server is verified listening on the port before exposure. */
+      verified_listening: boolean;
+    }
+  | {
+      supported: false;
+      reason: string;
+    };
+
+export interface ExposedPortInfo {
+  port: number;
+  url: string;
+  name?: string;
+  status: 'listening' | 'unknown' | 'unreachable';
 }
 
 export interface ExecutorInfo {
@@ -81,6 +155,10 @@ export interface ExecutorInfo {
   kind: ExecutorKind;
   capabilities: string[];
   available: boolean;
+  configured: boolean;
+  active: boolean;
+  status: ExecutorLifecycleStatus;
+  reason?: string;
 }
 
 /**

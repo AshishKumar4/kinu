@@ -1,5 +1,7 @@
 # Architecture
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 Proteus is a self-evolving AI agent built on Cloudflare's Agents SDK. It uses Monte Carlo Tree Search (MCTS) to explore multiple solution strategies in parallel, learns reusable tool patterns via a CraftStore, and can rewrite its own agentic loop (scaffold) based on observed performance.
 
 ## Message Flow
@@ -31,7 +33,7 @@ User types text + clicks Send (or presses Enter)
 │
 ├─ Think._runInferenceLoop()                          [think.js:295]
 │  ├─ Merge tools: workspace + getTools() + session context + MCP + client
-│  ├─ getSystemPrompt() — read agent_soul
+│  ├─ getSystemPrompt() — read SOUL.md from the VFS
 │  ├─ Build + prune messages from session history
 │  ├─ getModel() — read agent_config
 │  ├─ beforeTurn() — reset counters, return activeTools
@@ -82,8 +84,8 @@ sequenceDiagram
 
     U->>WS: cf_agent_use_chat_request
     WS->>T: _handleChatRequest → TurnQueue.enqueue
-    T->>T: getTools() — 5 tools + session context
-    T->>T: getSystemPrompt() — read agent_soul
+    T->>T: getTools() — 9 builtin tools + session context
+    T->>T: getSystemPrompt() — read SOUL.md from the VFS
     T->>T: getModel() — read agent_config
     T->>T: beforeTurn() — reset counters, set activeTools
     T->>LLM: streamText(model, system, messages, tools)
@@ -146,7 +148,7 @@ graph LR
     end
 
     subgraph "Durable Objects"
-        Orch["OrchestratorAgent<br/>extends Think&lt;Env&gt;<br/><br/>SQLite: agent_soul, agent_identity,<br/>agent_config, vfs_files, memory_chunks,<br/>crafted_tools, craft_scores, search_nodes,<br/>evolution_events, scaffold_versions,<br/>scaffold_regression_fixtures, task_history,<br/>fibers, messages, conversation_history,<br/>executor_output, activity_log"]
+        Orch["OrchestratorAgent<br/>extends Think&lt;Env&gt;<br/><br/>SQLite: agent_identity,<br/>SOUL.md (in vfs_files),<br/>agent_config, vfs_files, memory_chunks,<br/>crafted_tools, craft_scores, search_nodes,<br/>evolution_events, scaffold_versions,<br/>scaffold_regression_fixtures, task_history,<br/>fibers, messages, conversation_history,<br/>executor_output, activity_log"]
 
         subgraph "Facets (MCTS branches)"
             E1["ExplorationAgent #1<br/>extends Agent&lt;Env&gt;<br/>Isolated SQLite: traces"]
@@ -172,7 +174,7 @@ The `AgentRuntime` is the central contract. Every backend (CF Workers or CLI) mu
 | **Executor** | `execute(code, providers)` | `new Function()` fallback / LOADER codemode | Bun subprocess sandbox (30s timeout) |
 | **LLM** | `stream`, `complete` | Workers AI binding or AI Gateway | AI Gateway via Vercel AI SDK |
 | **Schedule** | `after`, `cron`, `fiber` | `agent.runFiber()` (durable) | SQLite-backed fiber |
-| **Identity** | `id`, `name`, `scaffold.*` | DO ID + agent_soul table | UUID + ~/.proteus/ directory |
+| **Identity** | `id`, `name`, `scaffold.*` | DO ID + SOUL.md (VFS) | UUID + ~/.proteus/ directory + SOUL.md (VFS) |
 
 Additional runtime fields:
 - **CraftStore** — FTS5-indexed learned tool storage
@@ -187,7 +189,7 @@ The `OrchestratorAgent` extends Think and implements these hooks:
 | Hook | When | What Proteus Does |
 |------|------|-------------------|
 | `getModel()` | Every turn | Read stored model preference from `agent_config`, create Workers AI or AI Gateway model |
-| `getSystemPrompt()` | Every turn | Read agent soul from `agent_soul` table |
+| `getSystemPrompt()` | Every turn | Read SOUL.md from the VFS (`readSoul`) |
 | `getTools()` | Every turn | Build 5-tool ToolSet (execute_tools, run, explore, save_note, search_memory). Cached by CraftStore version. `activeTools` restricts Think to only these 5 + session context tools. |
 | `configureSession()` | Session init | Memory context block (32000 tokens) + cached prompt |
 | `beforeTurn()` | Before inference | Reset turn tracking (tool calls, step count, timer) |

@@ -1,10 +1,12 @@
 /**
- * Unit tests: EMA scoring + time decay.
- * Formal spec: CraftStore.lean — ema_in_range, effective_score_zero_decay.
+ * Unit tests: EMA scoring + time decay + the shared injection filter.
  */
 
 import { describe, test, expect } from 'bun:test';
-import { emaUpdate, effectiveScore } from '../src/craft/ema.js';
+import { Database } from 'bun:sqlite';
+import { emaUpdate, effectiveScore, filterByEffectiveScore } from '../src/craft/ema.js';
+import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { makeSql, makeExecRaw } from './helpers.js';
 
 describe('EMA scoring', () => {
   test('emaUpdate with alpha=0.3', () => {
@@ -51,5 +53,38 @@ describe('Time decay', () => {
 
   test('score=0 stays 0 regardless of time', () => {
     expect(effectiveScore(0, 0, Date.now())).toBe(0);
+  });
+});
+
+describe('filterByEffectiveScore — the one injection policy', () => {
+  function setup() {
+    const db = new Database(':memory:');
+    initCraftScoreTables(makeExecRaw(db));
+    return { db, sql: makeSql(db) };
+  }
+  const tools = [{ name: 'good' }, { name: 'stale' }, { name: 'unscored' }];
+
+  test('drops below-threshold tools, keeps healthy + unscored ones', () => {
+    const { sql } = setup();
+    const now = Date.now();
+    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${now})`;
+    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale', 0.05, 5, ${now})`;
+    const kept = filterByEffectiveScore(sql, tools, 0.2, now);
+    expect(kept.map((t) => t.name)).toEqual(['good', 'unscored']);
+  });
+
+  test('time decay retires a once-good tool', () => {
+    const { sql } = setup();
+    const now = Date.now();
+    const ninetyDaysAgo = now - 90 * 86_400_000; // 3 half-lives → 0.8 → 0.1
+    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${ninetyDaysAgo})`;
+    const kept = filterByEffectiveScore(sql, [{ name: 'good' }], 0.2, now);
+    expect(kept).toEqual([]);
+  });
+
+  test('missing craft_scores table → everything passes', () => {
+    const db = new Database(':memory:');
+    const kept = filterByEffectiveScore(makeSql(db), tools);
+    expect(kept.map((t) => t.name)).toEqual(['good', 'stale', 'unscored']);
   });
 });

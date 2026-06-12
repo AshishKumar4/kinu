@@ -1,261 +1,524 @@
 /**
- * Interactive chat REPL — uses the shared runChat() engine from @proteus/core.
+ * Interactive chat REPL — the single classic (readline) chat surface for both
+ * backends, parameterized by an AgentClient. The client owns transport,
+ * recording, and history; this renders its streaming event feed, dispatches
+ * slash commands through the shared command core, surfaces device-consent
+ * requests inline while a turn is processing, and maps the first Ctrl+C during
+ * a turn to client.stop() (second Ctrl+C, or Ctrl+C while idle, exits).
  *
- * Streams text, displays tool calls inline, fires evolution hooks,
- * handles slash commands. Stores full CoreMessage history including
- * tool call/result messages for proper multi-turn context.
+ * Steering trio (classic equivalents): a line typed while a turn runs STEERS
+ * the running turn (client.steer); `/queue <text>` holds a message to send
+ * after the turn; `/fork [n]` walks back to an earlier user message, forking
+ * the conversation there and pre-filling the input with it for editing.
  */
 
 import * as readline from 'node:readline';
-import { type CoreMessage, type ToolSet } from 'ai';
-import type { AgentRuntime, AgentInfo, SearchNode, LLMProviderConfig } from '@proteus/core';
+import { renderChangelogText } from '@proteus/core';
+import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
+import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands.js';
+import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
+import { watchTerminalConsents } from './consent-watch.js';
 import {
-  EvolutionEngine,
-  buildBuiltinTools,
-  buildSystemPromptSync,
-  createChatModel,
-  runChat,
-  resolveMaxSteps,
-  type CompletedTurn,
-  type ToolCallRecord,
-} from '@proteus/core';
-import { createNodeCraftedExecute, createNodeExecuteToolFactory } from '@proteus/cli-backend';
+  connectDevice,
+  describeConnectOutcome,
+  deviceStatusLine,
+  dismissDeviceConnectPrompt,
+  shouldOfferDeviceConnect,
+} from './device-connect.js';
+import { requireAuthConfig } from './config.js';
+import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
 import {
-  printChatBanner, printSlashHelp, printAgentStatus,
-  printSearchTree, printToolCall, printToolResult,
-  printEvolutionEvent, createTypingIndicator,
-  ACCENT, DIM, MUTED, ERR, WARN,
+  printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator,
+  ACCENT, DIM, MUTED, ERR, OK, WARN,
 } from './display.js';
 
 export interface ChatLoopOpts {
-  rt: AgentRuntime;
-  info: AgentInfo;
-  dbSize: number;
-  llmConfig: LLMProviderConfig;
-  refreshInfo: () => AgentInfo;
-  noAutoEvolve?: boolean;
+  client: AgentClient;
+  initialPrompt?: string;
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
-  const { rt, dbSize, llmConfig, refreshInfo, noAutoEvolve } = opts;
-  let info = opts.info;
+  let client = opts.client;
+  const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  const model = createChatModel({
-    kind: 'openai-compat',
-    name: llmConfig.name,
-    baseURL: llmConfig.baseURL,
-    headers: llmConfig.headers,
-    modelId: llmConfig.model,
-  });
-
-  const engine = new EvolutionEngine(rt, { enabled: !noAutoEvolve });
-  engine.onEvent(event => printEvolutionEvent(event.type, event.message));
-
-  // v2.0: same 5-tool surface as CF.
-  // v2.1(B): craftedToolExecute supplies a Node-side compiler for crafted tools.
-  // v2.1(E): createExecuteTool is the Node execute-tools factory — core no
-  // longer ships an in-process fallback. A sentinel loader keeps the factory
-  // branch active in buildBuiltinTools.
-  const tools: ToolSet = buildBuiltinTools({
-    rt,
-    engine,
-    craftedToolExecute: createNodeCraftedExecute(),
-    createExecuteTool: createNodeExecuteToolFactory({
-      vfs: rt.storage.vfs,
-      memory: rt.memory,
-      shell: rt.shell,
-    }) as never,
-    codemodeLoader: { __cli: true } as unknown,
-  });
-
-  printChatBanner(info, Object.keys(tools), !noAutoEvolve);
-
-  const prompt = () => `${ACCENT(info.name)} ${DIM('›')} `;
-  const rl = readline.createInterface({
-    input: process.stdin, output: process.stdout, prompt: prompt(),
-  });
-
-  const sessionId = 'chat-' + Date.now();
-  const sessionTurns: CompletedTurn[] = [];
-  const sessionStart = Date.now();
-  const history: CoreMessage[] = [];
-
+  // Per-turn render state — reset on every user turn so the agent-name header
+  // prints once per turn and the typing indicator stops on first output.
+  let typing = createTypingIndicator(client.agentName);
+  let headerPrinted = false;
+  let turnInFlight = false;
+  let interruptRequested = false;
   let exiting = false;
+  /** Turn-lifecycle depth from paired turn-start/turn-end events — covers
+   *  cascaded turns (leftover steers, cloud-steer follow-ups) past send(). */
+  let activeTurns = 0;
+  /** Messages held for after the current turn (/queue, or a steer that lost
+   *  the race with turn end). Drained FIFO before the next prompt. */
+  const queuedInputs: string[] = [];
+  /** Input pre-filled into the next prompt (walk-back fork edit). */
+  let pendingPrefill: string | null = null;
+  /** True while a consent question owns the readline — its answer lines must
+   *  not be mistaken for mid-turn steering input. */
+  let consentAskPending = false;
+
+  const onClientEvent = (event: AgentClientEvent) => {
+    if (event.type === 'turn-start') activeTurns += 1;
+    else if (event.type === 'turn-end') activeTurns = Math.max(0, activeTurns - 1);
+    renderClientEvent(event, client.agentName, typing, () => headerPrinted, (v) => { headerPrinted = v; });
+  };
+  let unsubscribe = client.subscribe(onClientEvent);
+
   const onExit = async () => {
     if (exiting) return;
     exiting = true;
-    if (sessionTurns.length > 0) {
-      try {
-        // Await session evolution with a 5-second timeout so Ctrl+C doesn't hang
-        await Promise.race([
-          engine.onSessionComplete({
-            sessionId, turns: sessionTurns, startedAt: sessionStart, endedAt: Date.now(),
-          }),
-          new Promise(resolve => setTimeout(resolve, 5000)),
-        ]);
-      } catch { /* best effort */ }
-    }
+    unsubscribe();
+    // close() flushes a partial evolution window; cap it so Ctrl+C never hangs.
+    try { await Promise.race([client.close(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* best effort */ }
     console.log(DIM('\n  Goodbye.\n'));
     rl.close();
     process.exit(0);
   };
-  process.on('SIGINT', () => void onExit());
 
-  rl.prompt();
+  const onInterrupt = () => {
+    if (turnInFlight && !interruptRequested) {
+      interruptRequested = true;
+      client.stop();
+      console.log(WARN('\n  Interrupting the active turn… (Ctrl+C again to exit)'));
+      // Interrupt means stop — held messages must not auto-fire afterwards.
+      if (queuedInputs.length > 0) {
+        console.log(WARN(`  Dropping ${queuedInputs.length} queued message(s):`));
+        for (const queued of queuedInputs.splice(0)) console.log(DIM(`    ⧗ ${queued}`));
+      }
+      return;
+    }
+    void onExit();
+  };
+  rl.on('SIGINT', onInterrupt);
+  process.on('SIGINT', onInterrupt);
 
-  for await (const line of rl) {
+  // Mid-turn input: a plain line steers the running turn; /queue holds it for
+  // after; /stop interrupts. Lines answering a consent question are excluded.
+  const onMidTurnLine = async (input: string) => {
+    const command = input.split(/\s+/, 1)[0]!.toLowerCase();
+    if (command === '/stop') {
+      client.stop();
+      return;
+    }
+    if (command === '/queue') {
+      const text = input.slice('/queue'.length).trim();
+      if (text) {
+        queuedInputs.push(text);
+        console.log(DIM(`  ⧗ queued — sends after this turn (${queuedInputs.length} waiting)`));
+      } else {
+        console.log(DIM('  Usage while a turn runs: /queue <text>'));
+      }
+      return;
+    }
+    if (command === '/branch') {
+      const text = input.slice('/branch'.length).trim();
+      if (!text) console.log(DIM('  Usage while a turn runs: /branch <text> — runs the redirect in parallel.'));
+      else if (!client.branch(text, { cwd: process.cwd() })) {
+        queuedInputs.push(text);
+        console.log(DIM('  ⧗ the turn just finished — queued to send next'));
+      }
+      return;
+    }
+    if (input.startsWith('/')) {
+      console.log(DIM('  A turn is running — type to steer it, or use /queue <text>, /branch <text>, /stop.'));
+      return;
+    }
+    const resolved = await resolvePromptAttachments(input);
+    for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
+    const payload = resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text;
+    if (client.steer(payload, { cwd: process.cwd() })) {
+      console.log(DIM('  ↪ steering the running turn'));
+    } else {
+      queuedInputs.push(input);
+      console.log(DIM('  ⧗ the turn just finished — queued to send next'));
+    }
+  };
+  rl.on('line', (line) => {
+    if (!turnInFlight || consentAskPending || exiting) return;
     const input = line.trim();
-    if (!input) { rl.prompt(); continue; }
+    if (!input) return;
+    void onMidTurnLine(input);
+  });
+
+  await client.connect();
+  if (tty) {
+    console.log(`\n${ACCENT(client.agentName)} ${DIM(`${client.mode} chat`)}`);
+    console.log(DIM('Type a message, /help for commands, /exit to leave. Ctrl+C interrupts a running turn.'));
+    console.log(DIM('While a turn runs: type+Enter steers it · /queue <text> sends after · /fork walks back.\n'));
+  }
+  if (client.mode === 'cloud') await maybeOfferDeviceConnect(rl, tty);
+
+  const promptLabel = () => tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
+
+  /** Wait until every cascaded turn settles — a leftover steer (local) or a
+   *  steered follow-up (cloud) starts moments after the previous turn-end, so
+   *  idle must hold through a short debounce. */
+  const waitForTurnsToSettle = async () => {
+    for (;;) {
+      while (activeTurns > 0 && !exiting) await sleep(25);
+      if (exiting) return;
+      await sleep(60);
+      if (activeTurns === 0) return;
+    }
+  };
+
+  const consentAsk = async (question: string, signal: AbortSignal) => {
+    consentAskPending = true;
+    try {
+      return await ask(rl, question, signal);
+    } finally {
+      consentAskPending = false;
+    }
+  };
+
+  const runTurn = async (input: string) => {
+    // @path mentions (plus quoted/~ path tokens) become attachments: images
+    // and PDFs inline as file parts, other files stay path references.
+    const resolved = await resolvePromptAttachments(input);
+    for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
+    if (resolved.attached.length > 0) {
+      console.log(DIM(`  📎 ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
+    }
+    headerPrinted = false;
+    turnInFlight = true;
+    interruptRequested = false;
+    typing.start();
+    const consentWatch = client.consents
+      ? watchTerminalConsents(client.consents, client.agentName, consentAsk)
+      : null;
+    try {
+      await client.send(
+        resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text,
+        { cwd: process.cwd() },
+      );
+      await waitForTurnsToSettle();
+    } catch (err) {
+      typing.stop();
+      console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
+    } finally {
+      consentWatch?.stop();
+      turnInFlight = false;
+      typing.stop();
+    }
+    console.log('\n');
+  };
+
+  const handleFork = async (ref: string | undefined) => {
+    const history = await client.history().catch(() => []);
+    const candidates = forkCandidates(history);
+    if (candidates.length === 0) {
+      console.log(WARN('  No user messages to walk back to.'));
+      return;
+    }
+    if (!ref) {
+      console.log(`\n${DIM('Walk back to (1 = most recent):')}`);
+      candidates.forEach((candidate, i) => {
+        console.log(`  ${ACCENT(String(i + 1))} ${candidate.text.replace(/\s+/g, ' ').slice(0, 100)}`);
+      });
+      console.log(DIM('Fork with /fork <number> — the conversation restarts just before that message.\n'));
+      return;
+    }
+    const index = Number.parseInt(ref, 10) - 1;
+    const picked = Number.isInteger(index) ? candidates[index] : undefined;
+    if (!picked) {
+      console.log(WARN(`  No walk-back candidate "${ref}". List them with /fork.`));
+      return;
+    }
+    const result = await client.fork(picked);
+    if (result.client !== client) {
+      unsubscribe();
+      const previous = client;
+      client = result.client;
+      unsubscribe = client.subscribe(onClientEvent);
+      typing = createTypingIndicator(client.agentName);
+      await previous.close().catch(() => {});
+      await client.connect();
+    }
+    console.log(`\n${DIM('Forked')} ${ACCENT(result.label)} ${DIM('— edit the message and press Enter to resend.')}\n`);
+    pendingPrefill = picked.text;
+  };
+
+  if (opts.initialPrompt?.trim()) {
+    await runTurn(opts.initialPrompt.trim());
+  }
+
+  while (!exiting) {
+    // Drain messages queued during the previous turn, in order.
+    while (!exiting && queuedInputs.length > 0) {
+      await runTurn(queuedInputs.shift()!);
+    }
+    const prefill = pendingPrefill;
+    pendingPrefill = null;
+    const line = await ask(rl, promptLabel(), undefined, prefill ?? undefined);
+    if (line === null) break; // EOF
+    const input = line.trim();
+    if (!input) continue;
 
     if (input.startsWith('/')) {
-      const result = await handleSlash(input, rt, info, dbSize, refreshInfo, tools);
-      if (result === 'exit') { await onExit(); return; }
-      if (result === 'refresh') info = refreshInfo();
-      rl.prompt();
+      try {
+        const outcome = await executeSlashCommand(client, input);
+        if (outcome.kind === 'queue') {
+          if (outcome.text) queuedInputs.push(outcome.text);
+          else console.log(DIM('  Usage: /queue <text> — it sends after the running turn (or immediately when idle).'));
+          continue;
+        }
+        if (outcome.kind === 'branch') {
+          // Idle — there is no live turn to branch from; run it normally.
+          if (outcome.text) await runTurn(outcome.text);
+          else console.log(DIM('  Usage: /branch <text> — runs a redirect as a parallel branch while a turn is running.'));
+          continue;
+        }
+        if (outcome.kind === 'fork') {
+          await handleFork(outcome.ref);
+          continue;
+        }
+        if (outcome.kind === 'undo') {
+          const undone = await performUndo(client, outcome.ref);
+          console.log(`\n${MUTED(undone.text)}\n`);
+          if (undone.restored) {
+            // opencode parity: files came back — offer the conversation
+            // walk-back through the existing fork mechanics.
+            console.log(DIM('Files restored. To also walk the conversation back:'));
+            await handleFork(undefined);
+          }
+          continue;
+        }
+        const done = await applySlashOutcome(client, rl, outcome);
+        if (done === 'exit') { await onExit(); return; }
+      } catch (err) {
+        console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
+      }
       continue;
     }
 
-    const turnStart = Date.now();
-    const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 2000) ?? '';
-    const executorNames = (rt.executionRouter?.listExecutors() ?? []).map(e => e.name);
-    const systemPrompt = buildSystemPromptSync(rt, {
-      extraKnowledge: knowledge || undefined,
-      registeredExecutors: executorNames,
-    });
+    await runTurn(input);
+  }
 
-    history.push({ role: 'user', content: input });
+  await onExit();
+}
 
-    const turnToolCalls: ToolCallRecord[] = [];
-    let hadError = false;
-    let fullText = '';
-    let stepCount = 0;
-
-    const typing = createTypingIndicator(info.name);
-    typing.start();
-    let headerPrinted = false;
-
+/** Read one line; resolves null on EOF/close (so piped input terminates
+ *  cleanly) and on abort (a consent question cancelled by turn end). Settling
+ *  always detaches the listeners, so abandoned questions never leak them.
+ *  `prefill` seeds the line buffer for editing (walk-back fork resend). */
+function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefill?: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (answer: string | null) => {
+      if (settled) return;
+      settled = true;
+      rl.off('close', onClose);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(answer);
+    };
+    const onClose = () => settle(null);
+    const onAbort = () => settle(null);
+    rl.once('close', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      for await (const event of runChat({
-        model,
-        system: systemPrompt,
-        history,
-        tools,
-        maxSteps: resolveMaxSteps(),
-      })) {
-        switch (event.type) {
-          case 'text-delta':
-            if (!headerPrinted) {
-              typing.stop();
-              process.stdout.write(`\n${ACCENT(info.name)} ${DIM('›')} `);
-              headerPrinted = true;
-            }
-            process.stdout.write(event.delta);
-            fullText += event.delta;
-            break;
-
-          case 'tool-call':
-            typing.stop();
-            printToolCall(event.toolName, event.args);
-            turnToolCalls.push({ name: event.toolName, args: event.args, result: null });
-            break;
-
-          case 'tool-result': {
-            printToolResult(event.result);
-            const lastCall = turnToolCalls.findLast(tc => tc.name === event.toolName && tc.result === null);
-            if (lastCall) lastCall.result = event.result;
-            break;
-          }
-
-          case 'step-finish':
-            stepCount++;
-            break;
-
-          case 'done':
-            // Append the SDK's response messages to history (includes tool_call/result)
-            for (const msg of event.responseMessages) {
-              history.push(msg);
-            }
-            if (!fullText.trim() && event.text.trim()) {
-              if (!headerPrinted) {
-                typing.stop();
-                process.stdout.write(`\n${ACCENT(info.name)} ${DIM('›')} `);
-              }
-              process.stdout.write(event.text.trim());
-              fullText = event.text;
-            }
-            break;
-        }
-      }
-
-      if (!headerPrinted) typing.stop();
-      console.log('\n');
-
-      // Store in DB
-      const msgId = crypto.randomUUID();
-      rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
-        VALUES (${msgId}, ${sessionId}, ${'user'}, ${input})`;
-      rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-        VALUES (${crypto.randomUUID()}, ${sessionId}, ${msgId}, ${'assistant'}, ${fullText})`;
-
-      const turn: CompletedTurn = {
-        userMessage: input,
-        assistantResponse: fullText,
-        toolCalls: turnToolCalls,
-        steps: stepCount,
-        durationMs: Date.now() - turnStart,
-        feedback: null,
-        hadError,
-      };
-      sessionTurns.push(turn);
-      await engine.onTurnComplete(turn);
-
-    } catch (err) {
-      typing.stop();
-      hadError = true;
-      console.log(`\n${ERR('error')} ${(err as Error).message}\n`);
+      rl.question(prompt, settle);
+      if (prefill) rl.write(prefill);
+    } catch {
+      settle(null); // readline already closed (stdin hit EOF) — treat as EOF
     }
+  });
+}
 
-    rl.prompt();
+/**
+ * The natural device-access flow: when a cloud chat opens with no PC
+ * connected, offer to connect this one — once per CLI invocation, with a
+ * persisted "don't ask again". Reuses the consent-watch ask pattern; a
+ * non-interactive stdin gets the `proteus connect` instruction instead.
+ */
+async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Promise<void> {
+  if (!(await shouldOfferDeviceConnect())) return;
+  if (!tty) {
+    console.log(MUTED('No PC is connected for device access. Connect one with: proteus connect'));
+    return;
+  }
+  console.log(`${WARN('Let this agent use this PC?')}`);
+  console.log(MUTED('  No PC is connected to your account yet. Cloud agents run local commands'));
+  console.log(MUTED('  through the Proteus daemon, asking consent per command.'));
+  await promptDeviceConnect(rl, { allowDismiss: true });
+  console.log('');
+}
+
+async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss: boolean }): Promise<void> {
+  const choices = opts.allowDismiss
+    ? `[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again ›`
+    : `[c] connect & keep connected · [s] this session only · [n] not now ›`;
+  for (;;) {
+    const answer = (await ask(rl, `${DIM(choices)} `))?.trim().toLowerCase();
+    if (answer === undefined || answer === 'n' || answer === 'no') return; // EOF or not now
+    if (answer === 'c' || answer === 's') {
+      await runDeviceConnect(answer === 's');
+      return;
+    }
+    if (opts.allowDismiss && answer === 'd') {
+      dismissDeviceConnectPrompt();
+      console.log(DIM(`  Won't ask again. Connect anytime with /connect or: proteus connect`));
+      return;
+    }
+    console.log(DIM(opts.allowDismiss ? '  Please answer c, s, n, or d.' : '  Please answer c, s, or n.'));
   }
 }
 
-// ── Slash commands ────────────────────────────────────────────────
+async function runDeviceConnect(session: boolean): Promise<void> {
+  try {
+    const auth = requireAuthConfig();
+    let waiting = false;
+    const result = await connectDevice(auth, {
+      session,
+      onPoll: () => {
+        if (!waiting) {
+          process.stdout.write(DIM('  Waiting for the daemon to connect'));
+          waiting = true;
+        }
+        process.stdout.write(DIM('.'));
+      },
+    });
+    if (waiting) process.stdout.write('\n');
+    const outcome = describeConnectOutcome(result, session);
+    console.log(`  ${outcome.ok ? OK('✓') : ERR('✗')} ${outcome.message}`);
+  } catch (err) {
+    console.log(`  ${ERR('✗')} ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
-async function handleSlash(
-  input: string, rt: AgentRuntime, info: AgentInfo, dbSize: number,
-  refreshInfo: () => AgentInfo, tools: ToolSet,
-): Promise<'exit' | 'refresh' | 'ok'> {
-  const cmd = input.split(/\s+/)[0]!.toLowerCase();
-  switch (cmd) {
-    case '/exit': case '/quit': return 'exit';
-    case '/status': printAgentStatus(refreshInfo(), dbSize); return 'refresh';
-    case '/help': printSlashHelp(); return 'ok';
-    case '/tools': {
-      console.log(`\n${DIM('Built-in tools:')}`);
-      for (const [name, t] of Object.entries(tools)) {
-        console.log(`  ${ACCENT(name)} ${DIM('—')} ${(t as { description?: string }).description ?? ''}`);
+async function applySlashOutcome(client: AgentClient, rl: readline.Interface, outcome: SlashOutcome): Promise<'ok' | 'exit'> {
+  switch (outcome.kind) {
+    case 'exit':
+      return 'exit';
+    case 'text':
+      console.log(`\n${MUTED(outcome.text)}\n`);
+      return 'ok';
+    case 'model-set':
+      console.log(`\n${DIM('Model:')} ${ACCENT(outcome.spec)}\n`);
+      return 'ok';
+    case 'status':
+      console.log('');
+      for (const line of renderStatusLines(outcome.status)) console.log(`  ${DIM(line)}`);
+      console.log('');
+      return 'ok';
+    case 'changelog':
+      console.log(`\n${MUTED(renderChangelogText(outcome.view.entries, { unseenCount: outcome.view.unseenCount }))}`);
+      if (outcome.view.entries.some((entry) => entry.revert)) {
+        console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default — no action needed.'));
       }
-      const crafted = rt.craftStore.list();
-      if (crafted.length > 0) {
-        console.log(`\n${DIM('Crafted tools:')}`);
-        for (const t of crafted) console.log(`  ${ACCENT(t.name)} ${DIM('—')} ${t.description.slice(0, 60)}`);
+      console.log('');
+      return 'ok';
+    case 'takes':
+      console.log(`\n${MUTED(renderTakesText(outcome.set))}\n`);
+      return 'ok';
+    case 'model-picker': {
+      const current = await client.getModelSpec();
+      console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);
+      const models = await client.listModels().catch(() => []);
+      if (models.length > 0) {
+        console.log(DIM('Available (set with /model <spec>):'));
+        for (const model of models.slice(0, 40)) console.log(`  ${ACCENT(model.spec)} ${DIM('—')} ${model.label}`);
+        if (models.length > 40) console.log(DIM(`  … ${models.length - 40} more`));
       }
       console.log('');
       return 'ok';
     }
-    case '/memory': {
-      const content = await rt.memory.read('memory/MEMORY.md');
-      if (content) console.log(`\n${DIM('memory/MEMORY.md:')}\n${MUTED(content.slice(0, 1500))}\n`);
-      else console.log(DIM('  Memory is empty.'));
+    case 'sessions': {
+      const sessions = client.listSessions();
+      if (outcome.mode === 'resume' && outcome.resumeRef) {
+        const selected = selectSession(sessions, outcome.resumeRef);
+        if (!selected) {
+          console.log(WARN(`  No matching session for "${outcome.resumeRef}".`));
+          return 'ok';
+        }
+        await client.resumeConversation(selected.info.id);
+        console.log(`\n${DIM('Resumed')} ${ACCENT(selected.label)}\n`);
+        return 'ok';
+      }
+      console.log(`\n${MUTED(renderSessionBrowser(outcome.mode, sessions))}`);
+      if (outcome.mode === 'resume') console.log(MUTED('Resume with /resume <number|id>.'));
+      console.log('');
       return 'ok';
     }
-    case '/tree': {
-      const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
-      printSearchTree(nodes);
+    case 'device-connect': {
+      console.log(`\n${DIM('Devices:')} ${await deviceStatusLine()}`);
+      if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+        await promptDeviceConnect(rl, { allowDismiss: false });
+      } else {
+        console.log(MUTED('Connect this PC with: proteus connect'));
+      }
+      console.log('');
       return 'ok';
     }
-    default:
-      console.log(WARN(`  Unknown command: ${cmd}. Type /help`));
+    case 'cancel':
+      console.log(DIM('  Nothing to cancel.'));
+      return 'ok';
+    case 'queue':
+    case 'branch':
+    case 'fork':
+    case 'undo':
+      // Surface-owned outcomes — runChatLoop intercepts them before this.
+      return 'ok';
+    case 'unknown':
+      console.log(WARN(`  Unknown command: ${outcome.command}. Type /help`));
       return 'ok';
   }
 }
+
+/** Render one AgentClientEvent to the terminal. */
+function renderClientEvent(
+  event: AgentClientEvent, agentName: string, typing: { stop: () => void },
+  getHeader: () => boolean, setHeader: (v: boolean) => void,
+): void {
+  const header = () => {
+    if (getHeader()) return;
+    typing.stop();
+    process.stdout.write(`\n${ACCENT(agentName)} ${DIM('›')} `);
+    setHeader(true);
+  };
+  switch (event.type) {
+    case 'turn-start':
+      if (event.kind === 'programmatic') {
+        typing.stop();
+        setHeader(false);
+        console.log(`\n${DIM(`⚡ ${event.event ?? 'event'}`)} ${MUTED(event.text.slice(0, 80))}`);
+      } else {
+        // A cascaded user turn (steer follow-up / queued leftover) gets its
+        // own agent-name header when its response starts.
+        setHeader(false);
+      }
+      break;
+    case 'text-delta':
+      header();
+      process.stdout.write(event.delta);
+      break;
+    case 'tool-call':
+      typing.stop();
+      printToolCall(event.toolName, event.args);
+      break;
+    case 'tool-result':
+      printToolResult(event.result);
+      break;
+    case 'evolution':
+      printEvolutionEvent(event.event, event.message);
+      break;
+    case 'error':
+      typing.stop();
+      console.log(`\n${ERR('error')} ${event.message}\n`);
+      break;
+    case 'broadcast':
+      if (isBranchStatusEvent(event.event)) {
+        typing.stop();
+        console.log(`\n${DIM(describeBranchStatus(event.event))}`);
+      }
+      break;
+    case 'turn-end':
+    case 'step-finish':
+      break;
+  }
+}
+
