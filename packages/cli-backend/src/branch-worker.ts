@@ -16,7 +16,7 @@
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, diversityDirective, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, diversityDirective, formatInheritedContext, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -79,10 +79,7 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
           tools: unknown[];
           siblings?: readonly string[];
         };
-        const context = history
-          .map(m => `${m.role}: ${m.content}`)
-          .join('\n')
-          .slice(-800);
+        const context = formatInheritedContext(history);
         const response = await complete(
           `You are an expert exploring one approach to solve a task.${craftedToolHints}\n\n` +
           `Context:\n${context}\n\n` +

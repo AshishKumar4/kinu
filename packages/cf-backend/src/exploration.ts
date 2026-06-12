@@ -33,7 +33,7 @@ import { Agent, callable } from "agents";
 import { generateText, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey, diversityDirective } from "@proteus/core";
+import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
 import type { UserDO } from "./user/user-do.js";
 import type { OrchestratorAgent } from "./orchestrator.js";
@@ -222,7 +222,7 @@ export class ExplorationAgent extends Agent<Env> {
     siblings: readonly string[] = [],
   ): Promise<{ text: string; codeUsed: string | null }> {
     const model = this.getModel();
-    const context = priorHistory.map(m => `${m.role}: ${m.content}`).join("\n").slice(-2000);
+    const context = formatInheritedContext(priorHistory);
     const toolHints = craftedTools.length > 0
       ? `\nKnown patterns:\n${craftedTools.map(t => `- ${t.name}: ${t.description}`).join("\n")}`
       : "";
