@@ -100,30 +100,26 @@ function ancestorPath(byId: ReadonlyMap<string, SearchNode>, nodeId: string): Se
 }
 
 /**
- * Capture the winner's near-tied rivals as an alternate-takes set. Reads the
- * same population converge() decided over (status terminal/open — call BEFORE
- * the tree close prunes the siblings). A rival qualifies when its value is
- * within `epsilon` of the winner's AND it is a genuinely different approach:
- * not the root, not on the winner's own ancestor/descendant path, and not a
- * texual duplicate. Returns the new set id, or null when no real choice
- * exists (fewer than 2 candidates).
+ * The winner's near-tied rivals among `nodes`, highest value first. A rival
+ * qualifies when its value is within `epsilon` of the winner's AND it is a
+ * genuinely different approach: not the root, not on the winner's own
+ * ancestor/descendant path, and not a textual duplicate. Caps at
+ * MAX_TAKE_CANDIDATES-1. Pure — shared by Alternate-Takes capture and the
+ * test-based convergence tie-break (DO-NOW #3), so both reason over the SAME
+ * near-tie population.
  */
-export function captureAlternateTakes(
-  sql: SqlExecutor,
-  input: { task: string; winnerId: string; epsilon: number; now?: number },
-): string | null {
-  const nodes = sql<SearchNode>`
-    SELECT * FROM search_nodes WHERE status IN ('terminal', 'open')`;
+export function findNearTiedRivals(
+  nodes: readonly SearchNode[],
+  winner: SearchNode,
+  epsilon: number,
+): SearchNode[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const winner = byId.get(input.winnerId);
-  if (!winner) return null;
-
   const winnerPath = ancestorPath(byId, winner.id);
   const seenTexts = new Set([winner.observation.trim()]);
-  const rivals = nodes
+  return nodes
     .filter((n) => {
       if (n.id === winner.id || n.depth === 0) return false;
-      if (n.value < winner.value - input.epsilon) return false;
+      if (n.value < winner.value - epsilon) return false;
       // Same-path nodes are refinements of the winner's approach, not rivals.
       if (winnerPath.has(n.id) || ancestorPath(byId, n.id).has(winner.id)) return false;
       const text = n.observation.trim();
@@ -133,6 +129,24 @@ export function captureAlternateTakes(
     })
     .sort((a, b) => b.value - a.value || b.depth - a.depth)
     .slice(0, MAX_TAKE_CANDIDATES - 1);
+}
+
+/**
+ * Capture the winner's near-tied rivals as an alternate-takes set. Reads the
+ * same population converge() decided over (status terminal/open — call BEFORE
+ * the tree close prunes the siblings). Returns the new set id, or null when no
+ * real choice exists (fewer than 2 candidates).
+ */
+export function captureAlternateTakes(
+  sql: SqlExecutor,
+  input: { task: string; winnerId: string; epsilon: number; now?: number },
+): string | null {
+  const nodes = sql<SearchNode>`
+    SELECT * FROM search_nodes WHERE status IN ('terminal', 'open')`;
+  const winner = nodes.find((n) => n.id === input.winnerId);
+  if (!winner) return null;
+
+  const rivals = findNearTiedRivals(nodes, winner, input.epsilon);
   if (rivals.length === 0) return null;
 
   const toCandidate = (n: SearchNode): AlternateTakeCandidate => ({

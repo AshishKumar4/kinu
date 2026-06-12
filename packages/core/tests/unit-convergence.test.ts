@@ -97,6 +97,67 @@ describe('Convergence', () => {
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['best', 'rival']);
   });
 
+  test('DO-NOW #3: a near-tied candidate that PASSES the discriminating test wins over the marginally-higher-value argmax that FAILS it', async () => {
+    const { rt } = createTestRuntime({
+      // generateAssertions asks for a verification harness — return a js block
+      // so the discriminating test actually runs.
+      llmResponses: { 'verification harness': '```js\ncheck();\n```' },
+    });
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
+    const session = createMockSession();
+
+    // Marker executor: code containing FAIL_MARKER fails, everything else passes.
+    rt.executor = {
+      async execute(code: string) {
+        return String(code).includes('FAIL_MARKER')
+          ? { result: undefined, error: 'discriminating test failed' }
+          : { result: true };
+      },
+    } as typeof rt.executor;
+
+    // argmax winner: marginally higher value but its code FAILS the test.
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation, code_used)
+        VALUES ('argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const x = FAIL_MARKER;')`;
+    // near-tied rival (within takesEpsilon=0.1): lower value but its code PASSES.
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation, code_used)
+        VALUES ('passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const ok = 1;')`;
+
+    const result = await converge(rt, session);
+
+    // The test-passer wins regardless of the marginal value gap.
+    expect(result.winnerId).toBe('passer');
+    const passer = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'passer'`[0]!;
+    const argmax = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'argmax'`[0]!;
+    expect(passer.status).toBe('terminal');
+    expect(argmax.status).toBe('pruned');
+  });
+
+  test('DO-NOW #3: argmax winner is kept when it ALSO passes the discriminating test (no needless churn)', async () => {
+    const { rt } = createTestRuntime({
+      llmResponses: { 'verification harness': '```js\ncheck();\n```' },
+    });
+    initSearchTables(rt.storage.execRaw);
+    initAlternateTakesTable(rt.storage.execRaw);
+    const session = createMockSession();
+    rt.executor = {
+      async execute(code: string) {
+        return String(code).includes('FAIL_MARKER')
+          ? { result: undefined, error: 'failed' }
+          : { result: true };
+      },
+    } as typeof rt.executor;
+
+    // Both pass; argmax has higher value → it stays the winner.
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation, code_used)
+        VALUES ('argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;')`;
+    rt.storage.sql`INSERT INTO search_nodes (id, task, value, visits, depth, status, observation, code_used)
+        VALUES ('passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;')`;
+
+    const result = await converge(rt, session);
+    expect(result.winnerId).toBe('argmax');
+  });
+
   test('a clear winner converges without leaving a take set', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);

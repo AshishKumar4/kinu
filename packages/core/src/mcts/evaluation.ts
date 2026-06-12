@@ -139,8 +139,11 @@ function extractCode(trajectory: string): string | null {
  * Ask the judge model to write assertions that exercise the code against the
  * task. Returns null (bare run) when the judge declines or produces no code
  * block — assertion generation is best-effort, never a hard dependency.
+ *
+ * Exported so the convergence tie-break (mcts/test-selection.ts, DO-NOW #3)
+ * generates ONE discriminating harness reused across the near-tied candidates.
  */
-async function generateAssertions(judge: LLM, task: string, code: string): Promise<string | null> {
+export async function generateAssertions(judge: LLM, task: string, code: string): Promise<string | null> {
   const prompt = `You are writing a verification harness for code proposed by another agent.
 
 Task the code is meant to solve:
@@ -179,7 +182,7 @@ verified by assertions, reply with exactly: UNVERIFIABLE`;
  * Known limit: a top-level `return` inside the proposed code skips appended
  * assertions (the bare run still grounds syntax/runtime errors).
  */
-async function runForVerdict(
+export async function runForVerdict(
   executor: Executor,
   code: string,
   assertions: string | null,

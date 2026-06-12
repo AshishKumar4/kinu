@@ -38,6 +38,11 @@ export interface BranchHandle {
   explore(
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
+    /** Distinct solution angles assigned to this branch's siblings in the same
+     *  expansion. Threaded so each branch proposes something DISTINCT (MCTS
+     *  branches explore in parallel and never see a sibling's output). Optional
+     *  so backends/tests that don't enforce diversity still satisfy the type. */
+    siblings?: readonly string[],
   ): Promise<{ text: string; codeUsed: string | null }>;
   generateReflection(task: string): Promise<string>;
 }

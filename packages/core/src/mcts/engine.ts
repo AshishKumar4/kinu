@@ -15,6 +15,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { initSearchTables } from './schemas.js';
 import { initAlternateTakesTable } from './takes.js';
 import { selectNode } from './uct.js';
+import { siblingAngles } from './diversity.js';
 import { backpropagate } from './backpropagation.js';
 import { recordNode } from './record-node.js';
 import { converge } from './convergence.js';
@@ -100,9 +101,13 @@ export async function runMCTS(
         : [{ role: 'user', content: task }];
       const craftedTools = rt.craftStore.getAll();
 
-      // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest)
+      // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest).
+      // Each branch is handed its siblings' distinct angles so the N proposals
+      // diverge by construction, not just by sampling temperature (DO-NOW #1).
       const explorationResults = await abortable(
-        Promise.allSettled(branchHandles.map(handle => handle.explore(priorHistory, craftedTools))),
+        Promise.allSettled(branchHandles.map((handle, i) =>
+          handle.explore(priorHistory, craftedTools, siblingAngles(i, N_BRANCHES)),
+        )),
         config.signal,
         abortBranches,
       );

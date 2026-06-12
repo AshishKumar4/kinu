@@ -90,8 +90,8 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
     });
 
     return {
-      explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[]) =>
-        rpc('explore', { history, tools }),
+      explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], siblings: readonly string[] = []) =>
+        rpc('explore', { history, tools, siblings }),
       generateReflection: (task: string) => rpc('reflect', { task }),
     };
   };

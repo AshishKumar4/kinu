@@ -223,6 +223,10 @@ export { recordNode } from './mcts/record-node.js';
 export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/record-node.js';
 export { converge } from './mcts/convergence.js';
 export { pruneAndReflect } from './mcts/pruning.js';
+// Sibling diversity at expansion — backends render this into the explore prompt.
+export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity.js';
+// Test-based convergence tie-break over near-tied candidates.
+export { selectWinnerByTest, type TestSelectionDeps } from './mcts/test-selection.js';
 export {
   evaluateWithMultiModelJudging,
   type EvaluateBranchOptions, type BranchEvaluation,

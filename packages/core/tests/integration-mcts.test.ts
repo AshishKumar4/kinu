@@ -47,6 +47,44 @@ function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
 }
 
 describe('MCTS integration', () => {
+  test('DO-NOW #1: sibling diversity — each branch in an expansion gets a DISTINCT prompt naming the other branch angles', async () => {
+    const { rt } = createTestRuntime();
+    // Capture the siblings arg each branch received in its expansion.
+    const seenSiblings: Array<readonly string[]> = [];
+    let i = 0;
+    rt.spawnBranch = async () => {
+      const idx = i++;
+      return {
+        explore: async (_history, _tools, siblings = []) => {
+          seenSiblings.push(siblings);
+          // Echo the received sibling angles into the proposal text so we can
+          // assert downstream that explore actually consumed them.
+          return { text: `branch ${idx} differs from: ${siblings.join(' | ')}`, codeUsed: null };
+        },
+        generateReflection: async () => 'n/a',
+      };
+    };
+
+    initTables(rt);
+    await runMCTS(rt, createMockSession(), 'pick a strategy', { budget: 1, branches: 2 });
+
+    // Two branches in one expansion.
+    expect(seenSiblings.length).toBe(2);
+    // Each branch received exactly one sibling angle (the other branch's).
+    expect(seenSiblings[0]!.length).toBe(1);
+    expect(seenSiblings[1]!.length).toBe(1);
+    // The two prompts are DISTINCT — branch 0 differs from branch 1's angle and
+    // vice-versa, so they are not identical near-duplicates.
+    expect(seenSiblings[0]![0]).not.toBe(seenSiblings[1]![0]);
+
+    // And the distinct angles landed in the recorded node observations.
+    const observations = rt.storage.sql<SearchNode>`
+      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`.map((n) => n.observation);
+    expect(observations.length).toBe(2);
+    expect(observations[0]).not.toBe(observations[1]);
+    expect(observations.every((o) => o.includes('differs from:'))).toBe(true);
+  });
+
   test('full cycle: budget=3, branches=2', async () => {
     let branchCounter = 0;
     const { rt } = createTestRuntime({

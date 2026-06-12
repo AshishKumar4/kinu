@@ -33,7 +33,7 @@ import { Agent, callable } from "agents";
 import { generateText, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "@proteus/core";
+import { agentAffinityKey, diversityDirective } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
 import type { UserDO } from "./user/user-do.js";
 import type { OrchestratorAgent } from "./orchestrator.js";
@@ -190,6 +190,7 @@ export class ExplorationAgent extends Agent<Env> {
   async explore(
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
+    siblings: readonly string[] = [],
   ): Promise<{ text: string; codeUsed: string | null }> {
     const model = this.getModel();
     const context = priorHistory.map(m => `${m.role}: ${m.content}`).join("\n").slice(-2000);
@@ -201,7 +202,7 @@ export class ExplorationAgent extends Agent<Env> {
       model,
       system: "You are an expert agent exploring one approach to solve a task." + toolHints +
         "\n\nIf your approach involves code, include it in a ```js code block.",
-      messages: [{ role: "user" as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.` }],
+      messages: [{ role: "user" as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
       maxOutputTokens: 4096,
     });
 

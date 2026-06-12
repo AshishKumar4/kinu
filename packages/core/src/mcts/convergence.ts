@@ -15,6 +15,7 @@ import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
 import { captureAlternateTakes } from './takes.js';
+import { selectWinnerByTest } from './test-selection.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { isoDate } from '../utils/date.js';
 
@@ -24,16 +25,27 @@ export async function converge(
   minAcceptable: number = DEFAULT_CONFIG.mcts.minAcceptableScore,
   takesEpsilon: number = DEFAULT_CONFIG.mcts.takesEpsilon,
 ): Promise<ConvergenceResult> {
-  const winner = rt.storage.sql<SearchNode>`
+  const population = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
     WHERE status IN ('terminal', 'open')
-    ORDER BY value DESC, depth DESC
-    LIMIT 1
-  `[0];
+    ORDER BY value DESC, depth DESC`;
+  const argmaxWinner = population[0];
 
-  if (!winner) {
+  if (!argmaxWinner) {
     throw new Error('No viable nodes — all branches failed or were pruned');
   }
+
+  // DO-NOW #3: when the top candidates are within takesEpsilon the judge could
+  // not separate them, so argmax(value) is noise. Break the near-tie with a
+  // discriminating execution test over the candidates' code (same executor the
+  // EVALUATE phase used); the test-passer becomes the winner, else value order.
+  const selectedId = await selectWinnerByTest(population, argmaxWinner, takesEpsilon, {
+    executor: rt.executor,
+    judge: rt.judgeModel ?? rt.llm,
+  });
+  const winner = selectedId === argmaxWinner.id
+    ? argmaxWinner
+    : population.find((n) => n.id === selectedId) ?? argmaxWinner;
 
   // BUG-4: Below-threshold → converge reports failure, not hallucinated success
   if (winner.value < minAcceptable) {

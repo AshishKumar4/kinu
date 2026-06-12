@@ -16,7 +16,7 @@
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID, diversityDirective, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -74,9 +74,10 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
     let result: unknown;
     switch (msg.method) {
       case 'explore': {
-        const { history } = msg.args as {
+        const { history, siblings = [] } = msg.args as {
           history: Array<{ role: string; content: string }>;
           tools: unknown[];
+          siblings?: readonly string[];
         };
         const context = history
           .map(m => `${m.role}: ${m.content}`)
@@ -85,7 +86,7 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         const response = await complete(
           `You are an expert exploring one approach to solve a task.${craftedToolHints}\n\n` +
           `Context:\n${context}\n\n` +
-          `Propose ONE specific concrete approach in 2-3 sentences.`
+          `Propose ONE specific concrete approach in 2-3 sentences.${diversityDirective(siblings)}`
         );
         const text = response.trim();
         // Store trace in the branch's own DB

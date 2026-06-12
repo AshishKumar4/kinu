@@ -43,7 +43,7 @@ import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "@proteus/core";
+import { agentAffinityKey, diversityDirective } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,
@@ -557,7 +557,7 @@ function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<Bra
       const owner = readOwnerUserId(agent);
       if (owner) await stub.setOwner(owner);
       return {
-        explore: async (history, tools) => stub.explore(history, tools),
+        explore: async (history, tools, siblings) => stub.explore(history, tools, siblings ?? []),
         generateReflection: async (task) => stub.generateReflection(task),
       };
     } catch (err) {
@@ -597,13 +597,13 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
   const getModel = () => reg.resolveModel(spec);
 
   return {
-    explore: async (history, _tools) => {
+    explore: async (history, _tools, siblings = []) => {
       const context = history.map((m: { role: string; content: string }) =>
         `${m.role}: ${m.content}`).join("\n").slice(-800);
       const result = await generateText({
         model: getModel(),
         system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
-        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.` }],
+        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
         maxOutputTokens: 512,
       });
       const text = result.text.trim();
