@@ -8,10 +8,10 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
-import { initSearchTables, initAlternateTakesTable, captureAlternateTakes } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, initSearchTables, initAlternateTakesTable, captureAlternateTakes } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
-import type { LocalModelResolver } from '../src/model-resolver.js';
+import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
 import { createLocalAgentSelfProvider } from '../src/agent-self.js';
 
@@ -1236,5 +1236,93 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const { session } = setup('idle');
     expect(session.branch('nothing running')).toBe(false);
     expect(session.branch('   ')).toBe(false);
+  });
+});
+
+describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () => {
+  const TOKEN = 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz';
+
+  /** OpenAI-compatible SSE stream the worker proxy passes through untouched. */
+  function sseCompletion(model: string, deltas: string[]): Response {
+    const chunk = (choice: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+      `data: ${JSON.stringify({
+        id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model,
+        choices: [{ index: 0, ...choice }], ...extra,
+      })}\n\n`;
+    const body = [
+      chunk({ delta: { role: 'assistant', content: deltas[0] }, finish_reason: null }),
+      ...deltas.slice(1).map((delta) => chunk({ delta: { content: delta }, finish_reason: null })),
+      chunk({ delta: {}, finish_reason: 'stop' }, { usage: { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 } }),
+      'data: [DONE]\n\n',
+    ].join('');
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+  }
+
+  test('a user turn streams through /api/user/ai/v1 with the CLI bearer + affinity pin', async () => {
+    const completions: Array<{ auth: string | null; affinity: string | null; model: unknown; stream: unknown }> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === '/api/cli/models') {
+          return Response.json([{
+            spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
+            capabilities: ['tools', 'streaming'], contextWindow: 262144,
+          }]);
+        }
+        if (path === '/api/user/ai/v1/chat/completions') {
+          const body = await request.json() as { model?: unknown; stream?: unknown };
+          completions.push({
+            auth: request.headers.get('authorization'),
+            affinity: request.headers.get('x-session-affinity'),
+            model: body.model,
+            stream: body.stream,
+          });
+          return sseCompletion(String(body.model), ['local ', 'cloud turn']);
+        }
+        return new Response(`unexpected: ${path}`, { status: 500 });
+      },
+    });
+    try {
+      const origin = `http://127.0.0.1:${server.port}`;
+      const resolver = createLocalModelResolver({
+        // The llm config cli/config.ts derives for a signed-in user with no BYO keys.
+        llm: {
+          name: 'workers-ai',
+          baseURL: cloudProxyBaseURL(origin),
+          headers: { Authorization: `Bearer ${TOKEN}` },
+          model: '@cf/moonshotai/kimi-k2.6',
+        },
+        credentials: {},
+        cloud: { origin, token: TOKEN, sessionAffinity: 'proteus-jarvis' },
+      });
+      const { db, session, events } = setupWithResolver(resolver);
+      expect(session.getEffectiveModelSpec()).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+
+      await session.send('hi from the laptop');
+
+      const streamed = events.filter((e) => e.type === 'text-delta').map((e) => (e as { delta: string }).delta).join('');
+      expect(streamed).toBe('local cloud turn');
+      const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+      expect(turnEnd.turn.assistantResponse).toBe('local cloud turn');
+      expect(turnEnd.turn.hadError).toBe(false);
+      const rows = db.query(`SELECT role FROM messages ORDER BY created_at`).all() as Array<{ role: string }>;
+      expect(rows.map((r) => r.role)).toEqual(['user', 'assistant']);
+
+      expect(completions).toEqual([{
+        auth: `Bearer ${TOKEN}`,
+        affinity: 'proteus-jarvis',
+        model: '@cf/moonshotai/kimi-k2.6',
+        stream: true,
+      }]);
+
+      // /model parity at the session surface: the worker menu's metadata flows.
+      const models = await session.listAvailableModels();
+      const kimi = models.find((m) => m.provider === 'workers-ai' && m.id === '@cf/moonshotai/kimi-k2.6');
+      expect(kimi?.contextWindow).toBe(262144);
+    } finally {
+      server.stop(true);
+    }
   });
 });
