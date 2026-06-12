@@ -13,6 +13,7 @@ import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedAgent, handleCreateAgentRequest } from '../user/agent-access.js';
+import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
@@ -42,6 +43,18 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
   if (url.pathname === '/cli/auth' && method === 'POST') {
     return approveFromBrowser(request, env);
+  }
+
+  // The signed-in AI proxy is CLI-bearer-authenticated (never browser
+  // cookies), so its gate lives here even though the path is /api/user/…:
+  // session tokens pass, scoped access tokens need ai.proxy.
+  if (url.pathname.startsWith(`${USER_AI_PROXY_PREFIX}/`)) {
+    const cli = await authenticateCli(request, env);
+    if (cli instanceof Response) return cli;
+    if (cli.kind === 'access' && !tokenAllows(cli, 'ai.proxy')) {
+      return err(403, 'This access token does not have the ai.proxy scope.');
+    }
+    return handleUserAIProxyRequest(request, env, cli);
   }
 
   if (!url.pathname.startsWith('/api/cli')) return null;

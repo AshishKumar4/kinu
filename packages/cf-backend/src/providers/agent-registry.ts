@@ -54,6 +54,22 @@ export interface AgentProviderRegistry {
   resolveSpec(specOrNull?: string | null): Promise<string>;
 }
 
+/** Auth resolver proxying to UserDO — getAuth is a thin wrapper over its
+ *  RPCs, so no credential material ever touches the caller's layer. The DO
+ *  event loop serializes concurrent refreshes for the same credential. With a
+ *  null stub (inline-branch context) every lookup returns null, leaving only
+ *  env-bound providers usable. Shared by the registry below and the
+ *  /api/user/ai/v1 proxy. */
+export function createUserDOAuthResolver(stub: DurableObjectStub<UserDO> | null): AuthResolver {
+  return async (key, opts) => {
+    if (!stub) return null;
+    const headers = await stub.getAuthHeaders(key, opts);
+    if (!headers) return null;
+    const baseURL = await stub.getCredentialBaseURL(key);
+    return baseURL ? { headers, baseURL } : { headers };
+  };
+}
+
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
@@ -73,18 +89,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // it so workers-ai never grows a second resolution path.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
-  // Auth resolver — proxies to UserDO. The DO event loop serializes
-  // concurrent refreshes for the same credential, so we don't need to
-  // dedupe at this layer. When userDOStub is null (inline-branch context),
-  // every lookup returns null so only env-bound providers remain usable.
   const stub = opts.userDOStub ?? null;
-  const getAuth: AuthResolver = async (key, opts2) => {
-    if (!stub) return null;
-    const headers = await stub.getAuthHeaders(key, opts2);
-    if (!headers) return null;
-    const baseURL = await stub.getCredentialBaseURL(key);
-    return baseURL ? { headers, baseURL } : { headers };
-  };
+  const getAuth = createUserDOAuthResolver(stub);
 
   const hasCredential = async (key: string) => {
     if (!stub) return false;

@@ -13,7 +13,7 @@
 import { nanoid } from '@proteus/core';
 import { sha256Hex } from '../lib/crypto.js';
 
-export const ACCESS_TOKEN_SCOPES = ['agent.read', 'agent.exec'] as const;
+export const ACCESS_TOKEN_SCOPES = ['agent.read', 'agent.exec', 'ai.proxy'] as const;
 export type AccessTokenScope = (typeof ACCESS_TOKEN_SCOPES)[number];
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;

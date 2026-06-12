@@ -100,7 +100,7 @@ describe('verify', () => {
       ok: true,
       userId: USER_ID,
       tokenHash: minted.record.tokenHash,
-      scopes: [...ACCESS_TOKEN_SCOPES],
+      scopes: ['agent.read', 'agent.exec'],
     });
     const row = db.prepare('SELECT last_used_at FROM user_access_tokens').get() as { last_used_at: number | null };
     expect(row.last_used_at).toBeNumber();
@@ -157,5 +157,10 @@ describe('scope normalization', () => {
   test('dedupes, trims, and keeps a stable vocabulary order', () => {
     const result = normalizeAccessTokenScopes([' agent.exec ', 'agent.read', 'agent.exec']);
     expect(result).toEqual({ ok: true, scopes: ['agent.read', 'agent.exec'] });
+  });
+
+  test('the vocabulary carries ai.proxy for the signed-in AI proxy', () => {
+    expect(ACCESS_TOKEN_SCOPES).toEqual(['agent.read', 'agent.exec', 'ai.proxy']);
+    expect(normalizeAccessTokenScopes(['ai.proxy'])).toEqual({ ok: true, scopes: ['ai.proxy'] });
   });
 });
