@@ -538,12 +538,12 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
   <style>
     :root {
       color-scheme: dark;
-      --bg: #09090b;
-      --ink: #fafafa;
-      --muted: #a1a1aa;
-      --line: rgba(255, 255, 255, 0.08);
-      --accent: #a78bfa;
-      --accent-soft: rgba(139, 92, 246, 0.12);
+      --bg: #1A1613;
+      --ink: #F5EFE6;
+      --muted: #B6A893;
+      --line: rgba(224, 164, 88, 0.14);
+      --accent: #E0A458;
+      --accent-soft: rgba(224, 164, 88, 0.12);
     }
     * { box-sizing: border-box; }
     body {
@@ -562,7 +562,7 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
       border-inline: 1px solid var(--line);
       display: grid;
       grid-template-rows: auto 1fr;
-      background: rgba(9, 9, 11, 0.84);
+      background: rgba(26, 22, 19, 0.84);
     }
     header {
       min-height: 64px;
@@ -583,7 +583,7 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
       height: 24px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(167, 139, 250, 0.55);
+      border: 1px solid rgba(224, 164, 88, 0.55);
       color: var(--accent);
       font-weight: 780;
     }
@@ -616,13 +616,13 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
       display: flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid rgba(167, 139, 250, 0.62);
+      border: 1px solid rgba(224, 164, 88, 0.62);
       padding: 0 14px;
       color: var(--ink);
       background: var(--accent-soft);
       font-weight: 660;
     }
-    .provider:hover { background: rgba(139, 92, 246, 0.18); }
+    .provider:hover { background: rgba(224, 164, 88, 0.18); }
     @media (max-width: 720px) {
       .shell { width: 100%; border-inline: 0; }
       header { padding: 0 16px; }

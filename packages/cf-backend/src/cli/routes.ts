@@ -564,23 +564,25 @@ function installPageResponse(origin: string): Response {
   <style>
     :root {
       color-scheme: dark;
-      --bg: #09090b;
-      --panel: rgba(255, 255, 255, 0.04);
-      --panel-strong: rgba(139, 92, 246, 0.12);
-      --ink: #fafafa;
-      --muted: #a1a1aa;
-      --line: rgba(255, 255, 255, 0.08);
-      --accent: #a78bfa;
-      --accent-strong: #8b5cf6;
-      --warning: #d29922;
+      --bg: #1A1613;
+      --panel: rgba(224, 164, 88, 0.05);
+      --panel-strong: rgba(224, 164, 88, 0.12);
+      --ink: #F5EFE6;
+      --muted: #B6A893;
+      --line: rgba(224, 164, 88, 0.14);
+      --accent: #E0A458;
+      --accent-strong: #F0CF9B;
+      --accent-on: #2a1d0c;
+      --code: #E8B97A;
+      --warning: #D99A4E;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       background:
-        linear-gradient(135deg, rgba(139, 92, 246, 0.12), transparent 36%),
-        linear-gradient(315deg, rgba(20, 184, 166, 0.08), transparent 34%),
+        linear-gradient(160deg, rgba(46, 38, 30, 0.6), transparent 40%),
+        linear-gradient(315deg, rgba(136, 160, 107, 0.06), transparent 34%),
         var(--bg);
       color: var(--ink);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -594,7 +596,7 @@ function installPageResponse(origin: string): Response {
       border-inline: 1px solid var(--line);
       display: grid;
       grid-template-rows: auto 1fr;
-      background: rgba(9, 9, 11, 0.72);
+      background: rgba(26, 22, 19, 0.72);
     }
     header {
       min-height: 64px;
@@ -617,7 +619,7 @@ function installPageResponse(origin: string): Response {
       height: 24px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(167, 139, 250, 0.55);
+      border: 1px solid rgba(224, 164, 88, 0.55);
       color: var(--accent);
       font-weight: 780;
     }
@@ -633,7 +635,7 @@ function installPageResponse(origin: string): Response {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid rgba(167, 139, 250, 0.62);
+      border: 1px solid rgba(224, 164, 88, 0.62);
       padding: 0 14px;
       background: var(--panel-strong);
       color: var(--ink);
@@ -677,22 +679,22 @@ function installPageResponse(origin: string): Response {
       gap: 10px;
       width: min(900px, 100%);
       border: 1px solid var(--line);
-      background: #0f0f11;
+      background: #241E18;
       padding: 12px;
     }
     code {
       overflow-x: auto;
       white-space: nowrap;
-      color: var(--warning);
+      color: var(--code);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       font-size: 13px;
       line-height: 1.6;
     }
     .copy {
       min-height: 36px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      background: var(--panel-strong);
-      color: var(--ink);
+      border: 1px solid transparent;
+      background: var(--accent);
+      color: var(--accent-on);
       padding: 0 12px;
       font: inherit;
       font-size: 13px;
@@ -709,7 +711,7 @@ function installPageResponse(origin: string): Response {
     .cell {
       min-height: 132px;
       padding: 18px;
-      background: rgba(9, 9, 11, 0.9);
+      background: rgba(36, 30, 24, 0.9);
     }
     .cell strong {
       display: block;
@@ -1139,14 +1141,16 @@ function html(title: string, body: string, status = 200, init: ResponseInit = {}
   <style>
     :root {
       color-scheme: dark;
-      --bg: #09090b;
-      --surface: #18181b;
-      --ink: #fafafa;
-      --muted: #a1a1aa;
-      --line: rgba(255, 255, 255, 0.08);
-      --accent: #a78bfa;
-      --accent-soft: rgba(139, 92, 246, 0.12);
-      --warning: #d29922;
+      --bg: #1A1613;
+      --surface: #241E18;
+      --ink: #F5EFE6;
+      --muted: #B6A893;
+      --line: rgba(224, 164, 88, 0.14);
+      --accent: #E0A458;
+      --accent-soft: rgba(224, 164, 88, 0.12);
+      --accent-on: #2a1d0c;
+      --code: #E8B97A;
+      --warning: #D99A4E;
     }
     * { box-sizing: border-box; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: var(--bg); color: var(--ink); display: grid; min-height: 100vh; place-items: center; letter-spacing: 0; }
@@ -1157,8 +1161,8 @@ function html(title: string, body: string, status = 200, init: ResponseInit = {}
     dl > div { display: flex; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
     dt { color: var(--muted); }
     dd { margin: 0; text-align: right; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--warning); }
-    button { appearance: none; min-height: 38px; border: 1px solid rgba(167, 139, 250, 0.62); padding: 0 14px; background: var(--accent-soft); color: var(--ink); font-weight: 650; cursor: pointer; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--code); }
+    button { appearance: none; min-height: 38px; border: 1px solid rgba(224, 164, 88, 0.62); padding: 0 14px; background: var(--accent-soft); color: var(--ink); font-weight: 650; cursor: pointer; }
     .muted { font-size: 13px; color: var(--muted); }
   </style>
 </head>

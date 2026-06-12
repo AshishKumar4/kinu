@@ -173,33 +173,33 @@ function renderNotListeningPage(opts: {
   body {
     margin: 0; padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    background: #0b0b0c; color: #e4e4e7;
+    background: #1A1613; color: #F5EFE6;
     min-height: 100vh; display: flex; align-items: center; justify-content: center;
     padding: 2rem;
   }
   .card {
     max-width: 640px; width: 100%;
-    background: #18181b; border: 1px solid #27272a; border-radius: 12px;
+    background: #241E18; border: 1px solid rgba(224, 164, 88, 0.14); border-radius: 12px;
     padding: 2rem; box-shadow: 0 4px 20px rgba(0,0,0,0.4);
   }
   h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; }
-  p { line-height: 1.6; color: #a1a1aa; font-size: 0.95rem; margin: 0.5rem 0; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #27272a; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #D99A4E; }
+  p { line-height: 1.6; color: #B6A893; font-size: 0.95rem; margin: 0.5rem 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #2E261E; color: #E8B97A; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
   pre {
-    background: #0a0a0b; border: 1px solid #27272a; border-radius: 6px;
+    background: #1f1a15; border: 1px solid rgba(224, 164, 88, 0.14); border-radius: 6px;
     padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: #d4d4d8; white-space: pre-wrap; word-break: break-word;
+    color: #d8cdb8; white-space: pre-wrap; word-break: break-word;
   }
-  .hint { color: #71717a; font-size: 0.85rem; margin-top: 1rem; }
-  .meta { color: #52525b; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #27272a; }
+  .hint { color: #7d7261; font-size: 0.85rem; margin-top: 1rem; }
+  .meta { color: #7d7261; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(224, 164, 88, 0.14); }
   button {
-    background: #3b82f6; color: white; border: 0; border-radius: 6px;
-    padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 500; cursor: pointer;
+    background: #E0A458; color: #2a1d0c; border: 0; border-radius: 6px;
+    padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; cursor: pointer;
     margin-top: 1rem;
   }
-  button:hover { background: #2563eb; }
+  button:hover { background: #caa05a; }
 </style>
 </head>
 <body>
@@ -236,15 +236,15 @@ function renderProxyErrorPage(opts: { port: number; sandboxId: string; message: 
   body {
     margin: 0; padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    background: #0b0b0c; color: #e4e4e7;
+    background: #1A1613; color: #F5EFE6;
     min-height: 100vh; display: flex; align-items: center; justify-content: center;
     padding: 2rem;
   }
-  .card { max-width: 640px; background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 2rem; }
+  .card { max-width: 640px; background: #241E18; border: 1px solid rgba(224, 164, 88, 0.14); border-radius: 12px; padding: 2rem; }
   h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; margin-right: 0.5rem; }
-  pre { background: #0a0a0b; border: 1px solid #27272a; border-radius: 6px; padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8rem; color: #fca5a5; white-space: pre-wrap; word-break: break-word; }
-  .meta { color: #52525b; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #27272a; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #E07A5F; margin-right: 0.5rem; }
+  pre { background: #1f1a15; border: 1px solid rgba(224, 164, 88, 0.14); border-radius: 6px; padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8rem; color: #E5A38F; white-space: pre-wrap; word-break: break-word; }
+  .meta { color: #7d7261; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(224, 164, 88, 0.14); }
 </style>
 </head>
 <body>

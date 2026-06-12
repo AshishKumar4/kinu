@@ -30,13 +30,15 @@ function landingResponse(origin: string): Response {
   <style>
     :root {
       color-scheme: dark;
-      --bg: #09090b;
-      --ink: #fafafa;
-      --muted: #a1a1aa;
-      --line: rgba(255, 255, 255, 0.08);
-      --accent: #a78bfa;
-      --accent-strong: #8b5cf6;
-      --accent-soft: rgba(139, 92, 246, 0.12);
+      --bg: #1A1613;
+      --ink: #F5EFE6;
+      --muted: #B6A893;
+      --line: rgba(224, 164, 88, 0.14);
+      --accent: #E0A458;
+      --accent-strong: #F0CF9B;
+      --accent-soft: rgba(224, 164, 88, 0.12);
+      --accent-on: #2a1d0c;
+      --code: #E8B97A;
     }
     * { box-sizing: border-box; }
     body {
@@ -63,7 +65,7 @@ function landingResponse(origin: string): Response {
       border-inline: 1px solid var(--line);
       width: min(1180px, calc(100vw - 28px));
       margin: 0 auto;
-      background: linear-gradient(90deg, rgba(9, 9, 11, 0.96), rgba(9, 9, 11, 0.86) 58%, rgba(9, 9, 11, 0.38));
+      background: linear-gradient(90deg, rgba(26, 22, 19, 0.96), rgba(26, 22, 19, 0.86) 58%, rgba(26, 22, 19, 0.38));
     }
     header, footer {
       min-height: 64px;
@@ -73,7 +75,7 @@ function landingResponse(origin: string): Response {
       gap: 18px;
       padding: 0 24px;
       border-bottom: 1px solid var(--line);
-      background: rgba(11, 15, 16, 0.72);
+      background: rgba(32, 26, 21, 0.72);
       backdrop-filter: blur(16px);
     }
     footer {
@@ -93,8 +95,7 @@ function landingResponse(origin: string): Response {
       height: 24px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(79, 215, 188, 0.55);
-      border-color: rgba(167, 139, 250, 0.55);
+      border: 1px solid rgba(224, 164, 88, 0.55);
       color: var(--accent);
       font-weight: 780;
     }
@@ -124,8 +125,9 @@ function landingResponse(origin: string): Response {
       white-space: nowrap;
     }
     .button.primary {
-      border-color: rgba(167, 139, 250, 0.62);
-      background: var(--accent-soft);
+      border-color: transparent;
+      background: var(--accent);
+      color: var(--accent-on);
     }
     main {
       display: grid;
@@ -170,7 +172,7 @@ function landingResponse(origin: string): Response {
       width: min(860px, 100%);
       margin-top: 20px;
       border: 1px solid var(--line);
-      background: rgba(7, 10, 11, 0.9);
+      background: rgba(36, 30, 24, 0.9);
       padding: 14px;
     }
     .install-row {
@@ -183,16 +185,16 @@ function landingResponse(origin: string): Response {
       display: block;
       overflow-x: auto;
       white-space: nowrap;
-      color: #f4d28a;
+      color: var(--code);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       font-size: 13px;
       line-height: 1.6;
     }
     .copy {
       min-height: 36px;
-      border: 1px solid rgba(245, 241, 232, 0.2);
-      background: rgba(245, 241, 232, 0.1);
-      color: var(--ink);
+      border: 1px solid transparent;
+      background: var(--accent);
+      color: var(--accent-on);
       padding: 0 12px;
       font: inherit;
       font-size: 13px;
@@ -218,7 +220,7 @@ function landingResponse(origin: string): Response {
     .cell {
       min-height: 104px;
       padding: 16px;
-      background: rgba(11, 15, 16, 0.84);
+      background: rgba(32, 26, 21, 0.84);
     }
     .cell strong {
       display: block;
@@ -256,7 +258,7 @@ function landingResponse(origin: string): Response {
       line-height: 1.5;
     }
     @media (max-width: 720px) {
-      .shell { width: 100%; border-inline: 0; background: rgba(9, 9, 11, 0.92); }
+      .shell { width: 100%; border-inline: 0; background: rgba(26, 22, 19, 0.92); }
       header { padding: 0 16px; }
       nav .link { display: none; }
       main { padding: 64px 16px 38px; }
@@ -324,7 +326,7 @@ function landingResponse(origin: string): Response {
   <script>
     const canvas = document.getElementById('field');
     const ctx = canvas.getContext('2d');
-    const colors = ['#a78bfa', '#14b8a6', '#d29922', '#f85149'];
+    const colors = ['#E0A458', '#88A06B', '#E8B97A', '#E07A5F'];
     let nodes = [];
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -344,7 +346,7 @@ function landingResponse(origin: string): Response {
     }
     function tick() {
       ctx.clearRect(0, 0, innerWidth, innerHeight);
-      ctx.fillStyle = '#09090b';
+      ctx.fillStyle = '#1A1613';
       ctx.fillRect(0, 0, innerWidth, innerHeight);
       for (const n of nodes) {
         n.x += n.vx;
