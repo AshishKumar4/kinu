@@ -37,6 +37,7 @@ import {
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   appendVolatileContextMessage, hashSystemPrompt,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
@@ -190,6 +191,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly eventLog: EventLog;
   private readonly triggerRegistry: TriggerRegistry;
   private readonly productChanges: ProductChangeStore;
+  private _webSearchProvider: WebSearchProvider | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
   private ended = false;
@@ -1030,6 +1032,19 @@ export class LocalAgentSession implements BackendHost {
     };
   }
 
+  /** Web search + fetch provider — node fetch, key-less by default
+   *  (DuckDuckGo + local HTML→markdown); a stored `tavily` credential resolved
+   *  through the model resolver's auth store upgrades search. */
+  private getWebSearchProvider(): WebSearchProvider {
+    if (this._webSearchProvider) return this._webSearchProvider;
+    const getAuth = this.modelResolver?.getAuth;
+    this._webSearchProvider = createDefaultWebSearchProvider({
+      fetch: globalThis.fetch,
+      ...(getAuth ? { getAuth } : {}),
+    });
+    return this._webSearchProvider;
+  }
+
   /** Resolve the skills active for this turn — explicit @invocations,
    *  always-active config, and builtin auto-activation. Mirrors the DO's
    *  beforeTurn: only scans the VFS when activation is plausible, and records the
@@ -1281,7 +1296,7 @@ export class LocalAgentSession implements BackendHost {
         vfs: this.rt.storage.vfs,
         memory: this.rt.memory,
         shell: this.rt.shell,
-        extraProviders: [createLocalAgentSelfProvider(this)],
+        extraProviders: [createLocalAgentSelfProvider(this), createWebCodemodeProvider(this.getWebSearchProvider())],
       }) as never,
       codemodeLoader: { __cli: true } as unknown,
       thinkTool: this.buildThinkTool(),
@@ -1292,6 +1307,7 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
+      webSearch: this.getWebSearchProvider(),
     });
     this.tools = this.wrapToolsForBackground(rawTools);
   }

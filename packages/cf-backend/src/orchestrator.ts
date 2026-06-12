@@ -50,6 +50,7 @@ import {
   resolveMaxSteps,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
   appendVolatileContextMessage, hashSystemPrompt,
@@ -823,6 +824,8 @@ export class OrchestratorAgent extends Think<Env> {
       );
       // `agent.*` — the agent steers itself (curriculum + self-scheduling).
       const agentSelfProvider = createAgentSelfProvider(this);
+      // `web.*` — same web search/fetch provider that backs the web_* tools.
+      const webProvider = createWebCodemodeProvider(this.getWebSearchProvider());
       // Record which executor the agent actually works in, so the UI (diff /
       // file manager) defaults to where work happened. One upsert per executor
       // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
@@ -831,7 +834,7 @@ export class OrchestratorAgent extends Think<Env> {
         this._executorsUsedThisTurn.add(name);
         try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
       };
-      const allProviders = [craftedProvider, rlmProvider, agentSelfProvider, ...executorProviders.map(p => {
+      const allProviders = [craftedProvider, rlmProvider, agentSelfProvider, webProvider, ...executorProviders.map(p => {
         const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
         const wrapped: typeof tools = {};
         for (const [k, tool] of Object.entries(tools)) {
@@ -886,6 +889,32 @@ export class OrchestratorAgent extends Think<Env> {
     const stub = this.getOwnerUserDO();
     if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
     return stub;
+  }
+
+  private _webSearchProvider: WebSearchProvider | null = null;
+  /** The web search + fetch provider — built once per DO lifetime. Key-less by
+   *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
+   *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
+   *  routes through env.AI.toMarkdown when the AI binding is present. */
+  private getWebSearchProvider(): WebSearchProvider {
+    if (this._webSearchProvider) return this._webSearchProvider;
+    const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
+    const ai = (this.env as { AI?: { toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>> } }).AI;
+    this._webSearchProvider = createDefaultWebSearchProvider({
+      fetch: globalThis.fetch,
+      ...(getAuth ? { getAuth } : {}),
+      ...(ai?.toMarkdown
+        ? {
+            htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
+              const name = (opts?.url ?? 'page') + '.html';
+              const blob = new Blob([html], { type: 'text/html' });
+              const out = await ai.toMarkdown!([{ name, blob }]);
+              return out[0]?.data ?? '';
+            },
+          }
+        : {}),
+    });
+    return this._webSearchProvider;
   }
 
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
@@ -1100,6 +1129,8 @@ export class OrchestratorAgent extends Think<Env> {
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
         productChanges: this.getProductChangeToolDeps(),
+        // Web research — key-less default, codemode web.* wired below.
+        webSearch: this.getWebSearchProvider(),
       });
 
       // Anthropic prompt-caching: one breakpoint on the last tool caches the

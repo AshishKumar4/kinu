@@ -14,6 +14,7 @@ import {
   createProviderRegistry,
   listModelsDevProviderModels,
   type AuthResolution,
+  type AuthResolver,
   type ModelCapability,
   type ModelInfo,
   type ModelProvider,
@@ -64,6 +65,9 @@ export interface LocalModelResolver {
   resolveModel(specOrNull?: string | null): LanguageModel;
   listProviders(): Promise<ProviderInfo[]>;
   listModels(): Promise<Array<ModelInfo & { provider: string }>>;
+  /** Resolve auth headers for a credential key (e.g. `tavily` for the web
+   *  search upgrade) through the same local auth store model resolution uses. */
+  getAuth: AuthResolver;
 }
 
 export interface LocalModelResolverConfig {
@@ -228,6 +232,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     listModels() {
       return registry.listAllModels(deps);
     },
+    getAuth: deps.getAuth,
   };
 }
 
