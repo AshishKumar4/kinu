@@ -9,6 +9,7 @@ import { SLASH_COMMANDS } from '../src/slash-commands.js';
 import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays.js';
 import type { AgentModelEntry } from '../src/model-catalog.js';
 import { MessageList } from '../src/tui/messages.js';
+import { tuiColors } from '../src/tui/theme.js';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -81,7 +82,7 @@ describe('CLI TUI layout', () => {
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: '#0f0f23' }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
           <MessageList
             streamingText={null}
             messages={[
@@ -110,7 +111,7 @@ describe('CLI TUI layout', () => {
     const root = createRoot(renderer);
     try {
       root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: '#0f0f23' }}>
+        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
           <MessageList
             streamingText={null}
             messages={[
