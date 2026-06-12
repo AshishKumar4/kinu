@@ -38,6 +38,15 @@ export interface MCTSDefaults {
   stepPrmPruneThreshold: number;
 }
 
+/** Branching-heads parameters. The per-head grounded score reuses the MCTS
+ *  judge knobs (judgeSamples / maxEvalLLMCalls); only the merge ensemble size
+ *  is heads-specific. */
+export interface HeadsDefaults {
+  /** Independent merge-synthesis samples; the median-scored one is kept.
+   *  1 ⇒ the legacy n=1 merge. */
+  mergeSamples: number;
+}
+
 /** CraftStore quality management parameters */
 export interface CraftStoreDefaults {
   /** EMA smoothing factor (0-1). Higher = recent observations weighted more. */
@@ -75,6 +84,7 @@ export interface AgentConfig {
   /** Maximum agentic steps per LLM call (tool-call loops). Default 500. */
   maxSteps: number;
   mcts: MCTSDefaults;
+  heads: HeadsDefaults;
   craftStore: CraftStoreDefaults;
   scaffold: ScaffoldDefaults;
 }
@@ -101,6 +111,9 @@ export const DEFAULT_CONFIG: AgentConfig = {
     stepPrm: false,
     stepPrmPruneThreshold: 0.3,
   },
+  heads: {
+    mergeSamples: 3,
+  },
   craftStore: {
     emaAlpha: 0.3,
     halfLifeDays: 30,
@@ -125,6 +138,7 @@ export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
     maxSteps: overrides.maxSteps ?? DEFAULT_CONFIG.maxSteps,
     mcts: { ...DEFAULT_CONFIG.mcts, ...overrides.mcts },
+    heads: { ...DEFAULT_CONFIG.heads, ...overrides.heads },
     craftStore: { ...DEFAULT_CONFIG.craftStore, ...overrides.craftStore },
     scaffold: { ...DEFAULT_CONFIG.scaffold, ...overrides.scaffold },
   };

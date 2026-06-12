@@ -13,7 +13,7 @@
 
 import { generateText, tool, jsonSchema, type LanguageModel, type ToolSet } from 'ai';
 import {
-  type HeadRuntime, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
+  type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
   type MergeStrategy, type VFS, type WebSearchProvider,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
   buildHeadWebTools, HeadController, HeadJournal, initHeadsTables, budgetExhausted, extractJsonObject,
@@ -32,6 +32,10 @@ export interface CLIHeadRuntimeDeps {
   /** The shared web research provider — same seam the main loop uses. Omit ⇒
    *  web_search / web_fetch are not offered to heads. */
   webSearch?: WebSearchProvider;
+  /** Execution-grounding seam — the same executor + judge the MCTS engine uses,
+   *  so head outcomes + the merge are grounded, not heuristic. Omit ⇒ neutral
+   *  scores + n=1 merge. */
+  grounding?: HeadGrounding;
 }
 
 /** Per-head abort flag — flipped by SpawnedHead.abort (wall-clock timeout). */
@@ -50,6 +54,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
       };
     },
     mergeLLM: (prompt) => mergeViaLLM(deps.model, prompt),
+    ...(deps.grounding ? { grounding: deps.grounding } : {}),
   };
 }
 

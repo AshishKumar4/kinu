@@ -253,6 +253,10 @@ export class HeadJournal {
       recommendations: r.recommendations_json ? JSON.parse(r.recommendations_json) : [],
       evidenceAggregate: evidence,
       headIds: headIds.length > 0 ? headIds : tree.map((h) => h.id),
+      // Per-head grounded scores are a live-run signal, not persisted as columns;
+      // the cached read (UI replay) carries none.
+      headScores: [],
+      grounded: false,
       costSummary: {
         headCount: r.cost_head_count,
         totalTokens: r.cost_total_tokens,

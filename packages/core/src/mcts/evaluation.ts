@@ -257,7 +257,9 @@ async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | nu
   }
 }
 
-function median(values: number[]): number {
+/** Median of a non-empty list. Shared with the heads k-sample merge
+ *  (heads/controller.ts) so both ensembles aggregate identically. */
+export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;

@@ -20,10 +20,12 @@ import { nowMs } from '../utils/date.js';
  *  alternatives are a meaningful choice; ten are noise. */
 const MAX_TAKE_CANDIDATES = 4;
 
-/** Where a take set came from: near-tied MCTS convergence rivals, or a
- *  mid-turn Steer-as-Branch redirect run as a parallel head. ONE pipeline —
- *  the comparison + pick→ledger flow is identical for both. */
-export type AlternateTakeSource = 'mcts' | 'branch';
+/** Where a take set came from: near-tied MCTS convergence rivals, a mid-turn
+ *  Steer-as-Branch redirect run as a parallel head, or the comparable reports of
+ *  a think({strategy:'heads'}) fan-out. ONE pipeline — the comparison +
+ *  pick→ledger flow is identical for all three (synthetic-id sources skip the
+ *  search_nodes re-point; only 'mcts' has real nodes to move). */
+export type AlternateTakeSource = 'mcts' | 'branch' | 'heads';
 
 export interface AlternateTakeCandidate {
   nodeId: string;
@@ -199,6 +201,63 @@ export function recordBranchTakeSet(
   };
 }
 
+/** One comparable head answer feeding a heads-take set. */
+export interface HeadTakeCandidate {
+  /** The head id (used only to dedupe the synthetic node id). */
+  id: string;
+  /** The head's finding — the take candidate's text. */
+  text: string;
+  /** The head's grounded outcome in [0,1] — the score evidence on the chip. */
+  score: number;
+}
+
+/**
+ * Persist a think({strategy:'heads'}) fan-out as an alternate-takes set: each
+ * comparable head answer is a candidate, ranked by its grounded score (highest =
+ * the answer the merge favored). Like MCTS, heads run MID-TURN (before the
+ * assistant message id exists), so the set is written UNCLAIMED (turn_id NULL)
+ * and `claimAlternateTakesForTurn` attaches it at turn end — the same capture →
+ * claim flow MCTS uses. The synthetic node ids never touch search_nodes:
+ * recordTakePick skips the convergence re-point for heads-sourced sets
+ * (source !== 'mcts'). So the preference ledger finally gets a sample from heads
+ * (until now only MCTS convergence emitted takes). Returns null when fewer than
+ * 2 distinct non-empty head answers exist (no real choice to offer).
+ */
+export function recordHeadsTakeSet(
+  sql: SqlExecutor,
+  input: { task: string; heads: readonly HeadTakeCandidate[]; now?: number },
+): AlternateTakeSet | null {
+  const id = `take-${nanoid()}`;
+  const seen = new Set<string>();
+  const ranked = [...input.heads]
+    .filter((h) => {
+      const text = h.text.trim();
+      if (!text || seen.has(text)) return false;
+      seen.add(text);
+      return true;
+    })
+    .sort((a, b) => b.score - a.score);
+  if (ranked.length < 2) return null;
+
+  const candidates: AlternateTakeCandidate[] = ranked
+    .slice(0, MAX_TAKE_CANDIDATES)
+    .map((h) => ({
+      nodeId: `${id}-${h.id}`, text: h.text.trim(),
+      score: h.score, visits: 1, depth: 0,
+    }));
+  const now = input.now ?? nowMs();
+  sql`INSERT INTO alternate_takes
+        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
+      VALUES
+        (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'heads'},
+         ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)}, ${now}, ${null})`;
+  return {
+    id, turnId: null, sessionId: null, task: input.task.slice(0, 500),
+    source: 'heads', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
+    candidates, createdAt: now, pickedAt: null,
+  };
+}
+
 /** Attach the take sets captured during the just-finished turn (MCTS runs
  *  mid-turn, before the assistant message id exists) to that turn's id.
  *  The claim is scoped to this turn's window: stale unclaimed sets left by a
@@ -241,7 +300,7 @@ function toTakeSet(r: RawTakeRow): AlternateTakeSet {
   } catch { /* malformed row — surface an empty set rather than crash reads */ }
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
-    source: r.source === 'branch' ? 'branch' : 'mcts',
+    source: r.source === 'branch' ? 'branch' : r.source === 'heads' ? 'heads' : 'mcts',
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
     candidates, createdAt: r.created_at, pickedAt: r.picked_at,
   };
@@ -351,6 +410,9 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
   const framing = set.source === 'branch'
     ? `While you answered, the user redirected with "${set.task.slice(0, 200)}" and that redirect ran ` +
       `as a parallel branch. Comparing both answers, the user picked the branch's:`
+    : set.source === 'heads'
+    ? `While exploring "${set.task.slice(0, 200)}" you fanned out into parallel reasoning heads, ` +
+      `and the user compared their findings and picked a different head's answer than the one you merged to:`
     : `While exploring "${set.task.slice(0, 200)}" you surfaced several near-tied approaches, ` +
       `and the user compared them and picked a different take than the one you answered with:`;
   return (

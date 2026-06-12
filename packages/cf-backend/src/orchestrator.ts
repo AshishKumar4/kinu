@@ -70,7 +70,7 @@ import {
   nanoid,
   // Branching heads
   HeadController, HeadJournal, initHeadsTables,
-  type SerializedMessage, type SplitPhaseEvent, type HeadRunView, type HeadRuntime,
+  type SerializedMessage, type SplitPhaseEvent, type HeadRunView, type HeadRuntime, type MergeResult,
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
@@ -130,7 +130,7 @@ import {
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
-  recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
+  recordTakePick, recordHeadsTakeSet, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
@@ -648,6 +648,7 @@ export class OrchestratorAgent extends Think<Env> {
           controller: this.getHeadController(),
           inheritedContext: this.readInheritedContext(),
           onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
         },
       }),
     });
@@ -1164,6 +1165,20 @@ export class OrchestratorAgent extends Think<Env> {
     return this._headController;
   }
 
+  /** Record the comparable heads of a completed think({strategy:'heads'}) run as
+   *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
+   *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only grounded
+   *  scores are a real preference signal, so emit nothing when ungrounded. */
+  private recordHeadsTake(merge: MergeResult, task: string): void {
+    if (!merge.grounded) return;
+    const heads = merge.headScores
+      .filter((s) => s.status === 'completed')
+      .map((s) => ({ id: s.id, text: s.text, score: s.score }));
+    try {
+      recordHeadsTakeSet(this.boundSql, { task, heads });
+    } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
+  }
+
   /** Build the CF HeadRuntime (Facet spawner + merge LLM) once per DO lifetime,
    *  lazily — heads need the agent's owner for UserDO auth. undefined when the
    *  agent has no owner; surfaced via host.headRuntime. */
@@ -1172,7 +1187,11 @@ export class OrchestratorAgent extends Think<Env> {
     if (this._cfHeadRuntime) return this._cfHeadRuntime;
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) return undefined;
-    this._cfHeadRuntime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId);
+    this._cfHeadRuntime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId, {
+      executor: this.rt.executor,
+      explorer: this.rt.llm,
+      ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
+    });
     return this._cfHeadRuntime;
   }
 

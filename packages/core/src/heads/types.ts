@@ -225,12 +225,36 @@ export interface MergeResult {
   readonly evidenceAggregate: readonly Evidence[];
   /** The ids of every head spawned in this split (root-level only — not recursive). */
   readonly headIds: readonly HeadId[];
+  /** Per-head outcome score in [0,1] + the head's text — one entry per head,
+   *  surfaced as Alternate-Takes and reported to the preference ledger. When
+   *  `grounded`, the score is execution-banded (mcts/evaluation.ts); otherwise a
+   *  neutral 0.5 (no grounding seam wired). A failed/unresolved head scores below
+   *  a head whose work ran and held up. */
+  readonly headScores: readonly HeadScore[];
+  /** True when headScores carry a real grounded verdict (the controller had a
+   *  grounding seam); false when they are neutral placeholders. */
+  readonly grounded: boolean;
   readonly costSummary: {
     readonly headCount: number;
     readonly totalTokens: number;
     readonly totalWallClockMs: number;
     readonly maxDepth: number;
   };
+}
+
+/** A single head's execution-grounded outcome score, mirroring the MCTS
+ *  BranchEvaluation shape (evaluation.ts) so heads and branches report the same
+ *  grounded signal. Carries the head's summary so the backend can build the
+ *  Alternate-Takes set (the comparable answer of each thread) without re-reading
+ *  the journal. */
+export interface HeadScore {
+  readonly id: HeadId;
+  /** The head's finding (its report summary) — the take candidate's text. */
+  readonly text: string;
+  readonly status: HeadReport['status'];
+  /** [0,1] — grounded outcome (execution band when the head ran code, else judge). */
+  readonly score: number;
+  readonly grounding: 'execution' | 'judge';
 }
 
 /** Default budget for a fresh root head if the parent doesn't specify. */

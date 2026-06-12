@@ -8,7 +8,7 @@
  */
 
 import type {
-  HeadRuntime, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
+  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
 } from "@proteus/core";
 import { type MergeOutput, MergeOutputSchema, effortFor, createAgentConfigStore } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
@@ -22,7 +22,7 @@ import type { UserDO } from "../user/user-do.js";
  *  but the orchestrator (a subclass) passes `this` cast to this view. */
 type HeadHost = Think<Env> & { readonly env: Env };
 
-export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string): HeadRuntime {
+export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string, grounding?: HeadGrounding): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
   // is read once from agent_identity by the orchestrator and threaded down.
   const userDOStub = orchestrator.env.UserDO.get(
@@ -69,5 +69,6 @@ export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string)
       };
     },
     mergeLLM,
+    ...(grounding ? { grounding } : {}),
   };
 }

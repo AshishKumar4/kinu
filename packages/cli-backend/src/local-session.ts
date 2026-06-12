@@ -17,7 +17,7 @@ import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
-  HeadRuntime, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
+  HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
@@ -44,6 +44,7 @@ import {
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet, recordTakePick,
+  recordHeadsTakeSet,
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
@@ -274,7 +275,7 @@ export class LocalAgentSession implements BackendHost {
     initCurriculumTable(this.rt.storage.execRaw);
 
     initHeadsTables(this.rt.storage.execRaw);
-    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider() });
+    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider(), grounding: this.buildHeadGrounding() });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     // The EventsHub substrate (reactor source of truth). Local external
@@ -586,6 +587,31 @@ export class LocalAgentSession implements BackendHost {
   get headRuntime(): HeadRuntime {
     this.ensureModelState();
     return this._headRuntime;
+  }
+
+  /** The execution-grounding seam handed to the head runtime — the SAME executor
+   *  + judge the MCTS engine scores branches with, so head outcomes and the merge
+   *  are grounded. Sample knobs default from DEFAULT_CONFIG inside core. */
+  private buildHeadGrounding(): HeadGrounding {
+    return {
+      executor: this.rt.executor,
+      explorer: this.rt.llm,
+      ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
+    };
+  }
+
+  /** Record the comparable heads of a completed think({strategy:'heads'}) run as
+   *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
+   *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only the grounded
+   *  scores are a real preference signal, so emit nothing when ungrounded. */
+  private recordHeadsTake(merge: MergeResult, task: string): void {
+    if (!merge.grounded) return;
+    const heads = merge.headScores
+      .filter((s) => s.status === 'completed')
+      .map((s) => ({ id: s.id, text: s.text, score: s.score }));
+    try {
+      recordHeadsTakeSet(this.rt.storage.sql, { task, heads });
+    } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
   }
 
   /** BackendHost seam — the connected MCP tools, merged into each turn. */
@@ -1149,6 +1175,7 @@ export class LocalAgentSession implements BackendHost {
           controller: this.headController,
           inheritedContext: this.readInheritedContext(),
           onPhase: (e: SplitPhaseEvent) => this.emitHeadPhase(e),
+          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
         },
       }),
     });
@@ -1285,7 +1312,7 @@ export class LocalAgentSession implements BackendHost {
   private rebuildModelBoundState(model: LanguageModel): void {
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
     // The agent's VFS backs the shared findings scratch sibling heads write to.
-    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider() });
+    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider(), grounding: this.buildHeadGrounding() });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     const rawTools = buildBuiltinTools({

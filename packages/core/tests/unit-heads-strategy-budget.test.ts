@@ -13,6 +13,7 @@ function fakeMergeResult(): MergeResult {
   return {
     mergedNarrative: 'ok', selectedDecisions: [], unresolvedQuestions: [],
     recommendations: [], evidenceAggregate: [], headIds: ['h'],
+    headScores: [], grounded: false,
     costSummary: { headCount: 1, totalTokens: 0, totalWallClockMs: 0, maxDepth: 3 },
   };
 }

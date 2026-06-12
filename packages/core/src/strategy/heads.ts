@@ -25,6 +25,11 @@ interface HeadsStrategyOptions {
   defaultModel?: string;
   /** Host event sink — fires once on split (real head ids) and once on merge. */
   onPhase?: (event: SplitPhaseEvent) => void;
+  /** Host hook fired once the merge completes, carrying the full MergeResult
+   *  (per-head grounded scores + texts) and the split task. The host records an
+   *  Alternate-Takes set from the comparable heads so the pick lands in the
+   *  preference ledger — injected by the think tool's defaultOptions, like onPhase. */
+  onComplete?: (merge: MergeResult, task: string) => void;
 }
 
 export function createHeadsStrategy(): ExplorationStrategy {
@@ -67,20 +72,32 @@ export function createHeadsStrategy(): ExplorationStrategy {
         onPhase: o.onPhase,
       });
 
+      o.onComplete?.(merge, ctx.task);
+
       const formatted = formatMergeResult(merge, strategy);
+      // Real grounded outcome per head (execution-banded when the head left
+      // runnable code, else median judge). When the controller has no grounding
+      // seam, merge.grounded is false and the scores are neutral 0.5 — an honest
+      // "no signal" rather than the old unresolved-question formatting heuristic.
+      const NEUTRAL = 0.5;
+      const scoreById = new Map(merge.headScores.map((s) => [s.id, s.score]));
       const candidates = merge.headIds.map((id) => ({
         text: merge.mergedNarrative,
         payload: { headId: id, recommendations: merge.recommendations, unresolved: merge.unresolvedQuestions },
-        score: 1 - Math.min(0.5, merge.unresolvedQuestions.length * 0.1),
+        score: scoreById.get(id) ?? NEUTRAL,
         source: id,
       }));
+      // The merge represents the strongest thread that fed it.
+      const bestScore = merge.grounded && merge.headScores.length > 0
+        ? Math.max(...merge.headScores.map((s) => s.score))
+        : NEUTRAL;
 
       return {
         strategy: 'heads',
         best: {
           text: formatted,
           payload: merge,
-          score: candidates[0]?.score ?? 1,
+          score: bestScore,
           source: 'merge',
         },
         all: candidates,

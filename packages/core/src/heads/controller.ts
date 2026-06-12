@@ -24,6 +24,7 @@ import {
   type HeadBudget,
   type SplitRequest,
   type MergeResult,
+  type HeadScore,
   type MergeStrategy,
   type SerializedMessage,
   type Evidence,
@@ -34,12 +35,40 @@ import {
 } from './types.js';
 import { HeadJournal } from './journal.js';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
+import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
+import type { LLM, Executor } from '../types/primitives.js';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
   prompt: string,
   responseSchema: typeof MergeOutputSchema,
 ) => Promise<MergeOutput>;
+
+/**
+ * Optional execution-grounding seam for the heads path — the SAME grounded
+ * evaluator + median ensemble the MCTS engine uses (mcts/evaluation.ts), so a
+ * head's outcome and the merge are real signals, not heuristics. When present:
+ *   • each head's report is scored by evaluateWithMultiModelJudging → a real
+ *     [0,1] outcome (execution band when the head left runnable code, else judge);
+ *   • the merge runs `mergeSamples` independent synthesis samples and keeps the
+ *     median-scored one (parse-robust: a failed sample is dropped, never a 0).
+ * Omitting it preserves the old n=1, neutral-score behavior (tests opt in).
+ */
+export interface HeadGrounding {
+  /** Runs a head's runnable code for a pass/fail verdict (shared executor). */
+  readonly executor: Executor;
+  /** The explorer model — judges when no cross-model judge is set. */
+  readonly explorer: LLM;
+  /** Cross-model judge (documented self-enhancement-bias fallback to explorer). */
+  readonly judge?: LLM;
+  /** Judge ensemble size per head score. Default DEFAULT_CONFIG.mcts.judgeSamples. */
+  readonly judgeSamples?: number;
+  /** Per-head-score LLM-call budget. Default DEFAULT_CONFIG.mcts.maxEvalLLMCalls. */
+  readonly maxEvalLLMCalls?: number;
+  /** Independent merge synthesis samples; median-scored one wins. Default
+   *  DEFAULT_CONFIG.heads.mergeSamples. */
+  readonly mergeSamples?: number;
+}
 
 /** What the controller asks the runtime to do per child head. */
 export interface SpawnedHead {
@@ -56,6 +85,9 @@ export interface HeadRuntime {
   spawnHead(input: HeadInput): Promise<SpawnedHead>;
   /** Run the merge LLM with structured output enforcement. */
   mergeLLM: MergeLLMFn;
+  /** Execution-grounding seam — when set, head scores + the merge are grounded
+   *  + ensembled (see HeadGrounding). Omit ⇒ n=1 merge, empty head scores. */
+  grounding?: HeadGrounding;
 }
 
 /** Build a HeadController. */
@@ -180,7 +212,12 @@ export class HeadController {
       }),
     );
 
-    // Synthesize via LLM.
+    // Ground each head's report into a real [0,1] outcome (execution-banded
+    // when the head left runnable code, else median judge) — the SAME evaluator
+    // the MCTS engine uses. Empty when the runtime has no grounding seam.
+    const headScores = await this.scoreHeads(reports, opts.request.rationale);
+
+    // Synthesize via LLM (k-sample median when grounded; n=1 otherwise).
     const mergeResult = await this.merge(
       reports,
       opts.request.rationale,
@@ -188,6 +225,7 @@ export class HeadController {
       opts.inheritedContext,
       parentBudget,
       handles.map((h) => h.id),
+      headScores,
     );
     this.journal.cacheMerge(rootId, mergeResult, strategy);
     opts.onPhase?.({
@@ -200,11 +238,53 @@ export class HeadController {
   }
 
   /**
-   * Run the merge synthesis call.
+   * Score each head's report. With a grounding seam, each report becomes a
+   * candidate "trajectory" passed to the SHARED grounded evaluator
+   * (mcts/evaluation.ts): any runnable code it left is executed for a pass/fail
+   * band, so a head whose work ran outscores one whose didn't. A non-completed
+   * head gets the floor (0) without a judge call. Always returns one entry per
+   * head carrying the head's text + status (the Alternate-Takes candidate); when
+   * no grounding seam is wired the score is a neutral 0.5 (no grounded signal).
+   */
+  private async scoreHeads(
+    reports: readonly HeadReport[],
+    rationale: string,
+  ): Promise<readonly HeadScore[]> {
+    const g = this.runtime.grounding;
+    const siblings = reports.map(headTrajectory);
+    return Promise.all(
+      reports.map(async (r, i): Promise<HeadScore> => {
+        const base = { id: r.id, text: r.summary, status: r.status } as const;
+        // No grounding seam → no honest outcome signal; a neutral score keeps
+        // the take candidate without inventing a verdict.
+        if (!g) return { ...base, score: 0.5, grounding: 'judge' };
+        // A head that never completed produced no trustworthy outcome — floor it
+        // without a judge call so it ranks below a head that ran.
+        if (r.status !== 'completed') return { ...base, score: 0, grounding: 'judge' };
+        const evaluation = await evaluateWithMultiModelJudging({
+          task: rationale,
+          trajectory: siblings[i]!,
+          siblings: siblings.filter((_, j) => j !== i),
+          executor: g.executor,
+          explorer: g.explorer,
+          judge: g.judge,
+          judgeSamples: g.judgeSamples,
+          maxLLMCalls: g.maxEvalLLMCalls,
+        });
+        return { ...base, score: evaluation.score, grounding: evaluation.grounding };
+      }),
+    );
+  }
+
+  /**
+   * Run the merge synthesis.
    *
-   * Constructs a merge prompt with each head's summary + decisions + top
-   * evidence, asks the LLM to synthesize, validates against MergeOutputSchema,
-   * and produces the final MergeResult.
+   * With a grounding seam this is a k-sample median ensemble (mergeSamples
+   * independent synthesis samples, each scored by the grounded judge; the
+   * median-scored one is kept — parse-failed samples are dropped, never a 0).
+   * Without one it is the legacy n=1 call. Either way the prompt carries each
+   * head's FULL evidence + artifacts (no 6×200-char clipping) so no finding is
+   * lost on the way into the merge.
    */
   async merge(
     reports: readonly HeadReport[],
@@ -213,47 +293,87 @@ export class HeadController {
     inheritedContext: readonly SerializedMessage[],
     parentBudget: HeadBudget,
     headIds: readonly HeadId[] = reports.map((r) => r.id),
+    headScores: readonly HeadScore[] = [],
   ): Promise<MergeResult> {
-    const prompt = buildMergePrompt(reports, rationale, strategy, inheritedContext);
-    let merged: MergeOutput;
-    try {
-      merged = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
-    } catch (err) {
-      const narrative = fallbackNarrative(reports, rationale, err instanceof Error ? err.message : String(err));
-      return {
-        mergedNarrative: narrative,
-        selectedDecisions: reports.flatMap((r) => r.decisions),
-        unresolvedQuestions: [],
-        recommendations: [],
-        evidenceAggregate: reports.flatMap((r) => r.evidence),
-        headIds,
-        costSummary: summarizeCost(reports, parentBudget),
-      };
-    }
+    const grounded = this.runtime.grounding != null;
+    const prompt = buildMergePrompt(reports, rationale, strategy, inheritedContext, grounded ? headScores : []);
+    const fallback = (errMsg: string): MergeResult => ({
+      mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
+      selectedDecisions: reports.flatMap((r) => r.decisions),
+      unresolvedQuestions: [],
+      recommendations: [],
+      evidenceAggregate: reports.flatMap((r) => r.evidence),
+      headIds,
+      headScores,
+      grounded,
+      costSummary: summarizeCost(reports, parentBudget),
+    });
 
-    const parse = v.safeParse(MergeOutputSchema, merged);
-    if (!parse.success) {
-      const narrative = fallbackNarrative(reports, rationale, `merge schema invalid: ${parse.issues.map(i => i.message).join('; ')}`);
-      return {
-        mergedNarrative: narrative,
-        selectedDecisions: reports.flatMap((r) => r.decisions),
-        unresolvedQuestions: [],
-        recommendations: [],
-        evidenceAggregate: reports.flatMap((r) => r.evidence),
-        headIds,
-        costSummary: summarizeCost(reports, parentBudget),
-      };
-    }
+    const merged = await this.synthesize(prompt, rationale);
+    if (!merged.ok) return fallback(merged.error);
 
     return {
-      mergedNarrative: parse.output.narrative,
-      selectedDecisions: parse.output.selected_decisions as readonly Decision[],
-      unresolvedQuestions: parse.output.unresolved_questions,
-      recommendations: parse.output.recommendations,
+      mergedNarrative: merged.output.narrative,
+      selectedDecisions: merged.output.selected_decisions as readonly Decision[],
+      unresolvedQuestions: merged.output.unresolved_questions,
+      recommendations: merged.output.recommendations,
       evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
       headIds,
+      headScores,
+      grounded,
       costSummary: summarizeCost(reports, parentBudget),
     };
+  }
+
+  /**
+   * One validated merge synthesis, or the median-scored one of `mergeSamples`
+   * when grounded. Returns the surfaced error reason when every sample fails
+   * (LLM throw / schema invalid) — the caller renders the per-head fallback.
+   */
+  private async synthesize(
+    prompt: string,
+    rationale: string,
+  ): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> {
+    const g = this.runtime.grounding;
+    const k = Math.max(1, g?.mergeSamples ?? 1);
+
+    const sampleOne = async (): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> => {
+      let out: MergeOutput;
+      try {
+        out = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      const parse = v.safeParse(MergeOutputSchema, out);
+      return parse.success
+        ? { ok: true, output: parse.output }
+        : { ok: false, error: `merge schema invalid: ${parse.issues.map((i) => i.message).join('; ')}` };
+    };
+
+    if (k === 1 || !g) return sampleOne();
+
+    const results = await Promise.all(Array.from({ length: k }, sampleOne));
+    const samples = results.filter((r): r is { ok: true; output: MergeOutput } => r.ok).map((r) => r.output);
+    if (samples.length === 0) {
+      const firstError = results.find((r): r is { ok: false; error: string } => !r.ok);
+      return { ok: false, error: firstError?.error ?? 'all merge samples failed' };
+    }
+    if (samples.length === 1) return { ok: true, output: samples[0]! };
+
+    // Score each candidate synthesis with the grounded judge and keep the
+    // median — the same median ensemble the MCTS evaluator uses.
+    const judge = g.judge ?? g.explorer;
+    const scored = await Promise.all(
+      samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
+    );
+    const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
+    if (usable.length === 0) return { ok: true, output: samples[0]! };
+    const medianScore = median(usable.map((x) => x.score));
+    // Pick the sample whose score is closest to the median.
+    const winner = usable.reduce((best, cur) =>
+      Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
+    );
+    return { ok: true, output: winner.sample };
   }
 }
 
@@ -289,6 +409,46 @@ function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget)
   };
 }
 
+/** Flatten a head's report into the trajectory the grounded evaluator scores:
+ *  its summary + every decision + every evidence body + artifact refs. The
+ *  evaluator pulls any JS-family code fence out of this for execution grounding,
+ *  so a head that left runnable code is scored on whether it RUNS, not vibes. */
+function headTrajectory(r: HeadReport): string {
+  const parts: string[] = [r.summary];
+  for (const d of r.decisions) parts.push(`Decision — ${d.question}: ${d.choice} (${d.rationale})`);
+  for (const e of r.evidence) parts.push(`Evidence [${e.kind}]: ${e.body}`);
+  for (const a of r.artifactRefs) parts.push(`Artifact (${a.kind}): ${a.ref}${a.description ? ` — ${a.description}` : ''}`);
+  return parts.join('\n').trim();
+}
+
+/** Score ONE merge synthesis narrative for how well it answers the split — the
+ *  k-sample-median selector over merge candidates. Mirrors a judge sample in
+ *  evaluation.ts: unparseable/failed → null (dropped, never 0). */
+async function scoreMergeNarrative(judge: LLM, rationale: string, narrative: string): Promise<number | null> {
+  const prompt = `You are scoring how well a synthesized answer resolves a task that was explored by several parallel reasoning heads.
+
+Task / split rationale:
+${rationale.slice(0, 1500)}
+
+Synthesized answer:
+${narrative.slice(0, 3000)}
+
+Score from 0.0 to 1.0 for how completely and correctly the answer resolves the task: specific and grounded beats vague.
+JSON shape:
+{"score": <float 0.0-1.0>, "rationale": "<15 words max>"}
+${jsonObjectOnlyInstruction()}`;
+  let text: string;
+  try {
+    text = await judge.complete(prompt);
+  } catch {
+    return null;
+  }
+  const match = text.match(/"score"\s*:\s*(-?\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const score = Number(match[1]);
+  return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : null;
+}
+
 function fallbackNarrative(reports: readonly HeadReport[], rationale: string, errMsg: string): string {
   const lines: string[] = [];
   lines.push(`Merge synthesis unavailable (${errMsg}). Per-head summaries:`);
@@ -308,6 +468,7 @@ function buildMergePrompt(
   rationale: string,
   strategy: MergeStrategy,
   inheritedContext: readonly SerializedMessage[],
+  headScores: readonly HeadScore[] = [],
 ): string {
   const strategyGuidance: Record<MergeStrategy, string> = {
     synthesize: 'Synthesize the heads\' findings into a single coherent narrative. Reconcile disagreements explicitly; prefer the head with stronger evidence.',
@@ -320,24 +481,37 @@ function buildMergePrompt(
     .map((m) => `${m.role}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '…' : ''}`)
     .join('\n');
 
+  const scoreById = new Map(headScores.map((s) => [s.id, s]));
   const headSections = reports.map((r) => {
-    const evList = r.evidence
-      .slice(0, 6)
-      .map((e) => `  - [${e.kind}${e.confidence != null ? ` conf=${e.confidence.toFixed(2)}` : ''}] ${e.body.slice(0, 200)}`)
-      .join('\n');
+    // Pass ALL evidence with full bodies — no 6×200-char clipping; the merge is
+    // where information must NOT be lost. Same for decisions + artifact refs.
+    const evList = r.evidence.length === 0
+      ? '  (none)'
+      : r.evidence
+        .map((e) => `  - [${e.kind}${e.confidence != null ? ` conf=${e.confidence.toFixed(2)}` : ''}${e.ref ? ` ref=${e.ref}` : ''}] ${e.body}`)
+        .join('\n');
     const decList = r.decisions.length === 0
       ? '  (none)'
       : r.decisions.map((d) => `  - Q: ${d.question}\n    A: ${d.choice}\n    Why: ${d.rationale}`).join('\n');
-    return `## Head ${r.id} (${r.status})
+    const artList = r.artifactRefs.length === 0
+      ? ''
+      : `\n\nArtifacts:\n${r.artifactRefs.map((a) => `  - (${a.kind}) ${a.ref}${a.description ? ` — ${a.description}` : ''}`).join('\n')}`;
+    const s = scoreById.get(r.id);
+    const scoreTag = s ? ` — grounded outcome ${s.score.toFixed(2)} (${s.grounding})` : '';
+    return `## Head ${r.id} (${r.status})${scoreTag}
 Summary:
 ${r.summary}
 
 Decisions:
 ${decList}
 
-Top evidence:
-${evList || '  (none)'}`;
+Evidence:
+${evList}${artList}`;
   }).join('\n\n');
+
+  const scoreGuidance = headScores.length > 0
+    ? '\nEach head carries a grounded outcome score (execution-verified when it left runnable code); weight higher-scoring heads more heavily when they conflict.\n'
+    : '';
 
   return `You are merging the findings of ${reports.length} parallel reasoning heads.
 
@@ -345,7 +519,7 @@ Split rationale: ${rationale}
 
 Merge strategy: ${strategy}
 Strategy guidance: ${strategyGuidance[strategy]}
-
+${scoreGuidance}
 Recent conversation context:
 ${recentContext || '(none)'}
 

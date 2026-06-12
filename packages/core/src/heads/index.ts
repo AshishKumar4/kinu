@@ -16,6 +16,7 @@ export type {
   ArtifactRef,
   SplitRequest,
   MergeResult,
+  HeadScore,
   MergeStrategy,
   BudgetSplit,
   SerializedMessage,
@@ -34,6 +35,7 @@ export { MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput
 export {
   HeadController,
   type HeadRuntime,
+  type HeadGrounding,
   type SpawnedHead,
   type MergeLLMFn,
   type SplitPhaseEvent,

@@ -1,0 +1,285 @@
+/**
+ * Behavior tests for the grounded heads path (THINKING-AUDIT §4 DO-NOW #2).
+ *
+ *  1. Grounded outcome score — each head's report is scored by the SAME
+ *     execution-grounded evaluator the MCTS engine uses. A head whose work
+ *     failed/was aborted scores below one whose code ran and held up.
+ *  2. k-sample median merge — with a grounding seam the merge runs k synthesis
+ *     samples and keeps the median-scored one (not n=1).
+ *  3. No evidence clipping — a long finding survives verbatim into the merge
+ *     prompt (no 6×200-char truncation).
+ *  4. Heads → Alternate-Takes — a completed heads run emits a take set (source
+ *     'heads') into the ledger, claimed against the turn so the pick is a
+ *     preference signal.
+ */
+
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import {
+  HeadController, HeadJournal,
+  type HeadInput, type HeadReport, type HeadRuntime, type HeadGrounding,
+  type SpawnedHead, type SerializedMessage, type SplitRequest, type MergeOutput,
+  type Executor, type LLM,
+  initHeadsTables,
+  initAlternateTakesTable, recordHeadsTakeSet, claimAlternateTakesForTurn,
+  listAlternateTakeSets, recordTakePick,
+} from '../src/index.js';
+import { createJSONLLM } from '@proteus/test-utils';
+import { makeSql, makeExecRaw } from './helpers.js';
+import { initTurnOutcomeTables } from '../src/evolution/outcomes.js';
+
+// ── fakes ────────────────────────────────────────────────────────────
+
+function newJournal() {
+  const db = new Database(':memory:');
+  initHeadsTables(makeExecRaw(db));
+  const sql = makeSql(db);
+  return { sql, journal: new HeadJournal(sql), db };
+}
+
+/** Executor whose verdict is decided by whether the code mentions "boom". */
+function verdictExecutor(): Executor {
+  return {
+    async execute(code: string) {
+      return code.includes('boom')
+        ? { result: undefined, error: 'boom' }
+        : { result: undefined };
+    },
+  } as unknown as Executor;
+}
+
+function report(id: string, o: Partial<HeadReport> = {}): HeadReport {
+  return {
+    id, status: 'completed', summary: `Head ${id} finding.`,
+    evidence: [], decisions: [], artifactRefs: [], childHeadIds: [],
+    toolCalls: [], steps: [], tokenUsage: { input: 10, output: 10, total: 20 },
+    wallClockMs: 5, ...o,
+  };
+}
+
+function mergeOut(narrative: string): MergeOutput {
+  return { narrative, selected_decisions: [], unresolved_questions: [], recommendations: [] };
+}
+
+/** A runtime returning canned reports keyed by task, a scripted merge LLM, and
+ *  an optional grounding seam. Records every merge prompt + counts merge calls. */
+function buildRuntime(opts: {
+  reports: Record<string, HeadReport>;
+  grounding?: HeadGrounding;
+  mergeNarratives?: string[];     // one per merge call (cycles to last)
+  mergePrompts?: string[];        // out-param: every merge prompt seen
+}): HeadRuntime {
+  let mergeCall = 0;
+  return {
+    async spawnHead(input: HeadInput): Promise<SpawnedHead> {
+      return {
+        id: input.id,
+        async run() { return { ...opts.reports[input.task]!, id: input.id }; },
+        async abort() {},
+      };
+    },
+    async mergeLLM(prompt): Promise<MergeOutput> {
+      opts.mergePrompts?.push(prompt);
+      const narrs = opts.mergeNarratives ?? ['merged'];
+      const narrative = narrs[Math.min(mergeCall, narrs.length - 1)]!;
+      mergeCall++;
+      return mergeOut(narrative);
+    },
+    ...(opts.grounding ? { grounding: opts.grounding } : {}),
+  };
+}
+
+const ctx: SerializedMessage[] = [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }];
+
+function grounding(over: Partial<HeadGrounding> = {}): HeadGrounding {
+  const judge = createJSONLLM({ score: 0.5, rationale: 'ok' });
+  return { executor: verdictExecutor(), explorer: judge, judge, ...over };
+}
+
+// ── 1. grounded outcome score ─────────────────────────────────────────
+
+describe('grounded head outcome scores', () => {
+  test('a head whose code RAN outscores a head whose code FAILED', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({
+      reports: {
+        good: report('h-good', { summary: 'works', evidence: [{ id: 'e1', kind: 'artifact', body: '```js\nconst x = 42;\n```' }] }),
+        bad: report('h-bad', { summary: 'broken', evidence: [{ id: 'e2', kind: 'artifact', body: '```js\nthrow new Error("boom");\n```' }] }),
+      },
+      grounding: grounding(),
+    });
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'good', rationale: 'a' }, { task: 'bad', rationale: 'b' }] },
+    });
+
+    expect(result.grounded).toBe(true);
+    expect(result.headScores).toHaveLength(2);
+    const good = result.headScores.find((s) => s.text === 'works')!;
+    const bad = result.headScores.find((s) => s.text === 'broken')!;
+    expect(good.grounding).toBe('execution');
+    expect(bad.grounding).toBe('execution');
+    expect(good.score).toBeGreaterThan(bad.score);
+    expect(bad.score).toBeLessThanOrEqual(0.3);   // fail band
+    expect(good.score).toBeGreaterThanOrEqual(0.6); // pass band
+  });
+
+  test('a non-completed head is floored below a completed one without a judge call', async () => {
+    const { journal } = newJournal();
+    // Judge that throws if ever asked — proves the aborted head spends no call.
+    const throwingJudge: LLM = {
+      async *stream() { throw new Error('should not be called for the aborted head'); yield ''; },
+      async complete() { return JSON.stringify({ score: 0.9 }); },
+    };
+    const runtime = buildRuntime({
+      reports: {
+        done: report('h-done', { summary: 'finished' }),
+        gone: report('h-gone', { status: 'aborted', summary: '' }),
+      },
+      grounding: grounding({ judge: throwingJudge, explorer: throwingJudge }),
+    });
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'done', rationale: 'a' }, { task: 'gone', rationale: 'b' }] },
+    });
+    const gone = result.headScores.find((s) => s.status === 'aborted')!;
+    const done = result.headScores.find((s) => s.status === 'completed')!;
+    expect(gone.score).toBe(0);
+    expect(done.score).toBeGreaterThan(gone.score);
+  });
+
+  test('without a grounding seam, scores are neutral and grounded=false', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({ reports: { a: report('h-a'), b: report('h-b') } });
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+    });
+    expect(result.grounded).toBe(false);
+    expect(result.headScores.every((s) => s.score === 0.5)).toBe(true);
+  });
+});
+
+// ── 2. k-sample median merge ──────────────────────────────────────────
+
+describe('k-sample median merge', () => {
+  test('grounded merge runs k samples and keeps the median-scored one', async () => {
+    const { journal } = newJournal();
+    const mergePrompts: string[] = [];
+    // Three distinct candidate narratives; the judge scores them low/mid/high
+    // by keyword so the median ("mid") must be the one selected.
+    const scoringJudge: LLM = {
+      async *stream() { yield ''; },
+      async complete(prompt: string) {
+        if (prompt.includes('Synthesized answer:')) {
+          const s = prompt.includes('CAND-low') ? 0.1 : prompt.includes('CAND-high') ? 0.9 : 0.5;
+          return JSON.stringify({ score: s });
+        }
+        return JSON.stringify({ score: 0.5 }); // per-head judge
+      },
+    };
+    const runtime = buildRuntime({
+      reports: { a: report('h-a'), b: report('h-b') },
+      grounding: grounding({ judge: scoringJudge, explorer: scoringJudge, mergeSamples: 3 }),
+      mergeNarratives: ['CAND-low', 'CAND-mid', 'CAND-high'],
+      mergePrompts,
+    });
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+    });
+    // k=3 merge synthesis calls were made (the merge prompt is identical each time).
+    expect(mergePrompts).toHaveLength(3);
+    // The median-scored candidate ("mid") wins — not low, not high.
+    expect(result.mergedNarrative).toBe('CAND-mid');
+  });
+
+  test('ungrounded merge is n=1', async () => {
+    const { journal } = newJournal();
+    const mergePrompts: string[] = [];
+    const runtime = buildRuntime({
+      reports: { a: report('h-a'), b: report('h-b') },
+      mergeNarratives: ['only'],
+      mergePrompts,
+    });
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+    });
+    expect(mergePrompts).toHaveLength(1);
+    expect(result.mergedNarrative).toBe('only');
+  });
+});
+
+// ── 3. no evidence clipping ───────────────────────────────────────────
+
+describe('evidence is not clipped into the merge', () => {
+  test('a long finding body survives verbatim into the merge prompt', async () => {
+    const { journal } = newJournal();
+    const mergePrompts: string[] = [];
+    const longBody = 'X'.repeat(1200); // far past the old 200-char clip
+    const manyEv = Array.from({ length: 9 }, (_, i) => ({ id: `e${i}`, kind: 'fact' as const, body: `finding-${i}` }));
+    const runtime = buildRuntime({
+      reports: {
+        a: report('h-a', { evidence: [{ id: 'big', kind: 'fact', body: longBody }, ...manyEv] }),
+        b: report('h-b'),
+      },
+      mergePrompts,
+    });
+    await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: ctx,
+      request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
+    });
+    const prompt = mergePrompts[0]!;
+    expect(prompt).toContain(longBody);            // full body, not truncated
+    expect(prompt).toContain('finding-8');         // the 9th evidence item (past the old slice(0,6))
+  });
+});
+
+// ── 4. heads → Alternate-Takes ledger ─────────────────────────────────
+
+describe('heads emit an Alternate-Takes set into the preference ledger', () => {
+  test('recordHeadsTakeSet writes a heads-sourced set; claim + pick credits the turn', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initAlternateTakesTable(execRaw);
+    initTurnOutcomeTables(execRaw, sql);
+
+    const set = recordHeadsTakeSet(sql, {
+      task: 'compare approaches',
+      heads: [
+        { id: 'h1', text: 'approach one', score: 0.8 },
+        { id: 'h2', text: 'approach two', score: 0.4 },
+      ],
+    });
+    expect(set).not.toBeNull();
+    expect(set!.source).toBe('heads');
+    // Winner = highest grounded score.
+    expect(set!.candidates[0]!.text).toBe('approach one');
+    expect(set!.turnId).toBeNull(); // unclaimed until turn end
+
+    // Claimed against the finished turn (the MCTS capture flow).
+    claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 's', startedAt: 0 });
+    const claimed = listAlternateTakeSets(sql)[0]!;
+    expect(claimed.turnId).toBe('msg-1');
+    expect(claimed.source).toBe('heads');
+
+    // Picking the lower-scored head is a 'corrected' preference signal; the
+    // synthetic node ids never touch search_nodes (no re-point crash).
+    const pick = recordTakePick(sql, { takeId: claimed.id, nodeId: claimed.candidates[1]!.nodeId });
+    expect(pick.outcome).toBe('corrected');
+    const ledger = sql<{ source: string; outcome: string }>`SELECT source, outcome FROM turn_outcomes`;
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.source).toBe('take_pick');
+    expect(ledger[0]!.outcome).toBe('corrected');
+  });
+
+  test('returns null when fewer than 2 distinct head answers exist', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initAlternateTakesTable(makeExecRaw(db));
+    expect(recordHeadsTakeSet(sql, { task: 't', heads: [{ id: 'h1', text: 'same', score: 0.5 }, { id: 'h2', text: 'same', score: 0.6 }] })).toBeNull();
+    expect(recordHeadsTakeSet(sql, { task: 't', heads: [{ id: 'h1', text: 'lonely', score: 0.5 }] })).toBeNull();
+  });
+});
