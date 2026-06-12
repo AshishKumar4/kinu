@@ -140,7 +140,10 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
     return { code: null, stdout: '' };
   }
   child.stdin?.end();
-  const stdout = await readAll(child.stdout);
+  // A missing binary surfaces as a premature-close stream error rather than a
+  // synchronous spawn throw; the failing exit code (null/non-zero) is the real
+  // signal, so a broken stream read just means "no output".
+  const stdout = await readAll(child.stdout).catch(() => '');
   const code = await child.exit;
   return { code, stdout };
 }

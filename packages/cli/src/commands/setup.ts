@@ -3,6 +3,7 @@ import {
   decodeCodexAccountId,
   tokensToCredential,
 } from '@proteus/core';
+import { checkClaudeAvailability } from '@proteus/cli-backend';
 import { loadConfigFile, saveConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { ask, askSecret, canPrompt, confirm } from '../prompt.js';
@@ -27,6 +28,7 @@ export async function setupCommand(opts: {
   let cloudSkipped = Boolean(opts.skipCloud);
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
+    console.log(DIM('Local agents you create signed in get free Workers AI (no key needed).'));
   }
 
   if (!opts.skipCloud && !config.accessToken) {
@@ -172,6 +174,12 @@ async function chooseProvider(): Promise<string> {
   console.log(`  ${ACCENT('4')} Anthropic`);
   console.log(`  ${ACCENT('5')} OpenAI-compatible`);
   console.log(`  ${ACCENT('6')} Skip`);
+  // No-friction discovery: the Claude Code subscription stores no credential
+  // here (the binary owns its own login), so mention it inline rather than as a
+  // step — only when it is actually usable on this machine.
+  if ((await checkClaudeAvailability()).loggedIn) {
+    console.log(DIM('  Claude Code detected — or use --model claude/claude-opus-4-x for your subscription.'));
+  }
   const value = await ask('Choice', '1');
   return value;
 }
