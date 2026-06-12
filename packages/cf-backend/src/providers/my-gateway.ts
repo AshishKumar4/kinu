@@ -15,9 +15,10 @@
 // slash is exactly the wire `author/model` id (e.g. `openai/gpt-4.1`).
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps, AuthResolution } from '@proteus/core';
-import { asFetchFunction, authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@proteus/core';
+import type { ModelProvider, ModelInfo, ProviderDeps } from '@proteus/core';
+import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@proteus/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '../lib/cloudflare-oauth.js';
+import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch.js';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
 
@@ -78,34 +79,14 @@ export function createMyGatewayProvider(): ModelProvider {
     },
 
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = deps.fetch ?? fetch;
       const placeholder = 'https://proteus-my-gateway.invalid';
-      const customFetch = asFetchFunction(async (input, init) => {
-        const auth = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY);
-        if (!auth?.baseURL) {
-          return errorResponse(401, 'Connect Cloudflare and select an AI Gateway in User settings before using my-gateway models.');
-        }
-
-        const originalUrl = typeof input === 'string' ? input
-          : input instanceof URL ? input.toString()
-            : input.url;
-        const send = async (resolved: AuthResolution) => {
-          const headers = new Headers(init?.headers);
-          for (const [key, value] of Object.entries(resolved.headers)) headers.set(key, value);
-          const url = originalUrl.startsWith(placeholder) && resolved.baseURL
-            ? resolved.baseURL.replace(/\/+$/, '') + originalUrl.slice(placeholder.length)
-            : originalUrl;
-          return baseFetch(url, { ...init, headers });
-        };
-
-        let res = await send(auth);
-        // Same expiry-401 contract as workers-ai/codex: one forced refresh.
-        if (res.status === 401) {
-          const refreshed = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY, { forceRefresh: true });
-          if (refreshed?.baseURL) res = await send(refreshed);
-        }
-        if (!res.ok) return mapGatewayError(res, modelId, auth.headers['cf-aig-gateway-id']);
-        return res;
+      const customFetch = createCloudflareAIFetch({
+        credKey: CLOUDFLARE_AI_GATEWAY_CRED_KEY,
+        getAuth: deps.getAuth,
+        fetch: deps.fetch,
+        placeholder,
+        missingCredentialMessage: 'Connect Cloudflare and select an AI Gateway in User settings before using my-gateway models.',
+        mapError: (res, resolved) => mapGatewayError(res, modelId, resolved.headers['cf-aig-gateway-id']),
       });
 
       return createOpenAICompatible({
@@ -159,65 +140,3 @@ async function servableProviderSlugs(
   return [...slugs].sort();
 }
 
-/** Rewrite gateway/provider failures into actionable messages that name the
- *  gateway and the upstream provider — never raw Cloudflare error envelopes.
- *  Known shapes: 2008 "Invalid provider" (model id the unified surface can't
- *  route) and 2021 "Invalid User Credentials" (no BYOK key + no credits). */
-async function mapGatewayError(res: Response, modelId: string, gatewayId: string | undefined): Promise<Response> {
-  const body = await res.text();
-  const { code, message } = extractGatewayError(body);
-  const author = modelId.includes('/') ? modelId.slice(0, modelId.indexOf('/')) : modelId;
-  const gateway = gatewayId ? `AI Gateway "${gatewayId}"` : 'your AI Gateway';
-
-  let friendly: string | null = null;
-  if (code === 2008 || /invalid provider/i.test(message ?? '')) {
-    friendly = `${gateway} cannot route "${modelId}" — the unified endpoint only accepts "{provider}/{model}" ids for providers it supports (got provider "${author}").`;
-  } else if (code === 2021 || /invalid user credentials/i.test(message ?? '') || /insufficient.*(credit|balance)/i.test(message ?? '')) {
-    friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
-  } else if (res.status === 401) {
-    // Still 401 AFTER the forced-refresh retry → the Cloudflare login is dead.
-    friendly = 'Your Cloudflare login is no longer valid — reconnect Cloudflare in User settings.';
-  }
-  if (!friendly) {
-    // Unknown failure — keep the original payload intact for the caller.
-    return new Response(body, {
-      status: res.status,
-      headers: { 'content-type': res.headers.get('content-type') ?? 'text/plain' },
-    });
-  }
-  const detail = message && !friendly.includes(message) ? ` (upstream: ${message})` : '';
-  return errorResponse(res.status, `${friendly}${detail}`);
-}
-
-function extractGatewayError(body: string): { code: number | null; message: string | null } {
-  try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    // Cloudflare v4 envelope: { success, errors: [{ code, message }] }
-    const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
-    const first = errors[0] as Record<string, unknown> | undefined;
-    if (first) {
-      return {
-        code: typeof first.code === 'number' ? first.code : null,
-        message: typeof first.message === 'string' ? first.message : null,
-      };
-    }
-    // Gateway / OpenAI-style: { error: { code?, message } } or { error: "..." }
-    const error = parsed.error;
-    if (typeof error === 'string') return { code: null, message: error };
-    if (error && typeof error === 'object') {
-      const obj = error as Record<string, unknown>;
-      return {
-        code: typeof obj.code === 'number' ? obj.code : null,
-        message: typeof obj.message === 'string' ? obj.message : null,
-      };
-    }
-  } catch { /* not JSON */ }
-  return { code: null, message: body.trim() ? body.trim().slice(0, 200) : null };
-}
-
-function errorResponse(status: number, message: string): Response {
-  return new Response(
-    JSON.stringify({ error: { message } }),
-    { status, headers: { 'content-type': 'application/json' } },
-  );
-}
