@@ -84,7 +84,6 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
           <MessageList
-            streamingText={null}
             messages={[
               { id: 'u1', role: 'user', content: 'Review this module' },
               { id: 'a1', role: 'assistant', content: '### Plan\n\n- **Inspect** sources\n- Ship fix' },
@@ -106,6 +105,63 @@ describe('CLI TUI layout', () => {
     }
   });
 
+  test('text and tool calls render chronologically interleaved', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 30, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      // The transcript order IS the chronological order: text, tool, text, tool.
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+          <MessageList
+            messages={[
+              { id: 'a1', role: 'assistant', content: 'FIRST text before the tool' },
+              { id: 't1', role: 'tool_call', content: '', toolName: 'read_file' },
+              { id: 'a2', role: 'assistant', content: 'SECOND text after the tool' },
+              { id: 't2', role: 'tool_call', content: '', toolName: 'write_file' },
+              { id: 'a3', role: 'assistant', content: 'THIRD text after the second tool' },
+            ]}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      const at = (needle: string) => frame.indexOf(needle);
+      // Each surface lands strictly after the one that preceded it in the stream.
+      expect(at('FIRST')).toBeGreaterThanOrEqual(0);
+      expect(at('read_file')).toBeGreaterThan(at('FIRST'));
+      expect(at('SECOND')).toBeGreaterThan(at('read_file'));
+      expect(at('write_file')).toBeGreaterThan(at('SECOND'));
+      expect(at('THIRD')).toBeGreaterThan(at('write_file'));
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('a live assistant segment renders its streaming text in place', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
+          <MessageList
+            messages={[
+              { id: 't1', role: 'tool_call', content: '', toolName: 'read_file' },
+              { id: 'a1', role: 'assistant', content: 'streaming reply in progress', live: true },
+            ]}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      // The live segment sits AFTER the tool it followed, with its text visible.
+      expect(frame.indexOf('streaming reply')).toBeGreaterThan(frame.indexOf('read_file'));
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
   test('steered user messages carry the steering marker', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
@@ -113,7 +169,6 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: tuiColors.bg }}>
           <MessageList
-            streamingText={null}
             messages={[
               { id: 'u1', role: 'user', content: 'start the deploy' },
               { id: 'u2', role: 'user', content: 'use staging instead', steered: true },

@@ -16,8 +16,8 @@ export function modelDisplayName(spec: string | null | undefined): string {
     .replace(/\b([a-z])/g, (m) => m.toUpperCase());
 }
 
-export function estimateContextTokens(messages: readonly TextForContextEstimate[], streamingText: string | null): number {
-  const chars = messages.reduce((sum, msg) => sum + msg.content.length, 0) + (streamingText?.length ?? 0);
+export function estimateContextTokens(messages: readonly TextForContextEstimate[]): number {
+  const chars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
   return Math.max(0, Math.ceil(chars / 4));
 }
 

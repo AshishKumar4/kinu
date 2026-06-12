@@ -80,7 +80,6 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   // sibling client pointed at the forked agent.
   const [client, setClient] = useState(initialClient);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
-  const [streamingText, setStreamingText] = useState<string | null>(null);
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
@@ -105,7 +104,6 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const skipHydrationRef = useRef(false);
   /** Take sets already hinted at, so a turn without a new convergence is quiet. */
   const hintedTakesRef = useRef<string | null>(null);
-  const stream = useStreamingBuffer(setStreamingText);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
@@ -115,6 +113,46 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     const id = `msg-${++msgIdRef.current}`;
     setMessages((prev) => [...prev, { ...msg, id }]);
   }, []);
+
+  // ── Live assistant text segments — the key to chronological interleaving.
+  // Streamed text-deltas flow into a `live` assistant message that sits at its
+  // real position in the array. A tool-call SEALS the active segment so the
+  // next text-delta opens a fresh segment AFTER the tool, giving true
+  // text → tool → text → tool order (rather than buffering all text to a
+  // trailing block that renders after every tool card).
+  const activeSegmentRef = useRef<string | null>(null);
+  /** Whether the current turn streamed any assistant text. When false at
+   *  turn-end, turn.text was synthesized server-side (no deltas) and must be
+   *  appended once so the answer isn't dropped from the live view. */
+  const turnStreamedTextRef = useRef(false);
+
+  /** Stream-buffer flush target: write coalesced text into the live segment. */
+  const writeActiveSegment = useCallback((value: string | null) => {
+    const id = activeSegmentRef.current;
+    if (!id || value === null) return;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
+  }, []);
+  const stream = useStreamingBuffer(writeActiveSegment);
+
+  /** Open a fresh live assistant segment and route streamed text into it. */
+  const beginSegment = useCallback(() => {
+    const id = `msg-${++msgIdRef.current}`;
+    activeSegmentRef.current = id;
+    setMessages((prev) => [...prev, { id, role: 'assistant', content: '', live: true }]);
+    stream.start();
+  }, [stream]);
+
+  /** Seal the live segment in place: stop streaming, keep its text, drop the
+   *  cursor. An empty segment (tool fired before any text) is removed. */
+  const sealSegment = useCallback(() => {
+    const id = activeSegmentRef.current;
+    activeSegmentRef.current = null;
+    stream.clear();
+    if (!id) return;
+    setMessages((prev) =>
+      prev.flatMap((m) => (m.id === id ? (m.content.trim() ? [{ ...m, live: false }] : []) : [m])),
+    );
+  }, [stream]);
 
   /** All input transitions flow through the one reducer; effects come back to
    *  the caller so client events and keypresses never race over state. */
@@ -205,7 +243,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     setSessionPicker(null);
     setModelPicker(null);
     setReady(false);
-    setStreamingText(null);
+    activeSegmentRef.current = null;
+    stream.clear();
     setTurnPhase(null);
     await client.resumeConversation(selected.info.id);
     const history = await client.history().catch(() => []);
@@ -215,7 +254,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       ...history,
     ]);
     setReady(true);
-  }, [addMessage, client]);
+  }, [addMessage, client, stream]);
 
   const openModelPicker = useCallback(async () => {
     setModelPicker({ models: [], loading: true, error: null });
@@ -452,9 +491,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const handleClientEvent = useCallback((event: AgentClientEvent) => {
     switch (event.type) {
       case 'turn-start': {
-        const wasIdle = machineRef.current.activeTurns === 0;
         runInputEffects(dispatchInput({ type: 'turn-start' }));
-        if (wasIdle) stream.start();
+        // A new segment opens lazily on the first text-delta — start clean.
+        sealSegment();
+        turnStreamedTextRef.current = false;
         setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
         if (event.kind === 'programmatic') {
           addMessage({ role: 'evolution', content: `⚡ ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
@@ -462,10 +502,16 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         break;
       }
       case 'text-delta':
+        if (!event.delta) break;
+        turnStreamedTextRef.current = true;
+        if (!activeSegmentRef.current) beginSegment();
         stream.append(event.delta);
         setTurnPhase((current) => current === 'writing' ? current : 'writing');
         break;
       case 'tool-call':
+        // Seal the preceding text run so this tool — and any text that follows
+        // it — lands at its true chronological position.
+        sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
         addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
         break;
@@ -481,12 +527,19 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         break;
       case 'error':
         // Informational: the lifecycle settles through the paired turn-end.
+        sealSegment();
         addMessage({ role: 'system', content: `Error: ${event.message}` });
-        stream.clear();
         break;
       case 'turn-end': {
-        stream.clear();
-        if (event.turn.text.trim()) {
+        // Flush the trailing streamed text into the live segment, then seal it.
+        // The streamed segments ARE the transcript — re-appending turn.text here
+        // would duplicate the text after the tool cards (the old regrouping bug).
+        if (activeSegmentRef.current) stream.finish();
+        sealSegment();
+        // Synthesized-text fallback: when the backend produced text without
+        // streaming deltas (ended on a tool call, server-built summary), no
+        // live segment captured it — surface it once.
+        if (!turnStreamedTextRef.current && event.turn.text.trim()) {
           addMessage({ role: 'assistant', content: event.turn.text.trim() });
         }
         runInputEffects(dispatchInput({ type: 'turn-settled' }));
@@ -518,7 +571,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         break;
       }
     }
-  }, [addMessage, client, dispatchInput, runInputEffects, stream]);
+  }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, stream]);
 
   // Connect once per client: event subscription, startup resources, initial
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.
@@ -662,7 +715,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
   const commandHints = !modelPicker && !changelogView && !takesView && !inputState.walkbackOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
-  const contextTokens = estimateContextTokens(messages, streamingText);
+  const contextTokens = estimateContextTokens(messages);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
@@ -700,7 +753,6 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           : null}
         <MessageList
           messages={messages.filter((msg) => !(msg.role === 'system' && msg.content === STATUS_VIEW))}
-          streamingText={streamingText}
         />
         <PhaseLine label={isProcessing ? (turnPhase ?? 'thinking') : null} />
       </scrollbox>

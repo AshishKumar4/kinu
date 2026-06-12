@@ -18,6 +18,9 @@ export interface DisplayMessage {
   steered?: boolean;
   /** User redirect run as a parallel branch (Steer-as-Branch). */
   branched?: boolean;
+  /** Assistant text segment still streaming — renders with the live cursor.
+   *  Sealed (set false / removed) when a tool call or turn-end follows. */
+  live?: boolean;
 }
 
 function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
@@ -51,7 +54,7 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
   );
 }
 
-function AssistantMessage({ content }: { content: string }) {
+function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   return (
     <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box
@@ -67,42 +70,14 @@ function AssistantMessage({ content }: { content: string }) {
         <markdown
           width="100%"
           syntaxStyle={markdownSyntax}
-          streaming={false}
+          streaming={live ?? false}
           internalBlockMode="top-level"
           tableOptions={{ style: 'grid', widthMode: 'content' }}
-          content={content}
+          content={live ? (content || ' ') : content}
           fg={tuiColors.text}
           bg={tuiColors.bg}
         />
-      </box>
-    </box>
-  );
-}
-
-function StreamingMessage({ content }: { content: string }) {
-  return (
-    <box flexDirection="row" justifyContent="flex-start" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
-      <box
-        flexDirection="column"
-        style={{
-          width: '92%',
-          backgroundColor: tuiColors.bg,
-          paddingLeft: 1,
-          paddingRight: 1,
-        }}
-      >
-        <text><strong fg={tuiColors.accentStrong}>Agent</strong></text>
-        <markdown
-          width="100%"
-          syntaxStyle={markdownSyntax}
-          streaming={true}
-          internalBlockMode="top-level"
-          tableOptions={{ style: 'grid', widthMode: 'content' }}
-          content={content || ' '}
-          fg={tuiColors.text}
-          bg={tuiColors.bg}
-        />
-        <text><span fg={tuiColors.borderActive}>▌</span></text>
+        {live ? <text><span fg={tuiColors.borderActive}>▌</span></text> : null}
       </box>
     </box>
   );
@@ -154,10 +129,9 @@ function SystemMessage({ content }: { content: string }) {
 
 interface Props {
   messages: DisplayMessage[];
-  streamingText: string | null;
 }
 
-export function MessageList({ messages, streamingText }: Props) {
+export function MessageList({ messages }: Props) {
   return (
     <>
       {messages.map((msg) => {
@@ -165,7 +139,7 @@ export function MessageList({ messages, streamingText }: Props) {
           case 'user':
             return <UserMessage key={msg.id} content={msg.content} attachments={msg.attachments} steered={msg.steered} branched={msg.branched} />;
           case 'assistant':
-            return <AssistantMessage key={msg.id} content={msg.content} />;
+            return <AssistantMessage key={msg.id} content={msg.content} live={msg.live} />;
           case 'tool_call':
             return <ToolCallMessage key={msg.id} toolName={msg.toolName ?? ''} args={msg.args} />;
           case 'tool_result':
@@ -178,7 +152,6 @@ export function MessageList({ messages, streamingText }: Props) {
             return null;
         }
       })}
-      {streamingText?.trim() ? <StreamingMessage content={streamingText} /> : null}
     </>
   );
 }
