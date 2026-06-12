@@ -28,7 +28,7 @@ import {
   type CliSessionInfo,
   type CliSessionOptions,
 } from './session.js';
-import { recordAgentClientEvent } from './session-recorder.js';
+import { SessionRecorder } from './session-recorder.js';
 import { normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
 import {
   findForkPivot,
@@ -122,6 +122,7 @@ export class LocalAgentClient implements AgentClient {
   private activeCliSession: CliSession;
   private pending: PendingLocalTurn | null = null;
   private closed = false;
+  private readonly recorder = new SessionRecorder('local');
 
   constructor(deps: LocalAgentClientDeps) {
     this.deps = deps;
@@ -403,7 +404,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   private emit(event: AgentClientEvent): void {
-    recordAgentClientEvent(this.activeCliSession, event, 'local');
+    this.recorder.record(this.activeCliSession, event);
     for (const listener of this.listeners) {
       try { listener(event); } catch { /* a render error must not kill the loop */ }
     }

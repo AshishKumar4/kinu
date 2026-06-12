@@ -24,7 +24,7 @@ import {
   type CliSessionInfo,
   type CliSessionOptions,
 } from './session.js';
-import { recordAgentClientEvent } from './session-recorder.js';
+import { SessionRecorder } from './session-recorder.js';
 import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, TakePickOutcome } from '@proteus/core';
 import {
@@ -90,6 +90,7 @@ export class CloudAgentClient implements AgentClient {
   private readonly sessionOptions: CliSessionOptions;
   private activeCliSession: CliSession;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
+  private readonly recorder = new SessionRecorder('cloud');
   private ws: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
   private readonly activeTurns = new Map<string, ActiveTurn>();
@@ -389,7 +390,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private emit(event: AgentClientEvent): void {
-    recordAgentClientEvent(this.activeCliSession, event, 'cloud');
+    this.recorder.record(this.activeCliSession, event);
     for (const listener of this.listeners) {
       try { listener(event); } catch { /* a render error must not kill the stream */ }
     }

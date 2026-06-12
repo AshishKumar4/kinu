@@ -11,6 +11,8 @@ import {
   transcriptMessages,
 } from "../src/session.js";
 import { renderSessionBrowser, selectSession } from "../src/tui/session-browser.js";
+import { SessionRecorder } from "../src/session-recorder.js";
+import type { AgentClientEvent } from "../src/agent-client.js";
 
 const tempDirs: string[] = [];
 
@@ -54,6 +56,58 @@ describe("CLI sessions", () => {
 
     expect(messages.map((message) => message.role)).toEqual(["user", "tool_call", "tool_result", "assistant"]);
     expect(messages.at(-1)?.content).toBe("done");
+  });
+
+  test("recorder persists text and tool calls in chronological order", () => {
+    const sessionDir = tempSessionDir();
+    const session = createCliSession("jarvis", { sessionDir, conversationId: "default" });
+    const recorder = new SessionRecorder("local");
+    const turnText = "first text second text third text";
+    // A turn that streams: text → tool → text → tool → text.
+    const events: AgentClientEvent[] = [
+      { type: "turn-start", kind: "user", text: "go" },
+      { type: "text-delta", delta: "first text " },
+      { type: "tool-call", toolName: "read_file", args: { path: "a.ts" } },
+      { type: "tool-result", toolName: "read_file", result: "contents" },
+      { type: "text-delta", delta: "second text " },
+      { type: "tool-call", toolName: "write_file", args: { path: "b.ts" } },
+      { type: "tool-result", toolName: "write_file", result: "ok" },
+      { type: "text-delta", delta: "third text" },
+      { type: "turn-end", turn: { text: turnText, toolCalls: [], steps: 2, durationMs: 1, hadError: false } },
+    ];
+    for (const event of events) recorder.record(session, event);
+
+    const transcript = readCliSessionTranscript("jarvis", session.id, { sessionDir });
+    const messages = transcriptMessages(transcript.entries);
+
+    // Text segments land at their true positions, NOT regrouped after the tools.
+    expect(messages.map((m) => m.role)).toEqual([
+      "assistant", "tool_call", "tool_result",
+      "assistant", "tool_call", "tool_result",
+      "assistant",
+    ]);
+    expect(messages.filter((m) => m.role === "assistant").map((m) => m.content))
+      .toEqual(["first text", "second text", "third text"]);
+    expect(messages.filter((m) => m.role === "tool_call").map((m) => m.toolName))
+      .toEqual(["read_file", "write_file"]);
+  });
+
+  test("recorder falls back to turn.text when no deltas streamed", () => {
+    const sessionDir = tempSessionDir();
+    const session = createCliSession("jarvis", { sessionDir, conversationId: "default" });
+    const recorder = new SessionRecorder("local");
+    // The backend synthesized text without streaming deltas (ended on a tool).
+    for (const event of [
+      { type: "turn-start", kind: "user", text: "go" },
+      { type: "tool-call", toolName: "search", args: {} },
+      { type: "tool-result", toolName: "search", result: "hit" },
+      { type: "turn-end", turn: { text: "synthesized answer", toolCalls: [], steps: 1, durationMs: 1, hadError: false } },
+    ] satisfies AgentClientEvent[]) recorder.record(session, event);
+
+    const transcript = readCliSessionTranscript("jarvis", session.id, { sessionDir });
+    const messages = transcriptMessages(transcript.entries);
+    expect(messages.map((m) => m.role)).toEqual(["tool_call", "tool_result", "assistant"]);
+    expect(messages.at(-1)?.content).toBe("synthesized answer");
   });
 
   test("skips malformed session headers when listing", () => {
