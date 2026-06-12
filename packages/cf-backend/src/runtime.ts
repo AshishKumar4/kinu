@@ -43,7 +43,7 @@ import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "./providers/workers-ai.js";
+import { agentAffinityKey } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,

@@ -33,7 +33,7 @@ import { Agent, callable } from "agents";
 import { generateText, tool, jsonSchema } from "ai";
 import type { LanguageModel } from "ai";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "./providers/workers-ai.js";
+import { agentAffinityKey } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
 import type { UserDO } from "./user/user-do.js";
 import type { OrchestratorAgent } from "./orchestrator.js";

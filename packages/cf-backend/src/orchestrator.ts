@@ -150,7 +150,7 @@ import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "./providers/workers-ai.js";
+import { agentAffinityKey } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
 import { createRLMProvider } from "./rlm.js";

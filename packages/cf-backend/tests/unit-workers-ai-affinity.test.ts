@@ -8,7 +8,7 @@
 import { describe, test, expect } from 'bun:test';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { agentAffinityKey } from '../src/providers/workers-ai.ts';
+import { agentAffinityKey } from '@proteus/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 

@@ -14,7 +14,7 @@ import { type MergeOutput, MergeOutputSchema, effortFor, createAgentConfigStore 
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
-import { agentAffinityKey } from "../providers/workers-ai.js";
+import { agentAffinityKey } from "@proteus/core";
 import { generateJson } from "../lib/generate-json.js";
 import type { UserDO } from "../user/user-do.js";
 
