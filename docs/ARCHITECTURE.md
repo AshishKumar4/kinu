@@ -84,7 +84,7 @@ sequenceDiagram
 
     U->>WS: cf_agent_use_chat_request
     WS->>T: _handleChatRequest → TurnQueue.enqueue
-    T->>T: getTools() — 5 tools + session context
+    T->>T: getTools() — 9 builtin tools + session context
     T->>T: getSystemPrompt() — read SOUL.md from the VFS
     T->>T: getModel() — read agent_config
     T->>T: beforeTurn() — reset counters, set activeTools

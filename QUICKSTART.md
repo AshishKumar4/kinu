@@ -1,5 +1,7 @@
 # Proteus Quick Start
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## CLI
 
 ```bash
@@ -15,6 +17,35 @@ browser login and optional local model-provider credentials.
 
 Use `--mode cloud` for a persistent cloud agent that uses your desktop daemon as
 the local execution engine, or `--mode local` for a fully local bun:sqlite agent.
+
+## Providers & models
+
+```bash
+proteus auth                              # browser sign-in: attaches Cloudflare (Workers AI + AI Gateway)
+proteus providers list                    # see what's connected, with status inline
+proteus providers connect openai          # or: anthropic, openrouter, codex, openai-compatible
+```
+
+Signed in, a **local** agent gets free Workers AI with no key (it defaults to
+`workers-ai/@cf/moonshotai/kimi-k2.6`). Your AI Gateway shows up as
+`my-gateway/{author}/{model}` once the OAuth grant includes the `aig.write`
+scope — run `proteus auth` again if you connected before it was added.
+
+**Claude subscription** (local only, via your Claude Code login):
+
+```bash
+claude                                    # one-time: sign in to your Claude subscription
+proteus providers connect claude          # status check + next steps (no key is stored)
+proteus create jarvis --mode local --model claude/claude-opus-4-x
+```
+
+Proteus drives the official `claude` binary, which owns its own login — it never
+reads your credentials. Cloud agents can't use the subscription; give them an
+Anthropic API key (`proteus providers connect anthropic`) instead.
+
+**Web search** just works: the `web_search` and `web_fetch` tools need no setup
+(DuckDuckGo + Cloudflare's markdown service). For ranked, answer-augmented
+search, store a Tavily key as the `tavily` credential.
 
 ## Web UI Development
 

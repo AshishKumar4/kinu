@@ -41,6 +41,7 @@ graph TB
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
 - **POSIX shell emulator** — 16 commands (ls, grep, find, sed, cat, etc.) over virtual filesystem. No real OS needed on Workers.
+- **Web search & fetch** — `web_search` and `web_fetch` are built in and work with zero keys (DuckDuckGo search + Cloudflare's markdown service); add a Tavily key for ranked, answer-augmented search.
 - **Formally verified** — 75 Lean 4 theorems across 6 categories (Safety, MCTS, Evolution, Agent, Storage, Execution) covering capability safety, storage isolation, budget termination, and backprop correctness
 - **Portable** — same core runs on Cloudflare Workers (Think + DOs) or local CLI (bun:sqlite)
 
@@ -87,6 +88,17 @@ inspects state, and everything else (webhooks, device registration, agent
 creation, consent decisions) stays interactive-only and is enforced
 server-side. `proteus tokens list` shows last use; `proteus tokens revoke ci`
 kills one immediately.
+
+## Models & providers
+
+I wanted model choice to be flexible without forcing anyone into a single vendor, so an agent can run on any of these:
+
+- **Your own Cloudflare account** — one browser sign-in (`proteus auth`) attaches your Cloudflare account, and from that single login you get both **Workers AI** and your **AI Gateway**. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `proteus auth` again to re-grant it.
+- **Signed-in local agents — free Workers AI** — if you're signed in, a *local* agent you create gets Workers AI through the `/api/user/ai/v1` proxy with **no key at all**. New local agents default to `workers-ai/@cf/moonshotai/kimi-k2.6`.
+- **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `proteus providers connect <name>`.
+- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly — the binary is the auth boundary, which is what keeps this compliant. It is **local only**: cloud agents must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
+
+`proteus providers list` shows what's connected and each provider's status inline. Pick a model per agent with `--model`, or switch mid-conversation from the `/model` picker.
 
 ## Documentation
 

@@ -41,7 +41,7 @@ tests/          E2E tests (run from repo root)
 
 ### cf-backend Architecture
 
-- `OrchestratorAgent extends Think<Env>` — chat, the 7 builtin tools, evolution hooks
+- `OrchestratorAgent extends Think<Env>` — chat, the 9 builtin tools, evolution hooks
 - `ExplorationAgent extends Agent` — MCTS branch sub-agent via Facets
 - `runtime.ts` — `createCFRuntime()` bridges Think DO context to `AgentRuntime`
 - `wrangler.jsonc` — DO bindings, worker_loaders, AI Gateway, SPA assets
@@ -104,7 +104,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - OrchestratorAgent extends `Think<Env>` from `@cloudflare/think`
 - Think wraps AIChatAgent and provides tool lifecycle, sessions, fibers
 - `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.6` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
-- `getTools()` builds the 7-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`); results are cached per CraftStore version
+- `getTools()` builds the 9-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `skills`, `think`, `memory`, `fact`, `web_search`, `web_fetch`, `product_change`; results are cached per CraftStore version
 - `getSystemPrompt()` reads `SOUL.md` from VFS
 - `onChatResponse()` fires evolution async (never blocks TurnQueue)
 - `beforeTurn()` resets per-turn state counters
