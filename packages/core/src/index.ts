@@ -144,6 +144,8 @@ export {
   type BuiltinToolSpec,
 } from './tools/registry.js';
 export { buildBuiltinTools, type BuiltinToolDeps, type ProductChangeToolDeps } from './tools/builtins.js';
+// Web search + fetch — provider seam + key-less default + codemode provider.
+export * from './web/index.js';
 export {
   clampToolResult,
   clampSerializedToolResult,

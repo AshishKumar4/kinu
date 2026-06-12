@@ -352,7 +352,7 @@ describe('buildSystemPromptSync', () => {
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
       'Operating guidance': 560,
-      'Tools available this turn': 1050,
+      'Tools available this turn': 1230,
       'Execution environments': 2000,
       'Persistence': 700,
       'Memory and facts': 560,

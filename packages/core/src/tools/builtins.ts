@@ -41,6 +41,7 @@ import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
 import { SessionSearchStore } from '../memory/session-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
+import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import type {
   ProductChangeApproval,
   ProductChangeCheck,
@@ -138,6 +139,11 @@ export interface BuiltinToolDeps {
   /** Product self-customization lane. Backend-supplied because persistence,
    *  source bindings, approval identity, and deployments are platform-owned. */
   productChanges?: ProductChangeToolDeps;
+  /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
+   *  Tavily-key auth seam differ per backend). Exposes the `web_search` and
+   *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
+   *  same provider in each backend's execute_tools assembly. */
+  webSearch?: WebSearchProvider;
 }
 
 export interface ProductChangeToolDeps {
@@ -596,7 +602,59 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 6. product_change — governed product/UI self-customization lane ───────
+  // ── 6. web_search / web_fetch — live web research ─────────────────────────
+  // Two tools, the universal 2026 agent shape: web_search discovers ranked
+  // results, web_fetch retrieves one URL as clean markdown. Both work key-less
+  // (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential upgrades
+  // search quality transparently. Codemode gets the same capability as
+  // `web.search()` / `web.fetch()` via createWebCodemodeProvider, wired in each
+  // backend's execute_tools assembly.
+  const webSearch = deps.webSearch;
+  if (webSearch) {
+    tools.web_search = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.web_search,
+      inputSchema: jsonSchema<{ query: string; limit?: number }>({
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The search query.' },
+          limit: { type: 'number', description: 'Max results (default 5, max 20).' },
+        },
+        required: ['query'],
+      }),
+      execute: async (args: { query: string; limit?: number }) => {
+        try {
+          const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
+          return formatSearchResults(res);
+        } catch (err) {
+          return webErrorResult(err);
+        }
+      },
+    });
+
+    tools.web_fetch = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.web_fetch,
+      inputSchema: jsonSchema<{ url: string }>({
+        type: 'object',
+        properties: { url: { type: 'string', description: 'The absolute http(s) URL to fetch.' } },
+        required: ['url'],
+      }),
+      execute: async (args: { url: string }) => {
+        try {
+          const res = await webSearch.fetch(args.url);
+          // Restorable clamp: oversized pages are offloaded to the workspace
+          // VFS and reduced to a re-readable head (see clamp.ts), so a big
+          // page never rots the session.
+          const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
+          const body = await clampToolResult(res.markdown, { vfs: rt.storage.vfs });
+          return header + body;
+        } catch (err) {
+          return webErrorResult(err);
+        }
+      },
+    });
+  }
+
+  // ── 7. product_change — governed product/UI self-customization lane ───────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({
@@ -763,6 +821,30 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   }
 
   return tools;
+}
+
+/** Render search results model-ready: a ranked list of title + url + snippet
+ *  (+ date when present), with the synthesized answer first when available. */
+function formatSearchResults(res: WebSearchResponse): string {
+  if (res.results.length === 0) {
+    return `No web results for "${res.query}".`;
+  }
+  const lines: string[] = [];
+  if (res.answer) lines.push(`Answer: ${res.answer}`, '');
+  for (const r of res.results) {
+    const date = r.date ? ` (${r.date})` : '';
+    lines.push(`${r.position}. ${r.title}${date}\n   ${r.url}\n   ${r.snippet}`);
+  }
+  lines.push('', `[${res.results.length} results via ${res.source}]`);
+  return lines.join('\n');
+}
+
+/** Map a web tool failure to an honest, model-actionable error object. */
+function webErrorResult(err: unknown): { error: string; retriable?: boolean } {
+  if (err instanceof WebFetchError) {
+    return err.retriable ? { error: err.message, retriable: true } : { error: err.message };
+  }
+  return { error: err instanceof Error ? err.message : String(err) };
 }
 
 function readAbortSignal(options: unknown): AbortSignal | undefined {

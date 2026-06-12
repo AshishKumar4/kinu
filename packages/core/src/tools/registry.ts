@@ -16,6 +16,8 @@ export const BUILTIN_TOOLS = [
   'think',
   'memory',
   'fact',
+  'web_search',
+  'web_fetch',
   'product_change',
 ] as const;
 
@@ -100,6 +102,21 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenToUse: 'Use for named durable state that should be recalled or updated precisely.',
     whenNotToUse: 'Do not use for long prose notes; use memory for those.',
     result: 'Returns fact mutation status or recalled fact values.',
+  },
+  web_search: {
+    name: 'web_search',
+    summary: 'Search the live web and return ranked results (title, url, snippet, date).',
+    whenToUse:
+      'Use to research a topic, find current or post-training-cutoff information, locate documentation/sources, or discover URLs to fetch. Loop it (call again with refined queries) for thorough research.',
+    whenNotToUse: 'Do not use when you already have the URL — call web_fetch directly. Do not use for facts you already know.',
+    result: 'Returns up to ~5 ranked results, each with title, url, snippet, and a freshness date when available (plus a synthesized answer when a Tavily key is connected).',
+  },
+  web_fetch: {
+    name: 'web_fetch',
+    summary: 'Fetch one URL and return its content as clean, citation-ready markdown.',
+    whenToUse: 'Use to read a specific page (a web_search hit, a doc, an article) after you have its URL.',
+    whenNotToUse: 'Do not use to discover pages — that is web_search. Do not fetch private/internal addresses; they are blocked.',
+    result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head you can re-read.',
   },
   product_change: {
     name: 'product_change',

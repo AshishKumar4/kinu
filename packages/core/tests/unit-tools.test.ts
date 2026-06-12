@@ -74,7 +74,7 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
 
 // skills, think, fact, and product_change are conditional on their deps. Base = everything
 // else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'think', 'fact', 'product_change'] as const;
+const CONDITIONAL_TOOLS = ['skills', 'think', 'fact', 'web_search', 'web_fetch', 'product_change'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
@@ -164,6 +164,10 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
         deployedAt: 0,
       }),
     };
+    const stubWebSearch = {
+      search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
+      fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
+    };
     const t = buildBuiltinTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
@@ -173,6 +177,7 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
       facts: stubFacts,
       skills: stubSkillsDeps,
       productChanges: stubProductChanges,
+      webSearch: stubWebSearch,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
