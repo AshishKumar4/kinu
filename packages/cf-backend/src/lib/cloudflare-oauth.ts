@@ -9,10 +9,11 @@ export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 // `offline_access` is what makes dash.cloudflare.com issue a refresh token
 // (the OAuth client must also have the Refresh Token grant enabled). Without
 // it the credential dies at access-token expiry and Workers AI "disconnects".
-// `aig.read` (AI Gateway Read) powers gateway discovery + BYOK provider-key
-// listing for the my-gateway provider; `aig.run` covers inference. Users who
-// connected before a scope was added need one re-login to grant it.
-export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.read aig.run offline_access';
+// `aig.write` (AI Gateway Write — the owner's OAuth client offers no separate
+// Read scope; Write covers the gateway/provider-config/billing listing APIs
+// the my-gateway provider uses for discovery) and `aig.run` covers inference.
+// Users who connected before a scope was added need one re-login to grant it.
+export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.write aig.run offline_access';
 export const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
@@ -186,7 +187,7 @@ export function isCloudflareAIGatewayId(value: string): boolean {
 }
 
 /** List the account's AI Gateways (GET /accounts/{id}/ai-gateway/gateways).
- *  Requires the `aig.read` OAuth scope — a 401/403 here usually means the
+ *  Requires the `aig.write` OAuth scope — a 401/403 here usually means the
  *  credential predates that scope and the user must reconnect Cloudflare. */
 export async function fetchCloudflareAIGateways(
   accountId: string,

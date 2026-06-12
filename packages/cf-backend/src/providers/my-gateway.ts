@@ -101,7 +101,7 @@ export function createMyGatewayProvider(): ModelProvider {
 /** Which provider slugs THIS gateway can actually serve: its stored BYOK
  *  provider keys, plus the Unified-Billing set when the account has credits.
  *  Both reads are best-effort — a denied management call (e.g. a credential
- *  predating the aig.read scope) just narrows the menu, never throws. */
+ *  predating the aig.write scope) just narrows the menu, never throws. */
 async function servableProviderSlugs(
   baseURL: string,
   authHeaders: Record<string, string>,

@@ -320,7 +320,7 @@ describe('Cloudflare AI Gateway discovery helpers', () => {
     ]);
   });
 
-  test('a 403 listing failure tells the user to reconnect (missing aig.read)', async () => {
+  test('a 403 listing failure tells the user to reconnect (missing aig.write)', async () => {
     await expect(fetchCloudflareAIGateways('abc123abc123abc1', 'old-scope-token', (async () =>
       new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), {
         status: 403, headers: { 'content-type': 'application/json' },
