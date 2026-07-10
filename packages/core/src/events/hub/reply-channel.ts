@@ -78,6 +78,19 @@ export class ReplyChannelStore {
     return id;
   }
 
+  /** The open channel bound to an event (optionally narrowed by kind). Used by
+   *  reply tools that hold an event id, not a channel id — e.g. a peer answering
+   *  the ask event it was woken with. */
+  findOpenByEvent(event_id: EventId, kind?: ReplyChannelKind): ReplyChannelRow | null {
+    const rows = this.sql.exec(
+      `SELECT id FROM reply_channels
+       WHERE event_id = ? AND state = 'open'${kind ? ` AND kind = ?` : ''}
+       ORDER BY created_at DESC LIMIT 1`,
+      ...(kind ? [event_id, kind] : [event_id]),
+    ).toArray() as Array<{ id: string }>;
+    return rows.length > 0 ? this.get(rows[0].id) : null;
+  }
+
   get(id: ReplyChannelId): ReplyChannelRow | null {
     const rows = this.sql.exec(
       `SELECT id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,

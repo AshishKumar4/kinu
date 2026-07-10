@@ -375,7 +375,8 @@ describe('buildSystemPromptSync', () => {
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
       'Operating guidance': 560,
-      'Tools available this turn': 1230,
+      // +1 summary line for the `team` peer-messaging tool (2026-07).
+      'Tools available this turn': 1420,
       'Execution environments': 2000,
       'Persistence': 700,
       'Memory and facts': 560,
@@ -385,6 +386,8 @@ describe('buildSystemPromptSync', () => {
       // load-bearing growth over the old heads-only blurb.
       'Research and experimentation': 840,
       'Background work': 260,
+      // One-line peer-delegation doctrine, gated on the team tool (2026-07).
+      'Team': 340,
       'Proteus product changes': 290,
       'Output format': 180,
     };

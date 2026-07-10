@@ -47,6 +47,19 @@ export function initUserTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_agents_last_visited ON user_agents (last_visited DESC)`);
 
+  // Cross-owner peer-messaging grants: which foreign (sender_user_id,
+  // sender_agent_name) pairs may message THIS user's agents. Enforced by the
+  // receiving agent's receivePeerMessage via UserDO.hasPeerGrant — default
+  // deny; same-owner peers never need a row here.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_peer_grants (
+      sender_user_id    TEXT NOT NULL,
+      sender_agent_name TEXT NOT NULL,
+      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (sender_user_id, sender_agent_name)
+    )
+  `);
+
   // Credentials (the source-of-truth secret store). Value is JSON-encoded
   // Credential discriminated union (kind: bearer | oauth | openai-compat).
   sql.exec(`

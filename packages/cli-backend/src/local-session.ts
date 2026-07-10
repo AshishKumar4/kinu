@@ -1334,6 +1334,11 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
+      // deps.team is deliberately NOT wired: the `team` peer-messaging tool
+      // needs a cross-agent transport, and local agents are one-per-process
+      // SQLite sessions with no daemon to route between them. Absent deps →
+      // the tool is not registered and the prompt (derived from the built
+      // toolset) never advertises it. Hosted agents get the full team surface.
       webSearch: this.getWebSearchProvider(),
     });
     this.tools = this.wrapToolsForBackground(rawTools);

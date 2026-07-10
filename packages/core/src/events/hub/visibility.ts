@@ -206,8 +206,10 @@ function briefForVariant(event: ProteusEvent): string {
       return p.label ?? JSON.stringify(p.user_payload).slice(0, 100);
     }
     case 'peer_agent': {
+      // Peer messages are delegated tasks/answers — a chat-scale budget, not
+      // the 150-char telemetry brief, so the receiving turn sees the request.
       const p = event.payload as { topic: string; body: unknown };
-      return `${p.topic}: ${JSON.stringify(p.body).slice(0, 150)}`;
+      return `${p.topic}: ${JSON.stringify(p.body).slice(0, 600)}`;
     }
     case 'file_changed':
       return `${(event.payload as { change: string; path: string }).change} ${

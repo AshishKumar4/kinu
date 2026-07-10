@@ -18,6 +18,7 @@ export const BUILTIN_TOOLS = [
   'fact',
   'web_search',
   'web_fetch',
+  'team',
   'product_change',
 ] as const;
 
@@ -119,6 +120,14 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenToUse: 'Use to read a specific page (a web_search hit, a doc, an article) after you have its URL.',
     whenNotToUse: 'Do not use to discover pages — that is web_search. Do not fetch private/internal addresses; they are blocked.',
     result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head you can re-read.',
+  },
+  team: {
+    name: 'team',
+    summary: "Work with the owner's other agents: list peers, delegate and await an answer, fire-and-forget a task, spawn a specialist, or reply to a peer's message.",
+    whenToUse:
+      'Use to delegate a subtask to a better-suited peer agent, consult one and wait for its answer (action=ask), hand off work without waiting (action=send), create a fresh specialist teammate for a focused role (action=spawn), or answer a peer message event (action=reply with its event_id).',
+    whenNotToUse: 'Do not use for work you can do directly this turn, and do not message peers speculatively — every message wakes that agent for a full turn.',
+    result: "Returns the peer roster, delivery status, the peer's reply, or a timeout notice — a late reply still arrives as an event that wakes you.",
   },
   product_change: {
     name: 'product_change',

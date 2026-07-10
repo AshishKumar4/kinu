@@ -9,7 +9,7 @@
  * binds the returned ids (markConsumed) before injecting the message, so a
  * concurrent drain can't double-process them.
  */
-import type { ProteusEvent } from './types.js';
+import type { PeerAgentPayload, ProteusEvent } from './types.js';
 import { renderForLLM } from './visibility.js';
 
 export interface DrainBatch {
@@ -26,7 +26,12 @@ export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
   if (drainable.length === 0) return null;
   const lines = drainable.map((e) => {
     const r = renderForLLM(e);
-    return `- [${r.variant}] from ${r.triggered_by}: ${r.brief}`;
+    // Peer asks carry a mechanical reply route: the sender opened a peer-back
+    // channel keyed on this event id and is awaiting the answer.
+    const replyHint = e.variant === 'peer_agent' && (e.payload as PeerAgentPayload).reply_expected
+      ? ` [the sender awaits your answer — reply with team({action:'reply', event_id:'${e.id}', message:...})]`
+      : '';
+    return `- [${r.variant}] from ${r.triggered_by}: ${r.brief}${replyHint}`;
   });
   const text =
     `${drainable.length} event${drainable.length === 1 ? '' : 's'} arrived while you were idle. ` +

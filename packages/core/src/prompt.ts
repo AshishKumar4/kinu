@@ -283,6 +283,13 @@ function renderAgentStateSection(surface: PromptSurface): string {
     ].join('\n'));
   }
 
+  if (hasTool(tools, 'team')) {
+    parts.push([
+      '## Team',
+      "You are one of the owner's agents, not a lone worker: `team` lists your peers, delegates a subtask (ask waits for the answer, send does not), spawns a specialist teammate, and answers a peer message event via reply with its event_id.",
+    ].join('\n'));
+  }
+
   if (hasTool(tools, 'product_change')) {
     parts.push([
       '## Proteus product changes',

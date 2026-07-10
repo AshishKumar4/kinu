@@ -27,8 +27,9 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
       return `process_done:${event.payload.process_id}`;
 
     case 'peer_agent':
-      // Receiver-side dedupe on (sender, sender-side event id, carried in topic).
-      return `peer:${event.payload.from_agent_name}:${event.payload.topic}`;
+      // Receiver-side dedupe on (sender, sender-side outbox event id) — a
+      // redelivered message is a no-op while repeated topics still admit.
+      return `peer:${event.payload.from_agent_name}:${event.payload.sender_event_id}`;
 
     case 'mcp_chat':
     case 'mcp_third_party':

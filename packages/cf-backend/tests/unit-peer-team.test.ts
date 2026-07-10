@@ -1,0 +1,350 @@
+// Peer transport behavior — TWO real hubs (EventLog + ReplyChannelStore +
+// peer_outbox over in-memory SQLite) wired back-to-back through PeerHub, the
+// same seams the orchestrator wires to DO RPC. Covers the team-tool paths:
+// fire-and-forget, send-and-await round-trip, trust-grant enforcement,
+// timeout + late reply, crash redelivery dedupe, per-receiver ordering, and
+// the spawn-a-specialist round-trip (fresh peer joins the network mid-flight).
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import {
+  EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch,
+  type ReplyDispatcher, type ReplyChannelKind, type PeerAgentPayload,
+} from '@proteus/core';
+import { PeerHub, type PeerMessage, type ReceiveResult } from '../src/events/ingress/peer.js';
+
+interface SqlExec {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
+}
+
+function makeSql(): SqlExec {
+  const db = new Database(':memory:');
+  return {
+    exec(query: string, ...bindings: unknown[]) {
+      const stmt = db.prepare(query);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
+        const rows = stmt.all(...bindings as never[]) as Array<Record<string, unknown>>;
+        return { toArray: () => rows };
+      }
+      stmt.run(...bindings as never[]);
+      return { toArray: () => [] };
+    },
+  };
+}
+
+interface TestAgent {
+  name: string;
+  userId: string;
+  sql: SqlExec;
+  log: EventLog;
+  replyChannels: ReplyChannelStore;
+  hub: PeerHub;
+  /** onAdmitted() fires — the drain→programmatic-turn wake. */
+  wakes: number;
+  /** scheduleDispatch timestamps — the DO alarm arms. */
+  retries: number[];
+  /** Cross-owner senders this agent's owner has granted: `${userId}:${agent}`. */
+  grants: Set<string>;
+  /** Simulates the receiver DO being unreachable (RPC throws). */
+  online: boolean;
+}
+
+function makeNetwork() {
+  const network = new Map<string, TestAgent>();
+
+  function addAgent(name: string, userId: string): TestAgent {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const dispatchers: Partial<Record<ReplyChannelKind, ReplyDispatcher>> = {};
+    const replyChannels = new ReplyChannelStore(sql, dispatchers);
+    const agent: TestAgent = {
+      name, userId, sql, log, replyChannels,
+      hub: null as unknown as PeerHub,
+      wakes: 0, retries: [], grants: new Set(), online: true,
+    };
+    agent.hub = new PeerHub({
+      sql, log, replyChannels,
+      selfAgentName: () => name,
+      selfUserId: () => userId,
+      deliver: async (receiverName: string, msg: PeerMessage): Promise<ReceiveResult> => {
+        const peer = network.get(receiverName);
+        if (!peer || !peer.online) throw new Error(`receiver DO unreachable: ${receiverName}`);
+        return peer.hub.receive(msg);
+      },
+      isSameOwner: async (uid) => uid === userId,
+      hasGrant: async (senderAgent, senderUserId) => agent.grants.has(`${senderUserId}:${senderAgent}`),
+      scheduleDispatch: (at) => { agent.retries.push(at); },
+      onAdmitted: () => { agent.wakes++; },
+    });
+    // The peer_back reply dispatcher routes answers back over the same outbox
+    // (exactly how the orchestrator registers it, lazily bound).
+    dispatchers.peer_back = { dispatch: (ch, p) => agent.hub.dispatchPeerBack(ch, p) };
+    network.set(name, agent);
+    return agent;
+  }
+
+  return { network, addAgent };
+}
+
+function pendingPeerEvents(agent: TestAgent) {
+  return agent.log.pending({ variant: 'peer_agent' });
+}
+
+function outboxRows(agent: TestAgent) {
+  return agent.sql.exec(
+    `SELECT id, receiver_agent_name, state, attempt_count, last_error FROM peer_outbox ORDER BY id`,
+  ).toArray() as Array<{ id: string; receiver_agent_name: string; state: string; attempt_count: number; last_error: string | null }>;
+}
+
+describe('fire-and-forget (send)', () => {
+  test('delivers into the receiver hub and wakes it exactly once', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+
+    const result = await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'status', message: 'shipping today' });
+    expect(result).toMatchObject({ status: 'delivered' });
+
+    const events = pendingPeerEvents(bob);
+    expect(events).toHaveLength(1);
+    const payload = events[0].payload as PeerAgentPayload;
+    expect(payload.from_agent_name).toBe('alice');
+    expect(payload.body).toBe('shipping today');
+    expect(payload.reply_expected).toBe(false);
+    expect(bob.wakes).toBe(1);
+
+    // Same-owner peer events land at authenticated trust, normal priority.
+    expect(events[0].trust).toBe('authenticated');
+    expect(events[0].priority).toBe('normal');
+
+    // The drained turn renders the message without a reply instruction.
+    const batch = buildDrainBatch(pendingPeerEvents(bob))!;
+    expect(batch.text).toContain('peer agent (alice)');
+    expect(batch.text).not.toContain("action:'reply'");
+
+    expect(outboxRows(alice)[0].state).toBe('delivered');
+  });
+});
+
+describe('send-and-await (ask) round-trip', () => {
+  test("the peer's team-reply resolves the sender's awaiting ask", async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+
+    const askPromise = alice.hub.ask({
+      agent: 'bob', userId: bob.userId, topic: 'research',
+      message: 'What changed upstream?', timeoutMs: 2_000,
+    });
+    await Bun.sleep(0);   // delivery lands inside ask()'s dispatch await
+
+    // Bob was woken; his drained turn carries the mechanical reply route.
+    const events = pendingPeerEvents(bob);
+    expect(events).toHaveLength(1);
+    expect((events[0].payload as PeerAgentPayload).reply_expected).toBe(true);
+    const batch = buildDrainBatch(events)!;
+    expect(batch.text).toContain(`team({action:'reply', event_id:'${events[0].id}'`);
+
+    // Bob answers through the peer-back reply channel.
+    const replied = await bob.hub.reply({ eventId: events[0].id, message: 'v2 API landed' });
+    expect(replied).toEqual({ ok: true });
+
+    // Alice's ask resolves with the answer.
+    expect(await askPromise).toEqual({ status: 'replied', from: 'bob', reply: 'v2 API landed' });
+
+    // The reply envelope was consumed inline by the waiter — it must NOT wake
+    // Alice as a fresh turn nor linger as a pending event.
+    expect(alice.wakes).toBe(0);
+    expect(pendingPeerEvents(alice)).toHaveLength(0);
+
+    // Channel is spent: answering again is a sharp no-op error.
+    const again = await bob.hub.reply({ eventId: events[0].id, message: 'dup' });
+    expect(again.ok).toBe(false);
+  });
+
+  test('replying to an event that never asked for a reply errors honestly', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+    await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'fyi', message: 'no answer needed' });
+    const events = pendingPeerEvents(bob);
+    const result = await bob.hub.reply({ eventId: events[0].id, message: 'but here is one' });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain('no open peer reply channel');
+  });
+});
+
+describe('trust-grant enforcement (cross-owner)', () => {
+  const userA = 'a'.repeat(32);
+  const userB = 'b'.repeat(32);
+
+  test('an un-granted cross-owner sender is rejected by the receiver and dead-letters', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', userA);
+    const mallory = addAgent('mallory', userB);
+
+    const result = await mallory.hub.ask({
+      agent: 'alice', userId: userA, topic: 'probe', message: 'let me in', timeoutMs: 1_000,
+    });
+    expect(result).toEqual({ status: 'rejected', reason: 'no grant from receiver for cross-owner sender' });
+    expect(pendingPeerEvents(alice)).toHaveLength(0);
+    expect(alice.wakes).toBe(0);
+    expect(outboxRows(mallory)[0].state).toBe('dlq');
+  });
+
+  test('a cross-owner ask completes on a ONE-directional grant — the answer is implicitly accepted', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', userA);
+    const carol = addAgent('carol', userB);
+    alice.grants.add(`${userB}:carol`);   // alice accepts carol; carol grants nothing
+
+    const askPromise = carol.hub.ask({
+      agent: 'alice', userId: userA, topic: 'question', message: 'What is your uptime?', timeoutMs: 2_000,
+    });
+    await Bun.sleep(0);
+    const events = pendingPeerEvents(alice);
+    expect(events).toHaveLength(1);
+    await alice.hub.reply({ eventId: events[0].id, message: '99.99%' });
+
+    // Without the reply-to-my-ask correlation this would dead-letter on
+    // carol's side (no grant for alice) and the ask could never complete.
+    expect(await askPromise).toEqual({ status: 'replied', from: 'alice', reply: '99.99%' });
+    expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered']);
+  });
+
+  test('an uncorrelated cross-owner "reply" envelope is still rejected (no forged replies)', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', userA);
+
+    // Alice never delivered an ask to "mallory"; a forged reply envelope with
+    // a guessed id must hit the normal default-deny grant path.
+    const result = await alice.hub.receive({
+      sender_event_id: 'forged-1',
+      sender_agent_name: 'mallory',
+      sender_user_id: userB,
+      topic: 'peer_reply',
+      body: { in_reply_to: 'no-such-ask', content: 'gotcha' },
+    });
+    expect(result).toEqual({ admitted: false, reason: 'no grant from receiver for cross-owner sender' });
+    expect(pendingPeerEvents(alice)).toHaveLength(0);
+  });
+
+  test('a granted cross-owner sender is admitted at external trust / background priority', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', userA);
+    const carol = addAgent('carol', userB);
+    alice.grants.add(`${userB}:carol`);
+
+    const result = await carol.hub.send({ agent: 'alice', userId: userA, topic: 'hello', message: 'hi from another owner' });
+    expect(result).toMatchObject({ status: 'delivered' });
+
+    const events = pendingPeerEvents(alice);
+    expect(events).toHaveLength(1);
+    expect(events[0].trust).toBe('external');
+    expect(events[0].priority).toBe('background');
+    expect(alice.wakes).toBe(1);
+  });
+});
+
+describe('ask timeout + late reply', () => {
+  test('a silent peer times out gracefully; the late answer arrives as a waking event', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+
+    const result = await alice.hub.ask({
+      agent: 'bob', userId: bob.userId, topic: 'slow', message: 'take your time', timeoutMs: 30,
+    });
+    expect(result.status).toBe('no_reply');
+    expect(result.status === 'no_reply' && result.note).toContain('delivered');
+
+    // Bob answers after the waiter expired — the reply is NOT lost: it lands
+    // as a pending peer event that wakes Alice's next turn.
+    const events = pendingPeerEvents(bob);
+    const replied = await bob.hub.reply({ eventId: events[0].id, message: 'sorry, here it is' });
+    expect(replied).toEqual({ ok: true });
+
+    expect(alice.wakes).toBe(1);
+    const late = pendingPeerEvents(alice);
+    expect(late).toHaveLength(1);
+    const payload = late[0].payload as PeerAgentPayload;
+    expect(payload.topic).toBe('peer_reply');
+    expect((payload.body as { content: unknown }).content).toBe('sorry, here it is');
+  });
+});
+
+describe('redelivery dedupe (crash between deliver and mark)', () => {
+  test('re-dispatching an already-delivered outbox row is a receiver no-op', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+
+    await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'once', message: 'exactly once' });
+    expect(pendingPeerEvents(bob)).toHaveLength(1);
+
+    // Simulate a crash after delivery but before the delivered-mark landed:
+    // the row is pending again and the alarm re-drives it.
+    const row = outboxRows(alice)[0];
+    alice.sql.exec(`UPDATE peer_outbox SET state = 'pending', next_attempt_at = 0 WHERE id = ?`, row.id);
+    await alice.hub.dispatchOutbox();
+
+    expect(pendingPeerEvents(bob)).toHaveLength(1);          // deduped
+    expect(outboxRows(alice)[0].state).toBe('delivered');    // settled again
+    expect(bob.wakes).toBe(1);                                // no double wake
+  });
+});
+
+describe('per-receiver ordering + retry backoff', () => {
+  test('an unreachable receiver blocks its queue; recovery delivers in order', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+    bob.online = false;
+
+    const first = await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'step', message: 'first' });
+    const second = await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'step', message: 'second' });
+    expect(first.status).toBe('queued');
+    expect(second.status).toBe('queued');
+
+    // Only the head-of-line row was attempted — the second stayed untouched
+    // behind it (ordering) — and a retry alarm was armed.
+    const rows = outboxRows(alice);
+    expect(rows.map((r) => r.state)).toEqual(['pending', 'pending']);
+    expect(rows[0].attempt_count).toBe(1);
+    expect(rows[1].attempt_count).toBe(0);
+    expect(alice.retries.length).toBeGreaterThan(0);
+
+    // Receiver comes back; the alarm re-drives past the backoff window.
+    bob.online = true;
+    await alice.hub.dispatchOutbox(Date.now() + 60_000);
+
+    expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered', 'delivered']);
+    const bodies = pendingPeerEvents(bob).map((e) => (e.payload as PeerAgentPayload).body);
+    expect(bodies).toEqual(['first', 'second']);
+  });
+});
+
+describe('spawn a specialist (fresh peer joins mid-flight)', () => {
+  test('create → ask → reply round-trip against a just-created teammate', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+
+    // The orchestrator's spawn action: create the agent (registry +
+    // claimOwner — here: joins the network under the same owner), then ask.
+    const specialist = addAgent('paper-summarizer', alice.userId);
+    const askPromise = alice.hub.ask({
+      agent: specialist.name, userId: alice.userId, topic: 'task',
+      message: 'Summarize the three latest papers', timeoutMs: 2_000,
+    });
+    await Bun.sleep(0);
+
+    const events = pendingPeerEvents(specialist);
+    expect(events).toHaveLength(1);
+    expect(specialist.wakes).toBe(1);
+    await specialist.hub.reply({ eventId: events[0].id, message: 'Summaries: …' });
+
+    expect(await askPromise).toEqual({
+      status: 'replied', from: 'paper-summarizer', reply: 'Summaries: …',
+    });
+  });
+});

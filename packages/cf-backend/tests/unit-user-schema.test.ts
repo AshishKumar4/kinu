@@ -128,4 +128,30 @@ describe('UserDO schema bootstrap', () => {
     expect(indexes).toContain('idx_cli_agent_connect_tickets_exp');
     db.close();
   });
+
+  test('peer-grant store: default deny, idempotent grant, revoke', () => {
+    const db = new Database(':memory:');
+    initUserTables(sqlExec(db));
+
+    const has = (u: string, a: string) =>
+      !!db.prepare(`SELECT 1 FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`).get(u, a);
+    const grant = db.prepare(
+      `INSERT INTO user_peer_grants (sender_user_id, sender_agent_name, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(sender_user_id, sender_agent_name) DO NOTHING`,
+    );
+
+    const foreign = 'b'.repeat(32);
+    expect(has(foreign, 'scout')).toBe(false);       // default deny
+
+    grant.run(foreign, 'scout', Date.now());
+    grant.run(foreign, 'scout', Date.now());         // idempotent
+    expect(has(foreign, 'scout')).toBe(true);
+    expect(has(foreign, 'other-agent')).toBe(false); // grants are per-agent
+    expect(db.prepare('SELECT COUNT(*) AS n FROM user_peer_grants').get<{ n: number }>()!.n).toBe(1);
+
+    db.prepare(`DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`)
+      .run(foreign, 'scout');
+    expect(has(foreign, 'scout')).toBe(false);
+    db.close();
+  });
 });

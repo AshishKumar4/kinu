@@ -51,3 +51,26 @@ describe('buildDrainBatch', () => {
     expect(batch.text).toContain('1 event arrived');
   });
 });
+
+describe('buildDrainBatch — peer messages', () => {
+  const peer = (id: string, over: Record<string, unknown> = {}): ProteusEvent => evt(id, {
+    ingress: 'peer_async', variant: 'peer_agent', trust: 'authenticated',
+    payload: {
+      from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
+      body: 'What changed upstream?', sender_event_id: 'ox1', ...over,
+    },
+  } as Partial<ProteusEvent>);
+
+  test('an ask renders the mechanical reply route (team reply + event id)', () => {
+    const batch = buildDrainBatch([peer('pe1', { reply_expected: true })])!;
+    expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
+    expect(batch.text).toContain('What changed upstream?');
+    expect(batch.text).toContain("team({action:'reply', event_id:'pe1'");
+  });
+
+  test('a fire-and-forget message carries no reply instruction', () => {
+    const batch = buildDrainBatch([peer('pe2')])!;
+    expect(batch.text).toContain('[peer_agent]');
+    expect(batch.text).not.toContain("action:'reply'");
+  });
+});

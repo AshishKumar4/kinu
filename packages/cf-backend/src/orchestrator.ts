@@ -137,6 +137,8 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
+  // Peer-agent teams (the `team` tool contract)
+  type TeamToolDeps, type PeerSpawnOutcome,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
   parseModelSpec,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
@@ -157,6 +159,8 @@ import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
 import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
+import { createCloudAgentForUser } from "./user/agent-create.js";
+import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
 import {
   initWebhookRateLimitTables,
   normalizeWebhookRateLimitPerMin,
@@ -518,14 +522,8 @@ export class OrchestratorAgent extends Think<Env> {
     if (!this._triggerRegistry) {
       const orchestrator = this;
       const alarmScheduler: AlarmScheduler = {
-        scheduleAt(ts: number) {
-          // Idempotent: pick the soonest of (existing alarm, new ts).
-          void Promise.resolve(orchestrator.ctx.storage.getAlarm()).then((c) => {
-            if (c === null || ts < c) {
-              orchestrator.ctx.storage.setAlarm(ts);
-            }
-          }).catch(() => orchestrator.ctx.storage.setAlarm(ts));
-        },
+        // Idempotent: pick the soonest of (existing alarm, new ts).
+        scheduleAt(ts: number) { orchestrator.scheduleAlarmAt(ts); },
         currentAlarm(): number | null { return null; },
       };
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
@@ -571,9 +569,66 @@ export class OrchestratorAgent extends Think<Env> {
       };
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
         ws_session: wsDispatcher,
+        // peer_back: route the answer to a peer ask back over the outbox
+        // transport. Lazily bound — PeerHub needs this store to construct.
+        peer_back: {
+          dispatch: (channel, payload) => orchestrator.peerHub.dispatchPeerBack(channel, payload),
+        },
       });
     }
     return this._replyChannels;
+  }
+
+  // ── Peer transport endpoint (agent teams) ────────────────────────────────
+  // Sender: peer_outbox rows dispatched via DO RPC (inline + alarm retry).
+  // Receiver: the receivePeerMessage @callable below. The `team` tool's
+  // ask/send/reply actions ride this hub; spawn adds the create-agent path.
+  private _peerHub: PeerHub | null = null;
+  protected get peerHub(): PeerHub {
+    if (!this._peerHub) {
+      const orchestrator = this;
+      this._peerHub = new PeerHub({
+        sql: this.ctx.storage.sql,
+        log: this.eventLog,
+        replyChannels: this.replyChannels,
+        selfAgentName: () => orchestrator.name,
+        selfUserId: () => {
+          const userId = orchestrator.getOwnerUserId();
+          if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+          return userId;
+        },
+        deliver: async (receiverAgentName, msg) => {
+          const stub = orchestrator.env.OrchestratorAgent.get(
+            orchestrator.env.OrchestratorAgent.idFromName(receiverAgentName),
+          ) as DurableObjectStub<OrchestratorAgent>;
+          return await stub.receivePeerMessage(msg);
+        },
+        isSameOwner: async (senderUserId) => senderUserId === orchestrator.getOwnerUserId(),
+        hasGrant: async (senderAgentName, senderUserId) => {
+          const userDO = orchestrator.getOwnerUserDO();
+          if (!userDO) return false;
+          try {
+            return await userDO.hasPeerGrant(senderAgentName, senderUserId);
+          } catch (err) {
+            console.warn('[proteus] hasPeerGrant lookup failed:', (err as Error).message);
+            return false;   // default deny on lookup failure
+          }
+        },
+        scheduleDispatch: (at) => orchestrator.scheduleAlarmAt(at),
+        onAdmitted: () => { void orchestrator.orch.drainPendingEvents(); },
+      });
+    }
+    return this._peerHub;
+  }
+
+  /** Idempotent soonest-wins alarm arm (shared shape with the TriggerRegistry
+   *  scheduler above). */
+  private scheduleAlarmAt(ts: number): void {
+    void Promise.resolve(this.ctx.storage.getAlarm()).then((current) => {
+      if (current === null || ts < current) {
+        this.ctx.storage.setAlarm(ts);
+      }
+    }).catch(() => this.ctx.storage.setAlarm(ts));
   }
 
   // agent_facts world model — typed, idempotent, keyed.
@@ -918,6 +973,62 @@ export class OrchestratorAgent extends Think<Env> {
     return this._webSearchProvider;
   }
 
+  /** The `team` tool over the peer transport. Owner resolution is lazy inside
+   *  each action (the toolset is cached across turns — including a pre-claim
+   *  build — so deps must not capture owner state at construction). */
+  private getTeamToolDeps(): TeamToolDeps {
+    const orchestrator = this;
+    const requireOwner = () => {
+      const userId = orchestrator.getOwnerUserId();
+      if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+      return userId;
+    };
+    /** Same-owner roster check so a typo'd name errors clearly instead of
+     *  materializing a fresh unowned DO that rejects the message. */
+    const requirePeer = async (agent: string): Promise<void> => {
+      requireOwner();
+      if (agent === orchestrator.name) throw new Error('that is this agent — pick another peer (action:"list")');
+      const known = await orchestrator.requireOwnerUserDO().hasAgent(agent);
+      if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
+    };
+    return {
+      listPeers: async () => {
+        requireOwner();
+        const agents = await orchestrator.requireOwnerUserDO().listAgents();
+        return agents
+          .filter((a) => a.name !== orchestrator.name)
+          .map((a) => ({ name: a.name, displayName: a.displayName }));
+      },
+      ask: async ({ agent, topic, message, timeoutMs }) => {
+        await requirePeer(agent);
+        return orchestrator.peerHub.ask({ agent, userId: requireOwner(), topic, message, timeoutMs });
+      },
+      send: async ({ agent, topic, message }) => {
+        await requirePeer(agent);
+        return orchestrator.peerHub.send({ agent, userId: requireOwner(), topic, message });
+      },
+      reply: async ({ eventId, message }) => orchestrator.peerHub.reply({ eventId, message }),
+      spawn: async ({ name, purpose, message, timeoutMs }): Promise<PeerSpawnOutcome> => {
+        const userId = requireOwner();
+        const userDO = orchestrator.requireOwnerUserDO();
+        let agentName = name;
+        let created = false;
+        if (!agentName || !(await userDO.hasAgent(agentName))) {
+          const entry = await createCloudAgentForUser(orchestrator.env, userId, userDO, {
+            ...(agentName ? { name: agentName } : {}),
+            purpose,
+          });
+          agentName = entry.name;
+          created = true;
+        }
+        const outcome = await orchestrator.peerHub.ask({
+          agent: agentName, userId, topic: 'task', message, timeoutMs,
+        });
+        return { agent: agentName, created, ...outcome };
+      },
+    };
+  }
+
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
     const userDO = this.getOwnerUserDO();
     if (!userDO) return undefined;
@@ -1130,6 +1241,9 @@ export class OrchestratorAgent extends Think<Env> {
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
         productChanges: this.getProductChangeToolDeps(),
+        // Peer-agent teams over the EventsHub transport (owner resolved lazily
+        // per action, so the cached toolset stays valid across claimOwner).
+        team: this.getTeamToolDeps(),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       });
@@ -2346,14 +2460,27 @@ export class OrchestratorAgent extends Think<Env> {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
 
-    // Reschedule the next-soonest alarm.
+    // Re-drive pending outbound peer messages (crash/eviction recovery + the
+    // exponential-backoff retry path — inline tool dispatch handles the happy
+    // path, this alarm is the durable one).
+    try {
+      await this.peerHub.dispatchOutbox(now);
+    } catch (err) {
+      console.warn('[proteus] peer outbox dispatch failed:', (err as Error).message);
+    }
+
+    // Reschedule the next-soonest alarm (triggers ∪ peer-outbox retries).
     try {
       const all = this.triggerRegistry.list({ state: 'active' });
       const upcoming = all
         .map(t => t.next_fire_at)
         .filter((t): t is number => typeof t === 'number' && t > now)
         .sort((a, b) => a - b)[0];
-      if (upcoming) this.ctx.storage.setAlarm(upcoming);
+      const peerRetry = this.peerHub.nextRetryAt();
+      const next = [upcoming, peerRetry ?? undefined]
+        .filter((t): t is number => typeof t === 'number' && t > now)
+        .sort((a, b) => a - b)[0];
+      if (next) this.ctx.storage.setAlarm(next);
     } catch (err) {
       console.warn('[proteus] alarm reschedule failed:', (err as Error).message);
     }
@@ -4877,6 +5004,17 @@ export class OrchestratorAgent extends Think<Env> {
     } catch {
       return { secret: null };
     }
+  }
+
+  /** Peer-agent ingress: a sender agent's DO delivers one outbox message via
+   *  cross-DO RPC. Ownership/grant checks run receiver-side (never trusted
+   *  from the sender's claim beyond intra-Worker honesty); an admitted event
+   *  either resolves the local ask waiter inline (a reply envelope) or wakes
+   *  the agent through the standard drain → programmatic turn path. */
+  @callable()
+  async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
+    this.ensureSchema();
+    return this.peerHub.receive(msg);
   }
 
   /** Recent events for the operator UI's events sidebar. Mirrors

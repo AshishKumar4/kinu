@@ -157,6 +157,12 @@ export interface PeerAgentPayload {
   from_user_id: string;
   topic: string;
   body: unknown;
+  /** Sender-side outbox row id — the receiver-side dedupe key, so redelivery
+   *  after a crash is a no-op and repeated topics are NOT collapsed. */
+  sender_event_id: string;
+  /** True when the sender opened an ask (send-and-await) and holds a
+   *  reply waiter — the receiver should answer via its peer-back channel. */
+  reply_expected?: boolean;
 }
 
 export interface FileChangedPayload {

@@ -20,7 +20,10 @@
  *                       + Vectorize when a VectorStore is wired).
  *   6. fact           — typed keyed world model: remember / recall / forget.
  *                       Gated on deps.facts.
- *   7. product_change — governed product/UI self-customization lane.
+ *   7. team           — peer agent messaging over the EventsHub transport:
+ *                       list / ask / send / reply / spawn. Gated on deps.team
+ *                       (CF-only; local sessions have no cross-process peers).
+ *   8. product_change — governed product/UI self-customization lane.
  *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -139,11 +142,59 @@ export interface BuiltinToolDeps {
   /** Product self-customization lane. Backend-supplied because persistence,
    *  source bindings, approval identity, and deployments are platform-owned. */
   productChanges?: ProductChangeToolDeps;
+  /** Peer agent messaging (the `team` tool). Backend-supplied because the
+   *  transport (peer outbox + DO RPC + reply channels) and the owner's agent
+   *  registry are platform-owned. Absent on backends without a peer transport
+   *  (the local CLI runs one agent per process — no cross-process peering). */
+  team?: TeamToolDeps;
   /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
    *  Tavily-key auth seam differ per backend). Exposes the `web_search` and
    *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
    *  same provider in each backend's execute_tools assembly. */
   webSearch?: WebSearchProvider;
+}
+
+// ── Team (peer agents) tool contract ────────────────────────────────────────
+// The deps implementation rides the existing EventsHub peer transport:
+// enqueueOutboundPeer → receiver's receivePeerMessage → EventLog → turn, with
+// replies routed back through the receiver's peer-back reply channel.
+
+export type PeerSendOutcome =
+  | { status: 'delivered' | 'queued'; message_id: string }
+  | { status: 'rejected'; reason: string };
+
+export type PeerAskOutcome =
+  | { status: 'replied'; from: string; reply: unknown }
+  | { status: 'no_reply'; note: string }
+  | { status: 'rejected'; reason: string };
+
+export type PeerReplyOutcome = { ok: true } | { ok: false; error: string };
+
+export type PeerSpawnOutcome = { agent: string; created: boolean } & PeerAskOutcome;
+
+export interface TeamToolDeps {
+  /** The owner's other agents this one may address (self excluded). */
+  listPeers(): Promise<Array<{ name: string; displayName?: string }>>;
+  /** Send-and-await: deliver a message and wait for the peer's reply. */
+  ask(input: { agent: string; topic: string; message: string; timeoutMs: number }): Promise<PeerAskOutcome>;
+  /** Fire-and-forget: deliver a message without waiting for a reply. */
+  send(input: { agent: string; topic: string; message: string }): Promise<PeerSendOutcome>;
+  /** Answer a peer message event received this (or an earlier) turn. */
+  reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome>;
+  /** Create (or reuse by name) a specialist peer, message it, await the result. */
+  spawn(input: { name?: string; purpose: string; message: string; timeoutMs: number }): Promise<PeerSpawnOutcome>;
+}
+
+/** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
+export const PEER_REPLY_TOPIC = 'peer_reply';
+
+const ASK_TIMEOUT_DEFAULT_MS = 120_000;
+const ASK_TIMEOUT_MIN_MS = 5_000;
+const ASK_TIMEOUT_MAX_MS = 600_000;
+
+function askTimeoutMs(timeoutSeconds: number | undefined): number {
+  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_DEFAULT_MS;
+  return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
 }
 
 export interface ProductChangeToolDeps {
@@ -654,7 +705,88 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 7. product_change — governed product/UI self-customization lane ───────
+  // ── 7. team — peer agent messaging over the EventsHub transport ───────────
+  if (deps.team) {
+    const team = deps.team;
+    tools.team = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.team,
+      inputSchema: jsonSchema<{
+        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn';
+        agent?: string;
+        message?: string;
+        topic?: string;
+        event_id?: string;
+        purpose?: string;
+        timeout_seconds?: number;
+      }>({
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'ask', 'send', 'reply', 'spawn'],
+            description:
+              'list = peers you may address. ask = message a peer and await its reply. ' +
+              'send = message a peer without waiting. reply = answer a peer message event. ' +
+              'spawn = create (or reuse by name) a specialist peer, message it, and await the result.',
+          },
+          agent: { type: 'string', description: 'Peer agent name (ask/send; optional reuse name for spawn).' },
+          message: { type: 'string', maxLength: 20000, description: 'The message/task for ask, send, spawn, or the answer for reply.' },
+          topic: { type: 'string', maxLength: 80, description: 'Optional short label for ask/send (default "message").' },
+          event_id: { type: 'string', description: 'For action=reply: the peer message event id you were given.' },
+          purpose: { type: 'string', maxLength: 2000, description: "For action=spawn: the specialist's mission — it seeds the new agent's identity." },
+          timeout_seconds: { type: 'number', description: 'For ask/spawn: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
+        },
+        required: ['action'],
+      }),
+      execute: async (args: {
+        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn';
+        agent?: string;
+        message?: string;
+        topic?: string;
+        event_id?: string;
+        purpose?: string;
+        timeout_seconds?: number;
+      }) => {
+        const topic = args.topic?.trim() || 'message';
+        if (topic === PEER_REPLY_TOPIC) {
+          return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
+        }
+        try {
+          switch (args.action) {
+            case 'list': {
+              const peers = await team.listPeers();
+              return peers.length > 0
+                ? { peers }
+                : { peers, note: 'No other agents yet — create one with action:"spawn".' };
+            }
+            case 'ask':
+              if (!args.agent || !args.message) return { error: 'ask requires agent and message' };
+              return await team.ask({
+                agent: args.agent, topic, message: args.message,
+                timeoutMs: askTimeoutMs(args.timeout_seconds),
+              });
+            case 'send':
+              if (!args.agent || !args.message) return { error: 'send requires agent and message' };
+              return await team.send({ agent: args.agent, topic, message: args.message });
+            case 'reply':
+              if (!args.event_id || !args.message) return { error: 'reply requires event_id and message' };
+              return await team.reply({ eventId: args.event_id, message: args.message });
+            case 'spawn':
+              if (!args.purpose || !args.message) return { error: 'spawn requires purpose and message' };
+              return await team.spawn({
+                ...(args.agent ? { name: args.agent } : {}),
+                purpose: args.purpose, message: args.message,
+                timeoutMs: askTimeoutMs(args.timeout_seconds),
+              });
+          }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    });
+  }
+
+  // ── 8. product_change — governed product/UI self-customization lane ───────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({

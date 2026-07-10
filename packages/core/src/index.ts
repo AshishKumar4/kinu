@@ -143,7 +143,11 @@ export {
   type BuiltinToolName,
   type BuiltinToolSpec,
 } from './tools/registry.js';
-export { buildBuiltinTools, type BuiltinToolDeps, type ProductChangeToolDeps } from './tools/builtins.js';
+export {
+  buildBuiltinTools, PEER_REPLY_TOPIC,
+  type BuiltinToolDeps, type ProductChangeToolDeps, type TeamToolDeps,
+  type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
+} from './tools/builtins.js';
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index.js';
 export {

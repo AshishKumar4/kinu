@@ -333,6 +333,41 @@ export class UserDO extends Agent<Env> {
     return !!row;
   }
 
+  // ── Peer-messaging grants (cross-owner, default deny) ──────────────
+
+  /** Read by the receiving agent's `receivePeerMessage` — whether a foreign
+   *  sender may deliver into this user's agents. Same-owner peers never need
+   *  a grant (ownership is checked before this). */
+  @callable()
+  async hasPeerGrant(senderAgentName: string, senderUserId: string): Promise<boolean> {
+    const row = this.sqlx(
+      `SELECT 1 AS x FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
+      senderUserId, senderAgentName,
+    )[0];
+    return !!row;
+  }
+
+  /** Grant or revoke a foreign (sender user, sender agent) pair. Idempotent. */
+  @callable()
+  async setPeerGrant(senderAgentName: string, senderUserId: string, allowed: boolean): Promise<{ ok: true; allowed: boolean }> {
+    validateAgentName(senderAgentName);
+    if (!/^[a-f0-9]{32}$/.test(senderUserId)) throw new Error('invalid sender user id');
+    if (allowed) {
+      this.sqlx(
+        `INSERT INTO user_peer_grants (sender_user_id, sender_agent_name, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(sender_user_id, sender_agent_name) DO NOTHING`,
+        senderUserId, senderAgentName, Date.now(),
+      );
+    } else {
+      this.sqlx(
+        `DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
+        senderUserId, senderAgentName,
+      );
+    }
+    return { ok: true, allowed };
+  }
+
   // ── CLI auth tokens ────────────────────────────────────────────────
 
   /** Mint a CLI bearer token after browser approval. The raw token is returned
