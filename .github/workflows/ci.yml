@@ -35,6 +35,11 @@ jobs:
       - name: Core unit tests
         run: bun test --cwd packages/core
 
+      # Credential-free eval-gate verification. The live-model benchmark runs in
+      # the separate, gated eval.yml (manual / nightly / `run-eval` label).
+      - name: Eval gate logic
+        run: bun test scripts/eval.test.ts
+
   verify-lean:
     runs-on: ubuntu-latest
     timeout-minutes: 15

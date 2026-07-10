@@ -1,0 +1,64 @@
+name: Quality Eval
+
+# Runs the seed-corpus benchmark (runEvalPair + judge) as a regression gate.
+# This makes REAL model calls, so it never runs on every push — only:
+#   - manually (workflow_dispatch),
+#   - nightly (schedule), or
+#   - on a PR labelled `run-eval`.
+# The credential-free gate LOGIC (report + threshold) is verified on every push
+# by the main CI workflow; this job adds the live-model measurement on top.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model spec (provider/model). Blank = repo default (vars.EVAL_MODEL).'
+        required: false
+      min_score:
+        description: 'Quality floor [0..1]. Blank = committed DEFAULT_QUALITY_THRESHOLD.'
+        required: false
+  schedule:
+    - cron: '0 6 * * *'
+  pull_request:
+    types: [labeled]
+
+jobs:
+  benchmark:
+    # On PRs, only when explicitly labelled — otherwise skip so no one pays for
+    # model calls by accident. Dispatch + schedule always run.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-eval'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Fast, credential-free guard: report shape + threshold gate logic.
+      - name: Verify gate logic (no model calls)
+        run: bun test scripts/eval.test.ts packages/core/tests/unit-eval-report.test.ts
+
+      # The live benchmark. Provider auth comes from repo secrets/vars; with none
+      # configured the script fails with an honest message (never a hardcoded key).
+      - name: Run quality benchmark
+        env:
+          PROTEUS_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+          PROTEUS_AUTH: ${{ secrets.EVAL_AUTH }}
+          ANTHROPIC_API_KEY: ${{ secrets.EVAL_ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
+          PROTEUS_MODEL: ${{ github.event.inputs.model || vars.EVAL_MODEL }}
+          EVAL_MIN_SCORE: ${{ github.event.inputs.min_score || vars.EVAL_MIN_SCORE }}
+        run: bun scripts/eval.ts --out eval-report.json
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval-report.json
+          if-no-files-found: ignore
