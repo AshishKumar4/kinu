@@ -6,12 +6,13 @@
  */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon } from "@phosphor-icons/react";
+import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon } from "@phosphor-icons/react";
+import { DEFAULT_QUALITY_THRESHOLD } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
 import { EmptyState, EMPTY_HINTS, MarkdownContent } from "./shared";
 
-type SubView = "mcts" | "branches" | "gepa";
+type SubView = "mcts" | "branches" | "gepa" | "quality";
 
 export interface ReasoningSurfaceProps {
   mctsTree: MCTSNode | null;
@@ -24,6 +25,7 @@ export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
     { id: "mcts", label: "MCTS", icon: TreeStructureIcon },
     { id: "branches", label: "Branches", icon: GitForkIcon },
     { id: "gepa", label: "GEPA", icon: DatabaseIcon },
+    { id: "quality", label: "Quality", icon: GaugeIcon },
   ];
   return (
     <div className="h-full flex flex-col">
@@ -39,6 +41,7 @@ export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
         {view === "mcts" && <MctsView mctsTree={mctsTree} rpc={rpc} />}
         {view === "branches" && <BranchesView rpc={rpc} />}
         {view === "gepa" && <GepaView rpc={rpc} />}
+        {view === "quality" && <QualityView rpc={rpc} />}
       </div>
     </div>
   );
@@ -653,6 +656,94 @@ function GepaView({ rpc }: { rpc: Rpc }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ── Quality scoreboard ────────────────────────────────────────── */
+
+// The replay-eval loss curve (getReplayEvals): the live scaffold re-scored
+// against graded turns over time. Each row is tagged with the scaffold_version
+// it ran under, so version changes mark before-vs-after-evolution boundaries.
+interface ReplayEvalRow {
+  id: string; ranAt: number; sampleSize: number;
+  acceptedCount: number; negativeCount: number;
+  meanScore: number; loss: number; scaffoldVersion: number | null;
+}
+
+function QualityView({ rpc }: { rpc: Rpc }) {
+  const [rows, setRows] = useState<ReplayEvalRow[] | null>(null);
+  useEffect(() => { rpc<ReplayEvalRow[]>("getReplayEvals", [50]).then(setRows).catch(() => setRows([])); }, [rpc]);
+
+  if (rows === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  if (rows.length === 0) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (lifetime evolution, or agent.runReplayEval) re-score the live scaffold against graded turns. The loss curve and latest aggregate appear here." />;
+
+  const chrono = [...rows].reverse(); // oldest → newest for the curve
+  const latest = rows[0];
+  return (
+    <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Metric label="Latest score" value={<span className={scoreColor(latest.meanScore)}>{latest.meanScore.toFixed(3)}</span>} />
+        <Metric label="Loss" value={latest.loss.toFixed(3)} />
+        <Metric label="Sample" value={`${latest.sampleSize} (${latest.acceptedCount}✓ / ${latest.negativeCount}✗)`} />
+        <Metric label="Scaffold" value={latest.scaffoldVersion ?? "—"} />
+      </div>
+
+      <section className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-normal p-text-3">Mean score over time</div>
+          <div className="text-[10px] p-text-3">floor {DEFAULT_QUALITY_THRESHOLD.toFixed(2)}</div>
+        </div>
+        <QualitySparkline points={chrono} threshold={DEFAULT_QUALITY_THRESHOLD} />
+      </section>
+
+      <section className="space-y-1.5">
+        <div className="text-[10px] uppercase tracking-normal p-text-3">Recent runs</div>
+        <div className="space-y-1">
+          {rows.map((r, i) => {
+            const prev = rows[i + 1]; // next-oldest
+            const evolved = prev != null && prev.scaffoldVersion !== r.scaffoldVersion;
+            return (
+              <div key={r.id} className="flex items-center gap-2 text-[10px]">
+                <span className="p-text-3 shrink-0 w-16 truncate">{new Date(r.ranAt).toLocaleDateString()}</span>
+                {r.scaffoldVersion != null && (
+                  <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
+                )}
+                <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden">
+                  <div className={`h-full ${r.meanScore >= 0.7 ? "bg-emerald-500" : r.meanScore >= 0.4 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
+                </div>
+                <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// Inline SVG mean-score curve with a dashed quality-floor reference. Points are
+// coloured by score band; the path uses a non-scaling stroke so it stays crisp
+// under preserveAspectRatio="none".
+function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; threshold: number }) {
+  const W = 100, H = 32, pad = 2;
+  const n = points.length;
+  const x = (i: number) => n <= 1 ? W / 2 : pad + (i / (n - 1)) * (W - 2 * pad);
+  const y = (score: number) => pad + (1 - Math.max(0, Math.min(1, score))) * (H - 2 * pad);
+  const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.meanScore).toFixed(2)}`).join(" ");
+  const floorY = y(threshold).toFixed(2);
+  const dotColor = (s: number) => s >= 0.7 ? "#34d399" : s >= 0.4 ? "#fbbf24" : "#f87171";
+  return (
+    <div className="rounded-lg border p-border p-surface p-2">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-24">
+        <line x1={pad} y1={floorY} x2={W - pad} y2={floorY} stroke="var(--c-text-3, #888)" strokeWidth={0.4} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" opacity={0.6} />
+        {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent, #38bdf8)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
+        {points.map((p, i) => (
+          <circle key={p.id} cx={x(i)} cy={y(p.meanScore)} r={1.4} fill={dotColor(p.meanScore)} vectorEffect="non-scaling-stroke">
+            <title>{`${new Date(p.ranAt).toLocaleString()} · score ${p.meanScore.toFixed(3)} · loss ${p.loss.toFixed(3)}${p.scaffoldVersion != null ? ` · scaffold v${p.scaffoldVersion}` : ""}`}</title>
+          </circle>
+        ))}
+      </svg>
     </div>
   );
 }

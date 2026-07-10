@@ -108,7 +108,7 @@ export function evaluateGate(report: EvalReport, threshold: number): GateResult 
 export function renderEvalSummary(report: EvalReport, gate?: GateResult): string {
   const s = report.summary;
   const lines: string[] = [];
-  lines.push(`Eval: ${report.strategyB}${report.modelB ? ` (${report.modelB})` : ''} vs baseline ${report.strategyA}${report.modelA ? ` (${report.modelA})` : ''}`);
+  lines.push(`Eval: ${report.strategyB}${report.modelB ? ` (${report.modelB})` : ''} vs ${report.strategyA}${report.modelA ? ` (${report.modelA})` : ''} (baseline)`);
   if (report.corpus) lines.push(`Corpus: ${report.corpus}`);
   lines.push(`Cases: ${s.total}   B-wins: ${s.bWins}   A-wins: ${s.aWins}   ties: ${s.ties}`);
   lines.push(`Aggregate (B): ${s.avgScoreB.toFixed(3)}   Baseline (A): ${s.avgScoreA.toFixed(3)}   Δ: ${report.regressionDelta >= 0 ? '+' : ''}${report.regressionDelta.toFixed(3)}`);

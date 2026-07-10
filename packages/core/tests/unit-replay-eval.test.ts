@@ -91,6 +91,36 @@ describe('runReplayEval', () => {
   });
 });
 
+describe('listReplayEvals — the quality-panel data series', () => {
+  function insertReplay(
+    sql: ReturnType<typeof makeSql>,
+    row: { id: string; ranAt: number; meanScore: number; scaffoldVersion: number | null },
+  ) {
+    sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${row.id}, ${row.ranAt}, 4, 2, 2, ${row.meanScore}, ${1 - row.meanScore}, ${row.scaffoldVersion}, ${'[]'})`;
+  }
+
+  test('returns the series newest-first with the fields the panel renders', () => {
+    const { sql } = setup();
+    insertReplay(sql, { id: 'r1', ranAt: 100, meanScore: 0.5, scaffoldVersion: 1 });
+    insertReplay(sql, { id: 'r2', ranAt: 200, meanScore: 0.7, scaffoldVersion: 1 });
+    insertReplay(sql, { id: 'r3', ranAt: 300, meanScore: 0.9, scaffoldVersion: 2 });
+
+    const series = listReplayEvals(sql);
+    expect(series.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(series[0].meanScore).toBeCloseTo(0.9);
+    expect(series[0].loss).toBeCloseTo(0.1);
+    // scaffold_version is the before/after-evolution axis the panel annotates.
+    expect(series.map((r) => r.scaffoldVersion)).toEqual([2, 1, 1]);
+  });
+
+  test('honors the limit', () => {
+    const { sql } = setup();
+    for (let i = 0; i < 5; i++) insertReplay(sql, { id: `r${i}`, ranAt: i * 10, meanScore: 0.5, scaffoldVersion: null });
+    expect(listReplayEvals(sql, 3)).toHaveLength(3);
+  });
+});
+
 describe('EvolutionEngine.runReplayEval — the periodic seam', () => {
   test('lifetime evolution runs the replay eval through the backend runner and emits the loss', async () => {
     const { rt } = createTestRuntime({
