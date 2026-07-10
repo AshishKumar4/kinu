@@ -361,6 +361,14 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
 
+// File plane — CompositeVFS mount table + raw-handle mount adapters
+export {
+  CompositeVFS, cleanAbsolutePath, makeVfsError,
+  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
+  type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
+  type ResolvedPath, type VfsError, type DeviceMountConsent,
+} from './vfs/index.js';
+
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
 export {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, summarizeRestorePlan,

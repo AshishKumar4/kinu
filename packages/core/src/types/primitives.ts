@@ -28,6 +28,11 @@ export interface RawSqlExec {
 /**
  * VFS interface — matches SqliteFS from agent-utils.
  * Backed by a single vfs_files table with 1.8 MB chunking.
+ *
+ * In production `Storage.vfs` is a CompositeVFS (vfs/composite.ts): the same
+ * 7 methods over a mount table (/local = SqliteFS, plus /sandbox /nimbus /pc
+ * raw-handle mounts). Bare and deeper-absolute paths compat-route to /local,
+ * so implementations and consumers of this interface are unaffected.
  */
 export interface VFS {
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;

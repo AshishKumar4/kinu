@@ -15,6 +15,7 @@ import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
+  CompositeVFS,
   DefaultExecutionRouter, createInlineExecutor,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
@@ -216,7 +217,9 @@ export function createCLIRuntime(
   // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
   const sqliteFs = new SqliteFS(sql);
   sqliteFs.init();
-  const vfs = adaptVFS(sqliteFs);
+  // Storage.vfs is the CompositeVFS mount table; locally only /local (SqliteFS)
+  // is mounted — remote environments have no raw handles on this backend.
+  const vfs = new CompositeVFS({ local: adaptVFS(sqliteFs) });
 
   // MemoryStore needs the full agent-utils VFS (SqliteFS), not the adapted core VFS
   const memoryStore = new MemoryStore(sqliteFs as any, sql);

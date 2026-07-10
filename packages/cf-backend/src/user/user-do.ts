@@ -60,7 +60,11 @@ import { credentialToHeaders, accessTokenExpiring } from './credential-headers.j
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { resolveAgentTitle } from '../lib/agent-naming.js';
-import { DEVICE_CONSENT_SCOPE, summarizeDeviceAction, type DeviceConsentScope } from './device-consent.js';
+import {
+  DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
+  mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  type DeviceConsentScope,
+} from './device-consent.js';
 import {
   validateMcpServerInput, mcpToolKey, parseAllowedTools, mapConnectionStatus,
   type McpServerSummary, type McpTransport,
@@ -712,7 +716,7 @@ export class UserDO extends Agent<Env> {
       `SELECT policy, scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
     )[0];
     if (row?.policy !== 'allow' && row?.policy !== 'deny') return null;
-    return { policy: row.policy, scope: DEVICE_CONSENT_SCOPE };
+    return { policy: row.policy, scope: parseConsentScope(row.scope) };
   }
 
   private setDeviceConsentPolicy(
@@ -720,7 +724,13 @@ export class UserDO extends Agent<Env> {
     deviceId: string,
     policy: 'allow' | 'deny',
     lastAction?: { method: string; command: string },
+    scope: DeviceConsentScope = DEVICE_CONSENT_SCOPE,
   ): void {
+    // Remembering a base action grant must not downgrade full_filesystem.
+    const existing = this.sqlx<{ scope: string }>(
+      `SELECT scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
+    )[0];
+    const effectiveScope = policy === 'allow' ? mergeConsentScope(existing?.scope, scope) : scope;
     this.sqlx(
       `INSERT INTO device_consent
          (agent_name, device_id, policy, scope, last_method, last_summary, updated_at)
@@ -731,16 +741,17 @@ export class UserDO extends Agent<Env> {
          last_method = excluded.last_method,
          last_summary = excluded.last_summary,
          updated_at = excluded.updated_at`,
-      agentName, deviceId, policy, DEVICE_CONSENT_SCOPE,
+      agentName, deviceId, policy, effectiveScope,
       lastAction?.method ?? null, lastAction?.command ?? null, Date.now(),
     );
   }
 
   /** Resolve consent for one agent→device call. Remembered policies short-
-   *  circuit; otherwise the agent renders a card and the user decides. */
+   *  circuit (either tier covers device actions — full_filesystem implies the
+   *  base grant); otherwise the agent renders a card and the user decides. */
   private async checkDeviceConsent(agentName: string, deviceId: string, method: string, params: unknown[]): Promise<boolean> {
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    if (policy?.policy === 'allow' && policy.scope === DEVICE_CONSENT_SCOPE) return true;
+    if (policy?.policy === 'allow') return true;
     if (policy?.policy === 'deny') return false;
     const action = summarizeDeviceAction(method, params);
     let decision: 'once' | 'always' | 'deny';
@@ -802,6 +813,35 @@ export class UserDO extends Agent<Env> {
   async clearDeviceConsent(agentName: string, deviceId: string): Promise<{ ok: boolean }> {
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
     return { ok: true };
+  }
+
+  /** Grant or reduce an agent's consent tier on a device (Devices tab / CLI).
+   *  Granting full_filesystem also records the base 'allow' policy. */
+  @callable()
+  async setDeviceConsentScope(agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
+    if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) {
+      return { ok: false };
+    }
+    // An explicit tier choice overrides the no-downgrade merge.
+    this.sqlx(
+      `INSERT INTO device_consent (agent_name, device_id, policy, scope, updated_at)
+       VALUES (?, ?, 'allow', ?, ?)
+       ON CONFLICT(agent_name, device_id) DO UPDATE SET
+         policy = 'allow', scope = excluded.scope, updated_at = excluded.updated_at`,
+      agentName, deviceId, scope, Date.now(),
+    );
+    return { ok: true };
+  }
+
+  /** The /pc mount's path-scope check: does this agent hold the
+   *  full-filesystem tier on the currently connected device? */
+  async getDeviceFsConsent(agentName: string): Promise<{ fullFilesystem: boolean }> {
+    const deviceId = this._devices.connectedDeviceId();
+    if (!deviceId) return { fullFilesystem: false };
+    const policy = this.getDeviceConsentPolicy(agentName, deviceId);
+    return {
+      fullFilesystem: policy?.policy === 'allow' && policy.scope === DEVICE_CONSENT_SCOPE_FULL_FS,
+    };
   }
 
   /** The user's devices for the Devices tab (live-connected flag from the

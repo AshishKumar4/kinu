@@ -21,6 +21,8 @@ import type {
   FiberCtx, ExecutionRouter,
 } from "@proteus/core";
 import {
+  CompositeVFS, type MountPolicy,
+  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   DefaultExecutionRouter, createInlineExecutor,
   createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
   createNimbusExecutor, type NimbusSandboxHandle,
@@ -84,6 +86,9 @@ function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
  *  backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   sqliteFS: SqliteFS;
+  /** Storage.vfs, typed — the mount-table data surface (listMounts) for the
+   *  file-manager UI and cross-environment copy. */
+  compositeVfs: CompositeVFS;
   /** The laptop runtime's hub transport. `refreshStatus()` is awaited at turn
    *  start so the turn's context reflects the CURRENT device state. */
   deviceTransport: DeviceTransport;
@@ -123,8 +128,11 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
 
-  // Adapt SqliteFS to core's VFS interface (SqliteFS has a superset of methods)
-  const vfs = adaptVFS(sqliteFS);
+  // Storage.vfs is the CompositeVFS mount table; /local is SqliteFS adapted
+  // to core's VFS interface (SqliteFS has a superset of methods). Dynamic
+  // mounts (/sandbox, /nimbus, /pc) attach below once their handles exist.
+  const compositeVfs = new CompositeVFS({ local: adaptVFS(sqliteFS) });
+  const vfs: CoreVFS = compositeVfs;
 
   // Adapt MemoryStore to core's Memory interface
   const memory = adaptMemory(memoryStore);
@@ -162,6 +170,10 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     ? env.PREVIEW_HOSTNAME
     : undefined;
   const sandboxId = `proteus-${agent.name}`;
+  // Every remote mount exposes the environment's REAL root ('/'); the
+  // ergonomic working dir is metadata, not a path rewrite.
+  const sandboxMountPolicy: MountPolicy =
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
@@ -174,43 +186,61 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+      // File plane: /sandbox over the same (restoring) raw handle the
+      // codemode sandbox.* tools use — two consumers of one handle.
+      compositeVfs.mount('sandbox', {
+        vfs: createSandboxMountVFS(handle),
+        policy: sandboxMountPolicy,
+        workingDir: '/workspace',
+      });
       console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
+      compositeVfs.reserve('sandbox', (err as Error).message, sandboxMountPolicy);
     }
   } else {
     if (!previewHostname) console.warn("[proteus] PREVIEW_HOSTNAME not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
+    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOSTNAME missing)', sandboxMountPolicy);
   }
 
   // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
   // official SDK against the local NIMBUS_SESSION binding, so there are no
   // endpoint/token secrets. The handle is lazy: no session is touched until
   // the agent actually calls nimbus.*.
+  const nimbusMountPolicy: MountPolicy =
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
   if (env.NIMBUS_SESSION) {
     try {
-      executionRouter.register(createNimbusExecutor({
-        box: createAgentNimbusHandle(agent),
-      }));
+      const nimbusBox = createAgentNimbusHandle(agent);
+      executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
+      compositeVfs.mount('nimbus', {
+        vfs: createNimbusMountVFS(nimbusBox),
+        policy: nimbusMountPolicy,
+        workingDir: '/home/user',
+      });
       console.log('[proteus] NimbusExecutor registered (NIMBUS_SESSION binding)');
     } catch (err) {
       console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
+      compositeVfs.reserve('nimbus', (err as Error).message, nimbusMountPolicy);
     }
   } else {
     executionRouter.register(createNimbusExecutor());
+    compositeVfs.reserve('nimbus', 'NIMBUS_SESSION binding not configured', nimbusMountPolicy);
   }
 
   // Register the laptop executor. The device socket lives on the user's UserDO
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
   // one connected device serves all of the user's agents.
+  const cliCwdForDevice = () =>
+    typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
+      ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
+      : null;
   const deviceTransport = createHubDeviceTransport({
     hub: () => userDOStubFor(agent),
     agentName: agent.name,
-    cliCwd: () =>
-      typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
-        ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
-        : null,
+    cliCwd: cliCwdForDevice,
     checkpointMeta: () => {
       const host = agent as unknown as { getCheckpointMetaForDevice?: () => { turnId: string; sessionId: string } | null };
       return typeof host.getCheckpointMetaForDevice === 'function' ? host.getCheckpointMetaForDevice() : null;
@@ -218,6 +248,24 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   });
   void deviceTransport.refreshStatus();
   executionRouter.register(createSSHTunnelExecutor(deviceTransport));
+  // File plane: /pc over the same transport the laptop.* tools use. The mount
+  // is live only while a device is connected; the adapter scopes paths to the
+  // consented subtree (connect dir / home) unless the agent holds the
+  // full-filesystem consent tier on the hub. Action consent (ask-once-then-
+  // remember) still applies to every RPC underneath.
+  compositeVfs.mount('pc', {
+    vfs: createDeviceMountVFS(deviceTransport, {
+      consentedRoot: cliCwdForDevice,
+      hasFullFilesystem: async () => {
+        const hub = userDOStubFor(agent);
+        if (!hub) return false;
+        try { return (await hub.getDeviceFsConsent(agent.name)).fullFilesystem; }
+        catch { return false; } // consent unverifiable → subtree scope (fail closed)
+      },
+    }),
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    live: () => deviceTransport.status().connected,
+  });
 
   // Vectorize-backed semantic memory. Only constructs when both
   // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
@@ -255,6 +303,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     executionRouter,
     shell,
     sqliteFS,
+    compositeVfs,
     deviceTransport,
     vectorStore,
     sandboxHandle,
