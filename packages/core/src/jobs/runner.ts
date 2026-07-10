@@ -12,7 +12,7 @@
 import type { Schedule } from '../types/primitives.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { ThresholdDeps } from './threshold.js';
-import { BackgroundJobStore, serializeJobResult } from './store.js';
+import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
 import { nanoid } from '../utils/nanoid.js';
 
 export interface BackgroundJobRunnerDeps {
@@ -23,6 +23,10 @@ export interface BackgroundJobRunnerDeps {
   host: BackendHost;
   /** Activity-log sink (optional). */
   logActivity?(event: string, detail?: string): void;
+  /** Fires once per job settle (completed/failed), before the wake turn —
+   *  the backend's notification seam (e.g. Mission Inbox owner emails).
+   *  Never throws into the fiber. */
+  onSettled?(job: BackgroundJob): void;
 }
 
 export class BackgroundJobRunner {
@@ -71,6 +75,7 @@ export class BackgroundJobRunner {
       if (outcome.ok) this.deps.store.settle(jobId, serializeJobResult(outcome.result), Date.now());
       else this.deps.store.fail(jobId, outcome.error, Date.now());
       ctx.stash({ phase: 'settled', jobId, kind });
+      this.notifySettled(jobId);
       await this.wake(jobId);
     });
   }
@@ -132,7 +137,18 @@ export class BackgroundJobRunner {
     const jobId = typeof snap.jobId === 'string' ? snap.jobId : '';
     if (jobId && snap.phase === 'running') {
       this.deps.store.fail(jobId, 'interrupted by Durable Object eviction before completion', Date.now());
+      this.notifySettled(jobId);
       await this.wake(jobId);
     }
+  }
+
+  /** Deliver the settle notification without letting a sink error poison the
+   *  fiber / recovery path. */
+  private notifySettled(jobId: string): void {
+    if (!this.deps.onSettled) return;
+    const job = this.deps.store.get(jobId);
+    if (!job) return;
+    try { this.deps.onSettled(job); }
+    catch (err) { console.warn('[proteus] job onSettled sink failed:', err instanceof Error ? err.message : err); }
   }
 }

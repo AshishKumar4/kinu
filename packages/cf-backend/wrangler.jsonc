@@ -97,6 +97,10 @@
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
     "CLOUDFLARE_AI_GATEWAY_ID": "default",
+    // Mission Inbox mail domain: <agent-name>@EMAIL_DOMAIN. Takes effect only
+    // after the one-time Email Routing / Email Sending setup in
+    // docs/EMAIL-INGRESS.md is done for this domain.
+    "EMAIL_DOMAIN": "proteus.ashishkumarsingh.com",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:
@@ -107,6 +111,14 @@
     // Uses the NIMBUS_SESSION Durable Object binding above through the
     // official @nimbus-sh/sdk. No endpoint/token secrets are required.
   },
+  // ── Mission Inbox (Email Routing + Email Sending) ────────────────
+  // Inbound: an Email Routing catch-all rule on EMAIL_DOMAIN delivers to this
+  // Worker's email() handler; the local part is the agent name. Outbound:
+  // thread replies + owner notifications through this binding. ONE-TIME
+  // OWNER SETUP required (domain onboarding + routing rule) — see
+  // docs/EMAIL-INGRESS.md. Until then the binding is inert: inbound mail
+  // never arrives and outbound sends skip quietly.
+  "send_email": [{ "name": "EMAIL" }],
   // Workers AI binding — used for platform-side embeddings. Chat model calls
   // use the logged-in user's Cloudflare OAuth credential so Workers AI usage
   // bills to that user's Cloudflare account/quota.
@@ -177,6 +189,9 @@
         { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
         { "tag": "v4", "new_sqlite_classes": ["NimbusSession"] }
       ],
+      // Staging has the binding for parity but no EMAIL_DOMAIN — the Mission
+      // Inbox stays off (no routing rule points here; outbound sends skip).
+      "send_email": [{ "name": "EMAIL" }],
       "ai": { "binding": "AI" },
       "r2_buckets": [
         { "binding": "BACKUP_BUCKET", "bucket_name": "proteus-backups" }

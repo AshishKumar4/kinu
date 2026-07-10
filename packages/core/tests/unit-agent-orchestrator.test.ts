@@ -130,6 +130,14 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(enqueued).toHaveLength(1);                    // one batched turn
     expect(enqueued[0].text).toContain('arrived');        // the turn-driving message
     expect(enqueued[0].text).toContain('[webhook]');
+    // The injected turn is marked programmatic and carries the synthetic turn
+    // id the consumed events were bound to — the backend's reply-dispatch key.
+    expect(enqueued[0].metadata?.proteusEvent).toBe('event_drain');
+    const drainTurnId = enqueued[0].metadata?.drainTurnId;
+    expect(typeof drainTurnId).toBe('string');
+    // d1/d2 share a body → webhook dedupe admits one event; it is bound here.
+    const bound = log.query({ turn_id: drainTurnId as string });
+    expect(bound).toHaveLength(1);
 
     // Events are now consumed → a second drain is a no-op (self-terminates).
     await orch.drainPendingEvents();

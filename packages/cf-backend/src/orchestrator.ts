@@ -166,8 +166,17 @@ import {
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
 } from "./events/webhook-rate-limit.js";
+import { acceptInboundEmail } from "./events/ingress/email.js";
+import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
+import {
+  createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
+} from "./email/outbound.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
+
+// Inbound-email budget per agent (all senders combined). Email is a wake
+// channel, not a data plane — mail beyond this is dropped at the gate.
+const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -567,6 +576,13 @@ export class OrchestratorAgent extends Think<Env> {
           }
         },
       };
+      // email_thread dispatcher: a drained email turn's answer goes back onto
+      // the inbound mail's thread via the send_email binding. Context resolves
+      // per dispatch so binding/display-name changes never go stale.
+      const emailDispatcher = createEmailThreadDispatcher(() => ({
+        email: orchestrator.env.EMAIL,
+        agentDisplayName: orchestrator.safeDisplayName(),
+      }));
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
         ws_session: wsDispatcher,
         // peer_back: route the answer to a peer ask back over the outbox
@@ -574,9 +590,16 @@ export class OrchestratorAgent extends Think<Env> {
         peer_back: {
           dispatch: (channel, payload) => orchestrator.peerHub.dispatchPeerBack(channel, payload),
         },
+        email_thread: emailDispatcher,
       });
     }
     return this._replyChannels;
+  }
+
+  /** Display name for outbound email From headers — never throws pre-schema. */
+  private safeDisplayName(): string {
+    try { return this.config.getDisplayName() ?? this.name; }
+    catch { return this.name; }
   }
 
   // ── Peer transport endpoint (agent teams) ────────────────────────────────
@@ -655,6 +678,14 @@ export class OrchestratorAgent extends Think<Env> {
         fiber: this.rt.schedule.fiber,
         host: this.host,
         logActivity: (event, detail) => this.logActivity(event, detail),
+        // Mission Inbox: a settled background job also notifies the owner by
+        // email (skips silently when the platform email pieces are absent).
+        onSettled: (job) => this.emailOwnerNotification(
+          `Background ${job.kind} job ${job.status}`,
+          job.status === 'completed'
+            ? `Background ${job.kind} job ${job.id} completed.\n\nResult:\n${job.result ?? '(empty)'}`
+            : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
+        ),
       });
     }
     return this._jobRunner;
@@ -818,6 +849,12 @@ export class OrchestratorAgent extends Think<Env> {
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
+      });
+      // Mission Inbox: the session-end changelog digest also goes to the
+      // owner's inbox — the "what I changed about myself" email.
+      this._engine.onEvent((event) => {
+        if (event.type !== 'changelog_digest') return;
+        this.emailOwnerNotification('Evolution changelog digest', event.message);
       });
     }
     return this._engine;
@@ -1848,6 +1885,19 @@ export class OrchestratorAgent extends Think<Env> {
     // Steer-as-Branch redirects launched during this turn settle against its
     // answer — detached, so a slow branch never blocks the TurnQueue.
     this.settlePendingBranches(msgId ?? null, assistantText);
+
+    // Mission Inbox: a turn injected by the event drain carries the synthetic
+    // turn id its events were bound to — reply their open email_thread
+    // channels with this turn's answer (threaded outbound email). Detached.
+    const drainTurnId = isRecord((lastUserMsg as { metadata?: unknown } | undefined)?.metadata)
+      ? (lastUserMsg as { metadata: Record<string, unknown> }).metadata.drainTurnId
+      : undefined;
+    if (typeof drainTurnId === 'string') {
+      void dispatchEmailRepliesForTurn(
+        { log: this.eventLog, replies: this.replyChannels },
+        drainTurnId, assistantText, Date.now(),
+      ).catch((err) => console.warn('[proteus] email reply dispatch failed:', err));
+    }
 
     const turn: CompletedTurn = {
       userMessage: userText,
@@ -5015,6 +5065,122 @@ export class OrchestratorAgent extends Think<Env> {
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
     this.ensureSchema();
     return this.peerHub.receive(msg);
+  }
+
+  // ── Mission Inbox: email ingress + owner notifications ─────────
+
+  /** Owner's verified login email (UserDO profile), or null when unknown. */
+  private async getOwnerEmail(): Promise<string | null> {
+    try {
+      const userDO = this.getOwnerUserDO();
+      if (!userDO) return null;
+      return (await userDO.getProfile())?.email ?? null;
+    } catch { return null; }
+  }
+
+  /** Union of active email_route allowlists (normally zero or one trigger). */
+  private emailAllowlist(): string[] {
+    try {
+      return this.triggerRegistry.list({ kind: 'email_route', state: 'active' })
+        .flatMap((t) => {
+          const allow = (t.spec as { allow?: unknown }).allow;
+          return Array.isArray(allow) ? allow.filter((a): a is string => typeof a === 'string') : [];
+        });
+    } catch { return []; }
+  }
+
+  /** Run an inbound email through the hub from within the agent DO — the
+   *  email counterpart of acceptWebhookDelivery. The Worker `email()` handler
+   *  parses MIME + resolves the agent; the trust gate (owner email /
+   *  email_route allowlist), publish, and thread reply channel run here
+   *  atomically. Unauthorized senders never produce an event row. */
+  @callable()
+  async acceptEmailDelivery(opts: {
+    from: string;
+    to: string;
+    subject: string;
+    body_text: string;
+    message_id: string | null;
+    in_reply_to: string | null;
+    references: string | null;
+    attachments: Array<{ filename: string; content_type: string; size: number }>;
+    now: number;
+  }): Promise<{ admitted: boolean; duplicate?: boolean; event_id?: string; reason?: string }> {
+    const ownerEmail = await this.getOwnerEmail();
+    if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
+    const result = acceptInboundEmail({
+      log: this.eventLog,
+      replies: this.replyChannels,
+      owner_email: ownerEmail,
+      allowlist: this.emailAllowlist(),
+      tryConsumeRateLimit: (now) =>
+        tryConsumeWebhookRateLimit(this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now).allowed,
+    }, opts);
+    if (!result.admitted) return { admitted: false, reason: result.reason };
+    // Wake the agent for a turn — only on fresh admission (a duplicate
+    // delivery is already bound or in flight).
+    if (!result.duplicate) void this.orch.drainPendingEvents();
+    return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
+  }
+
+  /** The agent's email surface for the operator UI / routes. */
+  @callable()
+  async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
+    const domain = this.env.EMAIL_DOMAIN;
+    return {
+      address: domain ? agentEmailAddress(this.name, domain) : null,
+      allowlist: this.emailAllowlist(),
+      notifications: this.config.getEmailNotificationsEnabled(),
+    };
+  }
+
+  /** Replace the inbound-email allowlist. The owner's own verified address is
+   *  always allowed and never needs listing; one active email_route trigger
+   *  (creator_trust recorded like every ingress) holds the extra senders, and
+   *  an empty list just revokes it. Reached only through the owner-
+   *  authenticated + step-up route. */
+  @callable()
+  async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
+    const cleaned = [...new Set(
+      allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
+    )];
+    const now = Date.now();
+    for (const t of this.triggerRegistry.list({ kind: 'email_route' })) {
+      if (t.state !== 'revoked') this.triggerRegistry.revoke(t.id, now);
+    }
+    if (cleaned.length > 0) {
+      this.triggerRegistry.register({
+        kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner',
+      }, now);
+    }
+    return { allowlist: cleaned };
+  }
+
+  /** Toggle owner-email notifications (changelog digests, job completions). */
+  @callable()
+  async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
+    this.config.setEmailNotificationsEnabled(enabled);
+    return { notifications: this.config.getEmailNotificationsEnabled() };
+  }
+
+  /** Fire-and-forget owner email. `email_notifications='false'` silences it;
+   *  missing platform pieces (binding / domain / owner email) skip quietly.
+   *  Also skipped while an operator socket is live — the owner sees the
+   *  card in-app; email is the away channel, not a duplicate feed. */
+  private emailOwnerNotification(subject: string, text: string): void {
+    try {
+      if (!this.config.getEmailNotificationsEnabled()) return;
+      if (this.ctx.getWebSockets().length > 0) return;
+    } catch { return; }
+    void (async () => {
+      await sendOwnerEmail({
+        email: this.env.EMAIL,
+        emailDomain: this.env.EMAIL_DOMAIN,
+        agentName: this.name,
+        agentDisplayName: this.safeDisplayName(),
+        ownerEmail: await this.getOwnerEmail(),
+      }, { subject, text });
+    })().catch((err) => console.warn('[proteus-email] notification failed:', err));
   }
 
   /** Recent events for the operator UI's events sidebar. Mirrors

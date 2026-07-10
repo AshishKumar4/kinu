@@ -6,6 +6,9 @@
  *   POST /api/agents/<name>/triggers                — create trigger (auth + step-up)
  *   DELETE /api/agents/<name>/triggers/<id>         — revoke trigger (auth)
  *   GET  /api/agents/<name>/events                  — recent events (auth)
+ *   GET  /api/agents/<name>/email                   — email ingress config (auth)
+ *   PUT  /api/agents/<name>/email                   — set allowlist / notifications
+ *                                                     (auth + step-up)
  *
  * The webhook route is the only one that DOES NOT require operator auth —
  * it has its own per-trigger HMAC / Bearer / mTLS gate.
@@ -61,7 +64,47 @@ export async function handleHubRequest(
     return await handleEventsList(request, env, agentName);
   }
 
+  // ── Email ingress config (Mission Inbox) ──────────────────────
+  if (path === `/api/agents/${agentName}/email`) {
+    return await handleEmailConfigRoute(request, env, agentName);
+  }
+
   return null;
+}
+
+// ── Email ingress config handler ─────────────────────────────────
+
+async function handleEmailConfigRoute(
+  request: Request,
+  env: Env,
+  agentName: string,
+): Promise<Response> {
+  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  if (request.method === 'GET') {
+    return json(await agent.getEmailIngress());
+  }
+  if (request.method === 'PUT') {
+    // Widening who can drive turns by email is a grant — same step-up rule
+    // as webhook trigger creation.
+    if (!isFreshAuthTime(requestAuthTimeMs(request))) {
+      return err(401, 'step-up auth required (re-login within 5 minutes)');
+    }
+    const body = await safeJson<{ allow?: string[]; notifications?: boolean }>(request);
+    if (!body || (body.allow === undefined && body.notifications === undefined)) {
+      return err(400, 'allow (string[]) and/or notifications (boolean) required');
+    }
+    if (body.allow !== undefined) {
+      if (!Array.isArray(body.allow) || body.allow.some((a) => typeof a !== 'string')) {
+        return err(400, 'allow must be an array of email addresses');
+      }
+      await agent.setEmailAllowlist(body.allow);
+    }
+    if (body.notifications !== undefined) {
+      await agent.setEmailNotifications(body.notifications === true);
+    }
+    return json(await agent.getEmailIngress());
+  }
+  return err(405, 'GET or PUT');
 }
 
 // ── Webhook delivery handler ─────────────────────────────────────

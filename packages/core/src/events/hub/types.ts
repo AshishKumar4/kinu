@@ -63,6 +63,7 @@ export type IngressKind =
   | 'file_watch'      // sandbox filesystem change
   | 'peer_async'      // receiver-side write from a peer agent
   | 'mcp_streamable'  // MCP tool call from external client
+  | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
   | 'self_emit'       // emitted by a tool during the agent's own turn
   | 'reply_request';  // operator confirmation reply
 
@@ -75,6 +76,7 @@ export type EventVariant =
   | 'timer'            // alarm fired
   | 'peer_agent'       // cross-agent message
   | 'file_changed'     // sandbox FS event
+  | 'email'            // inbound email (Mission Inbox)
   | 'internal'         // tool-emitted within the agent's own turn
   | 'reply_request'    // pending owner-confirmation question
   | 'mcp_chat'         // owner-authenticated MCP call
@@ -97,6 +99,7 @@ export type ReplyChannelKind =
   | 'http_pending'  // held-open HTTP request — 30s TTL
   | 'peer_back'     // async reply to a peer agent — 24h TTL
   | 'mcp_pending'   // open MCP HTTP request — 60s TTL
+  | 'email_thread'  // reply lands back on the inbound email's thread — 24h TTL
   | 'none';         // event has no reply channel (timer, file_watch, etc.)
 
 export interface ReplyChannelRef {
@@ -171,6 +174,29 @@ export interface FileChangedPayload {
   size?: number;
 }
 
+export interface EmailAttachmentMeta {
+  filename: string;
+  content_type: string;
+  size: number;
+}
+
+export interface EmailPayload {
+  /** Envelope sender (SMTP MAIL FROM) — the address the trust gate verified. */
+  from: string;
+  /** The agent address the mail arrived at (envelope RCPT TO). */
+  to: string;
+  subject: string;
+  /** Top-of-thread text with quoted history stripped. */
+  body_text: string;
+  /** RFC 5322 Message-ID of the inbound mail — threading + dedupe anchor. */
+  message_id: string | null;
+  in_reply_to: string | null;
+  /** Raw References header (space-separated message ids). */
+  references: string | null;
+  /** Attachment metadata only — bytes never enter the event log. */
+  attachments: EmailAttachmentMeta[];
+}
+
 export interface InternalPayload {
   kind: string;
   data: unknown;
@@ -223,6 +249,7 @@ export type ProteusEvent =
   | (BaseEvent & { variant: 'timer'; payload: TimerPayload })
   | (BaseEvent & { variant: 'peer_agent'; payload: PeerAgentPayload })
   | (BaseEvent & { variant: 'file_changed'; payload: FileChangedPayload })
+  | (BaseEvent & { variant: 'email'; payload: EmailPayload })
   | (BaseEvent & { variant: 'internal'; payload: InternalPayload })
   | (BaseEvent & { variant: 'reply_request'; payload: ReplyRequestPayload })
   | (BaseEvent & { variant: 'mcp_chat'; payload: McpChatPayload })
@@ -283,6 +310,15 @@ export type IngressDescriptor =
       ingress: 'mcp_streamable';
       variant: 'mcp_chat' | 'mcp_third_party';
       payload: McpChatPayload | McpThirdPartyPayload;
+    }
+  | {
+      ingress: 'email_inbound';
+      variant: 'email';
+      payload: EmailPayload;
+      /** How the sender passed the gate — the ingress only calls publish AFTER
+       *  verifying the envelope sender against the owner's verified email or
+       *  the agent's email_route allowlist. Unknown senders never publish. */
+      sender_class: 'owner' | 'allowlisted';
     }
   | {
       ingress: 'self_emit';
@@ -414,7 +450,8 @@ export type TriggerKind =
   | 'process_watch'
   | 'file_watch'
   | 'peer_inbox'
-  | 'mcp_route';
+  | 'mcp_route'
+  | 'email_route';   // per-agent inbound-email allowlist (owner is always allowed)
 
 export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
 

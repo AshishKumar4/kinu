@@ -91,6 +91,13 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
       if (d.variant === 'mcp_chat') return 'owner';
       return 'authenticated';
 
+    case 'email_inbound':
+      // Email sender identity rests on envelope + DMARC checks upstream —
+      // weaker than an authenticated browser session, so even the owner's
+      // verified address is capped at `authenticated` (never `owner`).
+      // Allowlisted third-party senders run at `external`.
+      return d.sender_class === 'owner' ? 'authenticated' : 'external';
+
     case 'self_emit':
       return meetTrust('self', d.emitting_head_trust);
 
@@ -131,11 +138,13 @@ export function derivePriority(trust: TrustLevel, variant: EventVariant): Priori
       mcp_third_party: 'normal',
       reply_request: 'normal',
       internal: 'normal',
+      email: 'normal',
     },
     external: {
       webhook: 'background',
       peer_agent: 'background',
       mcp_third_party: 'background',
+      email: 'background',
     },
   };
   const row = table[trust];
@@ -176,6 +185,13 @@ export interface DerivedFields {
 export function deriveFields(d: IngressDescriptor): DerivedFields {
   const trust = deriveEventTrust(d);
   const priority = derivePriority(trust, d.variant);
-  const payload_visibility = deriveDefaultVisibility(trust);
+  // Email bodies ARE the turn input, and every email sender passed an
+  // explicit owner grant (own address or the email_route allowlist) — the
+  // per-trigger visibility override the spec allows. `redact` keeps content
+  // readable while masking secret-shaped fields; execution stays gated by
+  // trust regardless. Everything else keeps the per-trust default.
+  const payload_visibility = d.ingress === 'email_inbound'
+    ? 'redact'
+    : deriveDefaultVisibility(trust);
   return { trust, priority, payload_visibility };
 }

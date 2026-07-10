@@ -12,9 +12,11 @@
  *   sandbox    — process / file lifecycle inside the sandbox
  *   peer       — cross-agent async transport (outbox + alarm wake on receiver)
  *   mcp        — Model Context Protocol tool calls
+ *   email      — inbound mail via Cloudflare Email Routing (Mission Inbox)
  */
 export * from './chat.js';
 export * from './timer.js';
 export * from './sandbox.js';
 export * from './peer.js';
 export * from './mcp.js';
+export * from './email.js';

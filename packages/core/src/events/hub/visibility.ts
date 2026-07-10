@@ -165,6 +165,7 @@ function friendlySource(event: ProteusEvent): string {
     case 'process_watch':   return `sandbox (${(event.payload as { command?: string }).command?.slice(0, 40) ?? 'process'})`;
     case 'file_watch':      return `file (${(event.payload as { path?: string }).path ?? '?'})`;
     case 'peer_async':      return `peer agent (${(event.payload as { from_agent_name?: string }).from_agent_name ?? '?'})`;
+    case 'email_inbound':   return `email (${(event.payload as { from?: string }).from ?? '?'})`;
     case 'mcp_streamable':
       if (event.variant === 'mcp_chat') return `MCP (operator)`;
       return `MCP (${(event.payload as { client_label?: string }).client_label ?? 'third party'})`;
@@ -215,6 +216,13 @@ function briefForVariant(event: ProteusEvent): string {
       return `${(event.payload as { change: string; path: string }).change} ${
         (event.payload as { path: string }).path
       }`;
+    case 'email': {
+      const p = event.payload as { subject: string; body_text: string; attachments?: unknown[] };
+      const attachNote = p.attachments && p.attachments.length > 0
+        ? ` [${p.attachments.length} attachment${p.attachments.length === 1 ? '' : 's'}]`
+        : '';
+      return `"${p.subject}"${attachNote}: ${p.body_text.slice(0, 300)}`;
+    }
     case 'internal':
       return `${(event.payload as { kind: string }).kind}`;
     case 'reply_request':

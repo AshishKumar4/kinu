@@ -54,6 +54,9 @@ export const AGENT_CONFIG_KEYS = {
   mctsBranches: 'mcts_branches',
   mctsJudgeSamples: 'mcts_judge_samples',
   mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
+  /** 'false' silences owner emails (changelog digests, job completions).
+   *  Defaults on; sends only happen when the platform email pieces exist. */
+  emailNotifications: 'email_notifications',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -114,6 +117,9 @@ export interface AgentConfigStore {
   getMctsOverrides(): MctsOverrides;
   /** Persist MCTS overrides; undefined fields are left untouched. */
   setMctsOverrides(overrides: MctsOverrides): void;
+  /** Owner-email notifications (changelog digests, job completions). */
+  getEmailNotificationsEnabled(): boolean;
+  setEmailNotificationsEnabled(enabled: boolean): void;
 }
 
 export interface MctsOverrides {
@@ -295,6 +301,12 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       write(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
       write(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
       write(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
+    },
+    getEmailNotificationsEnabled() {
+      return get(AGENT_CONFIG_KEYS.emailNotifications) !== 'false';
+    },
+    setEmailNotificationsEnabled(enabled) {
+      set(AGENT_CONFIG_KEYS.emailNotifications, enabled ? 'true' : 'false');
     },
   };
 }

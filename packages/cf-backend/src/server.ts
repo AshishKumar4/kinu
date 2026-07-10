@@ -31,6 +31,7 @@ import { handleCliRequest } from "./cli/routes.js";
 import { handleAuthRequest } from "./auth/routes.js";
 import { handleLandingRequest } from "./landing-route.js";
 import { handleHubRequest } from "./events/routes.js";
+import { handleInboundEmail } from "./email/handler.js";
 import { handleNimbusPreviewRequest } from "./nimbus-route.js";
 import {
   authenticateRequest, AuthError, isPublicPath,
@@ -271,6 +272,13 @@ export default {
 
     // 11. SPA fallback.
     return withD1Bookmark(await env.ASSETS.fetch(request), identity);
+  },
+
+  // Mission Inbox — Cloudflare Email Routing (catch-all rule on EMAIL_DOMAIN)
+  // delivers inbound mail here. Addressing, trust gating, and the turn wake
+  // live in email/handler.ts + the agent's acceptEmailDelivery RPC.
+  async email(message: ForwardableEmailMessage, env: Env) {
+    await handleInboundEmail(message, env);
   },
 } satisfies ExportedHandler<Env>;
 

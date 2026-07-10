@@ -140,18 +140,25 @@ export class AgentOrchestrator {
    */
   async drainPendingEvents(): Promise<void> {
     let batch: ReturnType<typeof buildDrainBatch>;
+    const turnId = `evt-${nanoid()}`;
     try {
       const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
       batch = buildDrainBatch(pending);
       if (!batch) return;
-      const turnId = `evt-${nanoid()}`;
       for (const id of batch.ids) this.deps.eventLog.markConsumed(id, turnId, 0);
     } catch (err) {
       console.warn('[proteus] drainPendingEvents (select) failed:', (err as Error).message);
       return;
     }
     try {
-      await this.deps.host.enqueueTurn({ text: batch.text });
+      // The metadata marks the injected message as programmatic (event card,
+      // immediate outcome review) and carries the synthetic turn id so the
+      // backend can dispatch the turn's answer to the reply channels of the
+      // events it consumed (e.g. email_thread → outbound email reply).
+      await this.deps.host.enqueueTurn({
+        text: batch.text,
+        metadata: { proteusEvent: 'event_drain', drainTurnId: turnId },
+      });
     } catch (err) {
       console.warn('[proteus] drainPendingEvents (turn) failed:', (err as Error).message);
     }

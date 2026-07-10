@@ -35,6 +35,16 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
     case 'mcp_third_party':
       return `mcp:${event.payload.client_id}:${event.payload.request_id}`;
 
+    case 'email': {
+      // Message-ID is the natural idempotency key (Email Routing retries
+      // deliver the same id). Mail without one falls back to a content hash
+      // bucketed like webhooks.
+      const p = event.payload;
+      if (p.message_id) return `email:${p.message_id}`;
+      const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
+      return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`)}:${bucket}`;
+    }
+
     case 'chat':
     case 'internal':
     case 'file_changed':

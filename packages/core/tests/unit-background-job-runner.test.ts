@@ -44,13 +44,18 @@ function setup() {
   const { fiber, stashes, runs, settled } = fakeFiber();
   const { host, enqueued, setStatus } = fakeHost();
   const logs: Array<{ e: string; d?: string }> = [];
-  const runner = new BackgroundJobRunner({ store, fiber, host, logActivity: (e, d) => logs.push({ e, d }) });
-  return { runner, store, stashes, runs, settled, host, enqueued, setStatus, logs };
+  const notified: Array<{ id: string; status: string }> = [];
+  const runner = new BackgroundJobRunner({
+    store, fiber, host,
+    logActivity: (e, d) => logs.push({ e, d }),
+    onSettled: (job) => notified.push({ id: job.id, status: job.status }),
+  });
+  return { runner, store, stashes, runs, settled, host, enqueued, setStatus, logs, notified };
 }
 
 describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('resolving work settles the job + wakes a synthesis turn (once)', async () => {
-    const { runner, store, enqueued, stashes, settled } = setup();
+    const { runner, store, enqueued, stashes, settled, notified } = setup();
     const id = runner.create('think', { q: 1 }, new AbortController());
     expect(store.get(id)?.status).toBe('running');
 
@@ -69,10 +74,12 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
       { phase: 'running', jobId: id, kind: 'think' },
       { phase: 'settled', jobId: id, kind: 'think' },
     ]);
+    // The notification seam fired once, with the settled job.
+    expect(notified).toEqual([{ id, status: 'completed' }]);
   });
 
   test('rejecting work fails the job + the wake says failed', async () => {
-    const { runner, store, enqueued, settled } = setup();
+    const { runner, store, enqueued, settled, notified } = setup();
     const id = runner.create('run', {}, new AbortController());
     runner.detach(id, 'run', Promise.reject(new Error('boom')));
     await settled();
@@ -82,6 +89,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(enqueued[0].text).toContain('failed');
     expect(enqueued[0].text).toContain('boom');
     expect(enqueued[0].metadata?.status).toBe('failed');
+    expect(notified).toEqual([{ id, status: 'failed' }]);
   });
 
   test('a skipped wake (turn preempted) leaves a breadcrumb but keeps the result', async () => {

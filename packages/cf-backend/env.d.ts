@@ -64,6 +64,15 @@ declare global {
     /** Local dev backdoor — synthesize an authenticated identity for this
      *  email without an OAuth browser session. Production must leave this unset. */
     DEV_USER_EMAIL?: string;
+    /** Cloudflare Email Sending binding (`send_email` in wrangler.jsonc).
+     *  OPTIONAL — without it, outbound email (thread replies, owner
+     *  notifications) skips quietly. */
+    EMAIL?: SendEmail;
+    /** The mail domain agents live on (`<agent-name>@EMAIL_DOMAIN`). Must be
+     *  onboarded to Email Sending + have an Email Routing catch-all rule
+     *  pointing at this Worker — see docs/EMAIL-INGRESS.md. OPTIONAL: unset
+     *  disables the Mission Inbox. */
+    EMAIL_DOMAIN?: string;
     /** Public origin for unauthenticated CLI install/auth endpoints. */
     CLI_PUBLIC_ORIGIN?: string;
     /** Browser approval origin for CLI auth. In production this should be the
