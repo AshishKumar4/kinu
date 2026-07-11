@@ -30,6 +30,8 @@ const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
  *  are interactive-session-only until listed here. */
 const SCOPED_RPC_ALLOWLIST: Record<string, AccessTokenScope> = {
   getEvolutionChangelog: 'workspace.read',
+  listMounts: 'workspace.read',
+  getWorkspaceAgents: 'workspace.read',
   latestAlternateTakes: 'workspace.read',
   listFileCheckpoints: 'workspace.read',
   planFileRestore: 'workspace.read',

@@ -4261,9 +4261,12 @@ export class OrchestratorAgent extends Think<Env> {
         const entries: DirEntry[] = [];
         for (const name of names) {
           const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
-          let type: DirEntry['type'] = 'file';
+          // Entries of the composite root are mounts — directories by
+          // construction, even when the environment behind one can't answer
+          // a stat right now.
+          let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
           let size: number | undefined;
-          try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — leave as file */ }
+          try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — keep the default */ }
           entries.push({ name, type, size });
         }
         return { entries: sortDirEntries(entries) };

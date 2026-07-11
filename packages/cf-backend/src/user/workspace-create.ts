@@ -35,7 +35,7 @@ export async function createCloudWorkspaceForUser(
   const models = await listAvailableModels(env, userId);
   const model = pickInitialModel(await userDO.getConfig('default_model'), models);
   if (!model) {
-    throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the agent again.');
+    throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the workspace again.');
   }
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
@@ -75,7 +75,7 @@ function createInitialCloudAgentIdentity(
     };
   }
   const id = crypto.randomUUID();
-  const name = createWorkspaceNameFromMission(purpose ?? 'agent', id);
+  const name = createWorkspaceNameFromMission(purpose ?? 'workspace', id);
   return {
     name,
     displayName: input.displayName?.trim() || deriveWorkspaceTitle(purpose ?? '') || name,

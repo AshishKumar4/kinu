@@ -80,15 +80,15 @@ export const getProfile = () => api<UserProfile | null>('GET', '/profile');
 export const getCliSetup = () => api<CliSetup>('GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
-export const listWorkspaces     = () => api<WorkspaceEntry[]>('GET', '/agents');
+export const listWorkspaces     = () => api<WorkspaceEntry[]>('GET', '/workspaces');
 // `purpose` is the initial mission. When `name` is omitted the server creates
 // the agent identity using the user's connected model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
-  api<WorkspaceEntry>('POST', '/agents', { name, displayName, purpose });
+  api<WorkspaceEntry>('POST', '/workspaces', { name, displayName, purpose });
 export const touchWorkspace     = (name: string) =>
-  api<{ ok: boolean }>('POST', `/agents/${encodeURIComponent(name)}/touch`);
+  api<{ ok: boolean }>('POST', `/workspaces/${encodeURIComponent(name)}/touch`);
 export const removeWorkspace    = (name: string) =>
-  api<{ ok: boolean }>('DELETE', `/agents/${encodeURIComponent(name)}`);
+  api<{ ok: boolean }>('DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
 // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
 export interface UserDevice {
