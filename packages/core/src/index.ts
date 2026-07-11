@@ -89,6 +89,7 @@ export type * from './types/evaluation.js';
 // Product self-customization lane — separate from scaffold evolution.
 export {
   assertProductChangeTransition,
+  PRODUCT_CHANGE_STATUSES,
   ProductChangeEngine,
   ProductChangeStore,
   createProductChangeStore,

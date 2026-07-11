@@ -22,8 +22,9 @@ export function isProductChangeTerminal(status: ProductChangeStatus): boolean {
 
 /** States EARNED by the execution engine (apply/run_checks/deploy/rollback),
  *  never asserted: entering them requires real command results. The agent
- *  tool refuses manual transitions into these targets when an engine is
- *  wired; owner/UI RPCs keep full transition power. */
+ *  tool and the MCP product_change surface refuse manual transitions into
+ *  these targets when an engine is wired; owner/UI RPCs keep full
+ *  transition power. */
 const ENGINE_OWNED_TARGETS = new Set<ProductChangeStatus>([
   'validating', 'preview_ready', 'applying', 'deployed', 'rolled_back',
 ]);

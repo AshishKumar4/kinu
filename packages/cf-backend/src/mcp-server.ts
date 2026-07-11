@@ -58,6 +58,7 @@ import type {
   ProductChangeBoard,
   ProductChangeRequest,
 } from "@proteus/core";
+import { PRODUCT_CHANGE_STATUSES, isEngineOwnedTransitionTarget } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import { AuthError, authenticateRequest } from "./auth/session.js";
 import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
@@ -344,7 +345,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         prompt: z.string().optional().describe("create: what to change, in the owner's words."),
         plan: z.string().optional().describe("create: an optional up-front plan."),
         changeId: z.string().optional().describe("advance: the change to transition."),
-        status: z.string().optional().describe("advance: the target status (e.g. planning, patching, awaiting_approval)."),
+        status: z.enum(PRODUCT_CHANGE_STATUSES).optional().describe("advance: the target status (e.g. planning, patching, awaiting_approval)."),
       },
     },
     async ({ action, bindingId, prompt, plan, changeId, status }) => {
@@ -365,7 +366,21 @@ function buildServer(env: Env, agentName: string): McpServer {
         if (!changeId || !status) {
           return { content: [{ type: "text", text: "product_change advance requires changeId and status." }] };
         }
-        const advanced: ProductChangeRequest = await agent.transitionProductChange(changeId, status as ProductChangeRequest["status"]);
+        // Same governance gate as the builtin product_change tool: on this
+        // backend the execution engine owns validating/preview_ready/applying/
+        // deployed/rolled_back — those states are earned by real execution,
+        // never asserted by an external MCP actor.
+        if (isEngineOwnedTransitionTarget(status)) {
+          return {
+            content: [{
+              type: "text",
+              text:
+                `product_change advance refused: status '${status}' is earned by execution, not asserted — ` +
+                `use the agent's product_change tool actions apply / run_checks / deploy / rollback to get there for real.`,
+            }],
+          };
+        }
+        const advanced: ProductChangeRequest = await agent.transitionProductChange(changeId, status);
         return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
       } catch (err) {
         return { content: [{ type: "text", text: `product_change error: ${(err as Error).message}` }] };

@@ -1,15 +1,18 @@
-export type ProductChangeStatus =
-  | 'draft'
-  | 'planning'
-  | 'patching'
-  | 'validating'
-  | 'preview_ready'
-  | 'awaiting_approval'
-  | 'applying'
-  | 'deployed'
-  | 'rejected'
-  | 'rolled_back'
-  | 'failed';
+export const PRODUCT_CHANGE_STATUSES = [
+  'draft',
+  'planning',
+  'patching',
+  'validating',
+  'preview_ready',
+  'awaiting_approval',
+  'applying',
+  'deployed',
+  'rejected',
+  'rolled_back',
+  'failed',
+] as const;
+
+export type ProductChangeStatus = (typeof PRODUCT_CHANGE_STATUSES)[number];
 
 export type ProductSourceKind = 'local' | 'github';
 

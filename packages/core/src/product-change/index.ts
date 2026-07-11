@@ -9,6 +9,7 @@ export type {
   ProductSourceBinding,
   ProductSourceKind,
 } from './types.js';
+export { PRODUCT_CHANGE_STATUSES } from './types.js';
 export {
   assertProductChangeTransition,
   isEngineOwnedTransitionTarget,

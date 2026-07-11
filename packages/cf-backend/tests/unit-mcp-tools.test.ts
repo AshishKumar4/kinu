@@ -142,6 +142,24 @@ describe('MCP write tools → real @callables', () => {
     expect(await resultText(res)).toContain('requires bindingId and prompt');
     expect(calls.some((c) => c.method === 'createProductChange')).toBe(false);
   });
+
+  test('product_change advance into an engine-owned state is refused — same gate as the builtin tool', async () => {
+    const { env, calls } = mcpEnv();
+    for (const status of ['validating', 'preview_ready', 'applying', 'deployed', 'rolled_back']) {
+      const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'advance', changeId: 'pc_1', status }, SESSION_TOKEN), env);
+      expect(res?.status).toBe(200);
+      expect(await resultText(res)).toContain('earned by execution');
+    }
+    expect(calls.some((c) => c.method === 'transitionProductChange')).toBe(false);
+  });
+
+  test('product_change advance with a status outside the real enum is refused by the schema', async () => {
+    const { env, calls } = mcpEnv();
+    const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'advance', changeId: 'pc_1', status: 'shipped' }, SESSION_TOKEN), env);
+    expect(res?.status).toBe(200);
+    expect(await resultText(res)).toContain('Invalid');
+    expect(calls.some((c) => c.method === 'transitionProductChange')).toBe(false);
+  });
 });
 
 describe('MCP write tools — auth + ownership gate (a scoped token cannot exceed its grant)', () => {
