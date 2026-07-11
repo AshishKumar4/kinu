@@ -100,7 +100,7 @@ interface DiffResult {
   error?: string;
 }
 
-const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Agent state", nimbus: "Nimbus" };
+const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Workspace state", nimbus: "Nimbus" };
 const EXECUTOR_ORDER = ["laptop", "nimbus", "sandbox", "workspace"];
 
 function executorSortKey(name: string): number {
@@ -195,7 +195,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
         <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
-          hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Agent state.`} />
+          hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Workspace state.`} />
       ) : files.length === 0 ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="No changes"
           hint={result.mode === "vfs-baseline"

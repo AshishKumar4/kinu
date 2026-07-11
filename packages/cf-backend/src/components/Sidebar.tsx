@@ -3,7 +3,7 @@
  *
  *   ┌─────────────────┐
  *   │ ◉  Proteus      │
- *   │ + New agent     │
+ *   │ + New workspace │
  *   │ ─── Agents ───  │
  *   │ ● refactor-X    │
  *   │ ○ exploration   │
@@ -18,47 +18,47 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
-import { CreateAgentModal } from "./CreateAgentModal";
+import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle } from "./mode-toggle";
 
 // Route families in App.tsx that mount a live useProteus/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
 // a still-mounted socket auto-reconnects and resurrects the destroyed DO.
-const AGENT_SCOPED_SECTIONS = ["agent", "mcts", "settings", "triggers"];
+const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
 
 export default function Sidebar() {
   // useParams can't see :agentId from here (the Sidebar renders outside the
   // route's Outlet) — match the location directly instead.
   const sectionMatch = useMatch("/:section/:agentId");
-  const agentId = sectionMatch && AGENT_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
+  const agentId = sectionMatch && WORKSPACE_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
-  const [agents, setAgents] = useState<WorkspaceEntry[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  const refreshAgents = useCallback(async () => {
-    try { setAgents(await listWorkspaces()); }
+  const refreshWorkspaces = useCallback(async () => {
+    try { setWorkspaces(await listWorkspaces()); }
     catch (err) { console.warn('[sidebar] listWorkspaces:', (err as Error).message); }
   }, []);
 
   useEffect(() => {
-    refreshAgents();
+    refreshWorkspaces();
     getProfile().then(setProfile).catch(() => {});
-  }, [refreshAgents]);
+  }, [refreshWorkspaces]);
 
-  // Re-sync when route changes (so a freshly-created agent appears).
-  useEffect(() => { refreshAgents(); }, [agentId, refreshAgents]);
+  // Re-sync when route changes (so a freshly-created workspace appears).
+  useEffect(() => { refreshWorkspaces(); }, [agentId, refreshWorkspaces]);
 
-  // Re-sync when the active agent AI-renames itself after its first turn.
+  // Re-sync when the active workspace AI-renames itself after its first turn.
   useEffect(() => {
-    const h = () => refreshAgents();
-    window.addEventListener("proteus:agent-renamed", h);
-    return () => window.removeEventListener("proteus:agent-renamed", h);
-  }, [refreshAgents]);
+    const h = () => refreshWorkspaces();
+    window.addEventListener("proteus:workspace-renamed", h);
+    return () => window.removeEventListener("proteus:workspace-renamed", h);
+  }, [refreshWorkspaces]);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -69,20 +69,20 @@ export default function Sidebar() {
   }, []);
 
   const handleDelete = useCallback(async (name: string) => {
-    if (!confirm(`Delete agent "${name}" and clear its server-side state?`)) return;
+    if (!confirm(`Delete workspace "${name}" and clear its server-side state?`)) return;
     // Leave the agent's workspace BEFORE destroying it: the still-mounted
     // useAgent socket would auto-reconnect to the destroyed DO name and
     // resurrect an empty ghost agent (idFromName instantiates on connect).
     if (name === agentId) navigate("/");
-    try { await removeWorkspace(name); await refreshAgents(); }
+    try { await removeWorkspace(name); await refreshWorkspaces(); }
     catch (err) { alert(`Could not remove: ${(err as Error).message}`); }
-  }, [agentId, navigate, refreshAgents]);
+  }, [agentId, navigate, refreshWorkspaces]);
 
   // The responsive wrappers (desktop rail / mobile drawer) live in layout.tsx;
   // this renders just the column content so both reuse one roster + user menu.
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Logo + new agent */}
+      {/* Logo + new workspace */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
         <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
           <BrainIcon size={22} weight="duotone" className="p-accent" />
@@ -93,24 +93,24 @@ export default function Sidebar() {
           className="flex items-center gap-2 px-3 py-2 rounded-lg p-card hover:p-card-hover transition-colors text-sm cursor-pointer"
         >
           <PlusIcon size={14} />
-          <span>New agent</span>
+          <span>New workspace</span>
         </button>
       </div>
 
-      {/* Agent list */}
+      {/* Workspace list */}
       <div className="flex-1 overflow-y-auto px-2 pt-2 pb-3">
-        <div className="text-[10px] font-medium p-text-3 uppercase tracking-wider px-2 pb-1">Agents</div>
-        {agents.length === 0 && (
-          <div className="px-2 py-3 text-xs p-text-3">No agents yet. Click "New agent" to start.</div>
+        <div className="text-[10px] font-medium p-text-3 uppercase tracking-wider px-2 pb-1">Workspaces</div>
+        {workspaces.length === 0 && (
+          <div className="px-2 py-3 text-xs p-text-3">No workspaces yet. Click "New workspace" to start.</div>
         )}
         <ul className="space-y-0.5">
-          {agents.map((a) => (
+          {workspaces.map((a) => (
             // Link and delete button are siblings (a button inside an anchor is
             // invalid HTML and breaks keyboard/AT semantics); the button overlays
             // the row's right edge and is reachable by keyboard via focus-visible.
             <li key={a.name} className="group relative">
               <NavLink
-                to={`/agent/${a.name}`}
+                to={`/workspace/${a.name}`}
                 className={({ isActive }) =>
                   `flex items-center gap-2 pl-2 pr-7 py-1.5 rounded-md text-sm ${
                     isActive ? 'p-card font-medium' : 'hover:p-card-hover p-text'
@@ -123,7 +123,7 @@ export default function Sidebar() {
                 onClick={() => handleDelete(a.name)}
                 className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
                 title="Remove"
-                aria-label={`Remove agent ${a.displayName || a.name}`}
+                aria-label={`Remove workspace ${a.displayName || a.name}`}
               ><TrashIcon size={12} /></button>
             </li>
           ))}
@@ -163,7 +163,7 @@ export default function Sidebar() {
         )}
       </div>
 
-      {showCreate && <CreateAgentModal onClose={() => setShowCreate(false)} />}
+      {showCreate && <CreateWorkspaceModal onClose={() => setShowCreate(false)} />}
     </div>
   );
 }

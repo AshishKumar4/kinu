@@ -503,11 +503,11 @@ function ForkModal({
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
-        <p>Create a new agent that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+        <p>Create a new workspace that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
           <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
           <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
-          <li>Source agent is unaffected</li>
+          <li>Source workspace is unaffected</li>
         </ul>
       </div>
 
@@ -703,7 +703,7 @@ export default function WorkspacePage() {
 
   // Send the creation mission as the opening message — once, deterministically,
   // the moment the socket is connected. The mission rides in via navigation
-  // state from CreateAgentModal; we clear it (replace) right after sending so a
+  // state from CreateWorkspaceModal; we clear it (replace) right after sending so a
   // refresh or back-nav never re-fires it.
   useEffect(() => {
     if (initialPromptSent.current) return;
@@ -882,7 +882,7 @@ export default function WorkspacePage() {
                 {state.isStreaming && <Badge variant="primary">streaming</Badge>}
                 {as?.forkLineage && (
                   <Link
-                    to={`/agent/${as.forkLineage.sourceWorkspaceName}`}
+                    to={`/workspace/${as.forkLineage.sourceWorkspaceName}`}
                     className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
                     title={`Forked from ${as.forkLineage.sourceWorkspaceName} at message ${as.forkLineage.sourceMessageId} on ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
                   >

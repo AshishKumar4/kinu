@@ -70,7 +70,7 @@ export default function TriggersTab() {
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
         <header className="flex items-center justify-between">
           <div>
-            <Link to={`/agent/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
+            <Link to={`/workspace/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
               <ArrowLeftIcon size={12} /> Back to chat
             </Link>
             <h1 className="text-2xl font-semibold flex items-center gap-2">

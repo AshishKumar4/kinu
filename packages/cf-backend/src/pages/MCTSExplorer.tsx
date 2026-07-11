@@ -39,7 +39,7 @@ export default function MCTSExplorer() {
     <div className="h-full flex flex-col p-bg">
       <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
         <div className="flex items-center gap-3">
-          <Link to={`/agent/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
+          <Link to={`/workspace/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
           <div className="h-4 w-px bg-[var(--c-border)]" />
           <TreeStructureIcon size={16} className="p-accent" />
           <span className="font-semibold text-sm p-text">MCTS Explorer</span>

@@ -375,7 +375,7 @@ describe('auth and desktop security invariants', () => {
   test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
     const workspace = source('src/pages/WorkspacePage.tsx');
     const home = source('src/pages/HomePage.tsx');
-    const modal = source('src/components/CreateAgentModal.tsx');
+    const modal = source('src/components/CreateWorkspaceModal.tsx');
     const settings = source('src/pages/UserSettingsPage.tsx');
     expect(workspace).not.toContain('(no providers connected)');
     expect(workspace).toContain('Connect Workers AI');

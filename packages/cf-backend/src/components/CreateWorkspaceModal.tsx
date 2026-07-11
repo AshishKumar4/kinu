@@ -1,6 +1,6 @@
 /**
- * Create-agent dialog — opened by the sidebar "New agent" button. Shares the
- * creation pipeline (useCreateAgent) with the home-screen mission composer.
+ * Create-workspace dialog — opened by the sidebar "New workspace" button. Shares the
+ * creation pipeline (useCreateWorkspace) with the home-screen mission composer.
  *
  * One prompt box: the mission. It seeds SOUL.md server-side and becomes
  * the opening message. The display title is derived automatically — a
@@ -12,50 +12,50 @@ import { Button, Loader } from "@cloudflare/kumo";
 import { PlusIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { useCreateAgent } from "@/hooks/use-create-agent";
+import { useCreateWorkspace } from "@/hooks/use-create-workspace";
 
-export interface CreateAgentModalProps {
+export interface CreateWorkspaceModalProps {
   onClose: () => void;
   initialMission?: string;
 }
 
-export function CreateAgentModal({ onClose, initialMission = "" }: CreateAgentModalProps) {
+export function CreateWorkspaceModal({ onClose, initialMission = "" }: CreateWorkspaceModalProps) {
   const [mission, setMission] = useState(initialMission);
-  const { hasModels, busy, err, create } = useCreateAgent();
+  const { hasModels, busy, err, create } = useCreateWorkspace();
 
   // Dismiss the modal BEFORE navigating: it's rendered by the persistent
   // Sidebar, so without this the "creating…" scrim stays up over the
-  // freshly-opened agent page.
+  // freshly-opened workspace page.
   const submit = useCallback(() => { void create(mission, onClose); }, [create, mission, onClose]);
 
   return (
     <Modal
-      title="New agent"
+      title="New workspace"
       icon={<PlusIcon size={18} className="p-accent" />}
       onClose={onClose}
       maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
         <Button size="sm" variant="primary" onClick={submit} disabled={busy || !mission.trim() || hasModels === false}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create agent"}
+          {busy ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create workspace"}
         </Button>
       </>}
     >
       {hasModels === false && (
         <CloudflareAIConnectNotice
           returnTo={window.location.pathname}
-          message="Connect Cloudflare Workers AI before creating an agent."
+          message="Connect Cloudflare Workers AI before creating a workspace."
         />
       )}
 
       <div className="space-y-1">
-        <label htmlFor="agent-mission" className="text-xs font-medium p-text-2 block">Mission</label>
+        <label htmlFor="workspace-mission" className="text-xs font-medium p-text-2 block">Mission</label>
         <textarea
-          id="agent-mission"
+          id="workspace-mission"
           value={mission}
           onChange={(e) => setMission(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
-          placeholder="Ask the agent to investigate, build, automate, audit, or improve something."
+          placeholder="Ask the workspace's agent to investigate, build, automate, audit, or improve something."
           rows={7}
           autoFocus
           disabled={busy}

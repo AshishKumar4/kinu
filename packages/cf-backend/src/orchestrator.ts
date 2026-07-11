@@ -2148,7 +2148,7 @@ export class OrchestratorAgent extends Think<Env> {
         console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
       }
     }
-    try { this.broadcast(JSON.stringify({ type: 'agent_renamed', displayName })); } catch { /* nop */ }
+    try { this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName })); } catch { /* nop */ }
   }
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
@@ -4696,7 +4696,7 @@ export class OrchestratorAgent extends Think<Env> {
     return {
       id: copyResult.agentId,
       name: forkName,
-      url: `/agent/${forkName}`,
+      url: `/workspace/${forkName}`,
       forkPointMs: hit[0]!.created_at,
     };
   }

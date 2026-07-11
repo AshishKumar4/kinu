@@ -5,7 +5,7 @@
  * Layout:
  *
  *   ┌─────────────────────────────────────────────────────────────────────┐
- *   │ ● Your PC  ○ Nimbus                                Agent state      │ <- device sub-tabs
+ *   │ ● Your PC  ○ Nimbus                            Workspace state      │ <- device sub-tabs
  *   ├─────────────────────────────────────────────────────────────────────┤
  *   │ :8080 hello-world  :3000 api               │  Files    Terminal     │ <- preview tabs LEFT, utility RIGHT
  *   ├─────────────────────────────────────────────────────────────────────┤
@@ -39,7 +39,7 @@ import { EmptyState } from "./surfaces/shared";
 const EXECUTOR_LABELS: Record<string, string> = {
   sandbox:   "Sandbox",
   laptop:    "Your PC",
-  workspace: "Agent state",
+  workspace: "Workspace state",
   nimbus:    "Nimbus",
 };
 
@@ -437,9 +437,11 @@ interface UploadState { name: string; status: "uploading" | "error"; error?: str
 /** General per-executor file manager: typed directory listing (getExecutorFiles)
  *  + a text viewer (readExecutorFile) + uploads (writeExecutorFile) via drop or
  *  the Upload button. Drives its own fetches off the stable `rpc`, so it only
- *  re-reads when the path or executor changes. */
-function FilesPane({ execName, rpc }: { execName: string; rpc: Rpc }) {
-  const [path, setPath] = useState("/");
+ *  re-reads when the path or executor changes. Also reused by the Workspace
+ *  surface as the unified CompositeVFS browser (execName "workspace",
+ *  initialPath at a mount prefix). */
+export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: string; rpc: Rpc; initialPath?: string }) {
+  const [path, setPath] = useState(initialPath);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);

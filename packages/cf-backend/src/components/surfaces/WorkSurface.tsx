@@ -1,11 +1,12 @@
 /**
  * Work Surface — Column C of the RUN altitude. A thin segmented switcher over
- * the agent's pinned work surfaces (Output · Brain · Reasoning · Devices),
+ * the workspace's pinned work surfaces (Output · Brain · Reasoning ·
+ * Workspace · Devices),
  * NOT a row of co-equal debug tabs. The Run Timeline (Column B) drives which
  * surface is active; this owns the switcher chrome + dispatch.
  */
 import {
-  MonitorIcon, BrainIcon, TreeStructureIcon, DesktopTowerIcon, ClockIcon, GitDiffIcon,
+  MonitorIcon, BrainIcon, TreeStructureIcon, DesktopTowerIcon, ClockIcon, GitDiffIcon, StackIcon,
 } from "@phosphor-icons/react";
 import ExecutorsPanel from "@/components/ExecutorsPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -15,9 +16,10 @@ import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { BrainSurface } from "./BrainSurface";
 import { ReasoningSurface } from "./ReasoningSurface";
 import { TasksSurface } from "./TasksSurface";
+import { WorkspaceSurface } from "./WorkspaceSurface";
 import { ProductChangesSurface } from "./ProductChangesSurface";
 
-export const SURFACES = ["Output", "Brain", "Reasoning", "Product", "Tasks", "Devices"] as const;
+export const SURFACES = ["Output", "Brain", "Reasoning", "Product", "Tasks", "Workspace", "Devices"] as const;
 export type SurfaceKind = (typeof SURFACES)[number];
 
 const SURFACE_ICON: Record<SurfaceKind, React.ComponentType<{ size?: number }>> = {
@@ -26,6 +28,7 @@ const SURFACE_ICON: Record<SurfaceKind, React.ComponentType<{ size?: number }>> 
   Reasoning: TreeStructureIcon,
   Product: GitDiffIcon,
   Tasks: ClockIcon,
+  Workspace: StackIcon,
   Devices: DesktopTowerIcon,
 };
 
@@ -109,6 +112,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} rpc={props.rpc} />}
           {surface === "Product" && <ProductChangesSurface rpc={props.rpc} />}
           {surface === "Tasks" && <TasksSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshTasks} rpc={props.rpc} />}
+          {surface === "Workspace" && <WorkspaceSurface rpc={props.rpc} />}
           {surface === "Devices" && (
             <div className="h-full -m-5">
               <ExecutorsPanel

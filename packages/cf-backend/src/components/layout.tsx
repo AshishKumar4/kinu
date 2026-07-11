@@ -34,7 +34,7 @@ export default function Layout() {
           </Link>
         </div>
         <div className="flex items-center gap-1">
-          <Link to="/" aria-label="New agent" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          <Link to="/" aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </Link>
           <Link to="/user/settings" aria-label="Settings" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">

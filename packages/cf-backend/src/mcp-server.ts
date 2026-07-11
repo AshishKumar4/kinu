@@ -43,8 +43,8 @@
  *   • product_change     — list / create / advance a product-change request
  *
  * v1 resources:
- *   • proteus://agent/<name>/memory       — full memory content
- *   • proteus://agent/<name>/scaffold     — current scaffold code
+ *   • proteus://workspace/<name>/memory       — full memory content
+ *   • proteus://workspace/<name>/scaffold     — current scaffold code
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -377,7 +377,7 @@ function buildServer(env: Env, agentName: string): McpServer {
 
   server.registerResource(
     "memory",
-    `proteus://agent/${agentName}/memory`,
+    `proteus://workspace/${agentName}/memory`,
     {
       title: "Agent memory (MEMORY.md)",
       description: "Full content of the agent's long-term memory file.",

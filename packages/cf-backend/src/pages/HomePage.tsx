@@ -11,16 +11,16 @@ import {
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { useCreateAgent } from "@/hooks/use-create-agent";
+import { useCreateWorkspace } from "@/hooks/use-create-workspace";
 import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
-  const [agents, setAgents] = useState<WorkspaceEntry[]>([]);
-  const { hasModels, busy, err, create } = useCreateAgent();
+  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const { hasModels, busy, err, create } = useCreateWorkspace();
 
   useEffect(() => {
-    listWorkspaces().then(setAgents).catch(() => setAgents([]));
+    listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
   }, []);
 
   const submit = (event?: FormEvent) => {
@@ -57,7 +57,7 @@ export default function HomePage() {
             />
 
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs p-text-3">Proteus will create the agent, seed SOUL.md, and send this as the first turn.</p>
+              <p className="text-xs p-text-3">Proteus will create a workspace with its own agent, seed SOUL.md, and send this as the first turn.</p>
 
               <button
                 type="submit"
@@ -66,7 +66,7 @@ export default function HomePage() {
                 style={{ background: "var(--c-accent)" }}
               >
                 {busy ? <Loader size="sm" /> : <PlusIcon size={15} />}
-                Create agent
+                Create workspace
               </button>
             </div>
           </form>
@@ -75,7 +75,7 @@ export default function HomePage() {
             <div className="mt-3">
               <CloudflareAIConnectNotice
                 returnTo="/"
-                message="Connect Cloudflare Workers AI before creating an agent."
+                message="Connect Cloudflare Workers AI before creating a workspace."
               />
             </div>
           )}
@@ -99,17 +99,17 @@ export default function HomePage() {
             </div>
           </div>
 
-          {agents.length > 0 && (
+          {workspaces.length > 0 && (
             <div className="rounded-lg border p-border p-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold p-text">Recent</span>
-                <span className="text-xs p-text-3">{agents.length}</span>
+                <span className="text-xs p-text-3">{workspaces.length}</span>
               </div>
               <div className="mt-3 space-y-1">
-                {agents.slice(0, 5).map((agent) => (
+                {workspaces.slice(0, 5).map((agent) => (
                   <Link
                     key={agent.name}
-                    to={`/agent/${agent.name}`}
+                    to={`/workspace/${agent.name}`}
                     className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:p-card-hover hover:p-text"
                   >
                     <WrenchIcon size={13} className="shrink-0 p-text-3" />

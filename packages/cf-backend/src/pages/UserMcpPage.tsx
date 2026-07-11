@@ -88,7 +88,7 @@ export default function UserMcpPage() {
   }, [authResult, refresh, searchParams, setSearchParams]);
 
   const remove = useCallback(async (id: string, name: string) => {
-    if (!confirm(`Remove "${name}"? All agents will lose access to its tools.`)) return;
+    if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
     try { await removeMcpServer(id); refresh(); } catch (e) { alert((e as Error).message); }
   }, [refresh]);
 

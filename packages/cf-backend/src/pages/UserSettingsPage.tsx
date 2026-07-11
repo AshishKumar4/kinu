@@ -146,7 +146,7 @@ export default function UserSettingsPage() {
           ) : (
             <CloudflareAIConnectNotice
               returnTo="/user/settings"
-              message="Connect Cloudflare so agents can use your Workers AI quota and your own AI Gateway."
+              message="Connect Cloudflare so your workspaces can use your Workers AI quota and your own AI Gateway."
             />
           )}
         </Card>
@@ -179,7 +179,7 @@ export default function UserSettingsPage() {
         {/* Defaults */}
         <Card title="Defaults" icon={GearSixIcon}>
           <div className="space-y-2">
-            <div className="text-xs p-text-2">Default model for new agents</div>
+            <div className="text-xs p-text-2">Default model for new workspaces</div>
             <ModelPicker
               models={models}
               value={defaults.model ?? ''}
@@ -191,7 +191,7 @@ export default function UserSettingsPage() {
               placeholder="(use system default)"
             />
             <p className="text-[11px] p-text-3">
-              New agents pick this up at creation. Existing agents keep their own choice (change per-agent under "Agent settings").
+              New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
             </p>
           </div>
         </Card>

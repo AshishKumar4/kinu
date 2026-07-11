@@ -22,7 +22,7 @@ import type { ToolSet } from 'ai';
 import type { HeadRuntime } from '../heads/controller.js';
 
 /** A typed event fanned out to connected clients (mcts-progress, device_consent,
- *  agent_renamed, background-event cards…). Fire-and-forget. */
+ *  workspace_renamed, background-event cards…). Fire-and-forget. */
 export interface BroadcastEvent {
   readonly type: string;
   readonly [key: string]: unknown;
