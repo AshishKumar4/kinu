@@ -8,7 +8,7 @@ All state is stored in a single Durable Object's SQLite database. The schema is 
 
 ```mermaid
 erDiagram
-    agent_identity {
+    workspace_identity {
         TEXT id "Stable UUID (NOT NULL)"
         TEXT name "Agent name (NOT NULL)"
         INTEGER created_at "Epoch ms"
@@ -191,7 +191,7 @@ These are managed by Think internally — Proteus reads via `this.messages` but 
 
 Tables are created in `onStart()` (`orchestrator.ts:538-592`):
 1. Migration checks — detect old schemas (missing `chunk_index` in vfs_files, missing `start_line` in memory_chunks) and drop/recreate
-2. `initAllTables(execRaw)` — core tables (agent_identity, search_nodes, scaffold_versions, scaffold_regression_fixtures, task_history, craft_scores, fibers, vfs_files via the canonical agent-utils `VFS_SCHEMA_DDL`, messages, conversation_history, evolution_events, crafted_tools, executor_output, activity_log, fork_lineage)
+2. `initAllTables(execRaw)` — core tables (workspace_identity, search_nodes, scaffold_versions, scaffold_regression_fixtures, task_history, craft_scores, fibers, vfs_files via the canonical agent-utils `VFS_SCHEMA_DDL`, messages, conversation_history, evolution_events, crafted_tools, executor_output, activity_log, fork_lineage)
 3. `initSearchTables(execRaw)` — search_nodes (idempotent, already in initAllTables)
 4. `initScaffoldTables(execRaw)` — scaffold_versions, regression_fixtures, task_history
 5. `initCraftScoreTables(execRaw)` — craft_scores

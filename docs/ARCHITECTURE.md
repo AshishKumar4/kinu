@@ -148,7 +148,7 @@ graph LR
     end
 
     subgraph "Durable Objects"
-        Orch["OrchestratorAgent<br/>extends Think&lt;Env&gt;<br/><br/>SQLite: agent_identity,<br/>SOUL.md (in vfs_files),<br/>agent_config, vfs_files, memory_chunks,<br/>crafted_tools, craft_scores, search_nodes,<br/>evolution_events, scaffold_versions,<br/>scaffold_regression_fixtures, task_history,<br/>fibers, messages, conversation_history,<br/>executor_output, activity_log"]
+        Orch["OrchestratorAgent<br/>extends Think&lt;Env&gt;<br/><br/>SQLite: workspace_identity,<br/>SOUL.md (in vfs_files),<br/>agent_config, vfs_files, memory_chunks,<br/>crafted_tools, craft_scores, search_nodes,<br/>evolution_events, scaffold_versions,<br/>scaffold_regression_fixtures, task_history,<br/>fibers, messages, conversation_history,<br/>executor_output, activity_log"]
 
         subgraph "Facets (MCTS branches)"
             E1["ExplorationAgent #1<br/>extends Agent&lt;Env&gt;<br/>Isolated SQLite: traces"]

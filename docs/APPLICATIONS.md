@@ -57,7 +57,7 @@ The web UI exposes the agent's internal state across 6 tabs: Identity, Tools, Me
 
 ### Personal AI Assistant That Learns
 
-Each agent is a Durable Object with its own SQLite database. Conversations persist across sessions. The agent builds up:
+Each workspace is a Durable Object with its own SQLite database, hosting its default agent. Conversations persist across sessions. The agent builds up:
 
 - **Long-term memory** (MEMORY.md) — reflections, notes, learned facts
 - **Crafted tools** — reusable code patterns extracted from successful problem-solving

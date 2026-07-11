@@ -53,7 +53,7 @@ tests/          E2E tests (run from repo root)
 
 | Directory    | Purpose                                                 |
 |-------------|----------------------------------------------------------|
-| identity/   | Agent creation, reopening, soul (user-editable purpose), DDL |
+| identity/   | Workspace creation, reopening, soul (user-editable purpose), DDL |
 | evolution/  | 3-timescale auto-evolution engine, tool building         |
 | mcts/       | Monte Carlo Tree Search — UCT, backprop, convergence     |
 | scaffold/   | Agentic loop versioning — bootstrap, modify, rollback    |
@@ -114,8 +114,8 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 ## Architecture Invariants
 
-- `SOUL.md` in VFS is the canonical agent identity/purpose file; user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
-- agent_identity holds a single row with stable UUID
+- `SOUL.md` in VFS is the canonical workspace identity/purpose file (embodied by its default agent); user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
+- workspace_identity holds a single row with stable UUID — the workspace is the container (ownership root, file plane, sessions); the orchestrator is its default agent (see docs/WORKSPACES.md)
 - Scaffold is versioned in VFS (`scaffold/agent.js`) + `scaffold_versions` table
 - Memory lives in VFS under `memory/` prefix
 - MCTS nodes stored in `search_nodes` table

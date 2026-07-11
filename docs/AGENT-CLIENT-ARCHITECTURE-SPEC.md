@@ -83,7 +83,7 @@ These are the important current facts this spec is based on.
 | State | Cloud source of truth | Local source of truth | Client rule |
 |---|---|---|---|
 | User identity | D1 auth store plus `UserDO` | local config for local-only user prefs | Cloud identity never comes from local config. |
-| Agent roster | `UserDO.user_agents` | local config plus local DB discovery | CLI may cache aliases, not authoritative cloud roster. |
+| Agent roster | `UserDO.user_workspaces` | local config plus local DB discovery | CLI may cache aliases, not authoritative cloud roster. |
 | Agent identity / soul | `SOUL.md` in the agent DO VFS | local VFS / SQLite | Keep one `SOUL.md` source per backend. |
 | Chat history | Think / Agents session store in `OrchestratorAgent` | local SQLite / local session store | Cloud TUI reads DO history, never JSONL. |
 | Model selection | DO `agent_config` and user provider catalogs | local `agent_config` and local provider resolver | Cloud model changes go to DO only. |
@@ -206,7 +206,7 @@ CLI bearer tokens must not be placed in websocket URLs. Add a narrow ticket
 exchange:
 
 ```text
-POST /api/cli/agents/:name/connect-ticket
+POST /api/cli/workspaces/:name/connect-ticket
 Authorization: Bearer ptc_...
 
 -> { ticket: "pat_...", expiresAt: 1780970000000 }
@@ -272,10 +272,10 @@ or bootstrap APIs, not agent turn execution:
 
 - Auth start / poll / approve / logout.
 - `GET /api/cli/me`.
-- `GET /api/cli/agents` for cloud roster.
-- `POST /api/cli/agents` for explicit cloud agent creation.
+- `GET /api/cli/workspaces` for cloud roster.
+- `POST /api/cli/workspaces` for explicit cloud agent creation.
 - `GET /api/cli/models` for user/account model catalog.
-- `POST /api/cli/agents/:name/connect-ticket`.
+- `POST /api/cli/workspaces/:name/connect-ticket`.
 - Device registration and device websocket ticket APIs.
 
 ### 8.2 Agent APIs
@@ -294,10 +294,10 @@ must mark it transitional and list the deletion condition.
 
 These are incompatible with the target architecture:
 
-- `/api/cli/agents/:name/turn`
-- `/api/cli/agents/:name/local-turn/prepare`
-- `/api/cli/agents/:name/local-turn/tool`
-- `/api/cli/agents/:name/local-turn/commit`
+- `/api/cli/workspaces/:name/turn`
+- `/api/cli/workspaces/:name/local-turn/prepare`
+- `/api/cli/workspaces/:name/local-turn/tool`
+- `/api/cli/workspaces/:name/local-turn/commit`
 - `cliTurn`
 - `cliPrepareLocalTurn`
 - `cliInvokeLocalTool`
@@ -344,8 +344,8 @@ TUI correctness requirements:
 Cloud creation has one canonical server path:
 
 ```text
-POST /api/cli/agents
-POST /api/user/agents
+POST /api/cli/workspaces
+POST /api/user/workspaces
         -> createCloudAgentForUser()
         -> UserDO.registerAgent()
         -> OrchestratorAgent.claimOwner()
@@ -376,8 +376,8 @@ Delete or fully retire:
 - `packages/cli/src/cloud-local-turn.ts`
 - `runCloudTurnWithLocalModel` imports and call sites
 - `runCloudTurn()` in `cloud-api.ts`
-- `/api/cli/agents/:name/turn`
-- `/api/cli/agents/:name/local-turn/*`
+- `/api/cli/workspaces/:name/turn`
+- `/api/cli/workspaces/:name/local-turn/*`
 - Orchestrator local-turn callables and helper types
 - Cloud tests that assert prepare/tool/commit behavior
 
@@ -476,7 +476,7 @@ Classification rule:
    - Classify existing partial files as keep, replace, or delete.
 2. Add failing/guard tests and proof-search expectations for current issues.
 3. Add CLI websocket ticket schema and `UserDO` issue/verify methods.
-4. Add `/api/cli/agents/:name/connect-ticket`.
+4. Add `/api/cli/workspaces/:name/connect-ticket`.
 5. Extend `/agents/orchestrator-agent/:name` auth to accept browser session or
    scoped CLI ticket.
 6. Validate the Agents / Think chat websocket protocol from installed package or
@@ -637,7 +637,7 @@ not verified. Say exactly what was not verified and why.
 
 | Design | Reason rejected |
 |---|---|
-| Keep `/api/cli/agents/:name/turn` as cloud mode | Creates a second agent turn path. |
+| Keep `/api/cli/workspaces/:name/turn` as cloud mode | Creates a second agent turn path. |
 | Keep local model prepare/tool/commit for cloud agents | Violates actual DO-agent invariant. |
 | Commit local answer back to DO | Synchronization is not source-of-truth. |
 | Read cloud history from local JSONL | Hides DO bugs and causes web/TUI divergence. |

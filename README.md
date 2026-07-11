@@ -1,6 +1,6 @@
 # Proteus
 
-A self-evolving AI agent that improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state and formally verified safety properties in Lean 4.
+Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state and formally verified safety properties in Lean 4.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
@@ -66,7 +66,7 @@ jarvis "summarize this repository"
 ```
 
 `proteus setup` opens the browser OAuth flow, stores the app session locally,
-and can also configure local provider keys for fully local agents.
+and can also configure local provider keys for fully local workspaces.
 
 ### Headless / CI
 
@@ -77,33 +77,34 @@ interactive session (sign in within the last 5 minutes), store it as a CI
 secret, and pipe the line-delimited JSON events wherever you need them:
 
 ```bash
-proteus tokens create --name ci --scopes agent.exec,agent.read   # printed once
+proteus tokens create --name ci --scopes workspace.exec,workspace.read  # printed once
 # in the pipeline:
 export PROTEUS_TOKEN=pta_…                                       # from CI secrets
-proteus exec --agent jarvis --json "triage the failing tests" | tee events.jsonl
+proteus exec --workspace jarvis --json "triage the failing tests" | tee events.jsonl
 ```
 
-Access tokens are scoped, not godmode: `agent.exec` runs tasks, `agent.read`
-inspects state, and everything else (webhooks, device registration, agent
-creation, consent decisions) stays interactive-only and is enforced
-server-side. `proteus tokens list` shows last use; `proteus tokens revoke ci`
+Access tokens are scoped, not godmode: `workspace.exec` runs tasks,
+`workspace.read` inspects state, and everything else (webhooks, device
+registration, workspace creation, consent decisions) stays interactive-only
+and is enforced server-side. `proteus tokens list` shows last use; `proteus tokens revoke ci`
 kills one immediately.
 
 ## Models & providers
 
-I wanted model choice to be flexible without forcing anyone into a single vendor, so an agent can run on any of these:
+I wanted model choice to be flexible without forcing anyone into a single vendor, so a workspace can run on any of these:
 
 - **Your own Cloudflare account** — one browser sign-in (`proteus auth`) attaches your Cloudflare account, and from that single login you get both **Workers AI** and your **AI Gateway**. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `proteus auth` again to re-grant it.
-- **Signed-in local agents — free Workers AI** — if you're signed in, a *local* agent you create gets Workers AI through the `/api/user/ai/v1` proxy with **no key at all**. New local agents default to `workers-ai/@cf/moonshotai/kimi-k2.6`.
+- **Signed-in local workspaces — free Workers AI** — if you're signed in, a *local* workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with **no key at all**. New local workspaces default to `workers-ai/@cf/moonshotai/kimi-k2.6`.
 - **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `proteus providers connect <name>`.
-- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly — the binary is the auth boundary, which is what keeps this compliant. It is **local only**: cloud agents must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
+- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly — the binary is the auth boundary, which is what keeps this compliant. It is **local only**: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
 
-`proteus providers list` shows what's connected and each provider's status inline. Pick a model per agent with `--model`, or switch mid-conversation from the `/model` picker.
+`proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
+| [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (mounts, identity, sessions), agents = actors inside it |
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |

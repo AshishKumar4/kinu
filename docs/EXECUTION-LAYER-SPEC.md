@@ -44,7 +44,7 @@ graph TB
         MCTS[search_nodes]
         Scaffold[scaffold_versions]
         Evolution[evolution_events]
-        Identity[SOUL.md in VFS + agent_identity]
+        Identity[SOUL.md in VFS + workspace_identity]
     end
 
     subgraph "Execution Router"
@@ -438,7 +438,7 @@ sequenceDiagram
     participant CF as Cloudflare Edge
     participant Agent as OrchestratorAgent DO
 
-    User->>Daemon: proteus connect --agent <id>
+    User->>Daemon: proteus connect
     Daemon->>CF: WebSocket connect (mTLS client cert)
     CF->>Agent: Route to DO
     Agent->>Daemon: Challenge (nonce)

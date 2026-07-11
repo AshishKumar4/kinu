@@ -13,7 +13,7 @@ always-on durable agent — no app open, no session.
 ```
 inbound   Email Routing (catch-all on EMAIL_DOMAIN)
             → Worker email() handler                    (cf-backend/src/server.ts)
-            → routeInboundEmail: recipient → agent name (src/email/route.ts)
+            → routeInboundEmail: recipient → workspace name (src/email/route.ts)
               parse MIME once (postal-mime), strip quoted history
             → agent DO: acceptEmailDelivery             (src/orchestrator.ts)
               trust gate → EventLog.publish (email variant, Message-ID dedupe)
@@ -32,10 +32,11 @@ notify    changelog_digest (EvolutionEngine.onEvent) and background-job
 
 ## Addressing
 
-The local part of the recipient address **is** the agent name (agent names are
-globally unique Durable Object ids): `scout-a1b2c3@agents.example.com` routes
-to the agent `scout-a1b2c3`. `+tag` sub-addressing and case are tolerated;
-anything that isn't a plausible agent slug on `EMAIL_DOMAIN` is dropped.
+The local part of the recipient address **is** the workspace name (workspace
+names are globally unique Durable Object ids): `scout-a1b2c3@agents.example.com`
+routes to the workspace `scout-a1b2c3` and wakes its agent. `+tag`
+sub-addressing and case are tolerated; anything that isn't a plausible
+workspace slug on `EMAIL_DOMAIN` is dropped.
 
 ## Trust model (who can drive a turn)
 
@@ -65,10 +66,10 @@ Notes:
 ## Operator API
 
 ```
-GET /api/agents/<name>/email
+GET /api/workspaces/<name>/email
   → { address, allowlist, notifications }
 
-PUT /api/agents/<name>/email          (step-up auth: login within 5 minutes)
+PUT /api/workspaces/<name>/email          (step-up auth: login within 5 minutes)
   { "allow": ["friend@example.com"], "notifications": true }
 ```
 

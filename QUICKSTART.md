@@ -15,8 +15,10 @@ The installer works on macOS and Linux, adds `~/.proteus/bin` to your PATH when
 needed, and runs setup unless `--no-setup` is passed. `proteus setup` handles
 browser login and optional local model-provider credentials.
 
-Use `--mode cloud` for a persistent cloud agent that uses your desktop daemon as
-the local execution engine, or `--mode local` for a fully local bun:sqlite agent.
+Use `--mode cloud` for a persistent cloud workspace that uses your desktop daemon
+as the local execution engine, or `--mode local` for a fully local bun:sqlite
+workspace. Either way you get a workspace — the container that owns the files,
+execution environments, and sessions — with its default agent inside.
 
 ## Providers & models
 
@@ -26,7 +28,7 @@ proteus providers list                    # see what's connected, with status in
 proteus providers connect openai          # or: anthropic, openrouter, codex, openai-compatible
 ```
 
-Signed in, a **local** agent gets free Workers AI with no key (it defaults to
+Signed in, a **local** workspace gets free Workers AI with no key (it defaults to
 `workers-ai/@cf/moonshotai/kimi-k2.6`). Your AI Gateway shows up as
 `my-gateway/{author}/{model}` once the OAuth grant includes the `aig.write`
 scope — run `proteus auth` again if you connected before it was added.
@@ -40,7 +42,7 @@ proteus create jarvis --mode local --model claude/claude-opus-4-x
 ```
 
 Proteus drives the official `claude` binary, which owns its own login — it never
-reads your credentials. Cloud agents can't use the subscription; give them an
+reads your credentials. Cloud workspaces can't use the subscription; give them an
 Anthropic API key (`proteus providers connect anthropic`) instead.
 
 **Web search** just works: the `web_search` and `web_fetch` tools need no setup
