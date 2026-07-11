@@ -152,9 +152,14 @@ export class AgentOrchestrator {
   /**
    * The reactor: bind the selected pending events to a synthetic turn
    * (markConsumed — synchronous, so atomic w.r.t. the event loop; a concurrent
-   * drain sees them already consumed) then inject them as ONE programmatic turn
-   * via host.enqueueTurn. The injected turn's own post-turn drain re-checks, so
-   * this self-terminates once the external backlog is empty. No-op when none.
+   * drain sees them already consumed), then deliver the batch — spliced into
+   * the ACTIVE turn's next agentic step when one is live
+   * (host.injectIntoActiveTurn, also synchronous, so the whole select→bind→
+   * deliver decision is one event-loop tick), otherwise as ONE programmatic
+   * turn via host.enqueueTurn. Either way the events stay bound to `turnId`,
+   * so reply-channel dispatch (email_thread → outbound reply) finds them by
+   * the same id. The injected turn's own post-turn drain re-checks, so this
+   * self-terminates once the external backlog is empty. No-op when none.
    */
   async drainPendingEvents(): Promise<void> {
     let batch: ReturnType<typeof buildDrainBatch>;
@@ -169,6 +174,10 @@ export class AgentOrchestrator {
       return;
     }
     try {
+      if (this.deps.host.injectIntoActiveTurn({ turnId, stepText: batch.midTurnText, turnText: batch.text })) {
+        this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: batch.ids.length });
+        return;
+      }
       // The metadata marks the injected message as programmatic (event card,
       // immediate outcome review) and carries the synthetic turn id so the
       // backend can dispatch the turn's answer to the reply channels of the

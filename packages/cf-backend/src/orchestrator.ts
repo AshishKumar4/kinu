@@ -65,6 +65,7 @@ import {
   ExtensionHost, composePrepareStep,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
+  EventInjectionBuffer,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   type BuiltinToolName,
@@ -387,7 +388,19 @@ export class OrchestratorAgent extends Think<Env> {
     // be initialized before the getter caches its closure.
     this.compactionState = createCompactionStateStore(this.boundSql);
     this.registerCompactionExtension();
+    // Mid-turn background-event injection: batches the reactor bound to a live
+    // turn (host.injectIntoActiveTurn) splice into its next agentic step.
+    this.extensions.register({
+      name: 'proteus.event-injection',
+      prepareStep: (ctx) => this._eventInjections.prepareStep(ctx),
+    });
   }
+
+  /** Drain batches bound to the LIVE turn (BackendHost.injectIntoActiveTurn),
+   *  spliced into its next step by the proteus.event-injection extension and
+   *  settled in onChatResponse (absorbed → reply dispatch, leftover → the
+   *  standard programmatic drain turn). */
+  private readonly _eventInjections = new EventInjectionBuffer();
 
   /** Durable per-session compaction state (plan snapshot + the measured
    *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
@@ -501,6 +514,18 @@ export class OrchestratorAgent extends Think<Env> {
             ...(metadata ? { metadata } : {}),
           }]);
           return { status: result.status === 'skipped' ? 'skipped' : 'queued' };
+        },
+        // Mid-turn delivery: a drained batch bound while a turn is live rides
+        // that turn's next step boundary (the event-injection extension)
+        // instead of queueing behind it. Check + push are one synchronous
+        // tick, so the turn observed here is the one whose prepareStep will
+        // drain the buffer (turns are TurnQueue-serialized); a turn that
+        // settles first hands the batch back through settle()'s leftover path.
+        injectIntoActiveTurn: (batch) => {
+          if (!this._inFlight) return false;
+          this._eventInjections.push(batch);
+          this.logActivity('event_injected', `${batch.turnId} → live turn`);
+          return true;
         },
         // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
         // the evolution hooks already rely on) holds the DO through the window
@@ -1707,6 +1732,9 @@ export class OrchestratorAgent extends Think<Env> {
     this.acc.reset(Date.now());
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
+    // Drop event-injection splice state a turn that died before its response
+    // hook may have leaked; batches still waiting inject into THIS turn.
+    this._eventInjections.beginTurn();
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // A real user message is the verdict on the previous turn — dispatch the
@@ -2010,6 +2038,19 @@ export class OrchestratorAgent extends Think<Env> {
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;
+    // Mid-turn event injection settles FIRST (before anything that can throw
+    // or return early): batches this turn absorbed get its answer dispatched
+    // to their reply channels below; batches that never saw a step boundary
+    // (the model was already finishing — or the turn aborted) rerun as the
+    // standard programmatic drain turn, same metadata shape enqueueTurn
+    // stamps, so the event card and reply dispatch work unchanged.
+    const injectedEvents = this._eventInjections.settle();
+    for (const leftover of injectedEvents.leftover) {
+      void this.host.enqueueTurn({
+        text: leftover.turnText,
+        metadata: { proteusEvent: 'event_drain', drainTurnId: leftover.turnId },
+      }).catch((err) => console.warn('[proteus] leftover event re-enqueue failed:', err));
+    }
     // Persist the turn's final provider-priced prompt size — the NEXT turn's
     // measured compaction trigger. Recorded even on aborted/errored turns:
     // any step that reported was a real priced request. Bound to the turn's
@@ -2132,6 +2173,14 @@ export class OrchestratorAgent extends Think<Env> {
       void dispatchEmailRepliesForTurn(
         { log: this.eventLog, replies: this.replyChannels },
         drainTurnId, assistantText, Date.now(),
+      ).catch((err) => console.warn('[proteus] email reply dispatch failed:', err));
+    }
+    // Mid-turn injected batches feed the SAME dispatch, keyed by the batch
+    // turn ids this turn absorbed at its step boundaries.
+    for (const injectedTurnId of injectedEvents.absorbed) {
+      void dispatchEmailRepliesForTurn(
+        { log: this.eventLog, replies: this.replyChannels },
+        injectedTurnId, assistantText, Date.now(),
       ).catch((err) => console.warn('[proteus] email reply dispatch failed:', err));
     }
 

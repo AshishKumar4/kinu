@@ -688,6 +688,17 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
+  /** BackendHost seam — the CLI declines mid-turn event injection: the local
+   *  steer-drain owns the live turn's injection channel with USER semantics a
+   *  platform event must not assume (each steer persists as a verbatim user
+   *  row for the walk-back fork, interrupt() hands pending steers back to the
+   *  composer, and leftover steers rerun as a user-origin turn — which would
+   *  misgrade the outcome review). Events drain as the immediate next
+   *  programmatic turn instead (the enqueueTurn fallback). */
+  injectIntoActiveTurn(): boolean {
+    return false;
+  }
+
   // ── Public driver API ──────────────────────────────────────────────
 
   /** Run a user turn (and any programmatic turns it cascades). Resolves when

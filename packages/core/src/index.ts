@@ -585,6 +585,7 @@ export {
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
+export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow

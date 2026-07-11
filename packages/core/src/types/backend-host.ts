@@ -52,6 +52,20 @@ export interface EnqueueTurnResult {
   readonly status: 'queued' | 'skipped';
 }
 
+/** A drained event batch bound for the ACTIVE turn's next agentic step. The
+ *  events are already consumed against `turnId` (EventLog markConsumed), so
+ *  the backend dispatches the absorbing turn's answer to their reply channels
+ *  by that id — the same id scheme the enqueued drain-turn path stamps as
+ *  `metadata.drainTurnId`. */
+export interface MidTurnEventBatch {
+  readonly turnId: string;
+  /** Rendered for the live turn's next step ("arrived while you were working"). */
+  readonly stepText: string;
+  /** Rendered for a standalone programmatic turn — the fallback when the live
+   *  turn settles before another step boundary arrives. */
+  readonly turnText: string;
+}
+
 export interface BackendHost {
   /** Fan-out to connected clients. CF: DurableObject.broadcast(JSON). CLI: push
    *  to the TUI store / print to stdout. Never throws. */
@@ -60,6 +74,17 @@ export interface BackendHost {
   /** Inject a programmatic turn, serialized behind any live turn. CF:
    *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
+
+  /** Splice a drained event batch into the ACTIVE turn's next agentic step
+   *  ("injected mid turn if a turn is active"), returning false when no turn
+   *  is live so the caller falls back to enqueueTurn. Synchronous by contract:
+   *  the is-a-turn-active check and the buffer push must be one event-loop
+   *  tick, atomic with the caller's markConsumed. CF: buffers for the
+   *  event-injection extension's prepareStep drain. CLI: declines — the local
+   *  steer-drain owns the live turn's injection channel with USER semantics
+   *  (per-steer durable rows, composer restore on interrupt) that a platform
+   *  event must not assume. */
+  injectIntoActiveTurn(batch: MidTurnEventBatch): boolean;
 
   /** One-shot platform timer — the drain-debounce primitive (DrainScheduler).
    *  The implementation MUST keep the platform alive until `fn` settles and
