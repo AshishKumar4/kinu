@@ -13,6 +13,9 @@
 import { nanoid } from '@proteus/core';
 import { sha256Hex } from '../lib/crypto.js';
 
+// Scopes renamed from agent.read/agent.exec with no back-compat migration by
+// design — pre-production, tokens are reissued on redeploy (owner decision
+// 2026-06-13).
 export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
 export type AccessTokenScope = (typeof ACCESS_TOKEN_SCOPES)[number];
 

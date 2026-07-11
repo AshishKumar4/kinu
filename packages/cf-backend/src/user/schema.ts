@@ -37,6 +37,8 @@ export function initUserTables(sql: SqlExec): void {
   // Workspaces this user has created (each 1:1 with an OrchestratorAgent DO
   // that hosts the workspace + its default agent). UserDO is the source of
   // truth — replaces the old browser-side localStorage registry.
+  // Renamed from user_agents with no back-compat migration by design —
+  // pre-production, DB is recreated on deploy (owner decision 2026-06-13).
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_workspaces (
       name          TEXT PRIMARY KEY,

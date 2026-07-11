@@ -12,6 +12,9 @@ import type { RawSqlExec } from '../types/primitives.js';
 
 const DDL = [
   // ── Workspace identity — the ownership root ────────────────────
+  // Renamed from agent_identity with no back-compat migration by design —
+  // the project is pre-production and the DB is recreated on deploy
+  // (owner decision 2026-06-13).
   `CREATE TABLE IF NOT EXISTS workspace_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
