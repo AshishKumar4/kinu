@@ -31,7 +31,7 @@ import { streamText, generateText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
-import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
+import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextCronFire } from "./lib/cron.js";
 import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
@@ -4153,6 +4153,37 @@ export class OrchestratorAgent extends Think<Env> {
 
   @callable() async getExecutors() {
     return this.rt.executionRouter?.listExecutors() ?? [];
+  }
+
+  /** The workspace mount table — the CompositeVFS data surface behind the
+   *  unified file browser. One row per environment (/local always; /sandbox,
+   *  /nimbus, /pc as configured), with live state + declared policy. */
+  @callable() async listMounts() {
+    return this.rt.compositeVfs.listMounts();
+  }
+
+  /** The workspace's agent roster: this DO's orchestrator is the default
+   *  agent (always present); the rest are the owner's team peers, reachable
+   *  and spawnable via the `team` tool. Unowned workspaces have only their
+   *  default agent. */
+  @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
+    const self: WorkspaceAgent = {
+      name: this.name,
+      displayName: this.getDisplayName(),
+      role: 'orchestrator',
+    };
+    if (!this.getOwnerUserId()) return [self];
+    try {
+      const workspaces = await this.requireOwnerUserDO().listWorkspaces();
+      return [
+        self,
+        ...workspaces
+          .filter((w) => w.name !== this.name)
+          .map((w): WorkspaceAgent => ({ name: w.name, displayName: w.displayName, role: 'peer' })),
+      ];
+    } catch {
+      return [self];
+    }
   }
 
   @callable() async getExecutorOutput(executorId: string, limit: number = 50) {
