@@ -34,7 +34,7 @@ import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
 import { buildWorkspaceAgents } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
-import { nextCronFire } from "./lib/cron.js";
+import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
@@ -2556,17 +2556,16 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     // Reschedule the next-soonest alarm (triggers ∪ peer-outbox retries).
+    // A due/past-due peer retry is clamped to `now` (see nextAlarmTime), and
+    // the arm is soonest-wins so this reschedule never clobbers a sooner
+    // retry alarm armed during dispatch.
     try {
-      const all = this.triggerRegistry.list({ state: 'active' });
-      const upcoming = all
-        .map(t => t.next_fire_at)
-        .filter((t): t is number => typeof t === 'number' && t > now)
-        .sort((a, b) => a - b)[0];
-      const peerRetry = this.peerHub.nextRetryAt();
-      const next = [upcoming, peerRetry ?? undefined]
-        .filter((t): t is number => typeof t === 'number' && t > now)
-        .sort((a, b) => a - b)[0];
-      if (next) this.ctx.storage.setAlarm(next);
+      const next = nextAlarmTime(
+        now,
+        this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
+        this.peerHub.nextRetryAt(),
+      );
+      if (next !== null) this.scheduleAlarmAt(next);
     } catch (err) {
       console.warn('[proteus] alarm reschedule failed:', (err as Error).message);
     }

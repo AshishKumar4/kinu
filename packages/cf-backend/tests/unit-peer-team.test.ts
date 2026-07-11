@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch,
+  EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch, nextAlarmTime,
   type ReplyDispatcher, type ReplyChannelKind, type PeerAgentPayload,
 } from '@proteus/core';
 import { PeerHub, type PeerMessage, type ReceiveResult } from '../src/events/ingress/peer.js';
@@ -321,6 +321,32 @@ describe('per-receiver ordering + retry backoff', () => {
     expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered', 'delivered']);
     const bodies = pendingPeerEvents(bob).map((e) => (e.payload as PeerAgentPayload).body);
     expect(bodies).toEqual(['first', 'second']);
+  });
+
+  test('a past-due retry is re-armed immediately by the alarm fold — the blocked delivery eventually fires', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+    bob.online = false;
+
+    const sent = await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'ping', message: 'anyone there?' });
+    expect(sent.status).toBe('queued');
+    const retryAt = alice.hub.nextRetryAt();
+    expect(retryAt).not.toBeNull();
+
+    // The DO idled past the retry time with no dispatch (e.g. the armed alarm
+    // fired while an inline dispatch held the reentrancy guard). The retry is
+    // now PAST-DUE: a future-only reschedule filter would drop it and the
+    // delivery would stall forever on an idle agent. The fold clamps it to
+    // "fire immediately" instead.
+    const later = retryAt! + 3_600_000;
+    expect(nextAlarmTime(later, [], alice.hub.nextRetryAt())).toBe(later);
+
+    // The immediate alarm re-drives the outbox and the delivery lands.
+    bob.online = true;
+    await alice.hub.dispatchOutbox(later);
+    expect(outboxRows(alice).map((r) => r.state)).toEqual(['delivered']);
+    expect(pendingPeerEvents(bob)).toHaveLength(1);
   });
 });
 
