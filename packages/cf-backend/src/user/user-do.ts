@@ -60,7 +60,7 @@ import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
-import { resolveAgentTitle } from '../lib/agent-naming.js';
+import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
@@ -275,7 +275,7 @@ export class UserDO extends Agent<Env> {
     const existing = this.sqlx<{ display_name: string }>(
       `SELECT display_name FROM user_agents WHERE name = ?`, name,
     )[0];
-    const title = resolveAgentTitle({
+    const title = resolveWorkspaceTitle({
       explicit: displayName, existing: existing?.display_name, purpose, slug: name,
     });
     this.sqlx(

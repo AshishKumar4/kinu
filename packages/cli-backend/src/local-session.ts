@@ -1044,7 +1044,7 @@ export class LocalAgentSession implements BackendHost {
 
   private agentName(): string {
     try {
-      return this.rt.storage.sql<{ name: string }>`SELECT name FROM agent_identity LIMIT 1`[0]?.name ?? 'local';
+      return this.rt.storage.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name ?? 'local';
     } catch {
       return 'local';
     }

@@ -14,7 +14,7 @@ import { generateText, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 import {
-  createAgent,
+  createWorkspace,
   EvolutionEngine,
   buildBuiltinTools,
   initSearchTables,
@@ -134,7 +134,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
 
-    rt = createAgent(db, {
+    rt = createWorkspace(db, {
       name: 'algo-solver',
       purpose: 'An algorithmic problem solver. Always use execute_tools to compute answers. Never guess.',
       llm: LLM_CONFIG,

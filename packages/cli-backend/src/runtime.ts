@@ -174,8 +174,8 @@ export function createCLIRuntime(
   }
 
   // Stable identity
-  execRaw('CREATE TABLE IF NOT EXISTS agent_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))');
-  const existing = sql<{ id: string; name: string }>`SELECT id, name FROM agent_identity LIMIT 1`;
+  execRaw('CREATE TABLE IF NOT EXISTS workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))');
+  const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
   let agentId: string;
   let agentName: string;
   if (existing.length > 0 && existing[0]) {
@@ -184,7 +184,7 @@ export function createCLIRuntime(
   } else {
     agentId = crypto.randomUUID();
     agentName = config.agentName ?? 'agent';
-    sql`INSERT INTO agent_identity (id, name) VALUES (${agentId}, ${agentName})`;
+    sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
   }
 
   const llm = createLocalProviderLLM({

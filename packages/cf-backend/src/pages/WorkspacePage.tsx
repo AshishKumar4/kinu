@@ -882,12 +882,12 @@ export default function WorkspacePage() {
                 {state.isStreaming && <Badge variant="primary">streaming</Badge>}
                 {as?.forkLineage && (
                   <Link
-                    to={`/agent/${as.forkLineage.sourceAgentName}`}
+                    to={`/agent/${as.forkLineage.sourceWorkspaceName}`}
                     className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
-                    title={`Forked from ${as.forkLineage.sourceAgentName} at message ${as.forkLineage.sourceMessageId} on ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
+                    title={`Forked from ${as.forkLineage.sourceWorkspaceName} at message ${as.forkLineage.sourceMessageId} on ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
                   >
                     <GitBranchIcon size={10} />
-                    <span className="font-mono">{as.forkLineage.sourceAgentName}</span>
+                    <span className="font-mono">{as.forkLineage.sourceWorkspaceName}</span>
                   </Link>
                 )}
               </div>

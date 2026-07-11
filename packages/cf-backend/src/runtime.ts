@@ -66,10 +66,10 @@ type AgentHost = Think<Env> & {
   readonly ctx: DurableObjectState;
 };
 
-/** Read owner_user_id from the orchestrator's agent_identity. Empty/missing -> null. */
+/** Read owner_user_id from the orchestrator's workspace_identity. Empty/missing -> null. */
 function readOwnerUserId(agent: AgentHost): string | null {
   try {
-    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_identity LIMIT 1`;
+    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
     const v = rows[0]?.owner_user_id;
     return v && v !== '' ? v : null;
   } catch { return null; }

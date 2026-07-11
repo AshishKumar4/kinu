@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import { SqliteFS } from '@proteus/agent-utils/vfs';
 import { readSoul, writeSoul, seedSoul, SOUL_PATH } from '../src/identity/soul.js';
 import { initAllTables } from '../src/identity/schema.js';
-import { openAgent } from '../src/identity/open.js';
+import { openWorkspace } from '../src/identity/open.js';
 import { wrapDatabase, type AgentDatabase } from '../src/identity/inline-primitives.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
@@ -90,7 +90,7 @@ describe('legacy migrations', () => {
   test('legacy agent_soul table migrates to SOUL.md with purpose preserved, then drops', () => {
     const { db, sql, execRaw } = freshDb();
     initAllTables(execRaw);
-    sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'legacy-id'}, ${'Legacy Agent'}, ${1})`;
+    sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'legacy-id'}, ${'Legacy Agent'}, ${1})`;
     execRaw(`CREATE TABLE agent_soul (
       purpose       TEXT NOT NULL,
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -108,15 +108,15 @@ describe('legacy migrations', () => {
     expect(readSoul(sql)).toBe(soul);
   });
 
-  test('legacy CLI agent (agent_soul era) opens through openAgent with purpose intact', () => {
+  test('legacy CLI agent (agent_soul era) opens through openWorkspace with purpose intact', () => {
     const db = new Database(':memory:') as unknown as AgentDatabase & Database;
     const { sql, execRaw } = wrapDatabase(db);
     initAllTables(execRaw);
-    sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'old-cli'}, ${'old-cli-agent'}, ${42})`;
+    sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'old-cli'}, ${'old-cli-agent'}, ${42})`;
     execRaw(`CREATE TABLE agent_soul (purpose TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)`);
     db.run('INSERT INTO agent_soul (purpose) VALUES (?)', ['Keep the garden watered']);
 
-    const { info } = openAgent(db, { llm: TEST_LLM });
+    const { info } = openWorkspace(db, { llm: TEST_LLM });
     expect(info.soul).toContain('Keep the garden watered');
     expect(info.purpose).toContain('Keep the garden watered');
     expect(info.name).toBe('old-cli-agent');

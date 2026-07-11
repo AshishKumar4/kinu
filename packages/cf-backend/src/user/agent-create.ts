@@ -1,11 +1,11 @@
 import { generateText } from 'ai';
 import {
-  AGENT_IDENTITY_SYSTEM_PROMPT,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
-  agentIdentityPrompt,
-  createAgentNameFromMission,
-  deriveAgentTitle,
-  parseAgentIdentityOutput,
+  workspaceIdentityPrompt,
+  createWorkspaceNameFromMission,
+  deriveWorkspaceTitle,
+  parseWorkspaceIdentityOutput,
   renderSoulMarkdown,
 } from '@proteus/core';
 import type { OrchestratorAgent } from '../orchestrator.js';
@@ -75,10 +75,10 @@ function createInitialCloudAgentIdentity(
     };
   }
   const id = crypto.randomUUID();
-  const name = createAgentNameFromMission(purpose ?? 'agent', id);
+  const name = createWorkspaceNameFromMission(purpose ?? 'agent', id);
   return {
     name,
-    displayName: input.displayName?.trim() || deriveAgentTitle(purpose ?? '') || name,
+    displayName: input.displayName?.trim() || deriveWorkspaceTitle(purpose ?? '') || name,
     nameOrigin: 'auto',
   };
 }
@@ -127,11 +127,11 @@ async function suggestCloudAgentDisplayName(
   const provider = createAgentProviderRegistry({ env, userDOStub: userDO, fetch });
   const result = await generateText({
     model: provider.resolveModel(modelSpec),
-    system: AGENT_IDENTITY_SYSTEM_PROMPT,
-    prompt: agentIdentityPrompt(mission),
+    system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+    prompt: workspaceIdentityPrompt(mission),
     maxOutputTokens: 80,
   });
-  return parseAgentIdentityOutput(result.text, id)?.displayName ?? null;
+  return parseWorkspaceIdentityOutput(result.text, id)?.displayName ?? null;
 }
 
 async function initializeOrchestrator(

@@ -4,7 +4,7 @@
 
 export { createCLIRuntime, makeSql, makeExecRaw, withCheckpointedShell, type CLIRuntimeConfig } from './runtime.js';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
-export { openAgentCLI, type AgentInfo, type CLIOpenConfig } from './open.js';
+export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open.js';
 export { createSandboxedExecutor, createNodeExecutor } from './executor.js';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';
 export { createBranchSpawner } from './branch-process.js';

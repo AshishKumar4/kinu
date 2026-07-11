@@ -38,7 +38,7 @@ import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { parseReaddirEntries, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
-import { deriveAgentTitle } from "./lib/agent-naming.js";
+import { deriveWorkspaceTitle } from "./lib/agent-naming.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
   ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
@@ -66,7 +66,7 @@ import {
   feedbackToQuality,
   migrateCraftedToolDuplicates,
   // Fork feature
-  forkAgentStorage, readForkLineage,
+  forkWorkspaceStorage, readForkLineage,
   nanoid,
   // Branching heads
   HeadController, HeadJournal, initHeadsTables,
@@ -286,9 +286,9 @@ interface ForkPayload {
 }
 
 /**
- * Build an ephemeral SqlExecutor that answers the queries forkAgentStorage
+ * Build an ephemeral SqlExecutor that answers the queries forkWorkspaceStorage
  * makes against the source DB, using the serialized payload as the source
- * of truth. Only the exact SELECT shapes that forkAgentStorage issues are
+ * of truth. Only the exact SELECT shapes that forkWorkspaceStorage issues are
  * supported — this is a minimal shim, not a general SQL engine.
  */
 function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
@@ -324,7 +324,7 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
       if (query.startsWith("SELECT key, value FROM agent_config")) {
         return payload.agentConfig;
       }
-      if (query.startsWith("SELECT id, name FROM agent_identity")) {
+      if (query.startsWith("SELECT id, name FROM workspace_identity")) {
         return [{ id: payload.lineage.forkOriginAgentId, name: payload.lineage.forkOriginAgentName }];
       }
       // Think-Session messages: the source DO already time-filtered the
@@ -806,7 +806,7 @@ export class OrchestratorAgent extends Think<Env> {
   // ── Bound SQL executor ────────────────────────────────────────────────
   // `this.sql` is a plain method on the Agent base class — it needs `this`
   // bound to reach `this.ctx.storage.sql`. Passing `this.sql` as a bare
-  // function reference to any helper (readForkLineage, forkAgentStorage)
+  // function reference to any helper (readForkLineage, forkWorkspaceStorage)
   // loses the binding and fails with `Cannot read properties of undefined
   // (reading 'ctx')`. This closure captures `this` once and can be safely
   // passed by reference.
@@ -966,10 +966,10 @@ export class OrchestratorAgent extends Think<Env> {
     return this._providerRegistry;
   }
 
-  /** Read the owner userId from agent_identity; '' (empty) means unclaimed. */
+  /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
     try {
-      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_identity LIMIT 1`;
+      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
       const v = rows[0]?.owner_user_id;
       return v && v !== '' ? v : null;
     } catch { return null; }
@@ -1135,14 +1135,14 @@ export class OrchestratorAgent extends Think<Env> {
     const current = this.getOwnerUserId();
     if (current === null) {
       // Unclaimed — first touch. Ensure identity has the owner marker.
-      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_identity LIMIT 1`;
+      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
       if (exists.length === 0) {
         this.sql`
-          INSERT INTO agent_identity (id, name, owner_user_id, created_at)
+          INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
           VALUES (${this.ctx.id.toString()}, ${this.name}, ${userId}, ${Date.now()})
         `;
       } else {
-        this.sql`UPDATE agent_identity SET owner_user_id = ${userId}`;
+        this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
       this.invalidateModelCaches();
       return { owner: userId };
@@ -2111,7 +2111,7 @@ export class OrchestratorAgent extends Think<Env> {
       // roster), then replace it with the AI title below. name_origin stays
       // unset so this retries the AI step on the next turn if generation fails.
       if (!this.config.getDisplayName()) {
-        const provisional = deriveAgentTitle(userText);
+        const provisional = deriveWorkspaceTitle(userText);
         if (provisional) await this.propagateDisplayName(provisional);
       }
       const prompt =
@@ -2481,9 +2481,9 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     try {
-      const identity = this.sql<{ id: string }>`SELECT id FROM agent_identity LIMIT 1`;
+      const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
       if (identity.length === 0) {
-        this.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
+        this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
       // Bootstrap scaffold if it doesn't exist — needed for scaffold mutation to work
       const scaffoldExists = await this.rt.identity.scaffold.exists();
@@ -2652,7 +2652,7 @@ export class OrchestratorAgent extends Think<Env> {
       const soul = readSoul(this.boundSql) ?? "";
       const purpose = summarizeSoul(soul);
       const identity = this.sql<{ id: string; name: string; created_at: number }>`
-        SELECT id, name, created_at FROM agent_identity LIMIT 1`;
+        SELECT id, name, created_at FROM workspace_identity LIMIT 1`;
       const scaffoldVersion = this.sql<{ v: number }>`
         SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
       const searchNodes = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
@@ -2660,7 +2660,7 @@ export class OrchestratorAgent extends Think<Env> {
       // Message count reflects the persisted `messages` table, which is the
       // authoritative turn history used for fork cut-points. For non-fork
       // agents this table is populated by onChatResponse's mirror; for forks
-      // it's populated by forkAgentStorage's copy. Falling back to the
+      // it's populated by forkWorkspaceStorage's copy. Falling back to the
       // in-memory AIChatAgent array keeps behavior sane before the first
       // turn has been mirrored.
       const tableCount = this.sql<{ c: number }>`
@@ -4628,7 +4628,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     // 4. Validate name uniqueness by checking if a DO at that name already
-    //    has identity data. Fresh DOs return an empty agent_identity query.
+    //    has identity data. Fresh DOs return an empty workspace_identity query.
     const env = this.env as unknown as {
       OrchestratorAgent: {
         idFromName(name: string): DurableObjectId;
@@ -4638,7 +4638,7 @@ export class OrchestratorAgent extends Think<Env> {
     const forkStubForPrecheck = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
     let existingIdentity: { id: string; name: string } | null = null;
     try {
-      // A bare getAgentStatus call on a fresh DO may create agent_identity,
+      // A bare getAgentStatus call on a fresh DO may create workspace_identity,
       // but it does not seed SOUL.md. Existing agents have either chat history
       // or a SOUL.md file written by the creation path.
       const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; soul: string; name: string }> }).getAgentStatus();
@@ -4680,7 +4680,7 @@ export class OrchestratorAgent extends Think<Env> {
   async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
     // Apply the FULL schema before copying rows. onStart runs on first access,
     // but this RPC can be invoked before it completes — ensureSchema creates
-    // every table (not just initAllTables') so forkAgentStorage's copy of
+    // every table (not just initAllTables') so forkWorkspaceStorage's copy of
     // events-hub/heads/shadow/etc. rows never hits a missing table.
     this.ensureSchema();
 
@@ -4691,10 +4691,10 @@ export class OrchestratorAgent extends Think<Env> {
     // Copy atomically. `this.boundSql` is a stable closure over `this.sql`
     // that preserves the `this`-binding the Agent base class needs.
     this.ctx.storage.transactionSync(() => {
-      forkAgentStorage(srcSql, this.boundSql, {
+      forkWorkspaceStorage(srcSql, this.boundSql, {
         untilMessageId: payload.lineage.forkOriginMessageId,
-        targetAgentId: this.ctx.id.toString(),
-        targetAgentName: payload.forkName,
+        targetWorkspaceId: this.ctx.id.toString(),
+        targetWorkspaceName: payload.forkName,
         now: payload.lineage.forkedAt,
       });
     });
@@ -4713,7 +4713,7 @@ export class OrchestratorAgent extends Think<Env> {
    * payload. Runs inside the source DO where `this.sql` has direct SQL access.
    */
   private buildForkPayload(untilMessageId: string, forkName: string): ForkPayload {
-    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM agent_identity LIMIT 1`;
+    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
     const hit = this.sql<{ created_at: number }>`
       SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
     `;

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { runMCTS, type SearchNode } from '@proteus/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@proteus/core';
-import { openAgentCLI } from '@proteus/cli-backend';
+import { openWorkspaceCLI } from '@proteus/cli-backend';
 import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
 import {
   printSearchTree, printError, createSpinner,
@@ -30,7 +30,7 @@ export async function evolveCommand(name: string, opts: {
   const llmConfig = resolveLLMConfig(opts);
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
-  const { rt, info } = openAgentCLI(db, dbPath, {
+  const { rt, info } = openWorkspaceCLI(db, dbPath, {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
     codexAuthStore,

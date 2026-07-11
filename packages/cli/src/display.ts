@@ -4,7 +4,7 @@
  */
 
 import chalk from 'chalk';
-import type { AgentInfo, SearchNode } from '@proteus/core';
+import type { WorkspaceInfo, SearchNode } from '@proteus/core';
 
 // ── Brand ────────────────────────────────────────────────────────
 
@@ -119,7 +119,7 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
 
 // ── Agent status card ────────────────────────────────────────────
 
-export function printAgentStatus(info: AgentInfo, dbSize: number, extra?: {
+export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
   conversationCount?: number;
 }): void {
   const w = termWidth();

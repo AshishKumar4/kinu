@@ -299,7 +299,7 @@ describe('shared ownership claim status mapping', () => {
   });
 
   test('infra failure during claim → 500, not 403', async () => {
-    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/status'), envWithClaimFailure('SQLITE_ERROR: no such table: agent_identity'));
+    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/status'), envWithClaimFailure('SQLITE_ERROR: no such table: workspace_identity'));
     expect(res?.status).toBe(500);
   });
 });

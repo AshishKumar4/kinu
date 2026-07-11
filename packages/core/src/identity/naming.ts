@@ -1,6 +1,6 @@
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 
-/** URL-safe slug for stable agent ids. */
+/** URL-safe slug for stable workspace ids. */
 export function slugifyName(text: string): string {
   return text.toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -8,19 +8,19 @@ export function slugifyName(text: string): string {
     .slice(0, 24);
 }
 
-export interface SuggestedAgentIdentity {
+export interface SuggestedWorkspaceIdentity {
   name: string;
   displayName: string;
   nameOrigin: 'auto' | 'user';
 }
 
 /** Deterministic provisional display title: first non-empty line, collapsed. */
-export function deriveAgentTitle(text: string): string {
+export function deriveWorkspaceTitle(text: string): string {
   const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
   return firstLine.replace(/\s+/g, ' ').slice(0, 60);
 }
 
-export function resolveAgentTitle(opts: {
+export function resolveWorkspaceTitle(opts: {
   explicit?: string;
   existing?: string;
   purpose?: string;
@@ -28,32 +28,32 @@ export function resolveAgentTitle(opts: {
 }): string {
   return (opts.explicit && opts.explicit.trim())
     || (opts.existing && opts.existing.trim())
-    || deriveAgentTitle(opts.purpose ?? '')
+    || deriveWorkspaceTitle(opts.purpose ?? '')
     || opts.slug;
 }
 
-export function createAgentNameFromMission(mission: string, id: string): string {
-  const slug = cleanAgentSlug(extractPersonaName(mission) ?? 'agent') || 'agent';
+export function createWorkspaceNameFromMission(mission: string, id: string): string {
+  const slug = cleanSlug(extractPersonaName(mission) ?? 'workspace') || 'workspace';
   return `${slug}-${id.slice(0, 6)}`;
 }
 
-export function fallbackAgentIdentity(mission: string, id: string): SuggestedAgentIdentity {
+export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
   const persona = extractPersonaName(mission);
-  const title = cleanAgentTitle(persona ?? 'Agent') || 'Agent';
+  const title = cleanTitle(persona ?? 'Workspace') || 'Workspace';
   return {
-    name: `${cleanAgentSlug(persona ?? 'agent') || 'agent'}-${id.slice(0, 6)}`,
-    displayName: title || 'Agent',
+    name: `${cleanSlug(persona ?? 'workspace') || 'workspace'}-${id.slice(0, 6)}`,
+    displayName: title || 'Workspace',
     nameOrigin: 'auto',
   };
 }
 
-/** System prompt paired with agentIdentityPrompt — shared by the CLI's local
- *  naming call and the server's cloud display-name generation. */
-export const AGENT_IDENTITY_SYSTEM_PROMPT = 'You create short, useful names for persistent software agents.';
+/** System prompt paired with workspaceIdentityPrompt — shared by the CLI's
+ *  local naming call and the server's cloud display-name generation. */
+export const WORKSPACE_IDENTITY_SYSTEM_PROMPT = 'You create short, useful names for persistent agent workspaces.';
 
-export function agentIdentityPrompt(mission: string): string {
+export function workspaceIdentityPrompt(mission: string): string {
   return [
-    'Name a Proteus agent from this opening mission.',
+    'Name a Proteus workspace from this opening mission.',
     '',
     'Return a concise JSON object with:',
     '- title: 1-5 words, Title Case, specific to the mission or persona.',
@@ -67,7 +67,7 @@ export function agentIdentityPrompt(mission: string): string {
   ].join('\n');
 }
 
-export function parseAgentIdentityOutput(raw: string, id: string): SuggestedAgentIdentity | null {
+export function parseWorkspaceIdentityOutput(raw: string, id: string): SuggestedWorkspaceIdentity | null {
   let parsed: unknown;
   try {
     parsed = extractJsonObject(raw);
@@ -75,8 +75,8 @@ export function parseAgentIdentityOutput(raw: string, id: string): SuggestedAgen
     return null;
   }
   if (!isRecord(parsed)) return null;
-  const title = cleanAgentTitle(typeof parsed.title === 'string' ? parsed.title : '');
-  const slug = cleanAgentSlug(typeof parsed.slug === 'string' ? parsed.slug : title);
+  const title = cleanTitle(typeof parsed.title === 'string' ? parsed.title : '');
+  const slug = cleanSlug(typeof parsed.slug === 'string' ? parsed.slug : title);
   if (!title || !slug) return null;
   return {
     name: `${slug}-${id.slice(0, 6)}`,
@@ -90,7 +90,7 @@ function extractPersonaName(mission: string): string | null {
   return match?.[1] ?? null;
 }
 
-function cleanAgentTitle(value: string): string {
+function cleanTitle(value: string): string {
   return value
     .replace(/^["'#\s]+|["'\s.]+$/g, '')
     .replace(/\b(agent|assistant|ai|bot|helper)\b$/i, '')
@@ -99,7 +99,7 @@ function cleanAgentTitle(value: string): string {
     .trim();
 }
 
-function cleanAgentSlug(value: string): string {
+function cleanSlug(value: string): string {
   return slugifyName(value.replace(/\b(agent|assistant|ai|bot|helper)\b/gi, '')) || slugifyName(value);
 }
 

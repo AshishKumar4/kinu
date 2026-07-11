@@ -11,7 +11,7 @@ import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 import {
-  createAgent,
+  createWorkspace,
   collectStepText,
   EvolutionEngine,
   buildBuiltinTools,
@@ -118,7 +118,7 @@ describe('E2E Lifecycle', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = createAgent(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
+    rt = createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
     initCraftScoreTables(rt.storage.execRaw);

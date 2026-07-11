@@ -75,7 +75,7 @@ describe('cloud agent ownership safety', () => {
         suggestDisplayName: async () => 'React Hello World',
       });
 
-      expect(entry.name.startsWith('agent-')).toBe(true);
+      expect(entry.name.startsWith('workspace-')).toBe(true);
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
       expect(calls).toContain('soul');

@@ -2,19 +2,19 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
-  AGENT_IDENTITY_SYSTEM_PROMPT,
-  agentIdentityPrompt,
-  createAgent,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+  workspaceIdentityPrompt,
+  createWorkspace,
   createAgentConfigStore,
-  createAgentNameFromMission as coreCreateAgentNameFromMission,
-  fallbackAgentIdentity,
+  createWorkspaceNameFromMission as coreCreateAgentNameFromMission,
+  fallbackWorkspaceIdentity,
   initAgentConfigTable,
   initCraftScoreTables,
   initScaffoldTables,
   initSearchTables,
-  parseAgentIdentityOutput,
+  parseWorkspaceIdentityOutput,
   type LLMProviderConfig,
-  type SuggestedAgentIdentity,
+  type SuggestedWorkspaceIdentity,
 } from '@proteus/core';
 import {
   agentDbPath,
@@ -67,21 +67,21 @@ export interface SuggestAgentIdentityOptions {
   generate?: (mission: string) => Promise<string>;
 }
 
-export function createAgentNameFromMission(mission: string, id: string = crypto.randomUUID()): string {
+export function createWorkspaceNameFromMission(mission: string, id: string = crypto.randomUUID()): string {
   return coreCreateAgentNameFromMission(mission, id);
 }
 
 export async function suggestAgentIdentityFromMission(
   mission: string,
   opts: SuggestAgentIdentityOptions = {},
-): Promise<SuggestedAgentIdentity> {
+): Promise<SuggestedWorkspaceIdentity> {
   const id = opts.id ?? crypto.randomUUID();
-  const fallback = fallbackAgentIdentity(mission, id);
+  const fallback = fallbackWorkspaceIdentity(mission, id);
   try {
     const raw = opts.generate
       ? await opts.generate(mission)
       : await generateIdentityJson(mission, opts);
-    const identity = parseAgentIdentityOutput(raw, id);
+    const identity = parseWorkspaceIdentityOutput(raw, id);
     return identity || fallback;
   } catch {
     return fallback;
@@ -141,7 +141,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const db = new Database(dbPath);
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    const rt = createAgent(db, { name: displayName, purpose, llm: llmConfig });
+    const rt = createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
     initSearchTables((ddl: string) => db.exec(ddl));
     initScaffoldTables((ddl: string) => db.exec(ddl));
     initCraftScoreTables((ddl: string) => db.exec(ddl));
@@ -170,8 +170,8 @@ async function generateIdentityJson(mission: string, opts: SuggestAgentIdentityO
   const { resolver } = createConfiguredLocalModelResolver(opts);
   const result = await generateText({
     model: resolver.resolveModel(opts.model ?? null),
-    system: AGENT_IDENTITY_SYSTEM_PROMPT,
-    prompt: agentIdentityPrompt(mission),
+    system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+    prompt: workspaceIdentityPrompt(mission),
     maxOutputTokens: 80,
   });
   return result.text;

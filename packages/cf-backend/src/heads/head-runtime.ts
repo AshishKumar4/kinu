@@ -24,7 +24,7 @@ type HeadHost = Think<Env> & { readonly env: Env };
 
 export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string, grounding?: HeadGrounding): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
-  // is read once from agent_identity by the orchestrator and threaded down.
+  // is read once from workspace_identity by the orchestrator and threaded down.
   const userDOStub = orchestrator.env.UserDO.get(
     orchestrator.env.UserDO.idFromName(ownerUserId),
   ) as DurableObjectStub<UserDO>;

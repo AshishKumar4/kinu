@@ -11,19 +11,19 @@ export {
   summarizeSoul,
   writeSoul,
 } from './identity/soul.js';
-export { createAgent, wrapDatabase, type AgentBirthConfig, type AgentDatabase } from './identity/create.js';
-export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/open.js';
-export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
+export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
+export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
+export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
 export {
-  AGENT_IDENTITY_SYSTEM_PROMPT,
-  agentIdentityPrompt,
-  createAgentNameFromMission,
-  deriveAgentTitle,
-  fallbackAgentIdentity,
-  parseAgentIdentityOutput,
-  resolveAgentTitle,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+  workspaceIdentityPrompt,
+  createWorkspaceNameFromMission,
+  deriveWorkspaceTitle,
+  fallbackWorkspaceIdentity,
+  parseWorkspaceIdentityOutput,
+  resolveWorkspaceTitle,
   slugifyName,
-  type SuggestedAgentIdentity,
+  type SuggestedWorkspaceIdentity,
 } from './identity/naming.js';
 
 // Evolution engine (3-timescale auto-evolution)

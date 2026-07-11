@@ -124,7 +124,7 @@ function migrateLegacyAgentSoul(sql: SqlExecutor): string | null {
   }
 
   const name = sql<{ name: string | null }>`
-    SELECT name FROM agent_identity LIMIT 1
+    SELECT name FROM workspace_identity LIMIT 1
   `[0]?.name ?? '';
   const soul = renderSoulMarkdown({ name, mission: purpose });
   writeSoul(sql, soul);

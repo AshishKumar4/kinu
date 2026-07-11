@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { AgentInfo, AgentRuntime, SearchNode, ShellApprovalMode } from '@proteus/core';
+import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode } from '@proteus/core';
 import {
   LocalAgentSession,
-  openAgentCLI,
+  openWorkspaceCLI,
   resolveChatModel,
   type LocalModelResolver,
   type McpServerConfig,
@@ -75,14 +75,14 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
   };
-  const { rt, info } = openAgentCLI(db, dbPath, openConfig);
+  const { rt, info } = openWorkspaceCLI(db, dbPath, openConfig);
   return new LocalAgentClient({
     agentName: name,
     rt,
     db,
     dbPath,
     info,
-    refreshInfo: () => openAgentCLI(db, dbPath, openConfig).info,
+    refreshInfo: () => openWorkspaceCLI(db, dbPath, openConfig).info,
     model: resolveChatModel(llmConfig),
     modelResolver: resolver,
     mcpServers: resolveMcpServers(),
@@ -96,8 +96,8 @@ export interface LocalAgentClientDeps {
   rt: AgentRuntime;
   db: Database;
   dbPath: string;
-  info: AgentInfo;
-  refreshInfo: () => AgentInfo;
+  info: WorkspaceInfo;
+  refreshInfo: () => WorkspaceInfo;
   model: ReturnType<typeof resolveChatModel>;
   modelResolver: LocalModelResolver;
   mcpServers: Record<string, McpServerConfig>;

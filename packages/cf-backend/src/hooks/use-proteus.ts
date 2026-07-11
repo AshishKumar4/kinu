@@ -42,8 +42,8 @@ export interface BranchRun {
 }
 
 export interface ForkLineage {
-  sourceAgentId: string;
-  sourceAgentName: string;
+  sourceWorkspaceId: string;
+  sourceWorkspaceName: string;
   sourceMessageId: string;
   sourceMessageCreatedAt: number;
   forkedAt: number;

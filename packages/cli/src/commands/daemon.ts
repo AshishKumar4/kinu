@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import {
   LocalAgentSession,
-  openAgentCLI,
+  openWorkspaceCLI,
   resolveChatModel,
   type SessionEvent,
 } from '@proteus/cli-backend';
@@ -141,7 +141,7 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
     const providerCredentials = resolveProviderCredentials();
     const codexAuthStore = createCodexAuthStore();
     const mcpServers = resolveMcpServers();
-    const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
+    const { rt } = openWorkspaceCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
     const session = new LocalAgentSession({
       rt,
       db,

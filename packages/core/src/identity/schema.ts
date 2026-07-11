@@ -1,23 +1,23 @@
 /**
- * Unified schema — ALL agent tables in one place.
+ * Unified schema — ALL workspace tables in one place.
  * Idempotent: every statement uses IF NOT EXISTS.
  *
- * This is the single source of truth for what constitutes an agent's identity.
- * ~20 tables in one SQLite file = one agent.
+ * This is the single source of truth for what constitutes a workspace:
+ * ~20 tables in one SQLite file = one workspace (the container that owns the
+ * file plane, sessions, evolution state, and its default orchestrator agent).
  */
 
 import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
 import type { RawSqlExec } from '../types/primitives.js';
 
 const DDL = [
-  // ── Agent identity ──────────────────────────────────────────────
-  `CREATE TABLE IF NOT EXISTS agent_identity (
+  // ── Workspace identity — the ownership root ────────────────────
+  `CREATE TABLE IF NOT EXISTS workspace_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
-  `ALTER TABLE agent_identity ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
 
   // ── MCTS search tree ───────────────────────────────────────────
   // BUG-1 FIX: value defaults to 0, NOT 0.5
@@ -160,32 +160,20 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
 
-  // ── Fork lineage — single-row table populated when this agent is a fork ─
-  // Empty for non-forked agents. Written once by forkAgentStorage and read
-  // by the getForkLineage RPC for the UI lineage chip.
+  // ── Fork lineage — single-row table populated when this workspace is a
+  // fork. Empty otherwise. Written once by forkWorkspaceStorage and read by
+  // the getForkLineage RPC for the UI lineage chip.
   `CREATE TABLE IF NOT EXISTS fork_lineage (
-    id                        INTEGER PRIMARY KEY,
-    source_agent_id           TEXT    NOT NULL,
-    source_agent_name         TEXT    NOT NULL,
-    source_message_id         TEXT    NOT NULL,
-    source_message_created_at INTEGER NOT NULL,
-    forked_at                 INTEGER NOT NULL
+    id                            INTEGER PRIMARY KEY,
+    source_workspace_id           TEXT    NOT NULL,
+    source_workspace_name         TEXT    NOT NULL,
+    source_message_id             TEXT    NOT NULL,
+    source_message_created_at     INTEGER NOT NULL,
+    forked_at                     INTEGER NOT NULL
   )`,
 ];
 
-/** Initialize all agent tables. Idempotent — safe to call on every startup.
- *  ALTER statements may error if the column already exists; we swallow only
- *  that specific class so re-runs are safe. */
+/** Initialize all workspace tables. Idempotent — safe to call on every startup. */
 export function initAllTables(execRaw: RawSqlExec): void {
-  for (const ddl of DDL) {
-    try { execRaw(ddl); }
-    catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (/duplicate column name|already exists/i.test(msg) && /^\s*ALTER/i.test(ddl)) {
-        // Idempotent ALTER — column already present. Skip silently.
-        continue;
-      }
-      throw err;
-    }
-  }
+  for (const ddl of DDL) execRaw(ddl);
 }
