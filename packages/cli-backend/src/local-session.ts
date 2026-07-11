@@ -43,7 +43,7 @@ import {
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
   parseModelSpec, agentAffinityKey,
-  ExtensionHost,
+  ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -930,33 +930,16 @@ export class LocalAgentSession implements BackendHost {
     // Steer-drain bookkeeping (Hermes conversation_loop pattern): at each step
     // boundary all pending steers merge into ONE user message appended after
     // the latest tool results (Anthropic groups tool+user into a single turn,
-    // so role alternation holds). streamText rebuilds each step's messages
-    // from scratch, so every drained injection is re-applied at the position
-    // (in base-message coordinates) where it first entered the conversation.
-    // Base coordinates = the step-0 message count (durable history + woven
-    // ledger blocks + the turn-local tail), captured from the first
-    // prepareStep call — before any injection is recorded — so the math
-    // holds whatever the ledger appended this turn.
-    let baseLength = 0;
-    const injections: Array<{ index: number; message: ModelMessage; texts: string[] }> = [];
-    const prepareStepMessages = ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
-      if (stepNumber === 0) baseLength = messages.length;
-      if (this.pendingSteers.length > 0) {
-        const drained = this.pendingSteers.splice(0);
-        injections.push({
-          index: messages.length,
-          message: steerUserMessage(drained),
-          texts: drained.map((steer) => steer.text),
-        });
-      }
-      if (injections.length === 0) return undefined;
-      const next = [...messages];
-      let offset = 0;
-      for (const injection of injections) {
-        next.splice(injection.index + offset, 0, injection.message);
-        offset += 1;
-      }
-      return next;
+    // so role alternation holds). The splice-at-entry-index math — base
+    // coordinates from the step-0 message count, re-applied every step — is
+    // the shared core StepInjections (the cf backend's background-event
+    // injection rides the same class).
+    const injections = new StepInjections<{ message: ModelMessage; texts: string[] }>();
+    const prepareStepMessages = (ctx: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
+      const drained = this.pendingSteers.splice(0);
+      return injections.drain(ctx, drained.length > 0
+        ? [{ message: steerUserMessage(drained), texts: drained.map((steer) => steer.text) }]
+        : []);
     };
 
     // The compaction extension + the steer-drain ride the public extension
@@ -1016,16 +999,8 @@ export class LocalAgentSession implements BackendHost {
             break;
           case 'done': {
             // Replay the drained steers into the durable history at the exact
-            // positions the model saw them (indices are base-coordinate, so
-            // relative to responseMessages they sit at index - baseLength).
-            const merged = [...ev.responseMessages];
-            let spliced = 0;
-            for (const injection of injections) {
-              const at = Math.max(0, Math.min(merged.length, injection.index - baseLength + spliced));
-              merged.splice(at, 0, injection.message);
-              spliced += 1;
-            }
-            for (const msg of merged) this.history.push(msg);
+            // positions the model saw them (StepInjections.replayInto).
+            for (const msg of injections.replayInto(ev.responseMessages)) this.history.push(msg);
             if (!fullText.trim() && ev.text.trim()) fullText = ev.text;
             break;
           }
@@ -1036,7 +1011,7 @@ export class LocalAgentSession implements BackendHost {
       // rendered them as sent — a failed stream must not erase them from the
       // live context (their exact splice positions died with the stream, so
       // they append in drain order).
-      for (const injection of injections) this.history.push(injection.message);
+      for (const injection of injections.recorded) this.history.push(injection.message);
       this.orch.acc.hadError = true;
       this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -1066,7 +1041,7 @@ export class LocalAgentSession implements BackendHost {
     // One durable row PER steer (not per drain): the walk-back fork pivot
     // matches individual user messages verbatim, exactly as surfaces and the
     // JSONL transcript recorded them.
-    const assistantMsgId = this.persist(item.text, injections.flatMap((injection) => injection.texts), fullText);
+    const assistantMsgId = this.persist(item.text, injections.recorded.flatMap((injection) => injection.texts), fullText);
 
     // Alternate Takes captured during this turn's think-mcts runs get the
     // turn id they competed for, so a pick can credit the right turn. A turn
