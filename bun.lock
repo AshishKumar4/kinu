@@ -121,6 +121,13 @@
         "ai": "^6.0.196",
       },
     },
+    "packages/compaction": {
+      "name": "@proteus/compaction",
+      "version": "0.1.0",
+      "dependencies": {
+        "@proteus/core": "workspace:*",
+      },
+    },
     "packages/core": {
       "name": "@proteus/core",
       "version": "0.1.0",
@@ -507,6 +514,8 @@
     "@proteus/cli": ["@proteus/cli@workspace:packages/cli"],
 
     "@proteus/cli-backend": ["@proteus/cli-backend@workspace:packages/cli-backend"],
+
+    "@proteus/compaction": ["@proteus/compaction@workspace:packages/compaction"],
 
     "@proteus/core": ["@proteus/core@workspace:packages/core"],
 

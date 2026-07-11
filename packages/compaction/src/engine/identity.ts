@@ -1,0 +1,68 @@
+// PROTEUS MODIFICATION (the vendored core's single edit — see PROVENANCE.md):
+// upstream hashes via node:crypto createHash (sha256/sha1), which Workers
+// cannot load synchronously. All three digests below swap to Proteus's pure-JS
+// fnv1a64 (same 16-hex-char width as the upstream `.slice(0, 16)` outputs).
+// These hashes guard accidental divergence (edited prefix, duplicate payloads
+// within one session), never adversarial input, so 64-bit collision resistance
+// suffices — and a false match on rangeHash merely replays a stale plan whose
+// prefix hashed identically, while contentHashKey collisions dedupe
+// deterministically and fail open to a plan rebuild.
+import { fnv1a64 } from "@proteus/core"
+import type { Turn } from "./ir"
+
+// The seed is `key:stamp` per turn, byte-identical to the historical
+// id+timestamp seed, so hashes, transcript paths, and synthetic ids
+// survive the IR extraction unchanged. Id-less platforms derive `key`
+// via contentHashKey/keyDeduper below and plug in through Turn.key.
+export function rangeHash(turns: Turn[]): string {
+    const seed = turns.map((turn) => `${turn.key}:${turn.stamp}`).join("|")
+    return fnv1a64(seed)
+}
+
+// Summary keys survive forks: forked sessions mint new message ids but copy
+// roles and creation stamps, so a content-inherited plan can keep reusing
+// its paid-for assistant summaries. Adapted from origin/master 173146f,
+// which additionally hashed provider/model metadata the IR does not carry.
+export function assistantRunKey(turns: Turn[]): string {
+    const seed = turns.map((turn) => `${turn.role}:${turn.stamp}`).join("|")
+    return fnv1a64(seed)
+}
+
+export function syntheticTextKey(turnKey: string, text: string): string {
+    return `${turnKey}_better_compact_text_${fnv1a64(text).slice(0, 8)}`
+}
+
+// Identity for platforms whose messages carry no ids (pi context events,
+// Anthropic wire messages, Codex ResponseItems): a content hash over the
+// native payload, stable across requests because transcripts are
+// append-only. Codecs pass the payload with any request-volatile metadata
+// (e.g. cache_control) already stripped.
+export function contentHashKey(payload: unknown): string {
+    return fnv1a64(stableStringify(payload))
+}
+
+// Disambiguates identical payloads with an occurrence ordinal (`#2`, `#3`…),
+// deterministic because encode walks messages in order.
+export function keyDeduper(): (base: string) => string {
+    const seen = new Map<string, number>()
+    return (base) => {
+        const count = (seen.get(base) ?? 0) + 1
+        seen.set(base, count)
+        return count === 1 ? base : `${base}#${count}`
+    }
+}
+
+function stableStringify(value: unknown): string {
+    return JSON.stringify(sortKeys(value))
+}
+
+function sortKeys(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(sortKeys)
+    if (value && typeof value === "object") {
+        const source = value as Record<string, unknown>
+        const sorted: Record<string, unknown> = {}
+        for (const key of Object.keys(source).sort()) sorted[key] = sortKeys(source[key])
+        return sorted
+    }
+    return value
+}
