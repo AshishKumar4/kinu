@@ -5,7 +5,11 @@
 // send_email binding.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initEventsHubTables, EventLog, ReplyChannelStore } from '@proteus/core';
+import {
+  initEventsHubTables, EventLog, ReplyChannelStore,
+  AgentOrchestrator, EventInjectionBuffer,
+  type BackendHost, type EvolutionEngine,
+} from '@proteus/core';
 import { acceptInboundEmail } from '../src/events/ingress/email.js';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -132,6 +136,40 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     // Re-dispatch is a no-op (channel already replied).
     expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-1', 'again', 3_000)).toBe(0);
     expect(sent).toHaveLength(1);
+  });
+
+  test('an email injected MID-TURN still threads its reply — bound to the batch id the live turn absorbed', async () => {
+    const { log, replies, sent } = setup();
+    const eventId = admitOwnerEmail(log, replies);
+
+    // A turn is live: the reactor injects instead of enqueueing (the same
+    // decision drainPendingEvents makes on the DO), and the buffer splices
+    // the batch into the turn's next step — as the orchestrator wires it.
+    const buffer = new EventInjectionBuffer();
+    const host: BackendHost = {
+      broadcast: () => {},
+      enqueueTurn: async () => { throw new Error('must inject, not enqueue — a turn is live'); },
+      injectIntoActiveTurn: (batch) => { buffer.push(batch); return true; },
+      setTimer: () => {},
+    };
+    const orch = new AgentOrchestrator({
+      host, eventLog: log,
+      engine: { reviewTurnDetached: () => {}, reviewTurn: async () => {}, onSessionComplete: async () => {} } as unknown as EvolutionEngine,
+    });
+    await orch.drainPendingEvents();
+
+    const step = buffer.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
+    expect(String(step![1]!.content)).toContain('Is staging green?');
+
+    // Turn end: the absorbed batch id keys the SAME dispatch the enqueued
+    // drain-turn path uses — the live turn's answer threads back.
+    const { absorbed, leftover } = buffer.settle();
+    expect(leftover).toEqual([]);
+    expect(absorbed).toHaveLength(1);
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!, 'Green.', 2_000)).toBe(1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
+    expect(replies.findOpenByEvent(eventId)).toBeNull();
   });
 
   test('an existing Re: subject is not double-prefixed', async () => {

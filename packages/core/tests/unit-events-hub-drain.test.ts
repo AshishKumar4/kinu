@@ -41,6 +41,16 @@ describe('buildDrainBatch', () => {
     expect(batch.text).toContain('[timer]');
   });
 
+  test('the same batch renders a mid-turn variant that folds in instead of stopping', () => {
+    const batch = buildDrainBatch([evt('wh1', { variant: 'webhook', ingress: 'webhook_hmac' })])!;
+    expect(batch.text).toContain('arrived while you were idle');
+    expect(batch.text).toContain('then stop');
+    expect(batch.midTurnText).toContain('arrived while you were working');
+    expect(batch.midTurnText).toContain('Before finishing this response');
+    expect(batch.midTurnText).toContain('[webhook]');
+    expect(batch.midTurnText).not.toContain('then stop');
+  });
+
   test('mixes external + self → only external drains', () => {
     const events = [
       evt('ext', { variant: 'webhook', ingress: 'webhook_hmac' }),
