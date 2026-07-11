@@ -13,7 +13,7 @@
  * they call `getAuthHeaders(key)` and get ready-to-attach HTTP headers.
  * Token refresh (Codex OAuth) happens atomically inside this DO.
  */
-import { Agent, callable } from "agents";
+import { Agent } from "agents";
 import { parseCliTokenUserId } from "../cli/auth-store.js";
 import {
   getActiveAccessTokenScopes,
@@ -209,7 +209,6 @@ export class UserDO extends Agent<Env> {
 
   // ── Profile ────────────────────────────────────────────────────────
 
-  @callable()
   async ensureProfile(email: string, displayName?: string): Promise<UserProfile> {
     this.ensureInit();
     const now = Date.now();
@@ -235,7 +234,6 @@ export class UserDO extends Agent<Env> {
     return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now };
   }
 
-  @callable()
   async getProfile(): Promise<UserProfile | null> {
     const row = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
@@ -251,7 +249,6 @@ export class UserDO extends Agent<Env> {
 
   // ── Workspace registry ─────────────────────────────────────────────
 
-  @callable()
   async listWorkspaces(): Promise<WorkspaceEntry[]> {
     return this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
       `SELECT name, display_name, created_at, last_visited, archived_at
@@ -268,7 +265,6 @@ export class UserDO extends Agent<Env> {
   /** Insert-or-resurrect a roster row. `existed` reports whether ANY row
    *  (archived included — a name conflict un-archives) was already there, so
    *  a failed create can roll back ONLY rows it actually inserted. */
-  @callable()
   async registerWorkspace(name: string, displayName?: string, purpose?: string): Promise<{ entry: WorkspaceEntry; existed: boolean }> {
     validateWorkspaceName(name);
     const now = Date.now();
@@ -293,13 +289,11 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  @callable()
   async touchWorkspace(name: string): Promise<void> {
     validateWorkspaceName(name);
     this.sqlx(`UPDATE user_workspaces SET last_visited = ? WHERE name = ?`, Date.now(), name);
   }
 
-  @callable()
   async removeWorkspace(name: string, ownerUserId: string): Promise<void> {
     validateWorkspaceName(name);
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
@@ -321,13 +315,11 @@ export class UserDO extends Agent<Env> {
 
   /** Update only the roster display name — keeps the Sidebar in sync with the
    *  agent's own `agent_config.display_name` (e.g. after AI auto-titling). */
-  @callable()
   async setWorkspaceDisplayName(name: string, displayName: string): Promise<void> {
     validateWorkspaceName(name);
     this.sqlx(`UPDATE user_workspaces SET display_name = ? WHERE name = ?`, displayName, name);
   }
 
-  @callable()
   async hasWorkspace(name: string): Promise<boolean> {
     validateWorkspaceName(name);
     const row = this.sqlx(`SELECT 1 AS x FROM user_workspaces WHERE name = ? AND archived_at IS NULL`, name)[0];
@@ -339,7 +331,6 @@ export class UserDO extends Agent<Env> {
   /** Read by the receiving agent's `receivePeerMessage` — whether a foreign
    *  sender may deliver into this user's agents. Same-owner peers never need
    *  a grant (ownership is checked before this). */
-  @callable()
   async hasPeerGrant(senderAgentName: string, senderUserId: string): Promise<boolean> {
     const row = this.sqlx(
       `SELECT 1 AS x FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
@@ -349,7 +340,6 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Grant or revoke a foreign (sender user, sender agent) pair. Idempotent. */
-  @callable()
   async setPeerGrant(senderAgentName: string, senderUserId: string, allowed: boolean): Promise<{ ok: true; allowed: boolean }> {
     validateWorkspaceName(senderAgentName);
     if (!/^[a-f0-9]{32}$/.test(senderUserId)) throw new Error('invalid sender user id');
@@ -374,7 +364,6 @@ export class UserDO extends Agent<Env> {
   /** Mint a CLI bearer token after browser approval. The raw token is returned
    *  once to the CLI; only its hash is stored. The userId is embedded solely so
    *  edge routes can route directly to the correct UserDO before verification. */
-  @callable()
   async mintCliToken(userId: string, label?: string): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     this.ensureInit();
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
@@ -415,7 +404,6 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  @callable()
   async listCliTokens(): Promise<Array<{ tokenHash: string; label: string; createdAt: number; expiresAt: number; lastUsedAt: number | null }>> {
     this.ensureInit();
     return this.sqlx<{ token_hash: string; label: string; created_at: number; expires_at: number; last_used_at: number | null }>(
@@ -565,7 +553,6 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  @callable()
   async revokeCliToken(tokenHash: string): Promise<{ ok: boolean }> {
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) throw new Error('invalid token hash');
     return this.revokeCliTokenHash(tokenHash);
@@ -660,7 +647,6 @@ export class UserDO extends Agent<Env> {
   /** Mint a device + connect token. The authenticated CLI receives the raw
    *  token once and writes it to the local daemon config; only its hash is
    *  stored here. */
-  @callable()
   async registerDevice(label?: string): Promise<{ deviceId: string; token: string }> {
     const deviceId = `dev-${nanoid(10)}`;
     const token = `pdt_${randomToken(32)}`;
@@ -819,7 +805,6 @@ export class UserDO extends Agent<Env> {
 
   /** The remembered consent policies (Devices tab — see/revoke which agents may
    *  use a device). */
-  @callable()
   async listDeviceConsents(): Promise<Array<{
     agentName: string;
     deviceId: string;
@@ -845,7 +830,6 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Forget a remembered consent (next use re-asks). */
-  @callable()
   async clearDeviceConsent(agentName: string, deviceId: string): Promise<{ ok: boolean }> {
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
     return { ok: true };
@@ -853,7 +837,6 @@ export class UserDO extends Agent<Env> {
 
   /** Grant or reduce an agent's consent tier on a device (Devices tab / CLI).
    *  Granting full_filesystem also records the base 'allow' policy. */
-  @callable()
   async setDeviceConsentScope(agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
     if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) {
       return { ok: false };
@@ -882,7 +865,6 @@ export class UserDO extends Agent<Env> {
 
   /** The user's devices for the Devices tab (live-connected flag from the
    *  hibernatable-socket tags). */
-  @callable()
   async listDevices(): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null;
@@ -900,7 +882,6 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Revoke a device: drop its live socket + mark the row revoked. */
-  @callable()
   async revokeDevice(deviceId: string): Promise<{ ok: boolean }> {
     this._devices.close(deviceId, 'device revoked');
     this.sqlx(`UPDATE user_devices SET revoked_at = ?, connected_at = NULL WHERE id = ?`, Date.now(), deviceId);
@@ -909,27 +890,22 @@ export class UserDO extends Agent<Env> {
 
   // ── Product changes ─────────────────────────────────────────────────
 
-  @callable()
   async listProductSourceBindings(): Promise<ProductSourceBinding[]> {
     return this.productChanges().listSourceBindings();
   }
 
-  @callable()
   async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
     return this.productChanges().upsertSourceBinding(input);
   }
 
-  @callable()
   async createProductChange(agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
     return this.productChanges().createChange(agentName, input);
   }
 
-  @callable()
   async listProductChanges(agentName?: string, limit = 20): Promise<ProductChangeRequest[]> {
     return this.productChanges().listChanges(agentName, limit);
   }
 
-  @callable()
   async updateProductChange(
     changeId: string,
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
@@ -937,12 +913,10 @@ export class UserDO extends Agent<Env> {
     return this.productChanges().updateChange(changeId, patch);
   }
 
-  @callable()
   async transitionProductChange(changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest> {
     return this.productChanges().transitionChange(changeId, to);
   }
 
-  @callable()
   async recordProductChangeCheck(
     changeId: string,
     input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
@@ -950,12 +924,10 @@ export class UserDO extends Agent<Env> {
     return this.productChanges().recordCheck(changeId, input);
   }
 
-  @callable()
   async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval> {
     return this.productChanges().requestApproval(changeId, approvalType);
   }
 
-  @callable()
   async decideProductChangeApproval(
     approvalId: string,
     decision: 'approved' | 'rejected',
@@ -965,7 +937,6 @@ export class UserDO extends Agent<Env> {
     return this.productChanges().decideApproval(approvalId, decision, approvedBy, note);
   }
 
-  @callable()
   async recordProductDeployment(
     changeId: string,
     input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
@@ -973,20 +944,17 @@ export class UserDO extends Agent<Env> {
     return this.productChanges().recordDeployment(changeId, input);
   }
 
-  @callable()
   async getProductChangeBoard(agentName?: string, limit = 20): Promise<ProductChangeBoard> {
     return this.productChanges().board(agentName, limit);
   }
 
   /** Full ledger view of one change — the execution engine's read surface. */
-  @callable()
   async getProductChangeDetail(changeId: string): Promise<ProductChangeDetail> {
     return this.productChanges().detail(changeId);
   }
 
   // ── Credentials ────────────────────────────────────────────────────
 
-  @callable()
   async listCredentials(): Promise<CredentialSummary[]> {
     return this.sqlx<{ key: string; kind: string; created_at: number; updated_at: number }>(
       `SELECT key, kind, created_at, updated_at FROM user_credentials ORDER BY key`,
@@ -998,7 +966,6 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  @callable()
   async setCredential(key: string, credentialJson: unknown): Promise<void> {
     validateCredentialKey(key);
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
@@ -1020,7 +987,6 @@ export class UserDO extends Agent<Env> {
     if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways();
   }
 
-  @callable()
   async deleteCredential(key: string): Promise<void> {
     validateCredentialKey(key);
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
@@ -1037,7 +1003,6 @@ export class UserDO extends Agent<Env> {
    *  provider deps need this to point the SDK at the right endpoint —
    *  baseURL isn't a secret on its own and won't show up in
    *  listCredentials(). */
-  @callable()
   async getCredentialBaseURL(key: string): Promise<string | null> {
     validateCredentialKey(key);
     // The my-gateway view rides the same account-scoped /ai/v1 endpoint as
@@ -1055,7 +1020,6 @@ export class UserDO extends Agent<Env> {
 
   /** Returns headers ready to inject into a fetch. Handles Codex OAuth
    *  refresh atomically (DO event loop serializes concurrent calls). */
-  @callable()
   async getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
     validateCredentialKey(key);
     // `cloudflare.ai-gateway` is a DERIVED view of the Cloudflare login: same
@@ -1137,7 +1101,6 @@ export class UserDO extends Agent<Env> {
   /** The user's AI Gateways + current selection. Zero-friction rule: exactly
    *  one gateway and nothing selected → select it (persisted). Never throws —
    *  discovery failures surface in `error` so login can call this inline. */
-  @callable()
   async listAIGateways(): Promise<{
     connected: boolean;
     selectedId: string | null;
@@ -1160,7 +1123,6 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  @callable()
   async selectAIGateway(gatewayId: string | null): Promise<void> {
     this.ensureInit();
     if (gatewayId === null) {
@@ -1225,7 +1187,6 @@ export class UserDO extends Agent<Env> {
 
   // ── Codex device flow ──────────────────────────────────────────────
 
-  @callable()
   async startCodexDeviceFlow(): Promise<DeviceCodeStart> {
     const client = createCodexOAuthClient();
     const result = await client.startDeviceFlow();
@@ -1238,7 +1199,6 @@ export class UserDO extends Agent<Env> {
     return result;
   }
 
-  @callable()
   async pollCodexDeviceFlow(): Promise<{ connected: boolean; accountId?: string; error?: string }> {
     const row = this.sqlx<{ device_auth_id: string; user_code: string }>(
       `SELECT device_auth_id, user_code FROM codex_device_flow WHERE id = 1`,
@@ -1264,13 +1224,11 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  @callable()
   async disconnectCodex(): Promise<void> {
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, CODEX_CRED_KEY);
     this.sqlx(`DELETE FROM codex_device_flow`);
   }
 
-  @callable()
   async getCodexStatus(): Promise<CodexStatus> {
     const cred = this.getCredentialRow(CODEX_CRED_KEY);
     const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
@@ -1298,13 +1256,11 @@ export class UserDO extends Agent<Env> {
 
   // ── User-level config (defaults) ───────────────────────────────────
 
-  @callable()
   async getConfig(key: string): Promise<string | null> {
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
     return row?.value ?? null;
   }
 
-  @callable()
   async setConfig(key: string, value: string): Promise<void> {
     this.sqlx(
       `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)
@@ -1313,7 +1269,6 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  @callable()
   async listConfig(): Promise<Record<string, string>> {
     const rows = this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_config`);
     const out: Record<string, string> = {};
@@ -1348,7 +1303,6 @@ export class UserDO extends Agent<Env> {
   /** Idempotent boot warmup. Called by the routes layer on first hit per
    *  process so MCP connections can re-establish in parallel with the user's
    *  first orchestrator turn, not on its critical path. Fire-and-forget. */
-  @callable()
   async userMcp_warmConnections(): Promise<{ servers: number }> {
     this.ensureInit();
     const rows = this.sqlx(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0] as { n: number };
@@ -1358,7 +1312,6 @@ export class UserDO extends Agent<Env> {
     return { servers: rows.n };
   }
 
-  @callable()
   async userMcp_list(): Promise<McpServerSummary[]> {
     this.ensureInit();
     const rows = this.sqlx<{
@@ -1410,7 +1363,6 @@ export class UserDO extends Agent<Env> {
    *  Worker should redirect OAuth callbacks to (e.g. `https://proteus.example`).
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
-  @callable()
   async userMcp_add(
     input: unknown,
     publicOrigin: string,
@@ -1488,7 +1440,6 @@ export class UserDO extends Agent<Env> {
     return { id, authUrl };
   }
 
-  @callable()
   async userMcp_remove(id: string): Promise<void> {
     this.ensureInit();
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
@@ -1501,7 +1452,6 @@ export class UserDO extends Agent<Env> {
   /** Patch-update editable fields. `name`, `allowedTools`, and `headers` are
    *  safe to change without reconnecting. `serverUrl` / `transport` changes
    *  require remove + re-add (the SDK doesn't support live re-targeting). */
-  @callable()
   async userMcp_update(id: string, patch: unknown): Promise<void> {
     this.ensureInit();
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
@@ -1543,7 +1493,6 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Monotonic watermark — the orchestrator caches by this value. */
-  @callable()
   async userMcp_updatedAt(): Promise<number> {
     this.ensureInit();
     return this._userMcpUpdatedAt;
@@ -1552,7 +1501,6 @@ export class UserDO extends Agent<Env> {
   /** Serializable tool descriptors for every connected MCP server, filtered
    *  by per-server `allowed_tools`. The orchestrator wraps each into an
    *  AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`. */
-  @callable()
   async userMcp_toolDescriptors(): Promise<SerializableToolDescriptor[]> {
     this.ensureInit();
     const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
@@ -1603,7 +1551,6 @@ export class UserDO extends Agent<Env> {
   /** Execute a single MCP tool call. Called over RPC by the orchestrator's
    *  per-tool closure. The result must be JSON-serializable; the SDK already
    *  guarantees this (no closures in CallToolResult). */
-  @callable()
   async userMcp_callTool(
     serverId: string,
     name: string,
@@ -1635,7 +1582,6 @@ export class UserDO extends Agent<Env> {
 
   /** OAuth callback receiver. The routes layer matches the incoming
    *  `/api/user/mcp/callback` request and forwards it here verbatim. */
-  @callable()
   async userMcp_handleOAuthCallback(url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
     this.ensureInit();
     try {
@@ -1657,7 +1603,6 @@ export class UserDO extends Agent<Env> {
 
   /** Which providers does this user have credentials for? Used by the UI's
    *  model picker to know which providers are connected. */
-  @callable()
   async listConnectedProviders(): Promise<ConnectedProvider[]> {
     const creds = await this.listCredentials();
     const byKey = new Map(creds.map((c) => [c.key, c]));
