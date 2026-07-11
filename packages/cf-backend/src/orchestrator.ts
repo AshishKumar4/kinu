@@ -138,7 +138,8 @@ import {
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
   // Peer-agent teams (the `team` tool contract)
-  type TeamToolDeps, type PeerSpawnOutcome,
+  type TeamToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
+  type EnqueueTurnResult,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
   parseModelSpec,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
@@ -3921,6 +3922,35 @@ export class OrchestratorAgent extends Think<Env> {
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
     await appendMemoryNote(this.rt.memory, content);
     return { ok: true };
+  }
+
+  /** MCP `run_task`: inject a turn into the SAME serialized loop the event→turn
+   *  reactor and background-job wake use (host.enqueueTurn → Think.saveMessages).
+   *  Not a new execution path — the identical programmatic-turn seam. */
+  @callable()
+  async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    if (!trimmed) throw new Error('run_task requires non-empty text');
+    return this.host.enqueueTurn({ text: trimmed, metadata: { proteusEvent: 'mcp' } });
+  }
+
+  /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
+   *  agents over the exact `team` tool transport (owner + same-owner roster
+   *  gate enforced inside getTeamToolDeps). */
+  @callable()
+  async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
+    if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
+    return this.getTeamToolDeps().send({
+      agent: input.agent,
+      topic: (input.topic ?? '').trim() || 'message',
+      message: input.message,
+    });
+  }
+
+  /** MCP `send_peer` roster helper — the owner's other agents (self excluded). */
+  @callable()
+  async listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>> {
+    return this.getTeamToolDeps().listPeers();
   }
 
   // ── Hybrid memory search — FTS5 + Vectorize via RRF ──

@@ -26,7 +26,7 @@
  * read memory, trigger splits, manage scaffold versions. The distribution
  * play: Proteus becomes a tool other agents can use, not just a chat app.
  *
- * v1 tools:
+ * v1 read tools:
  *   • search_memory      — FTS over agent memory
  *   • save_note          — append to agent memory
  *   • list_skills        — list crafted tools + their quality scores
@@ -34,6 +34,13 @@
  *   • get_shadow_status  — pending scaffold rollout + decision
  *   • list_run_events    — paginated query of the event log
  *   • list_runs          — recent runs
+ *
+ * v1 write/act tools — thin wrappers over existing @callable orchestrator RPCs
+ * (no new execution path; the same seams the built-in tools and reactor use):
+ *   • run_task           — enqueue a turn into the agent's serialized loop
+ *   • send_peer          — message one of the owner's other agents (`team` send)
+ *   • list_peers         — the owner's other agents (send_peer roster helper)
+ *   • product_change     — list / create / advance a product-change request
  *
  * v1 resources:
  *   • proteus://agent/<name>/memory       — full memory content
@@ -44,7 +51,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { getAgentByName } from "agents";
-import type { ScaffoldRunResult } from "@proteus/core";
+import type {
+  ScaffoldRunResult,
+  EnqueueTurnResult,
+  PeerSendOutcome,
+  ProductChangeBoard,
+  ProductChangeRequest,
+} from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import { AuthError, authenticateRequest } from "./auth/session.js";
 import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
@@ -239,6 +252,123 @@ function buildServer(env: Env, agentName: string): McpServer {
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_run_events error: ${(err as Error).message}` }] };
+      }
+    },
+  );
+
+  // ── Write / act tools ────────────────────────────────────────────
+  // Each proxies an existing @callable on the orchestrator. Ownership is
+  // already enforced at the transport gate (claimOwnedAgent); the peer/turn
+  // seams re-check the owner + same-owner roster inside the DO, so a caller
+  // can never reach an agent or peer they do not own.
+
+  server.registerTool(
+    "run_task",
+    {
+      description:
+        "Enqueue a task for the agent: inject a user turn into its serialized loop — the exact " +
+        "path the event→turn reactor and background-job wake use. Fire-and-forget; the turn runs " +
+        "asynchronously. Returns whether it was queued or skipped (pre-empted by a newer turn).",
+      inputSchema: { text: z.string().min(1).describe("The task / instruction for the agent to act on.") },
+    },
+    async ({ text }) => {
+      try {
+        const agent = await resolveAgent(env, agentName);
+        const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
+        const msg = result.status === "queued"
+          ? "Task queued — the agent will run it on its turn loop."
+          : "Task skipped — a newer turn pre-empted this injection.";
+        return { content: [{ type: "text", text: msg }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `run_task error: ${(err as Error).message}` }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "send_peer",
+    {
+      description:
+        "Send a fire-and-forget message to one of the owner's other agents over the `team` transport. " +
+        "The target must be a peer on the owner's roster (see list_peers) — cross-owner messaging is refused.",
+      inputSchema: {
+        agent: z.string().describe("Peer agent name (from list_peers)."),
+        message: z.string().describe("Message body."),
+        topic: z.string().optional().describe("Short topic label (default \"message\")."),
+      },
+    },
+    async ({ agent: peer, message, topic }) => {
+      try {
+        const agent = await resolveAgent(env, agentName);
+        const outcome: PeerSendOutcome = await agent.sendPeerFromMcp({ agent: peer, message, ...(topic ? { topic } : {}) });
+        const text = outcome.status === "rejected"
+          ? `send_peer rejected: ${outcome.reason}`
+          : `Message ${outcome.status} to ${peer} (id ${outcome.message_id}).`;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `send_peer error: ${(err as Error).message}` }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_peers",
+    {
+      description: "List the owner's other agents (this agent excluded) — the valid targets for send_peer.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const agent = await resolveAgent(env, agentName);
+        const peers = await agent.listPeersFromMcp();
+        const text = peers.length === 0
+          ? "(no other agents on this owner's roster)"
+          : peers.map((p) => `- ${p.name}${p.displayName ? ` (${p.displayName})` : ""}`).join("\n");
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `list_peers error: ${(err as Error).message}` }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "product_change",
+    {
+      description:
+        "Drive the agent's product-change board. Actions: `list` (recent changes + bindings), " +
+        "`create` (open a change against a bound product source — needs bindingId + prompt), " +
+        "`advance` (transition a change to a new status — the lifecycle validates the move).",
+      inputSchema: {
+        action: z.enum(["list", "create", "advance"]),
+        bindingId: z.string().optional().describe("create: the product source binding to change (see list)."),
+        prompt: z.string().optional().describe("create: what to change, in the owner's words."),
+        plan: z.string().optional().describe("create: an optional up-front plan."),
+        changeId: z.string().optional().describe("advance: the change to transition."),
+        status: z.string().optional().describe("advance: the target status (e.g. planning, patching, awaiting_approval)."),
+      },
+    },
+    async ({ action, bindingId, prompt, plan, changeId, status }) => {
+      try {
+        const agent = await resolveAgent(env, agentName);
+        if (action === "list") {
+          const board: ProductChangeBoard = await agent.getProductChangeBoard(20);
+          return { content: [{ type: "text", text: JSON.stringify(board, null, 2) }] };
+        }
+        if (action === "create") {
+          if (!bindingId || !prompt) {
+            return { content: [{ type: "text", text: "product_change create requires bindingId and prompt." }] };
+          }
+          const change: ProductChangeRequest = await agent.createProductChange({ bindingId, userPrompt: prompt, plan: plan ?? null });
+          return { content: [{ type: "text", text: `Created change ${change.id} (${change.status}) for binding ${change.bindingId}.` }] };
+        }
+        // advance
+        if (!changeId || !status) {
+          return { content: [{ type: "text", text: "product_change advance requires changeId and status." }] };
+        }
+        const advanced: ProductChangeRequest = await agent.transitionProductChange(changeId, status as ProductChangeRequest["status"]);
+        return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `product_change error: ${(err as Error).message}` }] };
       }
     },
   );
