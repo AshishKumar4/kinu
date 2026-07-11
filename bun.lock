@@ -118,6 +118,7 @@
         "@ai-sdk/provider": "^3.0.10",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@proteus/agent-utils": "workspace:*",
+        "@proteus/compaction": "workspace:*",
         "@proteus/core": "workspace:*",
         "ai": "^6.0.196",
       },

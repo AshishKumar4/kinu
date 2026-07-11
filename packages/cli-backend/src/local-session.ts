@@ -12,11 +12,16 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import { type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import { generateText, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import {
+  createCompactionExtension, createVfsTranscriptStore,
+  createCompactionStateStore, initCompactionStateTable,
+  type CompactionStateStore,
+} from '@proteus/compaction';
 import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
+  SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, EventVariant,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
@@ -210,10 +215,19 @@ export class LocalAgentSession implements BackendHost {
 
   /** Ephemeral system-state blocks for this CLI session (core
    *  volatile-context.ts). In-memory only — a new session starts empty, so
-   *  the first turn attaches exactly one fresh block. The CLI has no
-   *  compaction yet; when it grows one it must call `reset()` on a landed
-   *  compaction, exactly like the DO's summarizeForCompaction. */
+   *  the first turn attaches exactly one fresh block. The compaction
+   *  extension's onOutcome resets it on a fresh plan ('planned') because the
+   *  frozen block positions are meaningless against the rewritten stream;
+   *  byte-stable replays keep them valid. */
   private readonly ephemeralLedger = new EphemeralContextLedger();
+
+  /** Durable per-session compaction state (plan snapshot + the measured
+   *  prompt-token trigger signal) in agent.db, and the default compaction
+   *  extension itself — the SAME better-compact transformContext path the
+   *  cloud backend registers, over the same shared stores. Registered on
+   *  every turn's ExtensionHost in processTurn. */
+  private readonly compactionState: CompactionStateStore;
+  private readonly compactionExtension: ProteusExtension;
 
   /** Skills invoked this turn (explicit/auto-activation + the skills tool's
    *  `invoke` action). Cleared at turn start; the skills tool's closures mutate
@@ -279,6 +293,33 @@ export class LocalAgentSession implements BackendHost {
     // agent_facts world model — exposes the `fact` tool (parity with the DO).
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
+
+    // Better-compact is THE default (and only) compaction path — the same
+    // staged transformContext ladder the cloud backend registers, over the
+    // same shared stores (transcripts in the composite VFS, plan + trigger
+    // state in agent.db). The summarizer rides the session's active model.
+    initCompactionStateTable(this.rt.storage.execRaw);
+    this.compactionState = createCompactionStateStore(this.rt.storage.sql);
+    this.compactionExtension = createCompactionExtension({
+      ports: {
+        transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
+        plans: this.compactionState.plans,
+        logger: {
+          info: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
+          debug: (message, data) => console.debug(`[proteus:compaction] ${message}`, data ?? ''),
+          warn: (message, data) => console.warn(`[proteus:compaction] ${message}`, data ?? ''),
+          error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
+        },
+      },
+      summarize: (prompt) =>
+        generateText({ model: this.ensureModelState(), prompt }).then((r) => r.text),
+      onOutcome: ({ outcome }) => {
+        // Fires inside runTransformContext, BEFORE runChat's ledger weave —
+        // a fresh plan invalidates the frozen block positions; a byte-stable
+        // replay keeps them.
+        if (outcome === 'planned') this.ephemeralLedger.reset();
+      },
+    });
 
     // Voyager-style curriculum table (agent.* parity with the DO).
     initCurriculumTable(this.rt.storage.execRaw);
@@ -916,9 +957,16 @@ export class LocalAgentSession implements BackendHost {
       return next;
     };
 
-    // The steer-drain rides the public extension seam — the same host external
-    // plugins register on. One hook path, not a private callback + a plugin API.
-    const extensions = new ExtensionHost().register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
+    // The compaction extension + the steer-drain ride the public extension
+    // seam — the same host external plugins register on. One hook path, not
+    // a private callback + a plugin API.
+    const extensions = new ExtensionHost()
+      .register(this.compactionExtension)
+      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
+    const cache = this.cacheIdentity();
+    // The measured trigger: the previous turn's final request as the provider
+    // actually priced it, persisted at turn end below.
+    const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey);
 
     try {
       for await (const ev of runChat({
@@ -929,10 +977,11 @@ export class LocalAgentSession implements BackendHost {
         systemState,
         turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
         tools: turnTools,
+        ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
         extensions,
-        cache: this.cacheIdentity(),
+        cache,
       })) {
         switch (ev.type) {
           case 'text-delta':
@@ -954,7 +1003,9 @@ export class LocalAgentSession implements BackendHost {
             break;
           }
           case 'step-finish':
-            this.orch.acc.recordStep({});
+            this.orch.acc.recordStep(
+              ev.inputTokens !== undefined ? { usage: { inputTokens: ev.inputTokens } } : {},
+            );
             break;
           case 'done': {
             // Replay the drained steers into the durable history at the exact
@@ -983,6 +1034,13 @@ export class LocalAgentSession implements BackendHost {
       this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     } finally {
       this.currentAbort = null;
+    }
+
+    // Persist the turn's final provider-priced prompt size — the NEXT turn's
+    // measured compaction trigger. Any step that reported was a real priced
+    // request, so errored turns record too.
+    if (this.orch.acc.lastPromptTokens > 0) {
+      this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens);
     }
 
     // Steers that never saw a step boundary (the model was already finishing)
