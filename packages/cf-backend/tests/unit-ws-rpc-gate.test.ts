@@ -1,5 +1,5 @@
 // Scope enforcement at the agent-websocket boundary: a `pta_…` access token
-// with agent.exec can mint a connect ticket, so the DO must pin that socket
+// with workspace.exec can mint a connect ticket, so the DO must pin that socket
 // to chat frames + read-only RPCs. Regression for the scope-model bypass
 // where every @callable (consent self-approval, approval mode, config, fork)
 // was reachable from an exec-scoped CI token.
@@ -23,8 +23,8 @@ function rpcFrame(method: string, id = 'req-1'): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [] });
 }
 
-const EXEC_ONLY = [cliScopesConnectionTag('agent.exec')!];
-const READ_EXEC = [cliScopesConnectionTag('agent.read,agent.exec')!];
+const EXEC_ONLY = [cliScopesConnectionTag('workspace.exec')!];
+const READ_EXEC = [cliScopesConnectionTag('workspace.read,workspace.exec')!];
 
 describe('connect-ticket scope tags', () => {
   test('interactive sessions carry no tag and stay unrestricted', () => {
@@ -34,8 +34,8 @@ describe('connect-ticket scope tags', () => {
   });
 
   test('scoped headers round-trip through the connection tag', () => {
-    expect(cliScopesFromTags(READ_EXEC)).toEqual(['agent.read', 'agent.exec']);
-    expect(cliScopesFromTags(EXEC_ONLY)).toEqual(['agent.exec']);
+    expect(cliScopesFromTags(READ_EXEC)).toEqual(['workspace.read', 'workspace.exec']);
+    expect(cliScopesFromTags(EXEC_ONLY)).toEqual(['workspace.exec']);
   });
 
   test('an unparseable scope header fails closed, never open', () => {
@@ -64,7 +64,7 @@ describe('rpc gate on scoped connections', () => {
     expect(rejectOutOfScopeRpc(READ_EXEC, 'not json')).toBeNull();
   });
 
-  test('read RPCs are allowed with agent.read', () => {
+  test('read RPCs are allowed with workspace.read', () => {
     for (const method of [
       'getEvolutionChangelog', 'latestAlternateTakes',
       'listFileCheckpoints', 'planFileRestore', 'checkpointStatus',
@@ -78,7 +78,7 @@ describe('rpc gate on scoped connections', () => {
     expect(rejection).not.toBeNull();
     const frame = JSON.parse(rejection!);
     expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-7', success: false });
-    expect(frame.error).toContain('agent.read');
+    expect(frame.error).toContain('workspace.read');
   });
 
   test('mutating @callables are rejected with a typed rpc error frame', () => {

@@ -17,7 +17,7 @@ function hubEnv() {
     async setName() {},
     async createDurableWebhook(opts: unknown) {
       calls.push(`webhook:${JSON.stringify(opts)}`);
-      return { trigger_id: 'trg_1', url: '/api/agents/jarvis/webhook/trg_1', auth_mode: 'hmac', secret: null };
+      return { trigger_id: 'trg_1', url: '/api/workspaces/jarvis/webhook/trg_1', auth_mode: 'hmac', secret: null };
     },
   };
   const env = {
@@ -30,7 +30,7 @@ function hubEnv() {
 }
 
 function createTriggerRequest(authTime: number | null) {
-  return new Request('https://proteus.example.com/api/agents/jarvis/triggers', {
+  return new Request('https://proteus.example.com/api/workspaces/jarvis/triggers', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

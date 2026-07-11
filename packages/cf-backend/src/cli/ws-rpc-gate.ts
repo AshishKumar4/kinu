@@ -1,7 +1,7 @@
 /**
  * Scope enforcement for the agent websocket — the DO-side counterpart to the
  * REST router's accessTokenDenial. A scoped `pta_…` access token with
- * `agent.exec` may mint a connect ticket, and the resulting websocket reaches
+ * `workspace.exec` may mint a connect ticket, and the resulting websocket reaches
  * the OrchestratorAgent's full @callable RPC surface; this module pins those
  * connections to chat frames plus an explicit read-only RPC allowlist.
  *
@@ -29,11 +29,11 @@ const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
  *  revert, restore, approval mode, …) is denied: methods added in the future
  *  are interactive-session-only until listed here. */
 const SCOPED_RPC_ALLOWLIST: Record<string, AccessTokenScope> = {
-  getEvolutionChangelog: 'agent.read',
-  latestAlternateTakes: 'agent.read',
-  listFileCheckpoints: 'agent.read',
-  planFileRestore: 'agent.read',
-  checkpointStatus: 'agent.read',
+  getEvolutionChangelog: 'workspace.read',
+  latestAlternateTakes: 'workspace.read',
+  listFileCheckpoints: 'workspace.read',
+  planFileRestore: 'workspace.read',
+  checkpointStatus: 'workspace.read',
 };
 
 /** Build the connection tag for a verified scopes header value; null when the

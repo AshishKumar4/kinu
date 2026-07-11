@@ -6,10 +6,10 @@
  * Routes:
  *   GET    /api/user/profile                       — user info
  *   GET    /api/user/cli                           — CLI setup commands
- *   GET    /api/user/agents                        — agent registry
- *   POST   /api/user/agents                        — register new agent
- *   POST   /api/user/agents/:name/touch            — update last_visited
- *   DELETE /api/user/agents/:name                  — remove from registry
+ *   GET    /api/user/workspaces                        — agent registry
+ *   POST   /api/user/workspaces                        — register new agent
+ *   POST   /api/user/workspaces/:name/touch            — update last_visited
+ *   DELETE /api/user/workspaces/:name                  — remove from registry
  *   GET    /api/user/credentials                   — masked listing
  *   POST   /api/user/credentials/:key              — set
  *   DELETE /api/user/credentials/:key              — delete
@@ -72,18 +72,18 @@ export async function handleUserRequest(
   }
 
   // ── Agents ─────────────────────────────────────────────────────────
-  if (path === '/agents' && method === 'GET') {
+  if (path === '/workspaces' && method === 'GET') {
     return json(await stub.listWorkspaces());
   }
-  if (path === '/agents' && method === 'POST') {
+  if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);
   }
-  const agentTouchMatch = path.match(/^\/agents\/([^/]+)\/touch$/);
+  const agentTouchMatch = path.match(/^\/workspaces\/([^/]+)\/touch$/);
   if (agentTouchMatch && method === 'POST') {
     try { await stub.touchWorkspace(decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
-  const agentMatch = path.match(/^\/agents\/([^/]+)$/);
+  const agentMatch = path.match(/^\/workspaces\/([^/]+)$/);
   if (agentMatch && method === 'DELETE') {
     try { await stub.removeWorkspace(decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }

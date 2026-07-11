@@ -4810,8 +4810,8 @@ export class OrchestratorAgent extends Think<Env> {
    *
    *  Deliberately NOT @callable: webhook creation is step-up gated, and the
    *  gate (auth/session isFreshAuthTime) lives in the only two entry points —
-   *  the web route POST /api/agents/<name>/triggers and the CLI route
-   *  POST /api/cli/agents/<name>/triggers/webhook. Exposing this over the
+   *  the web route POST /api/workspaces/<name>/triggers and the CLI route
+   *  POST /api/cli/workspaces/<name>/triggers/webhook. Exposing this over the
    *  WebSocket RPC surface would bypass that gate. */
   async createDurableWebhook(opts: {
     label: string;
@@ -4853,7 +4853,7 @@ export class OrchestratorAgent extends Think<Env> {
 
     return {
       trigger_id: id,
-      url: `/api/agents/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
+      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
       auth_mode: opts.auth_mode,
       // For HMAC/bearer modes, the operator needs the secret once to give
       // to the external system; we return it inline now and never again.

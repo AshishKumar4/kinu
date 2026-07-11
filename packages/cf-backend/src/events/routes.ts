@@ -1,13 +1,13 @@
 /**
  * Hub HTTP routes:
  *
- *   POST /api/agents/<name>/webhook/<trigger_id>   — public webhook delivery
- *   GET  /api/agents/<name>/triggers                — list triggers (auth)
- *   POST /api/agents/<name>/triggers                — create trigger (auth + step-up)
- *   DELETE /api/agents/<name>/triggers/<id>         — revoke trigger (auth)
- *   GET  /api/agents/<name>/events                  — recent events (auth)
- *   GET  /api/agents/<name>/email                   — email ingress config (auth)
- *   PUT  /api/agents/<name>/email                   — set allowlist / notifications
+ *   POST /api/workspaces/<name>/webhook/<trigger_id>   — public webhook delivery
+ *   GET  /api/workspaces/<name>/triggers                — list triggers (auth)
+ *   POST /api/workspaces/<name>/triggers                — create trigger (auth + step-up)
+ *   DELETE /api/workspaces/<name>/triggers/<id>         — revoke trigger (auth)
+ *   GET  /api/workspaces/<name>/events                  — recent events (auth)
+ *   GET  /api/workspaces/<name>/email                   — email ingress config (auth)
+ *   PUT  /api/workspaces/<name>/email                   — set allowlist / notifications
  *                                                     (auth + step-up)
  *
  * The webhook route is the only one that DOES NOT require operator auth —
@@ -46,7 +46,7 @@ export async function handleHubRequest(
   const method = request.method;
 
   // ── Webhook ingress (public, per-trigger auth) ────────────────
-  const webhookMatch = path.match(new RegExp(`^/api/agents/${escapeRe(agentName)}/webhook/([^/]+)$`));
+  const webhookMatch = path.match(new RegExp(`^/api/workspaces/${escapeRe(agentName)}/webhook/([^/]+)$`));
   if (webhookMatch) {
     if (method !== 'POST') return err(405, 'use POST');
     const trigger_id = decodeURIComponent(webhookMatch[1]);
@@ -54,18 +54,18 @@ export async function handleHubRequest(
   }
 
   // ── Triggers CRUD (auth + ownership already enforced upstream) ─
-  const triggersBase = `/api/agents/${agentName}/triggers`;
+  const triggersBase = `/api/workspaces/${agentName}/triggers`;
   if (path === triggersBase || path.startsWith(triggersBase + '/')) {
     return await handleTriggersRoute(request, env, agentName, path.slice(triggersBase.length));
   }
 
   // ── Events listing ────────────────────────────────────────────
-  if (path === `/api/agents/${agentName}/events` && method === 'GET') {
+  if (path === `/api/workspaces/${agentName}/events` && method === 'GET') {
     return await handleEventsList(request, env, agentName);
   }
 
   // ── Email ingress config (Mission Inbox) ──────────────────────
-  if (path === `/api/agents/${agentName}/email`) {
+  if (path === `/api/workspaces/${agentName}/email`) {
     return await handleEmailConfigRoute(request, env, agentName);
   }
 

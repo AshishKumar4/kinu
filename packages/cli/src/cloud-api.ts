@@ -144,7 +144,7 @@ export async function logout(origin: string, token: string): Promise<{ ok: boole
 }
 
 export async function listCloudAgents(origin: string, token: string): Promise<CloudAgent[]> {
-  return cloudJson(origin, '/api/cli/agents', { token });
+  return cloudJson(origin, '/api/cli/workspaces', { token });
 }
 
 export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenuEntry[]> {
@@ -154,30 +154,30 @@ export async function listCloudAvailableModels(origin: string, token: string): P
 export async function createCloudAgent(origin: string, token: string, input: {
   name?: string; displayName?: string; purpose?: string;
 }): Promise<CloudAgent> {
-  return cloudJson(origin, '/api/cli/agents', { method: 'POST', token, body: input });
+  return cloudJson(origin, '/api/cli/workspaces', { method: 'POST', token, body: input });
 }
 
 export async function createCloudAgentConnectTicket(origin: string, token: string, name: string): Promise<CloudAgentConnectTicket> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/connect-ticket`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/connect-ticket`, {
     method: 'POST',
     token,
   });
 }
 
 export async function getCloudAgentStatus(origin: string, token: string, name: string): Promise<CloudAgentStatus> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/status`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/status`, { token });
 }
 
 export async function getCloudAgentTools(origin: string, token: string, name: string): Promise<CloudToolDescriptions> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/tools`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/tools`, { token });
 }
 
 export async function getCloudAgentMessages(origin: string, token: string, name: string, limit = 100): Promise<CloudChatMessage[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/messages?limit=${encodeURIComponent(String(limit))}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/messages?limit=${encodeURIComponent(String(limit))}`, { token });
 }
 
 export async function listCloudPendingConsents(origin: string, token: string, name: string): Promise<CloudPendingConsent[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/consents`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/consents`, { token });
 }
 
 export async function resolveCloudDeviceConsent(
@@ -187,7 +187,7 @@ export async function resolveCloudDeviceConsent(
   consentId: string,
   decision: 'once' | 'always' | 'deny',
 ): Promise<{ ok: boolean }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/consents/${encodeURIComponent(consentId)}`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/consents/${encodeURIComponent(consentId)}`, {
     method: 'POST',
     token,
     body: { decision },
@@ -195,11 +195,11 @@ export async function resolveCloudDeviceConsent(
 }
 
 export async function getCloudAgentModel(origin: string, token: string, name: string): Promise<{ spec: string | null }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/model`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/model`, { token });
 }
 
 export async function setCloudAgentModel(origin: string, token: string, name: string, spec: string): Promise<{ ok: true; spec: string }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/model`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/model`, {
     method: 'PUT',
     token,
     body: { spec },
@@ -207,7 +207,7 @@ export async function setCloudAgentModel(origin: string, token: string, name: st
 }
 
 export async function listCloudTriggers(origin: string, token: string, name: string): Promise<CloudTriggerList> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/triggers`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers`, { token });
 }
 
 export async function createCloudTimerTrigger(
@@ -216,7 +216,7 @@ export async function createCloudTimerTrigger(
   name: string,
   input: { cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown> },
 ): Promise<{ id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/triggers/timer`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/timer`, {
     method: 'POST',
     token,
     body: input,
@@ -224,74 +224,74 @@ export async function createCloudTimerTrigger(
 }
 
 export async function cancelCloudTrigger(origin: string, token: string, name: string, triggerId: string): Promise<{ ok: true; changed: boolean }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/triggers/${encodeURIComponent(triggerId)}`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/${encodeURIComponent(triggerId)}`, {
     method: 'DELETE',
     token,
   });
 }
 
 export async function listCloudJobs(origin: string, token: string, name: string, limit = 20): Promise<CloudBackgroundJob[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/jobs?limit=${encodeURIComponent(String(limit))}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/jobs?limit=${encodeURIComponent(String(limit))}`, { token });
 }
 
 export async function cancelCloudJob(origin: string, token: string, name: string, jobId: string): Promise<{ ok: boolean }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/jobs/${encodeURIComponent(jobId)}`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/jobs/${encodeURIComponent(jobId)}`, {
     method: 'DELETE',
     token,
   });
 }
 
 export async function stopCloudAgent(origin: string, token: string, name: string): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/stop`, { method: 'POST', token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/stop`, { method: 'POST', token });
 }
 
 export async function getCloudAgentState(origin: string, token: string, name: string): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/state`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/state`, { token });
 }
 
 export async function getCloudMemoryContent(origin: string, token: string, name: string): Promise<{ content: string }> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/memory`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/memory`, { token });
 }
 
 export async function searchCloudMemory(origin: string, token: string, name: string, query: string, limit = 10): Promise<unknown[]> {
   const qs = new URLSearchParams({ q: query, limit: String(limit) });
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/memory?${qs.toString()}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/memory?${qs.toString()}`, { token });
 }
 
 export async function listCloudEvents(origin: string, token: string, name: string, opts: { variant?: string; since?: number; limit?: number } = {}): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/events${query(opts)}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/events${query(opts)}`, { token });
 }
 
 export async function listCloudTimeline(origin: string, token: string, name: string, opts: { runId?: string; limit?: number } = {}): Promise<unknown[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/timeline${query(opts)}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/timeline${query(opts)}`, { token });
 }
 
 export async function getCloudMctsTree(origin: string, token: string, name: string): Promise<unknown[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/mcts`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/mcts`, { token });
 }
 
 export async function getCloudMctsNode(origin: string, token: string, name: string, nodeId: string): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/mcts/${encodeURIComponent(nodeId)}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/mcts/${encodeURIComponent(nodeId)}`, { token });
 }
 
 export async function listCloudHeads(origin: string, token: string, name: string, limit = 20): Promise<unknown[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/heads?limit=${encodeURIComponent(String(limit))}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/heads?limit=${encodeURIComponent(String(limit))}`, { token });
 }
 
 export async function listCloudGepaRuns(origin: string, token: string, name: string, limit = 20): Promise<unknown[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/gepa?limit=${encodeURIComponent(String(limit))}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/gepa?limit=${encodeURIComponent(String(limit))}`, { token });
 }
 
 export async function getCloudGepaRun(origin: string, token: string, name: string, runId: string): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/gepa/${encodeURIComponent(runId)}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/gepa/${encodeURIComponent(runId)}`, { token });
 }
 
 export async function listCloudExecutors(origin: string, token: string, name: string): Promise<unknown[]> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/executors`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/executors`, { token });
 }
 
 export async function executeCloudExecutor(origin: string, token: string, name: string, executorId: string, command: string): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/executors/${encodeURIComponent(executorId)}/exec`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/executors/${encodeURIComponent(executorId)}/exec`, {
     method: 'POST',
     token,
     body: { command },
@@ -299,7 +299,7 @@ export async function executeCloudExecutor(origin: string, token: string, name: 
 }
 
 export async function getCloudProductBoard(origin: string, token: string, name: string, limit = 20): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/product?limit=${encodeURIComponent(String(limit))}`, { token });
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/product?limit=${encodeURIComponent(String(limit))}`, { token });
 }
 
 export async function createCloudWebhookTrigger(
@@ -308,7 +308,7 @@ export async function createCloudWebhookTrigger(
   name: string,
   input: CloudWebhookTriggerInput,
 ): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/agents/${encodeURIComponent(name)}/triggers/webhook`, {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/webhook`, {
     method: 'POST',
     token,
     body: input,

@@ -11,9 +11,9 @@ const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 const BOTH_TOKEN = `pta_${USER_ID}_${'b'.repeat(44)}`;
 
 const ACCESS_TOKENS: Record<string, { hash: string; scopes: string[] }> = {
-  [EXEC_TOKEN]: { hash: 'exec-hash', scopes: ['agent.exec'] },
-  [READ_TOKEN]: { hash: 'read-hash', scopes: ['agent.read'] },
-  [BOTH_TOKEN]: { hash: 'both-hash', scopes: ['agent.read', 'agent.exec'] },
+  [EXEC_TOKEN]: { hash: 'exec-hash', scopes: ['workspace.exec'] },
+  [READ_TOKEN]: { hash: 'read-hash', scopes: ['workspace.read'] },
+  [BOTH_TOKEN]: { hash: 'both-hash', scopes: ['workspace.read', 'workspace.exec'] },
 };
 
 function setupEnv(opts: { sessionMintedAt?: number } = {}) {
@@ -56,7 +56,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     },
     async listAccessTokens() {
       calls.push('tokens:list');
-      return [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['agent.exec'], createdAt: 1, lastUsedAt: 2 }];
+      return [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }];
     },
     async revokeAccessToken(ref: string) {
       calls.push(`tokens:revoke:${ref}`);
@@ -132,53 +132,53 @@ const jsonInit = (body: unknown, method = 'POST'): RequestInit => ({
 });
 
 describe('access token scope enforcement', () => {
-  test('agent.exec token can mint connect tickets, stop work, and run executors', async () => {
+  test('workspace.exec token can mint connect tickets, stop work, and run executors', async () => {
     const { env, calls } = setupEnv();
-    const ticket = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/agents/jarvis/connect-ticket', { method: 'POST' }), env);
+    const ticket = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
     expect(calls).toContain('connect-ticket:exec-hash');
 
-    const stop = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/agents/jarvis/stop', { method: 'POST' }), env);
+    const stop = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/stop', { method: 'POST' }), env);
     expect(stop?.status).toBe(200);
 
     const exec = await handleCliRequest(
-      req(EXEC_TOKEN, '/api/cli/agents/jarvis/executors/workspace/exec', jsonInit({ command: 'pwd' })),
+      req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/executors/workspace/exec', jsonInit({ command: 'pwd' })),
       env,
     );
     expect(exec?.status).toBe(200);
   });
 
-  test('agent.exec token cannot read agent state without agent.read', async () => {
+  test('workspace.exec token cannot read agent state without workspace.read', async () => {
     const { env, calls } = setupEnv();
-    const res = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/agents/jarvis/status'), env);
+    const res = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/status'), env);
     expect(res?.status).toBe(403);
-    expect((await res?.json() as { error: string }).error).toContain('agent.read');
+    expect((await res?.json() as { error: string }).error).toContain('workspace.read');
     expect(calls).not.toContain('status');
   });
 
-  test('agent.read token can read but cannot exec', async () => {
+  test('workspace.read token can read but cannot exec', async () => {
     const { env, calls } = setupEnv();
-    const status = await handleCliRequest(req(READ_TOKEN, '/api/cli/agents/jarvis/status'), env);
+    const status = await handleCliRequest(req(READ_TOKEN, '/api/cli/workspaces/jarvis/status'), env);
     expect(status?.status).toBe(200);
     expect(await status?.json()).toMatchObject({ name: 'jarvis' });
 
-    const ticket = await handleCliRequest(req(READ_TOKEN, '/api/cli/agents/jarvis/connect-ticket', { method: 'POST' }), env);
+    const ticket = await handleCliRequest(req(READ_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(403);
-    expect((await ticket?.json() as { error: string }).error).toContain('agent.exec');
+    expect((await ticket?.json() as { error: string }).error).toContain('workspace.exec');
     expect(calls.some((c) => c.startsWith('connect-ticket:'))).toBe(false);
   });
 
   test('access tokens are denied every interactive-only surface, server-side', async () => {
     const { env, calls } = setupEnv({ sessionMintedAt: Date.now() });
     const forbidden: Array<[string, RequestInit]> = [
-      ['/api/cli/agents/jarvis/triggers/webhook', jsonInit({ label: 'ci', auth_mode: 'hmac' })],
-      ['/api/cli/agents/jarvis/triggers/timer', jsonInit({ atMs: Date.now() + 1000 })],
+      ['/api/cli/workspaces/jarvis/triggers/webhook', jsonInit({ label: 'ci', auth_mode: 'hmac' })],
+      ['/api/cli/workspaces/jarvis/triggers/timer', jsonInit({ atMs: Date.now() + 1000 })],
       ['/api/cli/devices', jsonInit({ label: 'pc' })],
       ['/api/cli/devices', { method: 'GET' }],
-      ['/api/cli/agents', jsonInit({ name: 'new-agent' })],
-      ['/api/cli/agents/jarvis/consents/cons-1', jsonInit({ decision: 'always' })],
-      ['/api/cli/agents/jarvis/model', jsonInit({ spec: 'openai/gpt-5.1' }, 'PUT')],
-      ['/api/cli/tokens', jsonInit({ name: 'more', scopes: ['agent.exec'] })],
+      ['/api/cli/workspaces', jsonInit({ name: 'new-agent' })],
+      ['/api/cli/workspaces/jarvis/consents/cons-1', jsonInit({ decision: 'always' })],
+      ['/api/cli/workspaces/jarvis/model', jsonInit({ spec: 'openai/gpt-5.1' }, 'PUT')],
+      ['/api/cli/tokens', jsonInit({ name: 'more', scopes: ['workspace.exec'] })],
       ['/api/cli/tokens', { method: 'GET' }],
       ['/api/cli/tokens/ci', { method: 'DELETE' }],
       ['/api/cli/logout', { method: 'POST' }],
@@ -197,7 +197,7 @@ describe('access token scope enforcement', () => {
     expect(me?.status).toBe(200);
     expect(await me?.json()).toMatchObject({
       user: { id: USER_ID },
-      token: { kind: 'access', scopes: ['agent.exec'] },
+      token: { kind: 'access', scopes: ['workspace.exec'] },
     });
 
     const sessionMe = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/me'), env);
@@ -215,7 +215,7 @@ describe('access token management routes (session tokens only)', () => {
   test('minting requires a step-up-fresh session token', async () => {
     const fresh = setupEnv({ sessionMintedAt: Date.now() - 60_000 });
     const minted = await handleCliRequest(
-      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['agent.exec', 'agent.read'] })),
+      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec', 'workspace.read'] })),
       fresh.env,
     );
     expect(minted?.status).toBe(201);
@@ -223,13 +223,13 @@ describe('access token management routes (session tokens only)', () => {
     expect(await minted?.json()).toMatchObject({
       token: expect.stringMatching(/^pta_/),
       name: 'ci',
-      scopes: ['agent.exec', 'agent.read'],
+      scopes: ['workspace.exec', 'workspace.read'],
     });
-    expect(fresh.calls).toContain(`tokens:mint:${USER_ID}:ci:agent.exec+agent.read`);
+    expect(fresh.calls).toContain(`tokens:mint:${USER_ID}:ci:workspace.exec+workspace.read`);
 
     const stale = setupEnv({ sessionMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
     const refused = await handleCliRequest(
-      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['agent.exec'] })),
+      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec'] })),
       stale.env,
     );
     expect(refused?.status).toBe(401);
@@ -242,7 +242,7 @@ describe('access token management routes (session tokens only)', () => {
     const missing = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci' })), env);
     expect(missing?.status).toBe(400);
     const dup = await handleCliRequest(
-      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'dup', scopes: ['agent.exec'] })),
+      req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'dup', scopes: ['workspace.exec'] })),
       env,
     );
     expect(dup?.status).toBe(400);
@@ -254,7 +254,7 @@ describe('access token management routes (session tokens only)', () => {
     const list = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens'), env);
     expect(list?.status).toBe(200);
     expect(await list?.json()).toEqual({
-      tokens: [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['agent.exec'], createdAt: 1, lastUsedAt: 2 }],
+      tokens: [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }],
     });
 
     const revoked = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens/ci', { method: 'DELETE' }), env);

@@ -141,7 +141,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json({ ok: true });
   }
 
-  if (path === '/agents' && method === 'GET') {
+  if (path === '/workspaces' && method === 'GET') {
     return json(await cli.userDO.listWorkspaces());
   }
 
@@ -149,11 +149,11 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json(await listAvailableModels(env, cli.userId));
   }
 
-  if (path === '/agents' && method === 'POST') {
+  if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest(request, env, cli.userId, cli.userDO, ctx);
   }
 
-  const connectTicketMatch = path.match(/^\/agents\/([^/]+)\/connect-ticket$/);
+  const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
     if (!(await cli.userDO.hasWorkspace(name))) return err(404, `Agent ${name} not found.`);
@@ -170,35 +170,35 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     });
   }
 
-  const statusMatch = path.match(/^\/agents\/([^/]+)\/status$/);
+  const statusMatch = path.match(/^\/workspaces\/([^/]+)\/status$/);
   if (statusMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(statusMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getAgentStatus());
   }
 
-  const toolsMatch = path.match(/^\/agents\/([^/]+)\/tools$/);
+  const toolsMatch = path.match(/^\/workspaces\/([^/]+)\/tools$/);
   if (toolsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(toolsMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getToolDescriptions());
   }
 
-  const messagesMatch = path.match(/^\/agents\/([^/]+)\/messages$/);
+  const messagesMatch = path.match(/^\/workspaces\/([^/]+)\/messages$/);
   if (messagesMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(messagesMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getChatHistory(boundedLimit(url, 100)));
   }
 
-  const consentsMatch = path.match(/^\/agents\/([^/]+)\/consents$/);
+  const consentsMatch = path.match(/^\/workspaces\/([^/]+)\/consents$/);
   if (consentsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(consentsMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.listPendingConsents());
   }
 
-  const consentResolveMatch = path.match(/^\/agents\/([^/]+)\/consents\/([^/]+)$/);
+  const consentResolveMatch = path.match(/^\/workspaces\/([^/]+)\/consents\/([^/]+)$/);
   if (consentResolveMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(consentResolveMatch[1]));
     if (agent instanceof Response) return agent;
@@ -209,7 +209,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json(await agent.resolveDeviceConsent(decodeURIComponent(consentResolveMatch[2]), body.decision));
   }
 
-  const modelMatch = path.match(/^\/agents\/([^/]+)\/model$/);
+  const modelMatch = path.match(/^\/workspaces\/([^/]+)\/model$/);
   if (modelMatch && (method === 'GET' || method === 'PUT')) {
     const agent = await cliAgent(env, cli, decodeURIComponent(modelMatch[1]));
     if (agent instanceof Response) return agent;
@@ -219,14 +219,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json(await agent.setModel(body.spec));
   }
 
-  const triggersMatch = path.match(/^\/agents\/([^/]+)\/triggers$/);
+  const triggersMatch = path.match(/^\/workspaces\/([^/]+)\/triggers$/);
   if (triggersMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(triggersMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.listTriggers());
   }
 
-  const timerTriggerMatch = path.match(/^\/agents\/([^/]+)\/triggers\/timer$/);
+  const timerTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/timer$/);
   if (timerTriggerMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(timerTriggerMatch[1]));
     if (agent instanceof Response) return agent;
@@ -244,7 +244,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     }
   }
 
-  const webhookTriggerMatch = path.match(/^\/agents\/([^/]+)\/triggers\/webhook$/);
+  const webhookTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/webhook$/);
   if (webhookTriggerMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(webhookTriggerMatch[1]));
     if (agent instanceof Response) return agent;
@@ -275,14 +275,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     }
   }
 
-  const triggerDeleteMatch = path.match(/^\/agents\/([^/]+)\/triggers\/([^/]+)$/);
+  const triggerDeleteMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/([^/]+)$/);
   if (triggerDeleteMatch && method === 'DELETE') {
     const agent = await cliAgent(env, cli, decodeURIComponent(triggerDeleteMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.cancelTrigger(decodeURIComponent(triggerDeleteMatch[2])));
   }
 
-  const jobsMatch = path.match(/^\/agents\/([^/]+)\/jobs$/);
+  const jobsMatch = path.match(/^\/workspaces\/([^/]+)\/jobs$/);
   if (jobsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(jobsMatch[1]));
     if (agent instanceof Response) return agent;
@@ -290,28 +290,28 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json(await agent.listBackgroundJobs(limit));
   }
 
-  const jobDeleteMatch = path.match(/^\/agents\/([^/]+)\/jobs\/([^/]+)$/);
+  const jobDeleteMatch = path.match(/^\/workspaces\/([^/]+)\/jobs\/([^/]+)$/);
   if (jobDeleteMatch && method === 'DELETE') {
     const agent = await cliAgent(env, cli, decodeURIComponent(jobDeleteMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.cancelBackgroundJob(decodeURIComponent(jobDeleteMatch[2])));
   }
 
-  const stateMatch = path.match(/^\/agents\/([^/]+)\/state$/);
+  const stateMatch = path.match(/^\/workspaces\/([^/]+)\/state$/);
   if (stateMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(stateMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getWorkspaceSnapshot());
   }
 
-  const stopMatch = path.match(/^\/agents\/([^/]+)\/stop$/);
+  const stopMatch = path.match(/^\/workspaces\/([^/]+)\/stop$/);
   if (stopMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(stopMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.cancelCurrentWork());
   }
 
-  const memoryMatch = path.match(/^\/agents\/([^/]+)\/memory$/);
+  const memoryMatch = path.match(/^\/workspaces\/([^/]+)\/memory$/);
   if (memoryMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(memoryMatch[1]));
     if (agent instanceof Response) return agent;
@@ -320,7 +320,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json({ content: await agent.getMemoryContent() });
   }
 
-  const eventsMatch = path.match(/^\/agents\/([^/]+)\/events$/);
+  const eventsMatch = path.match(/^\/workspaces\/([^/]+)\/events$/);
   if (eventsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(eventsMatch[1]));
     if (agent instanceof Response) return agent;
@@ -331,49 +331,49 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     }));
   }
 
-  const timelineMatch = path.match(/^\/agents\/([^/]+)\/timeline$/);
+  const timelineMatch = path.match(/^\/workspaces\/([^/]+)\/timeline$/);
   if (timelineMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(timelineMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getRunTimeline({ runId: url.searchParams.get('runId') ?? undefined, limit: boundedLimit(url, 250) }));
   }
 
-  const mctsDetailMatch = path.match(/^\/agents\/([^/]+)\/mcts\/([^/]+)$/);
+  const mctsDetailMatch = path.match(/^\/workspaces\/([^/]+)\/mcts\/([^/]+)$/);
   if (mctsDetailMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(mctsDetailMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getMctsNodeDetail(decodeURIComponent(mctsDetailMatch[2])));
   }
 
-  const mctsMatch = path.match(/^\/agents\/([^/]+)\/mcts$/);
+  const mctsMatch = path.match(/^\/workspaces\/([^/]+)\/mcts$/);
   if (mctsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(mctsMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getMctsTree());
   }
 
-  const headsMatch = path.match(/^\/agents\/([^/]+)\/heads$/);
+  const headsMatch = path.match(/^\/workspaces\/([^/]+)\/heads$/);
   if (headsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(headsMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getHeadRuns(boundedLimit(url, 20)));
   }
 
-  const gepaDetailMatch = path.match(/^\/agents\/([^/]+)\/gepa\/([^/]+)$/);
+  const gepaDetailMatch = path.match(/^\/workspaces\/([^/]+)\/gepa\/([^/]+)$/);
   if (gepaDetailMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(gepaDetailMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getGepaRun(decodeURIComponent(gepaDetailMatch[2])));
   }
 
-  const gepaMatch = path.match(/^\/agents\/([^/]+)\/gepa$/);
+  const gepaMatch = path.match(/^\/workspaces\/([^/]+)\/gepa$/);
   if (gepaMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(gepaMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getGepaRuns(boundedLimit(url, 20)));
   }
 
-  const executorExecMatch = path.match(/^\/agents\/([^/]+)\/executors\/([^/]+)\/exec$/);
+  const executorExecMatch = path.match(/^\/workspaces\/([^/]+)\/executors\/([^/]+)\/exec$/);
   if (executorExecMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(executorExecMatch[1]));
     if (agent instanceof Response) return agent;
@@ -382,14 +382,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json(await agent.executeInExecutor(decodeURIComponent(executorExecMatch[2]), body.command));
   }
 
-  const executorsMatch = path.match(/^\/agents\/([^/]+)\/executors$/);
+  const executorsMatch = path.match(/^\/workspaces\/([^/]+)\/executors$/);
   if (executorsMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(executorsMatch[1]));
     if (agent instanceof Response) return agent;
     return json(await agent.getExecutors());
   }
 
-  const productMatch = path.match(/^\/agents\/([^/]+)\/product$/);
+  const productMatch = path.match(/^\/workspaces\/([^/]+)\/product$/);
   if (productMatch && method === 'GET') {
     const agent = await cliAgent(env, cli, decodeURIComponent(productMatch[1]));
     if (agent instanceof Response) return agent;
@@ -423,8 +423,8 @@ async function sessionTokenMintedAt(cli: CliTokenIdentity): Promise<number | nul
   return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
 }
 
-/** Default-deny gate for scoped `pta_…` access tokens: reads need agent.read,
- *  run-a-task surfaces need agent.exec, and everything else — webhook/timer
+/** Default-deny gate for scoped `pta_…` access tokens: reads need workspace.read,
+ *  run-a-task surfaces need workspace.exec, and everything else — webhook/timer
  *  creation, device registration, agent creation, consent decisions, model
  *  changes, token management — stays interactive-session-only. Routes added
  *  in the future are interactive-only until listed here. */
@@ -443,13 +443,13 @@ function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string):
 
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
   if (method === 'GET') {
-    if (path === '/agents' || path === '/models') return 'agent.read';
-    if (/^\/agents\/[^/]+\/[^/]+/.test(path)) return 'agent.read';
+    if (path === '/workspaces' || path === '/models') return 'workspace.read';
+    if (/^\/workspaces\/[^/]+\/[^/]+/.test(path)) return 'workspace.read';
     return null;
   }
   if (method === 'POST') {
-    if (/^\/agents\/[^/]+\/(connect-ticket|stop)$/.test(path)) return 'agent.exec';
-    if (/^\/agents\/[^/]+\/executors\/[^/]+\/exec$/.test(path)) return 'agent.exec';
+    if (/^\/workspaces\/[^/]+\/(connect-ticket|stop)$/.test(path)) return 'workspace.exec';
+    if (/^\/workspaces\/[^/]+\/executors\/[^/]+\/exec$/.test(path)) return 'workspace.exec';
   }
   return null;
 }

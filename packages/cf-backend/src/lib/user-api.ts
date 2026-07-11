@@ -267,7 +267,7 @@ export interface EventRow {
 
 /** Agent-scoped HTTP fetch; same auth as the user routes. */
 async function agentApi<T>(method: string, agentName: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}${path}`, {
+  const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -275,7 +275,7 @@ async function agentApi<T>(method: string, agentName: string, path: string, body
   if (!res.ok) {
     let detail = '';
     try { const j = await res.json() as { error?: string }; detail = j?.error ?? ''; } catch { /* nop */ }
-    throw new Error(`${method} /api/agents/${agentName}${path} → ${res.status} ${detail}`);
+    throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${detail}`);
   }
   return await res.json() as T;
 }

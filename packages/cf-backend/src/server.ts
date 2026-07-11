@@ -14,7 +14,7 @@
  *   7. AUTH GATE — every other request needs a Proteus browser session
  *      (or DEV_USER_EMAIL in local/staging dev).
  *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
- *   9. /api/agents/<name>/* — owner check via UserDO.hasWorkspace.
+ *   9. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
  *   10. /agents/* — Think DOs (chat WebSocket).
  *   11. env.ASSETS fallback — SPA for everything else.
  */
@@ -43,11 +43,11 @@ import { CLI_SCOPES_HEADER } from "./cli/ws-rpc-gate.js";
 import { claimOwnedWorkspace } from "./user/workspace-access.js";
 import { err } from "./lib/http.js";
 
-/** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
- *  the only `/api/agents/<name>/...` route that bypasses browser OAuth (it has
+/** Public webhook delivery endpoint match. `/api/workspaces/<name>/webhook/<id>` —
+ *  the only `/api/workspaces/<name>/...` route that bypasses browser OAuth (it has
  *  its own per-trigger HMAC / Bearer / mTLS gate). */
 function isWebhookDeliveryPath(pathname: string): boolean {
-  return /^\/api\/agents\/[^/]+\/webhook\/[^/]+$/.test(pathname);
+  return /^\/api\/workspaces\/[^/]+\/webhook\/[^/]+$/.test(pathname);
 }
 
 export { OrchestratorAgent } from "./orchestrator.js";
@@ -98,8 +98,8 @@ async function ensureAgentOwnership(
 }
 
 function extractAgentName(pathname: string): string | null {
-  // /api/agents/<name>/...
-  let m = pathname.match(/^\/api\/agents\/([^/]+)/);
+  // /api/workspaces/<name>/...
+  let m = pathname.match(/^\/api\/workspaces\/([^/]+)/);
   if (m) return decodeURIComponent(m[1]);
   // /agents/orchestrator-agent/<name>/...  (Think framework convention)
   m = pathname.match(/^\/agents\/[^/]+\/([^/]+)/);
@@ -218,7 +218,7 @@ export default {
     // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
     //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
     if (isWebhookDeliveryPath(url.pathname)) {
-      const m = url.pathname.match(/^\/api\/agents\/([^/]+)\/webhook\//);
+      const m = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/webhook\//);
       if (m) {
         const hubResp = await handleHubRequest(request, env, decodeURIComponent(m[1]));
         if (hubResp) return hubResp;

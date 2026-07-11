@@ -32,15 +32,15 @@ export function handleHealthRequest(request: Request): Response | null {
     endpoints: {
       // User-scoped (auth required)
       'GET /api/user/profile': 'caller identity',
-      'GET/POST/DELETE /api/user/agents[/<name>]': 'agent registry',
+      'GET/POST/DELETE /api/user/workspaces[/<name>]': 'agent registry',
       'GET/POST/DELETE /api/user/credentials[/<key>]': 'BYO API keys',
       'POST /api/user/codex/start | /codex/poll': 'ChatGPT device-flow',
       'GET/DELETE /api/user/codex': 'Codex status / disconnect',
       'GET /api/user/models': 'available models (union of connected providers)',
       // Per-agent (auth + ownership required)
-      'GET /api/agents/<name>/runs': 'list recent runs',
-      'GET /api/agents/<name>/runs/<id>/events': 'paginated event query',
-      'GET /api/agents/<name>/runs/<id>/stream': 'SSE w/ Last-Event-ID resume',
+      'GET /api/workspaces/<name>/runs': 'list recent runs',
+      'GET /api/workspaces/<name>/runs/<id>/events': 'paginated event query',
+      'GET /api/workspaces/<name>/runs/<id>/stream': 'SSE w/ Last-Event-ID resume',
       'POST/GET/DELETE /mcp/v1/<agentName>': 'MCP streamable-HTTP server',
       [`/agents/${ORCHESTRATOR_AGENT_SLUG}/<name>/...`]: 'chat WebSocket (Think SDK)',
       // Public

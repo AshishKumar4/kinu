@@ -33,7 +33,7 @@ async function listTokens(opts: TokensOpts): Promise<void> {
     return;
   }
   if (tokens.length === 0) {
-    console.log(DIM('No access tokens. Create one with: proteus tokens create --name ci --scopes agent.exec,agent.read'));
+    console.log(DIM('No access tokens. Create one with: proteus tokens create --name ci --scopes workspace.exec,workspace.read'));
     return;
   }
   for (const token of tokens) {
@@ -44,9 +44,9 @@ async function listTokens(opts: TokensOpts): Promise<void> {
 
 async function createToken(positionalName: string | undefined, opts: TokensOpts): Promise<void> {
   const name = opts.name ?? positionalName;
-  if (!name) throw new Error('Token name required: proteus tokens create --name ci --scopes agent.exec,agent.read');
+  if (!name) throw new Error('Token name required: proteus tokens create --name ci --scopes workspace.exec,workspace.read');
   const scopes = (opts.scopes ?? '').split(/[\s,]+/).filter(Boolean);
-  if (scopes.length === 0) throw new Error('Scopes required: --scopes agent.exec,agent.read');
+  if (scopes.length === 0) throw new Error('Scopes required: --scopes workspace.exec,workspace.read');
 
   const auth = requireAuthConfig();
   const created = await createCliAccessToken(auth.origin, auth.token, { name, scopes });

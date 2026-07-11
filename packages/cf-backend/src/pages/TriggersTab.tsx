@@ -128,7 +128,7 @@ function TriggerRow({ trigger, agentName, onCancel }: {
 }) {
   const isWebhook = trigger.kind === 'webhook_durable' || trigger.kind === 'webhook_ephemeral';
   const url = isWebhook
-    ? `${window.location.origin}/api/agents/${encodeURIComponent(agentName)}/webhook/${encodeURIComponent(trigger.id)}`
+    ? `${window.location.origin}/api/workspaces/${encodeURIComponent(agentName)}/webhook/${encodeURIComponent(trigger.id)}`
     : null;
   const spec = trigger.spec as { label?: string; auth_mode?: string; cron?: string };
 

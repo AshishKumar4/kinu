@@ -83,7 +83,7 @@ program
   .command('tokens [action] [name]')
   .description('Manage long-lived CI access tokens (list, create, revoke)')
   .option('--name <name>', 'Token name for create')
-  .option('--scopes <scopes>', 'Comma-separated scopes: agent.exec, agent.read')
+  .option('--scopes <scopes>', 'Comma-separated scopes: workspace.exec, workspace.read')
   .option('--json', 'Print raw JSON')
   .action(wrapAction(tokensCommand));
 

@@ -27,7 +27,7 @@ describe('run-events SSE client disconnect', () => {
     const { env, pollCount } = sseEnv();
     const aborter = new AbortController();
     const res = await handleRunEventsRequest(new Request(
-      'https://proteus.example.com/api/agents/jarvis/runs/run-1/stream',
+      'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
     ), env);
     expect(res?.status).toBe(200);
@@ -48,7 +48,7 @@ describe('run-events SSE client disconnect', () => {
   test('cancelling the response stream stops the DO poll loop', async () => {
     const { env, pollCount } = sseEnv();
     const res = await handleRunEventsRequest(new Request(
-      'https://proteus.example.com/api/agents/jarvis/runs/run-1/stream',
+      'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), env);
     const reader = res!.body!.getReader();
     await sleep(1200);

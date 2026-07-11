@@ -41,7 +41,7 @@ describe('CLI cloud agent registry sync', () => {
 
     const script = `
       globalThis.fetch = async (input, init) => {
-        if (String(input) !== 'https://proteus.test/api/cli/agents') throw new Error(String(input));
+        if (String(input) !== 'https://proteus.test/api/cli/workspaces') throw new Error(String(input));
         if (new Headers(init?.headers).get('authorization') !== 'Bearer ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz') {
           throw new Error('missing auth');
         }

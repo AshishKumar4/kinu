@@ -13,7 +13,7 @@ interface MockAgentServer {
   frames: Array<Record<string, unknown>>;
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
-  /** Rows served from /api/cli/agents/:name/messages (the DO chat projection). */
+  /** Rows served from /api/cli/workspaces/:name/messages (the DO chat projection). */
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: Record<string, unknown>): void;
@@ -37,7 +37,7 @@ function startMockAgentServer(): MockAgentServer {
     port: 0,
     fetch(req, srv) {
       const url = new URL(req.url);
-      const ticketMatch = url.pathname.match(/^\/api\/cli\/agents\/([^/]+)\/connect-ticket$/);
+      const ticketMatch = url.pathname.match(/^\/api\/cli\/workspaces\/([^/]+)\/connect-ticket$/);
       if (ticketMatch && req.method === 'POST') {
         ticketRequests.push({
           name: decodeURIComponent(ticketMatch[1]!),
@@ -45,7 +45,7 @@ function startMockAgentServer(): MockAgentServer {
         });
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
-      if (/^\/api\/cli\/agents\/[^/]+\/messages$/.test(url.pathname)) {
+      if (/^\/api\/cli\/workspaces\/[^/]+\/messages$/.test(url.pathname)) {
         return Response.json(chatMessages);
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {

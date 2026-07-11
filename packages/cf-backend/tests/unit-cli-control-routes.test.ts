@@ -145,7 +145,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     },
     async createDurableWebhook(opts: unknown) {
       calls.push(`triggers:webhook:${JSON.stringify(opts)}`);
-      return { trigger_id: 'trg_webhook', url: '/api/agents/jarvis/webhook/trg_webhook', secret: 'secret' };
+      return { trigger_id: 'trg_webhook', url: '/api/workspaces/jarvis/webhook/trg_webhook', secret: 'secret' };
     },
   };
   const env = {
@@ -175,52 +175,52 @@ describe('CLI control routes', () => {
   test('mints scoped agent websocket tickets for owned agents', async () => {
     const { env, calls } = setupEnv();
 
-    const ticket = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/connect-ticket', { method: 'POST' }), env);
+    const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
     expect(ticket?.headers.get('cache-control')).toBe('no-store');
     expect(await ticket?.json()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
     expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
 
-    const missing = await handleCliRequest(cliRequest('/api/cli/agents/unknown/connect-ticket', { method: 'POST' }), env);
+    const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown/connect-ticket', { method: 'POST' }), env);
     expect(missing?.status).toBe(404);
   });
 
   test('forward cloud control commands through the owned OrchestratorAgent', async () => {
     const { env, calls } = setupEnv();
 
-    const status = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/status'), env);
+    const status = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/status'), env);
     expect(status?.status).toBe(200);
     expect(await status?.json()).toMatchObject({ name: 'jarvis', messageCount: 3 });
 
-    const tools = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/tools'), env);
+    const tools = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/tools'), env);
     expect(await tools?.json()).toMatchObject({ builtIn: [{ name: 'run' }] });
 
-    const messages = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/messages?limit=17'), env);
+    const messages = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/messages?limit=17'), env);
     expect(await messages?.json()).toEqual([
       { id: 'u1', role: 'user', content: 'hello', createdAt: '2026-06-08 00:00:00.000' },
       { id: 'a1', role: 'assistant', content: 'hi', createdAt: '2026-06-08 00:00:00.001' },
     ]);
 
-    const consents = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/consents'), env);
+    const consents = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/consents'), env);
     expect(await consents?.json()).toEqual([
       { consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', scope: 'all_local_actions', createdAt: 1 },
     ]);
 
-    const consent = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/consents/cons-1', {
+    const consent = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/consents/cons-1', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ decision: 'once' }),
     }), env);
     expect(await consent?.json()).toEqual({ ok: true });
 
-    const model = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/model', {
+    const model = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/model', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ spec: 'openai/gpt-5.1' }),
     }), env);
     expect(await model?.json()).toEqual({ ok: true, spec: 'openai/gpt-5.1' });
 
-    const trigger = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/triggers/timer', {
+    const trigger = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/timer', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ atMs: 123, label: 'wake' }),
@@ -228,30 +228,30 @@ describe('CLI control routes', () => {
     expect(trigger?.status).toBe(201);
     expect(await trigger?.json()).toMatchObject({ id: 'trg_1', nextFireAt: 123 });
 
-    const jobs = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/jobs?limit=7'), env);
+    const jobs = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/jobs?limit=7'), env);
     expect(await jobs?.json()).toEqual([{ id: 'job_1', kind: 'run', status: 'running' }]);
 
-    const cancel = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/jobs/job_1', { method: 'DELETE' }), env);
+    const cancel = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/jobs/job_1', { method: 'DELETE' }), env);
     expect(await cancel?.json()).toEqual({ ok: true });
 
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/state'), env))?.json()).toMatchObject({ status: { name: 'jarvis' } });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/stop', { method: 'POST' }), env))?.json()).toMatchObject({ ok: true, abortedTools: 1 });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/memory?q=repo&limit=3'), env))?.json()).toEqual([{ path: 'memory/MEMORY.md', snippet: 'hit', score: 1 }]);
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/events?limit=4'), env))?.json()).toEqual({ events: [{ id: 'evt_1' }] });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/timeline?limit=5'), env))?.json()).toEqual([{ label: 'turn' }]);
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/mcts'), env))?.json()).toEqual([{ id: 'root' }]);
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/mcts/root'), env))?.json()).toEqual({ id: 'root' });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/heads?limit=6'), env))?.json()).toEqual([{ rootId: 'head-root' }]);
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/gepa'), env))?.json()).toEqual([{ runId: 'gepa_1' }]);
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/gepa/gepa_1'), env))?.json()).toMatchObject({ run: { runId: 'gepa_1' } });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/executors'), env))?.json()).toEqual([{ name: 'workspace', available: true }]);
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/executors/workspace/exec', {
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/state'), env))?.json()).toMatchObject({ status: { name: 'jarvis' } });
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/stop', { method: 'POST' }), env))?.json()).toMatchObject({ ok: true, abortedTools: 1 });
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/memory?q=repo&limit=3'), env))?.json()).toEqual([{ path: 'memory/MEMORY.md', snippet: 'hit', score: 1 }]);
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/events?limit=4'), env))?.json()).toEqual({ events: [{ id: 'evt_1' }] });
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/timeline?limit=5'), env))?.json()).toEqual([{ label: 'turn' }]);
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/mcts'), env))?.json()).toEqual([{ id: 'root' }]);
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/mcts/root'), env))?.json()).toEqual({ id: 'root' });
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/heads?limit=6'), env))?.json()).toEqual([{ rootId: 'head-root' }]);
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/gepa'), env))?.json()).toEqual([{ runId: 'gepa_1' }]);
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/gepa/gepa_1'), env))?.json()).toMatchObject({ run: { runId: 'gepa_1' } });
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/executors'), env))?.json()).toEqual([{ name: 'workspace', available: true }]);
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/executors/workspace/exec', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ command: 'pwd' }),
     }), env))?.json()).toEqual({ stdout: 'ok', exitCode: 0 });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/product'), env))?.json()).toEqual({ changes: [] });
-    expect(await (await handleCliRequest(cliRequest('/api/cli/agents/jarvis/triggers/webhook', {
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/product'), env))?.json()).toEqual({ changes: [] });
+    expect(await (await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ label: 'github', auth_mode: 'hmac', secret: 'secret' }),
@@ -294,12 +294,12 @@ describe('shared ownership claim status mapping', () => {
   }
 
   test('cross-user collision → 403', async () => {
-    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/status'), envWithClaimFailure('Agent owned by a different user (stored=aaaa…, caller=bbbb…)'));
+    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/status'), envWithClaimFailure('Agent owned by a different user (stored=aaaa…, caller=bbbb…)'));
     expect(res?.status).toBe(403);
   });
 
   test('infra failure during claim → 500, not 403', async () => {
-    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/status'), envWithClaimFailure('SQLITE_ERROR: no such table: workspace_identity'));
+    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/status'), envWithClaimFailure('SQLITE_ERROR: no such table: workspace_identity'));
     expect(res?.status).toBe(500);
   });
 });
@@ -313,14 +313,14 @@ describe('CLI webhook creation step-up gate', () => {
 
   test('freshly-minted token (recent proteus auth) may create webhooks', async () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 60_000 });
-    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/triggers/webhook', webhookInit), env);
+    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(201);
     expect(calls.some((c) => c.startsWith('triggers:webhook:'))).toBe(true);
   });
 
   test('long-lived token is denied with 401 step-up (same policy as the web route)', async () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
-    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/triggers/webhook', webhookInit), env);
+    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(401);
     expect((await res?.json() as { error: string }).error).toContain('step-up auth required');
     expect(calls.some((c) => c.startsWith('triggers:webhook:'))).toBe(false);
@@ -328,7 +328,7 @@ describe('CLI webhook creation step-up gate', () => {
 
   test('timer triggers are not step-up gated (matches web semantics)', async () => {
     const { env } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
-    const res = await handleCliRequest(cliRequest('/api/cli/agents/jarvis/triggers/timer', {
+    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/timer', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ atMs: Date.now() + 1000 }),
