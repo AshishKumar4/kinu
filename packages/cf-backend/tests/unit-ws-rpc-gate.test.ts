@@ -47,7 +47,7 @@ describe('connect-ticket scope tags', () => {
 
 describe('rpc gate on scoped connections', () => {
   test('interactive (untagged) connections pass every frame through', () => {
-    for (const method of ['resolveDeviceConsent', 'setShellApprovalMode', 'setAgentConfig', 'forkAgent']) {
+    for (const method of ['resolveDeviceConsent', 'setShellApprovalMode', 'setMctsConfig', 'forkAgent']) {
       expect(rejectOutOfScopeRpc([], rpcFrame(method))).toBeNull();
     }
   });
@@ -83,7 +83,7 @@ describe('rpc gate on scoped connections', () => {
 
   test('mutating @callables are rejected with a typed rpc error frame', () => {
     for (const method of [
-      'resolveDeviceConsent', 'setShellApprovalMode', 'setAgentConfig',
+      'resolveDeviceConsent', 'setShellApprovalMode', 'setMctsConfig',
       'forkAgent', 'revertChangelogEntry', 'restoreFileCheckpoint',
       'pickAlternateTake', 'branchTurn', 'setModel', 'setDisplayName',
       'markChangelogSeen', 'createTimerTrigger',

@@ -142,8 +142,8 @@ import {
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
-  type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
+  type ProductChangeApproval, type ProductChangeStatus,
+  type ProductChangeToolDeps, type ProductSourceBindingInput,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
   // Peer-agent teams (the `team` tool contract)
@@ -2845,11 +2845,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   @callable()
-  async listProductSourceBindings() {
-    return this.requireOwnerUserDO().listProductSourceBindings();
-  }
-
-  @callable()
   async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }) {
     return this.requireOwnerUserDO().upsertProductSourceBinding(input);
   }
@@ -2859,24 +2854,8 @@ export class OrchestratorAgent extends Think<Env> {
     return this.requireOwnerUserDO().createProductChange(this.name, input);
   }
 
-  @callable()
-  async updateProductChange(
-    changeId: string,
-    patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
-  ) {
-    return this.requireOwnerUserDO().updateProductChange(changeId, patch);
-  }
-
   async transitionProductChange(changeId: string, status: ProductChangeStatus) {
     return this.requireOwnerUserDO().transitionProductChange(changeId, status);
-  }
-
-  @callable()
-  async recordProductChangeCheck(
-    changeId: string,
-    input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
-  ) {
-    return this.requireOwnerUserDO().recordProductChangeCheck(changeId, input);
   }
 
   @callable()
@@ -2892,14 +2871,6 @@ export class OrchestratorAgent extends Think<Env> {
       try { await userDO.transitionProductChange(decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
     }
     return decided;
-  }
-
-  @callable()
-  async recordProductDeployment(
-    changeId: string,
-    input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
-  ) {
-    return this.requireOwnerUserDO().recordProductDeployment(changeId, input);
   }
 
   async getAgentStatus() {
@@ -3652,30 +3623,6 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /**
-   * Generic agent_config setter. Used by the Settings page for tunables
-   * like shadow_sample_rate, auto_promote_scaffold. Allow-listed keys only —
-   * anything else throws so callers can't write arbitrary settings.
-   */
-  @callable()
-  async setAgentConfig(key: string, value: string): Promise<{ ok: true; key: string; value: string }> {
-    const allowedKeys = new Set([
-      'shadow_sample_rate',
-      'auto_promote_scaffold',
-      'scaffold_explore_share',
-      'sleep_time_compute',
-      'tool_surfacing_mode',
-      'review_model',
-      'gepa_eval_budget',
-      // shell_approval_mode has its own typed setter; not allowed via this.
-    ]);
-    if (!allowedKeys.has(key)) {
-      throw new Error(`agent_config key not allowed via generic setter: ${key}`);
-    }
-    this.config.set(key, value);
-    return { ok: true, key, value };
-  }
-
   /** The scaffold variant archive: recent versions with status, DGM lineage
    *  (parent_version) and aggregated shadow-eval record. Read-only — also the
    *  backing for the agent.scaffoldVersions codemode helper. Computed by
@@ -3843,14 +3790,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   // ── Replay-eval loss curve ──────────────────────────────────────
-
-  /** Run one replay-eval pass now: sample outcome-labeled turns, re-run them
-   *  through the LIVE scaffold, score against the recorded outcomes, persist
-   *  the loss entry. Also runs periodically inside lifetime evolution. */
-  @callable()
-  async runReplayEval(opts?: { sampleSize?: number }): Promise<ReplayEvalSummary | null> {
-    return this.engine.runReplayEval(opts?.sampleSize);
-  }
 
   /** The persisted loss curve (replay_evals), newest first. Read-only — the
    *  data a loss chart would render. */
