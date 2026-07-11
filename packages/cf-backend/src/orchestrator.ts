@@ -27,7 +27,7 @@ import { Think, Session } from "@cloudflare/think";
 // preamble into the LLM's sandbox arrow, so mid-turn additions are visible
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
-import { streamText, generateText, tool, jsonSchema, stepCountIs } from "ai";
+import { streamText, generateText, tool, jsonSchema, stepCountIs, convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
@@ -35,7 +35,7 @@ import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
-import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
+import { contextWindowForModel, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
@@ -44,6 +44,7 @@ import type {
   TurnContext, TurnConfig, ChatResponseResult,
   ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
   PrepareStepContext, StepConfig,
+  ToolCallContext as ThinkToolCallContext,
 } from "@cloudflare/think";
 import {
   EvolutionEngine,
@@ -56,6 +57,8 @@ import {
   buildSystemPromptSync,
   currentDateForPrompt,
   appendVolatileContextMessage, hashSystemPrompt,
+  // Public extension seam — the SAME host contract runChat drives on the CLI
+  ExtensionHost, composePrepareStep,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   shouldBackupWorkspace, workspaceBackupOptions,
@@ -158,7 +161,7 @@ import { createAgentProviderRegistry, type AgentProviderRegistry } from "./provi
 import {
   agentAffinityKey,
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
-  resolvePromptCacheStrategy, cacheableSystem, markCacheTail, promptCacheOptions,
+  resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
   hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
 } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
@@ -780,6 +783,17 @@ export class OrchestratorAgent extends Think<Env> {
   // Set in beforeTurn, cleared in onChatResponse (after durable persist;
   // evolution is fire-and-forget and does not extend the busy window).
   private _inFlight = false;
+
+  /** The public extension seam on the cloud backend — the SAME ExtensionHost
+   *  contract `runChat` drives on the CLI, bridged onto Think's subclass
+   *  hooks: beforeTurn → onTurnStart + transformContext, beforeStep → the
+   *  shared step pipeline (composePrepareStep), beforeToolCall/afterToolCall
+   *  → onToolCall/onToolResult, onChatResponse → onTurnEnd. Persistent for
+   *  the DO activation. No internal cf consumer registers yet (the CLI's
+   *  steering drain is CLI-local; cf steering is turn-queued) — the Wave-2
+   *  compaction plugin and mid-turn event injection are the first
+   *  registrants. */
+  private readonly extensions = new ExtensionHost();
   private _cliCwd: string | null = null;
   // Current turn identity for the device daemon's pre-mutation shadow-git
   // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
@@ -1551,14 +1565,20 @@ export class OrchestratorAgent extends Think<Env> {
    *  Arms an async catalog lookup on first sight of a spec; until (and unless)
    *  it lands, the static fallback table answers. */
   private _catalogWindow: { spec: string; window: number | null } | null = null;
-  private sessionCompactionThreshold(): number {
+  /** The resolved model's context window: catalog-reported when the async
+   *  lookup has landed, else the static fallback table. Feeds both the
+   *  compaction threshold and the extension transformContext seam. */
+  private sessionContextWindow(): number {
     const spec = this.effectiveModelSpec();
     if (this._catalogWindow?.spec !== spec) {
       this._catalogWindow = { spec, window: null };
       void this.lookupCatalogWindow(spec);
     }
-    const reported = this._catalogWindow.window;
-    return reported ? compactionThresholdForWindow(reported) : compactionThreshold(spec);
+    return this._catalogWindow.window ?? contextWindowForModel(spec);
+  }
+
+  private sessionCompactionThreshold(): number {
+    return compactionThresholdForWindow(this.sessionContextWindow());
   }
 
   private async lookupCatalogWindow(spec: string): Promise<void> {
@@ -1769,15 +1789,42 @@ export class OrchestratorAgent extends Think<Env> {
     });
     this.recordSystemPromptHash(systemOverride);
 
-    const cfg: TurnConfig = { activeTools: effectiveActiveTools, system: systemOverride };
+    const cfg: TurnConfig = { system: systemOverride };
     const baseMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
-    cfg.messages = appendVolatileContextMessage(baseMessages, {
+
+    // ── Extension seam: turn start + the awaited context transform ─────
+    // The same ExtensionHost contract runChat fires on the CLI. The
+    // transform sees ONLY the durable history — the volatile turn context is
+    // spliced after it, so a compaction plugin can never see (or persist)
+    // turn-local state.
+    await this.extensions.emitTurnStart({ system: systemOverride, history: baseMessages });
+    const transformed = await this.extensions.runTransformContext({
+      sessionKey: this.name,
+      messages: baseMessages,
+      system: systemOverride,
+      contextWindow: this.sessionContextWindow(),
+      trigger: 'auto',
+    });
+    cfg.messages = appendVolatileContextMessage(transformed ?? baseMessages, {
       factsBlock: this.renderFactsForTurn(),
       executors: execs,
       deviceNotice,
       ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
     });
-    if (effectiveTools) cfg.tools = effectiveTools;
+
+    // Extension-contributed tools join the turn's ToolSet without ever
+    // shadowing a built-in or MCP tool (runChat's merge order, mirrored:
+    // caller tools win, only extension-vs-extension collisions throw).
+    const extensionTools = Object.fromEntries(
+      Object.entries(this.extensions.tools())
+        .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
+    );
+    const extensionToolNames = Object.keys(extensionTools);
+    const extraTools: ToolSet = { ...extensionTools, ...(effectiveTools ?? {}) };
+    if (Object.keys(extraTools).length > 0) cfg.tools = extraTools;
+    cfg.activeTools = extensionToolNames.length > 0
+      ? [...effectiveActiveTools, ...extensionToolNames]
+      : effectiveActiveTools;
 
     // Prompt-cache plan for this turn (core prompting/cache-breakpoints.ts).
     // Request-level cache routing (prompt_cache_key / promptCacheKey) rides
@@ -1800,11 +1847,15 @@ export class OrchestratorAgent extends Think<Env> {
   private _turnCachePlan: { strategy: PromptCacheStrategy; system: string | SystemModelMessage } | null = null;
 
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
-    const plan = this._turnCachePlan;
-    if (!plan) return;
-    // Roll the tail breakpoints onto this step's newest messages so each
-    // request of the agentic loop reads the prefix the previous step wrote.
-    return { system: plan.system, messages: markCacheTail(ctx.messages, plan.strategy) };
+    // The shared step pipeline (core prompting/prepare-step.ts, identical on
+    // the CLI): extension prepareStep rewrites first, then the cache plan
+    // rolls the tail breakpoints onto the FINAL message array so each request
+    // of the agentic loop reads the prefix the previous step wrote.
+    return composePrepareStep(
+      this.extensions,
+      { stepNumber: ctx.stepNumber, messages: ctx.messages },
+      this._turnCachePlan,
+    );
   }
 
   /** The byte-stability invariant as telemetry: the system prompt hash should
@@ -1833,10 +1884,24 @@ export class OrchestratorAgent extends Think<Env> {
     return isRecord(last?.metadata) && typeof last.metadata.proteusEvent === 'string';
   }
 
-  afterToolCall(ctx: ToolCallResultContext): void {
+  async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
+    // Extension observation before the tool's execute runs (returning void =
+    // allow with the original input — the seam observes, it does not gate).
+    await this.extensions.emitToolCall({
+      toolName: ctx.toolName,
+      args: (ctx.input ?? {}) as Record<string, unknown>,
+    });
+  }
+
+  async afterToolCall(ctx: ToolCallResultContext): Promise<void> {
     // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
     // accumulator records it + fires the activity log + run-event sinks.
     this.acc.recordToolCall(ctx as unknown as Parameters<TurnAccumulator['recordToolCall']>[0]);
+    await this.extensions.emitToolResult({
+      toolName: ctx.toolName,
+      // Same shape the CLI seam emits: stringified, capped at 1000 chars.
+      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? '').slice(0, 1000),
+    });
   }
 
   onStepFinish(ctx: StepContext): void {
@@ -1886,6 +1951,14 @@ export class OrchestratorAgent extends Think<Env> {
       ?.filter(p => p.type === "text")
       .map(p => (p as { type: "text"; text: string }).text)
       .join("") ?? "";
+
+    // Extension seam: the turn settled and was durably persisted — the same
+    // onTurnEnd contract runChat fires on the CLI (final text + the turn's
+    // response messages in ModelMessage shape).
+    await this.extensions.emitTurnEnd({
+      text: assistantText,
+      responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
+    });
 
     // Persist the completed turn into the `messages` table (session_id='default')
     // so the fork feature has a durable row to cut against. AIChatAgent's
