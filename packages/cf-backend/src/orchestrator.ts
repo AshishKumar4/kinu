@@ -424,12 +424,13 @@ export class OrchestratorAgent extends Think<Env> {
       },
       summarize: (prompt) => generateText({ model: this.getModel(), prompt }).then((r) => r.text),
       onOutcome: ({ outcome }) => {
-        // A NEW plan rewrote the durable stream — the ephemeral ledger's
-        // frozen block positions are meaningless against it. This fires
-        // inside runTransformContext, BEFORE beforeTurn's weave, so the next
-        // weave starts over with one fresh block at the compacted tail. A
-        // byte-stable replay keeps the frozen positions valid — no reset.
-        if (outcome === 'planned') this.ephemeralLedger.reset();
+        // The model-visible stream changed shape — a NEW plan rewrote it
+        // ('planned') or a cached plan was discarded after a history rewrite
+        // ('invalidated') — so the ephemeral ledger's frozen block positions
+        // are meaningless. This fires inside runTransformContext, BEFORE
+        // beforeTurn's weave, so the next weave starts over with one fresh
+        // block at the tail. A byte-stable replay keeps positions valid.
+        if (outcome !== 'replayed') this.ephemeralLedger.reset();
       },
     }));
   }
@@ -875,8 +876,9 @@ export class OrchestratorAgent extends Think<Env> {
   /** Ephemeral system-state blocks for this DO activation (core
    *  volatile-context.ts). In-memory only — hibernation/reset empties it, so
    *  a cold start attaches exactly one fresh block; the compaction
-   *  extension's onOutcome resets it on a fresh plan ('planned') because the
-   *  frozen block positions are meaningless against the rewritten stream. */
+   *  extension's onOutcome resets it whenever the model-visible stream
+   *  changed shape ('planned'/'invalidated') because the frozen block
+   *  positions are meaningless against a rewritten stream. */
   private readonly ephemeralLedger = new EphemeralContextLedger();
   private _cliCwd: string | null = null;
   // Current turn identity for the device daemon's pre-mutation shadow-git

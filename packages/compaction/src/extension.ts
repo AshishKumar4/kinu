@@ -53,12 +53,13 @@ import { proteusCodec, proteusSpec } from './codec.js';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;
-  /** 'planned' = a NEW plan rewrote the history — frozen positions derived
-   *  from the previous stream (the EphemeralContextLedger's blocks) are
-   *  invalid and must reset. 'replayed' = deterministic cache-warm replay of
-   *  the persisted plan — the transformed prefix is byte-stable, so frozen
-   *  positions still hold. */
-  outcome: 'planned' | 'replayed';
+  /** 'planned' = a NEW plan rewrote the history. 'invalidated' = a cached
+   *  plan was discarded after a history rewrite and nothing replaced it, so
+   *  the durable view flips back to the raw stream. Both invalidate frozen
+   *  positions derived from the previous stream (the EphemeralContextLedger's
+   *  blocks) — reset on anything but 'replayed', the deterministic cache-warm
+   *  replay whose transformed prefix is byte-stable. */
+  outcome: 'planned' | 'replayed' | 'invalidated';
   /** The freshly built plan, on 'planned'. */
   plan?: BoundaryContextPlan;
 }
@@ -72,8 +73,8 @@ export interface CompactionExtensionDeps {
   summarize: (prompt: string) => Promise<string>;
   /** Trigger/target/recent-tool profile. Defaults to the light preset. */
   profile?: CompactionProfile;
-  /** Fires whenever the transform rewrote history — the 2B ledger-reset
-   *  signal (reset on 'planned', keep on 'replayed'). */
+  /** Fires whenever the model-visible stream changed shape — the ledger-reset
+   *  signal (reset on 'planned' and 'invalidated', keep on 'replayed'). */
   onOutcome?: (event: CompactionOutcomeEvent) => void;
 }
 
@@ -218,7 +219,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
               providerReportedTokens: ctx.providerReportedTokens,
               summarize: runJobs,
             });
-      if (processed.outcome === 'unchanged') return undefined;
+      if (processed.outcome === 'unchanged') {
+        if (processed.invalidatedPlan) {
+          deps.onOutcome?.({ sessionKey: ctx.sessionKey, outcome: 'invalidated' });
+        }
+        return undefined;
+      }
 
       const applied =
         processed.outcome === 'planned'

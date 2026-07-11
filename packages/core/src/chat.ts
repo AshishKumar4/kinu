@@ -23,9 +23,10 @@ export type ChatEvent =
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
   | { type: 'tool-result'; toolName: string; result: string }
-  /** `inputTokens` = the step request's provider-reported prompt total, when
-   *  the provider reported one — the caller's measured compaction signal. */
-  | { type: 'step-finish'; stepIndex: number; inputTokens?: number }
+  /** `inputTokens`/`outputTokens` = the step request's provider-reported
+   *  totals, when reported — inputTokens doubles as the caller's measured
+   *  compaction signal. */
+  | { type: 'step-finish'; stepIndex: number; inputTokens?: number; outputTokens?: number }
   | { type: 'done'; text: string; responseMessages: ModelMessage[] };
 
 export interface ChatOptions {
@@ -84,7 +85,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
-  const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number }> = [];
+  const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number; outputTokens?: number }> = [];
   let stepCount = 0;
 
   await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
@@ -142,9 +143,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     onStepFinish: (step) => {
       stepCount++;
       const inputTokens = step.usage?.inputTokens;
+      const outputTokens = step.usage?.outputTokens;
       pendingStepEvents.push({
         stepIndex: stepCount,
         ...(typeof inputTokens === 'number' && inputTokens > 0 ? { inputTokens } : {}),
+        ...(typeof outputTokens === 'number' && outputTokens > 0 ? { outputTokens } : {}),
       });
     },
   });

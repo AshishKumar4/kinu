@@ -216,9 +216,10 @@ export class LocalAgentSession implements BackendHost {
   /** Ephemeral system-state blocks for this CLI session (core
    *  volatile-context.ts). In-memory only — a new session starts empty, so
    *  the first turn attaches exactly one fresh block. The compaction
-   *  extension's onOutcome resets it on a fresh plan ('planned') because the
-   *  frozen block positions are meaningless against the rewritten stream;
-   *  byte-stable replays keep them valid. */
+   *  extension's onOutcome resets it whenever the model-visible stream
+   *  changed shape ('planned'/'invalidated') because the frozen block
+   *  positions are meaningless against a rewritten stream; byte-stable
+   *  replays keep them valid. */
   private readonly ephemeralLedger = new EphemeralContextLedger();
 
   /** Durable per-session compaction state (plan snapshot + the measured
@@ -315,9 +316,10 @@ export class LocalAgentSession implements BackendHost {
         generateText({ model: this.ensureModelState(), prompt }).then((r) => r.text),
       onOutcome: ({ outcome }) => {
         // Fires inside runTransformContext, BEFORE runChat's ledger weave —
-        // a fresh plan invalidates the frozen block positions; a byte-stable
-        // replay keeps them.
-        if (outcome === 'planned') this.ephemeralLedger.reset();
+        // a fresh plan ('planned') or a discarded one ('invalidated')
+        // invalidates the frozen block positions; a byte-stable replay
+        // keeps them.
+        if (outcome !== 'replayed') this.ephemeralLedger.reset();
       },
     });
 
@@ -1007,7 +1009,9 @@ export class LocalAgentSession implements BackendHost {
           }
           case 'step-finish':
             this.orch.acc.recordStep(
-              ev.inputTokens !== undefined ? { usage: { inputTokens: ev.inputTokens } } : {},
+              ev.inputTokens !== undefined || ev.outputTokens !== undefined
+                ? { usage: { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens } }
+                : {},
             );
             break;
           case 'done': {

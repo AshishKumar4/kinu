@@ -288,7 +288,11 @@ export function replayPlanSnapshot(
 }
 
 export type ProcessResult =
-    | { outcome: "unchanged" }
+    // invalidatedPlan: a cached plan was discarded (rangeHash/tail-key
+    // mismatch after a history rewrite) and nothing replaced it — the
+    // durable view flips from the transformed stream back to raw, which
+    // position-anchored consumers (the ephemeral ledger) must hear about.
+    | { outcome: "unchanged"; invalidatedPlan?: boolean }
     | { outcome: "replayed"; turns: Turn[] }
     | { outcome: "planned"; turns: Turn[]; plan: BoundaryContextPlan }
 
@@ -345,7 +349,7 @@ export function createEngine(spec: LadderSpec, ports: EnginePorts): Engine {
             let plan = buildPlan(turns, inputs, spec)
             if (!plan) {
                 if (staleSnapshotCleared) await ports.plans.save(sessionKey, null)
-                return { outcome: "unchanged" }
+                return staleSnapshotCleared ? { outcome: "unchanged", invalidatedPlan: true } : { outcome: "unchanged" }
             }
             if (summarize && plan.summaryJobs.length > 0) {
                 const assistantSummaries = await summarize(plan.summaryJobs)

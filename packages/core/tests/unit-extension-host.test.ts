@@ -188,7 +188,7 @@ describe('transformContext through runChat', () => {
   test('providerReportedTokens threads into the transform context, and step-finish reports the priced prompt', async () => {
     const { model } = promptCapturingModel();
     let sawTokens: number | undefined;
-    const stepTokens: Array<number | undefined> = [];
+    const stepTokens: Array<[number | undefined, number | undefined]> = [];
     for await (const ev of runChat({
       model: model as never,
       system: 'sys',
@@ -204,11 +204,11 @@ describe('transformContext through runChat', () => {
         },
       }),
     })) {
-      if (ev.type === 'step-finish') stepTokens.push(ev.inputTokens);
+      if (ev.type === 'step-finish') stepTokens.push([ev.inputTokens, ev.outputTokens]);
     }
     expect(sawTokens).toBe(123_456);
-    // promptCapturingModel reports inputTokens: 1 on its finish chunk.
-    expect(stepTokens).toEqual([1]);
+    // promptCapturingModel reports inputTokens: 1, outputTokens: 1 on finish.
+    expect(stepTokens).toEqual([[1, 1]]);
   });
 
   test('a throwing transform never breaks the turn (fail-open)', async () => {

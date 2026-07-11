@@ -98,8 +98,9 @@ staged pruning ladder once per turn assembly, over shared stores — raw
 transcripts in the workspace CompositeVFS (`/local/.proteus/compaction/…`,
 readable back through the agent's own file tools) and the replayable plan +
 the measured prompt-token trigger in one `compaction_state` row (DO SQLite /
-agent.db). Its `onOutcome` resets the ephemeral ledger only on a fresh plan
-(`'planned'`); byte-stable replays keep the frozen block positions valid.
+agent.db). Its `onOutcome` resets the ephemeral ledger whenever the
+model-visible stream changed shape (`'planned'` / `'invalidated'`);
+byte-stable replays keep the frozen block positions valid.
 
 The CLI backend's mid-turn steering (`LocalAgentSession`) is itself an
 extension registered as `proteus.steering` with a `prepareStep` hook — it drains

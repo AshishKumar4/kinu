@@ -187,6 +187,19 @@ describe('replay', () => {
     expect(ports.plans.snapshots.get(SESSION)?.rangeHash).not.toBe(firstHash);
   });
 
+  test('a history rewrite that lands UNDER the trigger fires invalidated and clears the plan', async () => {
+    const { ports, outcomes, transform } = rig();
+    await transform(history(15, 3_000)); // planned
+    // The conversation was rewritten to something small (undo / restart
+    // truncation): the cached plan cannot replay and nothing replaces it —
+    // the durable view flips back to raw, and listeners must hear about it.
+    const rewritten = history(4, 100);
+    const result = await transform(rewritten);
+    expect(result).toBeUndefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'invalidated']);
+    expect(ports.plans.snapshots.size).toBe(0);
+  });
+
   test('a plan persisted for another session never applies', async () => {
     const { ports, transform } = rig();
     const messages = history(15, 3_000);
