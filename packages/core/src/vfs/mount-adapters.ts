@@ -20,12 +20,9 @@ import type { SandboxHandle } from '../execution/sandbox.js';
 import type { NimbusSandboxHandle } from '../execution/nimbus.js';
 import type { DeviceTransport } from '../execution/ssh.js';
 import { makeVfsError } from './composite.js';
+import { shellQuote } from '../utils/shell.js';
 
 type Stat = { size: number; mtime: number; isDir: boolean } | null;
-
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
 
 function dirname(path: string): string {
   const i = path.lastIndexOf('/');

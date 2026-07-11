@@ -32,7 +32,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
-import { buildWorkspaceAgents } from "./lib/workspace-roster.js";
+import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
@@ -1035,10 +1035,7 @@ export class OrchestratorAgent extends Think<Env> {
     return {
       listPeers: async () => {
         requireOwner();
-        const agents = await orchestrator.requireOwnerUserDO().listWorkspaces();
-        return agents
-          .filter((a) => a.name !== orchestrator.name)
-          .map((a) => ({ name: a.name, displayName: a.displayName }));
+        return teamPeers(orchestrator.name, await orchestrator.requireOwnerUserDO().listWorkspaces());
       },
       ask: async ({ agent, topic, message, timeoutMs }) => {
         await requirePeer(agent);

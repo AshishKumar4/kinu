@@ -10,6 +10,7 @@
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorCapability, ExecutorProvider } from './types.js';
 import { readExecSignal } from './signal.js';
+import { shellQuote } from '../utils/shell.js';
 
 export interface NimbusExecOptions {
   cwd?: string;
@@ -80,10 +81,6 @@ export interface NimbusExecutorOpts {
 const NOT_CONFIGURED =
   'Nimbus executor not configured. Add the NIMBUS_SESSION Durable Object binding ' +
   'and construct the executor with Nimbus.fromEnv(...).sandbox(...).';
-
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
 
 function normalizeExec(result: NimbusExecResult): string {
   const stdout = result.stdout ?? '';

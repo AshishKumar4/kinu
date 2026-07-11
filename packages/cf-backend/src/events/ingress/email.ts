@@ -74,6 +74,10 @@ export function acceptInboundEmail(
   deps: EmailIngressDeps,
   msg: IncomingEmail,
 ): EmailIngressResult {
+  // Sender identity is the envelope from as delivered by Cloudflare Email
+  // Routing, whose edge enforces SPF/DKIM/DMARC before the Worker ever runs —
+  // that upstream reliance is why even the owner's mail caps at trust
+  // `authenticated` (see events/hub/trust.ts).
   const sender = normalizeEmailAddress(msg.from);
   const owner = deps.owner_email ? normalizeEmailAddress(deps.owner_email) : null;
   const sender_class: 'owner' | 'allowlisted' | null =

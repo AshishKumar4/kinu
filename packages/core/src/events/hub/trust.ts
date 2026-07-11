@@ -92,10 +92,11 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
       return 'authenticated';
 
     case 'email_inbound':
-      // Email sender identity rests on envelope + DMARC checks upstream —
-      // weaker than an authenticated browser session, so even the owner's
-      // verified address is capped at `authenticated` (never `owner`).
-      // Allowlisted third-party senders run at `external`.
+      // Email sender identity rests on Cloudflare Email Routing's edge
+      // SPF/DKIM/DMARC checks upstream of the Worker — weaker than an
+      // authenticated browser session, so even the owner's verified address
+      // is capped at `authenticated` (never `owner`). Allowlisted
+      // third-party senders run at `external`.
       return d.sender_class === 'owner' ? 'authenticated' : 'external';
 
     case 'self_emit':

@@ -2,7 +2,7 @@
 // orchestrator agent, listed first; the owner's other workspaces' agents
 // appear as team peers (the `team` tool's reach), self excluded.
 import { describe, expect, test } from 'bun:test';
-import { buildWorkspaceAgents } from '../src/lib/workspace-roster.js';
+import { buildWorkspaceAgents, teamPeers } from '../src/lib/workspace-roster.js';
 
 const self = { name: 'jarvis', displayName: 'Jarvis' };
 
@@ -32,5 +32,12 @@ describe('workspace agent roster', () => {
     ]);
     expect(roster.filter((a) => a.role === 'orchestrator')).toHaveLength(1);
     expect(roster).toHaveLength(1);
+  });
+
+  test('teamPeers is the one self-exclusion filter (the team tool and the roster share it)', () => {
+    expect(teamPeers('jarvis', [
+      { name: 'jarvis', displayName: 'Jarvis' },
+      { name: 'scout-a1b2c3', displayName: 'Scout' },
+    ])).toEqual([{ name: 'scout-a1b2c3', displayName: 'Scout' }]);
   });
 });

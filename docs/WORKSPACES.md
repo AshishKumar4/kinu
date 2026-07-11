@@ -26,7 +26,8 @@ agents are the actors that work inside it.
 │   │   orchestrator — the DEFAULT agent, always present. Answers     │  │
 │   │     chat, runs tools, evolves the workspace.                    │  │
 │   │   heads / branches / forks-in-flight — ephemeral actors with    │  │
-│   │     an isolated scratch /local but the same shared mounts.      │  │
+│   │     a bare per-head scratch VFS (no workspace mounts); their    │  │
+│   │     durable findings return through the merge.                  │  │
 │   │   team peers — agents of the owner's other workspaces; the      │  │
 │   │     `team` tool lists, messages, awaits, and SPAWNS them        │  │
 │   │     (spawn creates a new workspace with a specialist agent).    │  │
@@ -52,8 +53,9 @@ agents are the actors that work inside it.
   credentials-stay-in-host). The web UI renders this on the **Workspace**
   surface as a unified file browser.
 - **One default agent, more on demand.** Heads (`think(strategy:'heads')`)
-  are in-workspace actors: isolated ephemeral `/local`, shared execution
-  environments. Durable collaborators ride the peer transport: the `team`
+  are in-workspace actors with a bare per-head ephemeral VFS and virtual
+  shell — they do NOT see the workspace mounts; findings come back through
+  the merge. Durable collaborators ride the peer transport: the `team`
   tool (`list | ask | send | reply | spawn`) messages the owner's other
   workspaces' agents, and `spawn` creates a new workspace around a specialist.
   `getWorkspaceAgents()` (RPC) returns the roster the UI shows.

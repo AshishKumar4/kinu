@@ -41,6 +41,7 @@ import type {
   ProductDeploymentRecord,
   ProductSourceBinding,
 } from './types.js';
+import { shellQuote } from '../utils/shell.js';
 
 // ── Seams ────────────────────────────────────────────────────────────────
 
@@ -148,10 +149,6 @@ const CLONE_TIMEOUT_MS = 300_000;
 const CHECK_TIMEOUT_MS = 300_000;
 const DEPLOY_TIMEOUT_MS = 600_000;
 const MAX_CHECKS_PER_RUN = 8;
-
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
 
 function cap(text: string): string {
   return text.length > OUTPUT_CAP ? `${text.slice(0, OUTPUT_CAP)}\n…[truncated]` : text;
