@@ -13,7 +13,9 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile.js';
-import { applyCacheBreakpoints, hasCacheMarkers, markCacheTail } from './prompting/cache-breakpoints.js';
+import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
+import { composePrepareStep } from './prompting/prepare-step.js';
+import { contextWindowForModel } from './context-window.js';
 import type { ExtensionHost } from './extension.js';
 
 export type ChatEvent =
@@ -26,7 +28,13 @@ export type ChatEvent =
 export interface ChatOptions {
   model: LanguageModel;
   system: string;
+  /** Durable conversation history — what extensions' transformContext sees
+   *  (and may rewrite, e.g. compaction). */
   history: ModelMessage[];
+  /** Turn-local context (e.g. the volatile facts/executor-status message) —
+   *  spliced AFTER transformContext so it is never visible to a transform
+   *  and never treated as durable history. */
+  ephemeral?: readonly ModelMessage[];
   tools: ToolSet;
   modelContext?: PromptModelContext;
   maxSteps?: number;
@@ -68,6 +76,19 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
 
+  // Awaited context-transform seam (the compaction-plugin hook): fires once
+  // per turn assembly, on the DURABLE history only — the ephemeral turn-local
+  // context is spliced after, so a transform never sees or persists it.
+  const transformed = await extensions?.runTransformContext({
+    sessionKey: opts.cache?.sessionKey ?? '',
+    messages: opts.history,
+    system: opts.system,
+    contextWindow: opts.modelContext?.contextWindow
+      ?? contextWindowForModel(opts.modelContext?.id ?? ''),
+    trigger: 'auto',
+  });
+  const turnMessages = [...(transformed ?? opts.history), ...(opts.ephemeral ?? [])];
+
   // Provider prompt-cache plan: cache-eligible system + request-level cache
   // routing at turn assembly; marker strategies additionally re-roll the tail
   // breakpoints in prepareStep so every request of the agentic loop reads the
@@ -76,7 +97,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     providerId: opts.cache?.providerId,
     modelId: opts.cache?.modelId ?? opts.modelContext?.id,
     system: opts.system,
-    messages: opts.history,
+    messages: turnMessages,
     sessionKey: opts.cache?.sessionKey ?? '',
   });
   const rollTail = hasCacheMarkers(cache.strategy);
@@ -90,11 +111,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     abortSignal: opts.signal,
     ...(cache.providerOptions ? { providerOptions: cache.providerOptions } : {}),
     ...(extensions || rollTail ? {
-      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) => {
-        const steered = extensions?.runPrepareStep({ stepNumber, messages }) ?? null;
-        if (rollTail) return { messages: markCacheTail(steered ?? messages, cache.strategy) };
-        return steered ? { messages: steered } : undefined;
-      },
+      // The shared step pipeline (prompting/prepare-step.ts): extension
+      // rewrites first, cache tail markers LAST onto the final array. The cf
+      // orchestrator's beforeStep runs the identical composition.
+      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
+        composePrepareStep(extensions, { stepNumber, messages },
+          rollTail ? { strategy: cache.strategy } : null),
     } : {}),
     onStepFinish: () => {
       stepCount++;

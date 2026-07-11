@@ -2,8 +2,11 @@
  * Proteus extension seam — the small, stable public API for observing and
  * extending a turn without importing engine internals.
  *
- * This is the one hook path the turn loop fires (see `runChat` in chat.ts):
- * plugin/host code registers a {@link ProteusExtension} on an
+ * This is the one hook path BOTH backends' turn loops fire: the shared chat
+ * engine (`runChat` in chat.ts, the CLI path) and the cloud DO's Think hook
+ * bridge (cf-backend `OrchestratorAgent` — beforeTurn/beforeStep/
+ * beforeToolCall/afterToolCall/onChatResponse map onto this contract).
+ * Plugin/host code registers a {@link ProteusExtension} on an
  * {@link ExtensionHost}, and the engine drives every registered extension's
  * lifecycle hooks + folds its contributed tools into the single turn ToolSet.
  * Internal consumers (the CLI backend's steering drain) ride the SAME host, so
@@ -41,6 +44,25 @@ export interface PrepareStepContext {
   readonly messages: ModelMessage[];
 }
 
+export interface TransformContext {
+  /** Stable conversation identity — the agent/DO name on cf, the session key on cli. */
+  readonly sessionKey: string;
+  /** The durable history about to be sent, BEFORE any turn-local (volatile/
+   *  ephemeral) context is spliced — a transform never sees what is never
+   *  persisted. */
+  readonly messages: readonly ModelMessage[];
+  /** The assembled system prompt for this turn. */
+  readonly system: string;
+  /** The resolved model's context window, in tokens. */
+  readonly contextWindow: number;
+  /** Provider-reported prompt tokens for the previous turn, when known —
+   *  the measured trigger signal (chars/4 estimates lie). */
+  readonly providerReportedTokens?: number;
+  /** 'auto' = normal turn assembly; 'force' = overflow recovery demands a
+   *  rewrite before the turn can be replayed. */
+  readonly trigger: 'auto' | 'force';
+}
+
 /**
  * A unit of turn observation/extension. Every hook is optional. Implement only
  * what you need and register it on an {@link ExtensionHost}.
@@ -63,6 +85,15 @@ export interface ProteusExtension {
    * — each sees the prior extension's output.
    */
   prepareStep?(ctx: PrepareStepContext): ModelMessage[] | undefined;
+  /**
+   * Async context-transform hook, fired ONCE per turn assembly before the
+   * model streams (and before turn-local ephemeral context is spliced).
+   * Return a replacement history (e.g. a compacted one) or `undefined` to
+   * leave it unchanged. Chained like {@link prepareStep}, but awaited — and
+   * fail-open: a throwing transform is logged and skipped, never allowed to
+   * break the turn.
+   */
+  transformContext?(ctx: TransformContext): Promise<ModelMessage[] | undefined>;
   /** Contribute tools into the turn's ToolSet. Called once at turn start. */
   registerTools?(): ToolSet;
 }
@@ -117,6 +148,32 @@ export class ExtensionHost {
       }
     }
     return changed ? messages : undefined;
+  }
+
+  /** Run every transformContext hook in registration order, chaining outputs
+   *  (extension N sees extension N-1's rewritten history). Awaited, and
+   *  fail-open per extension — a plugin must never break a turn. Returns the
+   *  final rewritten messages, or `undefined` if no extension changed
+   *  anything. */
+  async runTransformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
+    let current: readonly ModelMessage[] = ctx.messages;
+    let out: ModelMessage[] | undefined;
+    for (const ext of this.extensions) {
+      if (!ext.transformContext) continue;
+      try {
+        const next = await ext.transformContext({ ...ctx, messages: current });
+        if (next) {
+          out = next;
+          current = next;
+        }
+      } catch (err) {
+        console.warn(
+          `[proteus] extension "${ext.name}" transformContext failed (skipped):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    return out;
   }
 
   async emitTurnStart(ctx: TurnStartContext): Promise<void> {

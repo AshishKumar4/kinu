@@ -40,7 +40,7 @@ import {
   parseModelSpec, agentAffinityKey,
   ExtensionHost,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
-  appendVolatileContextMessage, hashSystemPrompt,
+  volatileContextMessage, hashSystemPrompt,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -846,8 +846,10 @@ export class LocalAgentSession implements BackendHost {
 
     // The volatile turn context (facts, executor status, activation reasons)
     // rides as ONE trailing message for THIS turn only — it is never pushed
-    // into the durable history, so the stable prefix stays cacheable.
-    const turnMessages = appendVolatileContextMessage(this.history, {
+    // into the durable history, so the stable prefix stays cacheable. It goes
+    // to runChat as `ephemeral` so the transformContext seam (compaction)
+    // only ever sees the durable history.
+    const volatileMsg = volatileContextMessage({
       factsBlock: this.renderFactsForTurn(),
       memoryTail: knowledge || undefined,
       executors,
@@ -865,7 +867,10 @@ export class LocalAgentSession implements BackendHost {
     // so role alternation holds). streamText rebuilds each step's messages
     // from scratch, so every drained injection is re-applied at the position
     // (in base-message coordinates) where it first entered the conversation.
-    const baseLength = turnMessages.length;
+    // Step-0 message count = durable history + the ephemeral tail runChat
+    // splices (no transformContext extensions are registered here, so the
+    // durable prefix length is exact).
+    const baseLength = this.history.length + (volatileMsg ? 1 : 0);
     const injections: Array<{ index: number; message: ModelMessage; texts: string[] }> = [];
     const prepareStepMessages = ({ messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
       if (this.pendingSteers.length > 0) {
@@ -895,7 +900,8 @@ export class LocalAgentSession implements BackendHost {
         model,
         modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
         system: systemPrompt,
-        history: turnMessages,
+        history: this.history,
+        ephemeral: volatileMsg ? [volatileMsg] : undefined,
         tools: turnTools,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
@@ -1129,15 +1135,16 @@ export class LocalAgentSession implements BackendHost {
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       currentDate: currentDateForPrompt(),
     });
+    const volatileMsg = volatileContextMessage({
+      factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined,
+    });
     let text = '';
     for await (const ev of runChat({
       model,
       modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       system: systemPrompt,
-      history: appendVolatileContextMessage(
-        [{ role: 'user', content: task }],
-        { factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined },
-      ),
+      history: [{ role: 'user', content: task }],
+      ephemeral: volatileMsg ? [volatileMsg] : undefined,
       tools: {},
       maxSteps: 1,
     })) {

@@ -11,6 +11,7 @@ import { z } from 'zod';
 import {
   ExtensionHost,
   runChat,
+  composePrepareStep,
   type ProteusExtension,
   type ChatEvent,
 } from '../src/index.ts';
@@ -115,6 +116,137 @@ describe('extension seam through runChat', () => {
   });
 });
 
+/** A one-step text model that captures the prompt it was handed. */
+function promptCapturingModel() {
+  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+  let prompt: Array<{ role: string; content: unknown }> = [];
+  const model = {
+    specificationVersion: 'v2' as const,
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {},
+    doStream: async (options: { prompt: Array<{ role: string; content: unknown }> }) => {
+      prompt = options.prompt;
+      return {
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue({ type: 'stream-start', warnings: [] });
+            c.enqueue({ type: 'text-start', id: 't1' });
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
+            c.enqueue({ type: 'text-end', id: 't1' });
+            c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            c.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  };
+  return { model, prompt: () => prompt };
+}
+
+function userTexts(prompt: Array<{ role: string; content: unknown }>): string[] {
+  return prompt
+    .filter((m) => m.role === 'user')
+    .map((m) => (m.content as Array<{ type: string; text?: string }>)
+      .filter((p) => p.type === 'text').map((p) => p.text ?? '').join(''));
+}
+
+describe('transformContext through runChat', () => {
+  test('rewrites the durable history; ephemeral context is spliced AFTER (never seen by the transform)', async () => {
+    const { model, prompt } = promptCapturingModel();
+    let transformSaw: string[] = [];
+
+    const compactor: ProteusExtension = {
+      name: 'compactor',
+      transformContext: async ({ messages }) => {
+        transformSaw = messages.map((m) => String(m.content));
+        return [{ role: 'user', content: 'summary-of-history' }];
+      },
+    };
+
+    for await (const _ of runChat({
+      model: model as never,
+      system: 'sys',
+      history: [
+        { role: 'user', content: 'old-1' },
+        { role: 'assistant', content: 'old-2' },
+        { role: 'user', content: 'old-3' },
+      ],
+      ephemeral: [{ role: 'user', content: 'volatile-tail' }],
+      tools: {},
+      maxSteps: 1,
+      extensions: new ExtensionHost().register(compactor),
+    })) { /* drain */ }
+
+    // The transform saw ONLY the durable history — not the ephemeral tail.
+    expect(transformSaw).toEqual(['old-1', 'old-2', 'old-3']);
+    // The model saw the rewritten history with the ephemeral tail after it.
+    expect(userTexts(prompt())).toEqual(['summary-of-history', 'volatile-tail']);
+  });
+
+  test('a throwing transform never breaks the turn (fail-open)', async () => {
+    const { model, prompt } = promptCapturingModel();
+    let doneText = '';
+    for await (const ev of runChat({
+      model: model as never,
+      system: 'sys',
+      history: [{ role: 'user', content: 'go' }],
+      tools: {},
+      maxSteps: 1,
+      extensions: new ExtensionHost().register({
+        name: 'broken',
+        transformContext: async () => { throw new Error('boom'); },
+      }),
+    })) {
+      if (ev.type === 'done') doneText = ev.text;
+    }
+    expect(doneText).toBe('ok');
+    expect(userTexts(prompt())).toEqual(['go']);
+  });
+});
+
+describe('composePrepareStep (the shared step pipeline)', () => {
+  const base: ModelMessage[] = [
+    { role: 'user', content: 'a' },
+    { role: 'assistant', content: 'b' },
+  ];
+
+  test('extension rewrites first, cache tail markers land LAST on the final array', () => {
+    const host = new ExtensionHost().register({
+      name: 'steer',
+      prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'steered' }],
+    });
+    const out = composePrepareStep(host, { stepNumber: 0, messages: base }, { strategy: { kind: 'anthropic' } });
+    expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
+    // The marker rides the injected tail message — proof the markers were
+    // applied AFTER the extension rewrite.
+    const tail = out!.messages[out!.messages.length - 1] as ModelMessage & {
+      providerOptions?: { anthropic?: { cacheControl?: unknown } };
+    };
+    expect(tail.providerOptions?.anthropic?.cacheControl).toEqual({ type: 'ephemeral' });
+  });
+
+  test('per-step system override rides the plan (Think TurnConfig is string-only)', () => {
+    const out = composePrepareStep(undefined, { stepNumber: 0, messages: base }, {
+      strategy: { kind: 'anthropic' },
+      system: { role: 'system', content: 'cached-sys' },
+    });
+    expect(out?.system).toEqual({ role: 'system', content: 'cached-sys' });
+    expect(out?.messages).toHaveLength(2);
+  });
+
+  test('no plan → steered messages only; nothing at all → undefined', () => {
+    const host = new ExtensionHost().register({
+      name: 'steer',
+      prepareStep: ({ messages }) => [...messages, { role: 'user', content: 's' }],
+    });
+    expect(composePrepareStep(host, { stepNumber: 1, messages: base }, null)?.messages).toHaveLength(3);
+    expect(composePrepareStep(undefined, { stepNumber: 1, messages: base }, null)).toBeUndefined();
+    expect(composePrepareStep(new ExtensionHost(), { stepNumber: 1, messages: base }, null)).toBeUndefined();
+  });
+});
+
 describe('ExtensionHost', () => {
   test('tools() merges every extension\'s contributed tools', () => {
     const host = new ExtensionHost()
@@ -138,6 +270,50 @@ describe('ExtensionHost', () => {
       .register({ name: 'second', onTurnStart: () => { order.push('second'); } });
     await host.emitTurnStart({ system: 's', history: [] });
     expect(order).toEqual(['first', 'second']);
+  });
+
+  test('runTransformContext is awaited, chained, and fail-open', async () => {
+    const seen: string[][] = [];
+    const host = new ExtensionHost()
+      .register({
+        name: 'appender',
+        transformContext: async ({ messages }) => {
+          seen.push(messages.map((m) => String(m.content)));
+          await Promise.resolve(); // genuinely async
+          return [...messages, { role: 'user', content: 'from-appender' }];
+        },
+      })
+      .register({
+        name: 'thrower',
+        transformContext: async () => { throw new Error('plugin exploded'); },
+      })
+      .register({
+        name: 'chained',
+        transformContext: async ({ messages }) => {
+          seen.push(messages.map((m) => String(m.content)));
+          return [...messages, { role: 'user', content: 'from-chained' }];
+        },
+      });
+
+    const out = await host.runTransformContext({
+      sessionKey: 's', messages: [{ role: 'user', content: 'base' }],
+      system: 'sys', contextWindow: 1000, trigger: 'auto',
+    });
+    // The thrower is skipped (fail-open); the chain still completes.
+    expect(out?.map((m) => m.content)).toEqual(['base', 'from-appender', 'from-chained']);
+    // Extension N sees extension N-1's output (thrower contributed nothing).
+    expect(seen).toEqual([['base'], ['base', 'from-appender']]);
+  });
+
+  test('runTransformContext returns undefined when nothing changed (or only failures)', async () => {
+    const ctx = {
+      sessionKey: 's', messages: [{ role: 'user', content: 'base' }] as const,
+      system: 'sys', contextWindow: 1000, trigger: 'auto' as const,
+    };
+    const noop = new ExtensionHost().register({ name: 'p', transformContext: async () => undefined });
+    expect(await noop.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
+    const failing = new ExtensionHost().register({ name: 'f', transformContext: async () => { throw new Error('x'); } });
+    expect(await failing.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
   });
 
   test('runPrepareStep chains outputs and reports no-change as undefined', () => {

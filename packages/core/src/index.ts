@@ -142,7 +142,9 @@ export {
   type ToolResultContext,
   type TurnEndContext,
   type PrepareStepContext,
+  type TransformContext,
 } from './extension.js';
+export { composePrepareStep, type StepCachePlan } from './prompting/prepare-step.js';
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
@@ -229,6 +231,7 @@ export {
 } from './prompting/agents-md.js';
 export {
   appendVolatileContextMessage,
+  volatileContextMessage,
   executorAvailabilityLabel,
   hashSystemPrompt,
   renderVolatileContext,

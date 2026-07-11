@@ -93,6 +93,15 @@ export function renderVolatileContext(ctx: VolatileTurnContext): string | null {
   return [VOLATILE_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
+/** The volatile context as one turn-local user message (or null when there
+ *  is nothing to say). Callers hand it to the model for THIS turn only —
+ *  never persisted into durable history, and spliced AFTER the extension
+ *  transformContext seam so a compaction plugin never sees it. */
+export function volatileContextMessage(ctx: VolatileTurnContext): ModelMessage | null {
+  const text = renderVolatileContext(ctx);
+  return text ? { role: 'user', content: text } : null;
+}
+
 /** Append the volatile context as one trailing user message. Returns a new
  *  array — callers pass it to the model for THIS turn only and never persist
  *  the appended message into durable history. */
@@ -100,8 +109,8 @@ export function appendVolatileContextMessage(
   messages: ReadonlyArray<ModelMessage>,
   ctx: VolatileTurnContext,
 ): ModelMessage[] {
-  const text = renderVolatileContext(ctx);
-  return text ? [...messages, { role: 'user', content: text }] : [...messages];
+  const msg = volatileContextMessage(ctx);
+  return msg ? [...messages, msg] : [...messages];
 }
 
 /** FNV-1a 64-bit hash of the assembled system prompt — the byte-stability
