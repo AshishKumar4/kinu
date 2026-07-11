@@ -54,10 +54,12 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 /** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride
- *  a text transport; anything else must go base64 or it corrupts. */
+ *  a text transport; anything else must go base64 or it corrupts. ignoreBOM
+ *  keeps a leading BOM in the decoded text (the default decoder strips it —
+ *  a silent 3-byte loss). */
 function asLosslessText(bytes: Uint8Array): string | null {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return null;
   }

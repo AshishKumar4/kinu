@@ -344,6 +344,13 @@ describe('device mount adapter (raw DeviceTransport + consent scope)', () => {
     const write = calls.filter((c) => c.method === 'writeFile').find((c) => String(c.params[0]).endsWith('notes.txt'));
     expect(write?.params[1]).toBe('plain');
     expect(write?.params[2]).toBeUndefined();
+
+    // A leading BOM is text but must not be stripped by the lossless check.
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69]);
+    await vfs.writeFile('/home/me/proj/bom.txt', bom);
+    const stored = files.get('/home/me/proj/bom.txt');
+    const storedBytes = typeof stored === 'string' ? new TextEncoder().encode(stored) : stored;
+    expect(storedBytes).toEqual(bom);
   });
 
   test('an older daemon (no base64 support) still answers text reads correctly', async () => {

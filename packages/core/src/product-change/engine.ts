@@ -610,7 +610,8 @@ export class ProductChangeEngine {
     const target = latest.rollbackTarget;
     const isCommitTarget = /^[0-9a-f]{7,40}$/.test(target);
     const explicitCommand = opts?.command?.trim() || null;
-    if (!isCommitTarget && !explicitCommand) {
+    const platformCommand = isCommitTarget ? null : explicitCommand;
+    if (!isCommitTarget && !platformCommand) {
       return {
         ok: false,
         error:
@@ -638,8 +639,8 @@ export class ProductChangeEngine {
 
     // Platform-version-id target: the explicit command IS the rollback —
     // there is nothing for git to restore, so no git reset runs at all.
-    if (!isCommitTarget) {
-      const res = await this.run(exec, explicitCommand!, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
+    if (platformCommand) {
+      const res = await this.run(exec, platformCommand, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
       await this.ledger.recordCheck(changeId, {
         name: 'rollback',
         status: res.exitCode === 0 ? 'passed' : 'failed',
