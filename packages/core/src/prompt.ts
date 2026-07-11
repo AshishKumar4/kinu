@@ -181,6 +181,13 @@ function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutor
     exec.name === 'laptop' && exec.configured === true && !executorIsSelectable(exec));
 }
 
+/** Executor name → its prefix in the workspace mount table (CompositeVFS). */
+const MOUNT_PREFIX: Record<string, string> = {
+  sandbox: '/sandbox',
+  nimbus: '/nimbus',
+  laptop: '/pc',
+};
+
 function renderExecutorSection(surface: PromptSurface): string {
   const tools = surface.builtinTools;
   if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
@@ -207,6 +214,16 @@ function renderExecutorSection(surface: PromptSurface): string {
   ];
   if (executors.length > 1) {
     parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
+  }
+  // Mount-table doctrine — only on backends whose workspace VFS actually
+  // mounts the remote environments (the CLI-local VFS is /local alone).
+  const mounts = devices.map((exec) => MOUNT_PREFIX[exec.name]).filter(Boolean);
+  if (surface.backend !== 'cli-local' && mounts.length > 0) {
+    parts.push(
+      '',
+      `The workspace filesystem (workspace.* file ops) is a mount table: /local is the durable base, and ${mounts.join(', ')} are live windows into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
+      'Mounts are the FILE plane only: command execution stays target-native — run commands via the environment\'s own namespace or the run tool, never against a mount path.',
+    );
   }
   if (devices.length > 1) {
     parts.push('When more than one execution device is available, decide explicitly: laptop for the user machine, Nimbus for quick cloud execution, Sandbox for heavyweight/server work.');

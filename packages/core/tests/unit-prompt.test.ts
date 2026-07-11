@@ -268,6 +268,38 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/exposePort/);
   });
 
+  test('names the workspace mount table (/local + per-environment mounts) and keeps exec target-native', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+        { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: true, status: 'active' },
+        { name: 'nimbus', kind: 'nimbus', available: true, configured: true, active: false, status: 'idle' },
+        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(prompt).toContain('mount table');
+    expect(prompt).toContain('/local is the durable base');
+    expect(prompt).toContain('/sandbox');
+    expect(prompt).toContain('/nimbus');
+    expect(prompt).toContain('/pc');
+    expect(prompt).toContain('target-native');
+  });
+
+  test('the CLI-local VFS has no remote mounts — no mount doctrine rendered', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cli-local',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(prompt).not.toContain('mount table');
+    expect(prompt).not.toContain('/pc');
+  });
+
   test('includes output-format guidance', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -377,7 +409,9 @@ describe('buildSystemPromptSync', () => {
       'Operating guidance': 560,
       // +1 summary line for the `team` peer-messaging tool (2026-07).
       'Tools available this turn': 1420,
-      'Execution environments': 2000,
+      // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
+      // /pc file plane; exec stays target-native) — deliberate (2026-07).
+      'Execution environments': 2450,
       'Persistence': 700,
       'Memory and facts': 560,
       'Code execution and learned capabilities': 1530,
