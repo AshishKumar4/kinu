@@ -1,0 +1,348 @@
+/** Extension behavior through the public transformContext seam: trigger
+ *  gating, plan build + transcript + reference message, cache-warm replay
+ *  determinism, rangeHash refusal on an edited prefix, force rebuilds,
+ *  summary upgrades (assistant runs + tuned prefix handoff), and fail-open
+ *  summarizer degradation. */
+
+import { describe, expect, test } from 'bun:test';
+import type { ModelMessage } from 'ai';
+import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@proteus/core';
+import {
+  createCompactionExtension,
+  proteusCodec,
+  type CompactionExtensionDeps,
+  type CompactionOutcomeEvent,
+  type CompactionProfile,
+} from '../src/index.js';
+import { assistant, history, memoryPorts, toolCall, toolMessage, toolResult, user, validSummary, type MemoryPorts } from './helpers.js';
+
+const SESSION = 'agent-test-session';
+
+/** Small window + tiny recent-tool budget so modest fixtures overflow. */
+const profile: CompactionProfile = {
+  preset: 'custom',
+  triggerPercent: 85,
+  targetPercent: 30,
+  recentToolTokens: 2_000,
+  summarizerConcurrency: 2,
+};
+
+interface Rig {
+  ports: MemoryPorts;
+  prompts: string[];
+  outcomes: CompactionOutcomeEvent[];
+  transform: (messages: ModelMessage[], overrides?: Partial<TransformContext>) => Promise<ModelMessage[] | undefined>;
+}
+
+function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
+  const ports = memoryPorts();
+  const prompts: string[] = [];
+  const outcomes: CompactionOutcomeEvent[] = [];
+  const extension = createCompactionExtension({
+    ports,
+    summarize: async (prompt) => {
+      prompts.push(prompt);
+      return validSummary(String(prompts.length));
+    },
+    profile,
+    onOutcome: (event) => outcomes.push(event),
+    ...overrides,
+  });
+  const transform = (messages: ModelMessage[], ctxOverrides: Partial<TransformContext> = {}) => {
+    if (!extension.transformContext) throw new Error('extension must implement transformContext');
+    return extension.transformContext({
+      sessionKey: SESSION,
+      messages,
+      system: 'system prompt',
+      contextWindow: 10_000,
+      trigger: 'auto',
+      ...ctxOverrides,
+    });
+  };
+  return { ports, prompts, outcomes, transform };
+}
+
+describe('trigger gating', () => {
+  test('under-threshold history is unchanged and persists nothing', async () => {
+    const { ports, outcomes, transform } = rig();
+    const result = await transform(history(3, 200));
+    expect(result).toBeUndefined();
+    expect(ports.plans.snapshots.size).toBe(0);
+    expect(ports.transcripts.writes.size).toBe(0);
+    expect(outcomes).toHaveLength(0);
+  });
+
+  test('provider-reported tokens are a trigger signal even when the estimate is low', async () => {
+    const { transform, outcomes } = rig();
+    const result = await transform(history(6, 200), { providerReportedTokens: 9_500 });
+    expect(result).toBeDefined();
+    expect(outcomes[0]?.outcome).toBe('planned');
+  });
+
+  test('empty history and zero window are benign', async () => {
+    const { transform } = rig();
+    expect(await transform([])).toBeUndefined();
+    expect(await transform(history(2, 100), { contextWindow: 0 })).toBeUndefined();
+  });
+});
+
+describe('plan build', () => {
+  test('overflow prunes old tool output, protects the tail, injects the citable reference, writes the transcript', async () => {
+    const { ports, outcomes, transform } = rig();
+    const messages = history(15, 3_000); // ~45k chars of tool output ≈ 11k tokens > 8.5k trigger
+    const result = await transform(messages);
+    expect(result).toBeDefined();
+    if (!result) throw new Error('expected a rewrite');
+
+    // Shrunk for real, on the codec's own scale.
+    const before = proteusCodec.estimateTurns(proteusCodec.encode(messages));
+    const after = proteusCodec.estimateTurns(proteusCodec.encode(result));
+    expect(after).toBeLessThan(before * 0.5);
+
+    // The raw tail (from the 2nd-from-last user turn) is byte-verbatim.
+    const tail = messages.slice(-6);
+    for (let i = 0; i < 6; i++) expect(result[result.length - 6 + i]).toBe(tail[i]);
+
+    // A reference message cites the transcript path the plan persisted.
+    const snapshot = ports.plans.snapshots.get(SESSION);
+    if (!snapshot) throw new Error('expected a persisted plan snapshot');
+    const reference = result.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes(snapshot.transcriptRelativePath),
+    );
+    expect(reference).toBeDefined();
+
+    // Transcript holds the raw pruned output for read-back.
+    const transcript = ports.transcripts.writes.get(snapshot.transcriptRelativePath);
+    expect(transcript).toBeDefined();
+    expect(transcript).toContain('output-0');
+
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
+    expect(outcomes[0].plan?.rangeHash).toBe(snapshot.rangeHash);
+  });
+
+  test('early tool outputs are pruned while the recent-budget tool tail survives', async () => {
+    const { transform } = rig();
+    const messages = history(15, 3_000);
+    const result = await transform(messages);
+    if (!result) throw new Error('expected a rewrite');
+    const flat = JSON.stringify(result);
+    expect(flat).not.toContain('output-0 ');
+    expect(flat).toContain('output-14 ');
+  });
+
+  test('skills bodies are pruned even inside the recent tool budget', async () => {
+    const { transform } = rig();
+    const skillsBody = 'skill body '.repeat(30);
+    const messages: ModelMessage[] = [
+      ...history(14, 3_000),
+      user('load the deploy skill'),
+      assistant([toolCall('sk1', 'skills', { action: 'read', name: 'deploy' })]),
+      toolMessage([toolResult('sk1', 'skills', skillsBody)]),
+      ...history(2, 100).map((m) => m), // protected tail turns
+    ];
+    const result = await transform(messages);
+    if (!result) throw new Error('expected a rewrite');
+    expect(JSON.stringify(result)).not.toContain('skill body ');
+  });
+});
+
+describe('replay', () => {
+  test('same input replays deterministically without a rebuild', async () => {
+    const { ports, outcomes, transform } = rig();
+    const messages = history(15, 3_000);
+    const first = await transform(messages);
+    const second = await transform(messages);
+    const third = await transform(messages);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    expect(JSON.stringify(third)).toBe(JSON.stringify(first));
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed', 'replayed']);
+    expect(ports.transcripts.writes.size).toBe(1);
+    expect(ports.plans.snapshots.size).toBe(1);
+  });
+
+  test('appended tail growth under the trigger still replays the same prefix', async () => {
+    const { outcomes, transform } = rig();
+    const messages = history(15, 3_000);
+    const first = await transform(messages);
+    if (!first) throw new Error('expected a rewrite');
+    const grown = [...messages, user('one more small question'), assistant([{ type: 'text', text: 'answer' }])];
+    const second = await transform(grown);
+    if (!second) throw new Error('expected a rewrite');
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
+    // Same transformed prefix, new tail appended.
+    expect(JSON.stringify(second.slice(0, first.length))).toBe(JSON.stringify(first));
+    expect(second).toHaveLength(first.length + 2);
+  });
+
+  test('an edited prefix fails the rangeHash guard and rebuilds', async () => {
+    const { ports, outcomes, transform } = rig();
+    const messages = history(15, 3_000);
+    await transform(messages);
+    const firstHash = ports.plans.snapshots.get(SESSION)?.rangeHash;
+    const edited = [...messages];
+    edited[0] = user('REWRITTEN first task with different wording');
+    const result = await transform(edited);
+    expect(result).toBeDefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'planned']);
+    expect(ports.plans.snapshots.get(SESSION)?.rangeHash).not.toBe(firstHash);
+  });
+
+  test('a plan persisted for another session never applies', async () => {
+    const { ports, transform } = rig();
+    const messages = history(15, 3_000);
+    await transform(messages);
+    const snapshot = ports.plans.snapshots.get(SESSION);
+    if (!snapshot) throw new Error('expected snapshot');
+    // A foreign snapshot (sessionId=agent-test-session) under another key is
+    // ignored by the ownership check; a fresh plan is built and saved.
+    ports.plans.snapshots.set('other-session', snapshot);
+    const ext = createCompactionExtension({ ports, summarize: async () => validSummary('other'), profile });
+    const result = await ext.transformContext?.({
+      sessionKey: 'other-session',
+      messages,
+      system: 's',
+      contextWindow: 10_000,
+      trigger: 'auto',
+    });
+    expect(result).toBeDefined();
+    expect(ports.plans.snapshots.get('other-session')?.sessionId).toBe('other-session');
+  });
+
+  test('a JSON-round-tripped snapshot (durable plan store) still replays', async () => {
+    const { ports, outcomes, transform } = rig();
+    const messages = history(15, 3_000);
+    const first = await transform(messages);
+    const snapshot = ports.plans.snapshots.get(SESSION);
+    if (!snapshot) throw new Error('expected snapshot');
+    ports.plans.snapshots.set(SESSION, JSON.parse(JSON.stringify(snapshot)));
+    const second = await transform(messages);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
+  });
+});
+
+describe('force trigger', () => {
+  test('force rebuilds below the trigger threshold', async () => {
+    const { outcomes, transform } = rig();
+    const messages = history(6, 500); // well under trigger
+    expect(await transform(messages)).toBeUndefined();
+    const forced = await transform(messages, { trigger: 'force' });
+    expect(forced).toBeDefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
+  });
+
+  test('force with an existing plan rebuilds rather than replaying', async () => {
+    const { outcomes, transform, ports } = rig();
+    const messages = history(15, 3_000);
+    await transform(messages);
+    const firstSnapshot = ports.plans.snapshots.get(SESSION);
+    const forced = await transform(messages, { trigger: 'force' });
+    expect(forced).toBeDefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'planned']);
+    // The rebuild honors the prior plan as its floor (same range, same transcript path).
+    expect(ports.plans.snapshots.get(SESSION)?.transcriptRelativePath).toBe(firstSnapshot?.transcriptRelativePath);
+  });
+
+  test('force on a too-small history is benign', async () => {
+    const { transform } = rig();
+    expect(await transform([user('only message')], { trigger: 'force' })).toBeUndefined();
+  });
+});
+
+describe('summaries', () => {
+  test('assistant runs collapse through the injected summarizer with the per-run prompt', async () => {
+    const { prompts, transform } = rig();
+    // Fat assistant TEXT (not tool output): only the assistant-runs stage can shrink it.
+    const messages: ModelMessage[] = [];
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`chapter ${i}?`));
+      messages.push(assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]));
+    }
+    const result = await transform(messages);
+    if (!result) throw new Error('expected a rewrite');
+    const runPrompts = prompts.filter((p) => p.includes('Summarize this historical assistant turn'));
+    expect(runPrompts.length).toBeGreaterThan(0);
+    expect(JSON.stringify(result)).toContain('Summary(');
+  });
+
+  test('an advanced boundary re-summarizes iteratively from the previous checkpoint', async () => {
+    const { prompts, transform } = rig();
+    const fatUser = (i: number): ModelMessage[] => [
+      user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
+      assistant([{ type: 'text', text: `noted ${i}` }]),
+    ];
+    const messages: ModelMessage[] = [];
+    for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
+    await transform(messages); // first prefix-summary plan (checkpoint-wrapped)
+
+    const grown = [...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)];
+    await transform(grown); // regrown past trigger → boundary advances → rebuild
+    const updatePrompts = prompts.filter((p) => p.includes('PREVIOUS SUMMARY'));
+    expect(updatePrompts).toHaveLength(1);
+    expect(updatePrompts[0]).toContain(validSummary('1'));
+    expect(updatePrompts[0]).not.toContain(CONTEXT_CHECKPOINT_PREFIX);
+  });
+
+  test('prefix fallback upgrades to the tuned handoff summary and stays sticky', async () => {
+    const { ports, prompts, outcomes, transform } = rig();
+    // Fat USER messages: no prune stage touches user turns, so the ladder
+    // must fall through to the last-resort prefix summary.
+    const messages: ModelMessage[] = [];
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+    const result = await transform(messages);
+    if (!result) throw new Error('expected a rewrite');
+
+    const prefixPrompts = prompts.filter((p) => p.includes('## Active Task'));
+    expect(prefixPrompts).toHaveLength(1);
+    // The tuned template got the verbatim latest ask and the transcript.
+    expect(prefixPrompts[0]).toContain('requirement 7');
+    expect(prefixPrompts[0]).toContain('structured handoff summary');
+
+    const snapshot = ports.plans.snapshots.get(SESSION);
+    expect(snapshot?.requiresCustomCompaction).toBe(true);
+    expect(snapshot?.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)).toBe(true);
+    expect(JSON.stringify(result)).toContain('[Context Summary]');
+
+    // Replay keeps the upgraded summary without re-summarizing.
+    const promptCount = prompts.length;
+    const again = await transform(messages);
+    expect(JSON.stringify(again)).toBe(JSON.stringify(result));
+    expect(prompts.length).toBe(promptCount);
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
+  });
+
+  test('a failing summarizer degrades to deterministic previews, never breaks the turn', async () => {
+    const { transform, outcomes } = rig({
+      summarize: async () => {
+        throw new Error('llm down');
+      },
+    });
+    const messages: ModelMessage[] = [];
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
+      messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
+    }
+    const result = await transform(messages);
+    expect(result).toBeDefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
+    // Deterministic fallback summary, not the LLM one.
+    expect(JSON.stringify(result)).toContain('compacted as a last resort');
+  });
+
+  test('too-short summaries are discarded in favor of previews', async () => {
+    const { transform } = rig({ summarize: async () => 'too short' });
+    const messages: ModelMessage[] = [];
+    for (let i = 0; i < 8; i++) {
+      messages.push(user(`chapter ${i}?`));
+      messages.push(assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]));
+    }
+    const result = await transform(messages);
+    if (!result) throw new Error('expected a rewrite');
+    expect(JSON.stringify(result)).not.toContain('too short');
+    // Collapsed runs fall back to truncated previews of the original text.
+    expect(JSON.stringify(result)).toContain('[Assistant turn summary]');
+  });
+});
