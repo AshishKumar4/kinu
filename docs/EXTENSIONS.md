@@ -90,7 +90,16 @@ onTurnEnd
 Within a single hook, every registered extension runs in **registration order**.
 `prepareStep` chains: extension N sees extension N-1's rewritten messages.
 
-## Internal consumer: steering drain
+## Internal consumers: compaction + the steering drain
+
+Compaction is the default `transformContext` registrant on BOTH backends:
+`createCompactionExtension` (`@proteus/compaction`) runs the better-compact
+staged pruning ladder once per turn assembly, over shared stores — raw
+transcripts in the workspace CompositeVFS (`/local/.proteus/compaction/…`,
+readable back through the agent's own file tools) and the replayable plan +
+the measured prompt-token trigger in one `compaction_state` row (DO SQLite /
+agent.db). Its `onOutcome` resets the ephemeral ledger only on a fresh plan
+(`'planned'`); byte-stable replays keep the frozen block positions valid.
 
 The CLI backend's mid-turn steering (`LocalAgentSession`) is itself an
 extension registered as `proteus.steering` with a `prepareStep` hook — it drains
@@ -112,8 +121,9 @@ contract above:
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult` |
 | `onChatResponse` (completed) | `emitTurnEnd` |
 
-No internal cf consumer registers yet — the compaction plugin and mid-turn
-event injection are the first planned registrants.
+The compaction extension registers on this host at DO construction
+(`registerCompactionExtension`); mid-turn event injection is the next planned
+registrant.
 
 ## Notes
 
