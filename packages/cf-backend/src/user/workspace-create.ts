@@ -11,26 +11,26 @@ import {
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
 import { listAvailableModels, type ModelMenuEntry } from './available-models.js';
-import type { AgentEntry, UserDO } from './user-do.js';
+import type { WorkspaceEntry, UserDO } from './user-do.js';
 
-export interface CreateCloudAgentInput {
+export interface CreateCloudWorkspaceInput {
   name?: string;
   displayName?: string;
   purpose?: string;
 }
 
-export interface CreateCloudAgentOptions {
+export interface CreateCloudWorkspaceOptions {
   waitUntil?: (promise: Promise<unknown>) => void;
   suggestDisplayName?: (mission: string) => Promise<string | null>;
 }
 
-export async function createCloudAgentForUser(
+export async function createCloudWorkspaceForUser(
   env: Env,
   userId: string,
   userDO: DurableObjectStub<UserDO>,
-  input: CreateCloudAgentInput,
-  options: CreateCloudAgentOptions = {},
-): Promise<AgentEntry> {
+  input: CreateCloudWorkspaceInput,
+  options: CreateCloudWorkspaceOptions = {},
+): Promise<WorkspaceEntry> {
   const purpose = input.purpose?.trim() || undefined;
   const models = await listAvailableModels(env, userId);
   const model = pickInitialModel(await userDO.getConfig('default_model'), models);
@@ -40,7 +40,7 @@ export async function createCloudAgentForUser(
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
-  const { entry, existed } = await userDO.registerAgent(identity.name, identity.displayName, purpose);
+  const { entry, existed } = await userDO.registerWorkspace(identity.name, identity.displayName, purpose);
   try {
     await initializeOrchestrator(env, userId, entry.name, entry.displayName, purpose, model);
     if (identity.nameOrigin === 'auto' && purpose) {
@@ -49,13 +49,13 @@ export async function createCloudAgentForUser(
     return entry;
   } catch (err) {
     // Roll back ONLY a row this create inserted. A pre-existing row — even an
-    // archived one, which registerAgent resurrects on name conflict — must
-    // never be destroyed here: removeAgent wipes the agent's whole DO.
+    // archived one, which registerWorkspace resurrects on name conflict — must
+    // never be destroyed here: removeWorkspace wipes the agent's whole DO.
     if (!existed) {
       try {
-        await userDO.removeAgent(entry.name, userId);
+        await userDO.removeWorkspace(entry.name, userId);
       } catch (rollbackErr) {
-        console.warn('[proteus] createCloudAgentForUser rollback failed:', rollbackErr instanceof Error ? rollbackErr.message : rollbackErr);
+        console.warn('[proteus] createCloudWorkspaceForUser rollback failed:', rollbackErr instanceof Error ? rollbackErr.message : rollbackErr);
       }
     }
     throw err;
@@ -63,7 +63,7 @@ export async function createCloudAgentForUser(
 }
 
 function createInitialCloudAgentIdentity(
-  input: CreateCloudAgentInput,
+  input: CreateCloudWorkspaceInput,
   purpose: string | undefined,
 ): { name: string; displayName: string; nameOrigin: 'auto' | 'user' } {
   const requestedName = input.name?.trim();
@@ -89,7 +89,7 @@ function scheduleCloudAgentDisplayNameGeneration(
   agentName: string,
   mission: string,
   modelSpec: string,
-  options: CreateCloudAgentOptions,
+  options: CreateCloudWorkspaceOptions,
 ): void {
   const task = applyGeneratedDisplayName(env, userDO, agentName, mission, modelSpec, options.suggestDisplayName)
     .catch((err) => {

@@ -22,7 +22,7 @@ function setupEnv() {
     },
     async getConfig(key: string) { return config.get(key) ?? null; },
     async setConfig(key: string, value: string) { config.set(key, value); },
-    async listAgents() { return []; },
+    async listWorkspaces() { return []; },
   };
   const env = {
     AUTH_DB: makeD1(createAuthDatabase()),

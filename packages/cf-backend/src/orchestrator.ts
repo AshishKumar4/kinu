@@ -162,7 +162,7 @@ import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
 import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
-import { createCloudAgentForUser } from "./user/agent-create.js";
+import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
 import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
 import {
   initWebhookRateLimitTables,
@@ -1028,13 +1028,13 @@ export class OrchestratorAgent extends Think<Env> {
     const requirePeer = async (agent: string): Promise<void> => {
       requireOwner();
       if (agent === orchestrator.name) throw new Error('that is this agent — pick another peer (action:"list")');
-      const known = await orchestrator.requireOwnerUserDO().hasAgent(agent);
+      const known = await orchestrator.requireOwnerUserDO().hasWorkspace(agent);
       if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
     };
     return {
       listPeers: async () => {
         requireOwner();
-        const agents = await orchestrator.requireOwnerUserDO().listAgents();
+        const agents = await orchestrator.requireOwnerUserDO().listWorkspaces();
         return agents
           .filter((a) => a.name !== orchestrator.name)
           .map((a) => ({ name: a.name, displayName: a.displayName }));
@@ -1053,8 +1053,8 @@ export class OrchestratorAgent extends Think<Env> {
         const userDO = orchestrator.requireOwnerUserDO();
         let agentName = name;
         let created = false;
-        if (!agentName || !(await userDO.hasAgent(agentName))) {
-          const entry = await createCloudAgentForUser(orchestrator.env, userId, userDO, {
+        if (!agentName || !(await userDO.hasWorkspace(agentName))) {
+          const entry = await createCloudWorkspaceForUser(orchestrator.env, userId, userDO, {
             ...(agentName ? { name: agentName } : {}),
             purpose,
           });
@@ -2143,7 +2143,7 @@ export class OrchestratorAgent extends Think<Env> {
     if (userId) {
       try {
         const stub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-        await stub.setAgentDisplayName(this.name, displayName);
+        await stub.setWorkspaceDisplayName(this.name, displayName);
       } catch (err) {
         console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
       }
@@ -3827,7 +3827,7 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
-   *  by UserDO.removeAgent on delete so a same-name recreate starts clean and no
+   *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and no
    *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
    *  the DO wipe (storage + alarm) always runs. */
   @callable()
@@ -4399,7 +4399,7 @@ export class OrchestratorAgent extends Think<Env> {
   // stub at fetch time. Use the `/api/user/codex/*` routes (or the user
   // settings UI) to connect ChatGPT / save BYO API keys.
 
-  /** Worker fan-out target (user/agent-access notifyAgentsCredentialsChanged):
+  /** Worker fan-out target (user/workspace-access notifyWorkspacesCredentialsChanged):
    *  invoked after credential mutations in UserDO so cached provider/model
    *  state in this agent is dropped. Cheap; no-op if nothing is cached. */
   async onCredentialsChanged(): Promise<{ ok: true }> {

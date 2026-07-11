@@ -61,7 +61,7 @@ import type {
 import type { OrchestratorAgent } from "./orchestrator.js";
 import { AuthError, authenticateRequest } from "./auth/session.js";
 import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
-import { claimOwnedAgent } from "./user/agent-access.js";
+import { claimOwnedWorkspace } from "./user/workspace-access.js";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -258,7 +258,7 @@ function buildServer(env: Env, agentName: string): McpServer {
 
   // ── Write / act tools ────────────────────────────────────────────
   // Each proxies an existing @callable on the orchestrator. Ownership is
-  // already enforced at the transport gate (claimOwnedAgent); the peer/turn
+  // already enforced at the transport gate (claimOwnedWorkspace); the peer/turn
   // seams re-check the owner + same-owner roster inside the DO, so a caller
   // can never reach an agent or peer they do not own.
 
@@ -439,7 +439,7 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
 
   const caller = await authenticateMcpCaller(request, env);
   if (caller instanceof Response) return caller;
-  const owned = await claimOwnedAgent(env, caller.userId, agentName);
+  const owned = await claimOwnedWorkspace(env, caller.userId, agentName);
   if (!owned.ok) {
     return withCors(Response.json({ error: owned.error }, { status: owned.status }));
   }

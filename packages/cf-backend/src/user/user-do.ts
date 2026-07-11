@@ -58,7 +58,7 @@ import {
 import { initUserTables } from './schema.js';
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
 import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
-import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
+import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
 import {
@@ -107,7 +107,7 @@ export interface UserProfile {
   lastSeenAt: number;
 }
 
-export interface AgentEntry {
+export interface WorkspaceEntry {
   name: string;
   displayName: string;
   createdAt: number;
@@ -204,7 +204,7 @@ export class UserDO extends Agent<Env> {
 
   private productChanges() {
     this.ensureInit();
-    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName });
+    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
   // ── Profile ────────────────────────────────────────────────────────
@@ -249,13 +249,13 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  // ── Agent registry ─────────────────────────────────────────────────
+  // ── Workspace registry ─────────────────────────────────────────────
 
   @callable()
-  async listAgents(): Promise<AgentEntry[]> {
+  async listWorkspaces(): Promise<WorkspaceEntry[]> {
     return this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
       `SELECT name, display_name, created_at, last_visited, archived_at
-       FROM user_agents WHERE archived_at IS NULL ORDER BY last_visited DESC`,
+       FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC`,
     ).map((r) => ({
       name: r.name,
       displayName: r.display_name,
@@ -269,17 +269,17 @@ export class UserDO extends Agent<Env> {
    *  (archived included — a name conflict un-archives) was already there, so
    *  a failed create can roll back ONLY rows it actually inserted. */
   @callable()
-  async registerAgent(name: string, displayName?: string, purpose?: string): Promise<{ entry: AgentEntry; existed: boolean }> {
-    validateAgentName(name);
+  async registerWorkspace(name: string, displayName?: string, purpose?: string): Promise<{ entry: WorkspaceEntry; existed: boolean }> {
+    validateWorkspaceName(name);
     const now = Date.now();
     const existing = this.sqlx<{ display_name: string }>(
-      `SELECT display_name FROM user_agents WHERE name = ?`, name,
+      `SELECT display_name FROM user_workspaces WHERE name = ?`, name,
     )[0];
     const title = resolveWorkspaceTitle({
       explicit: displayName, existing: existing?.display_name, purpose, slug: name,
     });
     this.sqlx(
-      `INSERT INTO user_agents (name, display_name, created_at, last_visited)
+      `INSERT INTO user_workspaces (name, display_name, created_at, last_visited)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          display_name = excluded.display_name,
@@ -294,14 +294,14 @@ export class UserDO extends Agent<Env> {
   }
 
   @callable()
-  async touchAgent(name: string): Promise<void> {
-    validateAgentName(name);
-    this.sqlx(`UPDATE user_agents SET last_visited = ? WHERE name = ?`, Date.now(), name);
+  async touchWorkspace(name: string): Promise<void> {
+    validateWorkspaceName(name);
+    this.sqlx(`UPDATE user_workspaces SET last_visited = ? WHERE name = ?`, Date.now(), name);
   }
 
   @callable()
-  async removeAgent(name: string, ownerUserId: string): Promise<void> {
-    validateAgentName(name);
+  async removeWorkspace(name: string, ownerUserId: string): Promise<void> {
+    validateWorkspaceName(name);
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
     // Tear down the agent's Durable Object (storage, alarm, sandbox) BEFORE
     // dropping it from the registry — otherwise the DO's SQLite (conversation,
@@ -313,24 +313,24 @@ export class UserDO extends Agent<Env> {
       await stub.destroyAgent(ownerUserId);
     } catch (err) {
       if (!(err instanceof Error) || err.message !== 'destroyed') {
-        console.warn('[proteus] removeAgent: agent teardown failed:', err instanceof Error ? err.message : err);
+        console.warn('[proteus] removeWorkspace: agent teardown failed:', err instanceof Error ? err.message : err);
       }
     }
-    this.sqlx(`DELETE FROM user_agents WHERE name = ?`, name);
+    this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
   }
 
   /** Update only the roster display name — keeps the Sidebar in sync with the
    *  agent's own `agent_config.display_name` (e.g. after AI auto-titling). */
   @callable()
-  async setAgentDisplayName(name: string, displayName: string): Promise<void> {
-    validateAgentName(name);
-    this.sqlx(`UPDATE user_agents SET display_name = ? WHERE name = ?`, displayName, name);
+  async setWorkspaceDisplayName(name: string, displayName: string): Promise<void> {
+    validateWorkspaceName(name);
+    this.sqlx(`UPDATE user_workspaces SET display_name = ? WHERE name = ?`, displayName, name);
   }
 
   @callable()
-  async hasAgent(name: string): Promise<boolean> {
-    validateAgentName(name);
-    const row = this.sqlx(`SELECT 1 AS x FROM user_agents WHERE name = ? AND archived_at IS NULL`, name)[0];
+  async hasWorkspace(name: string): Promise<boolean> {
+    validateWorkspaceName(name);
+    const row = this.sqlx(`SELECT 1 AS x FROM user_workspaces WHERE name = ? AND archived_at IS NULL`, name)[0];
     return !!row;
   }
 
@@ -351,7 +351,7 @@ export class UserDO extends Agent<Env> {
   /** Grant or revoke a foreign (sender user, sender agent) pair. Idempotent. */
   @callable()
   async setPeerGrant(senderAgentName: string, senderUserId: string, allowed: boolean): Promise<{ ok: true; allowed: boolean }> {
-    validateAgentName(senderAgentName);
+    validateWorkspaceName(senderAgentName);
     if (!/^[a-f0-9]{32}$/.test(senderUserId)) throw new Error('invalid sender user id');
     if (allowed) {
       this.sqlx(
@@ -483,8 +483,8 @@ export class UserDO extends Agent<Env> {
     if (!/^[a-f0-9]{32}$/.test(input.userId)) return { ok: false, error: 'invalid user id' };
     if (input.agentClass !== ORCHESTRATOR_AGENT_SLUG) return { ok: false, error: 'invalid agent class' };
     if (!/^[a-f0-9]{64}$/.test(input.cliTokenHash)) return { ok: false, error: 'invalid token hash' };
-    validateAgentName(input.agentName);
-    if (!(await this.hasAgent(input.agentName))) return { ok: false, error: 'agent not found' };
+    validateWorkspaceName(input.agentName);
+    if (!(await this.hasWorkspace(input.agentName))) return { ok: false, error: 'agent not found' };
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -523,7 +523,7 @@ export class UserDO extends Agent<Env> {
     const hintedUserId = parseCliAgentConnectTicketUserId(ticket);
     if (!hintedUserId) return { ok: false, error: 'malformed ticket' };
     if (hintedUserId !== expected.userId) return { ok: false, error: 'wrong user' };
-    validateAgentName(expected.agentName);
+    validateWorkspaceName(expected.agentName);
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -550,7 +550,7 @@ export class UserDO extends Agent<Env> {
     if (!capabilities.includes(expected.capability)) return { ok: false, error: 'missing capability' };
 
     this.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
-    if (!(await this.hasAgent(expected.agentName))) return { ok: false, error: 'agent not found' };
+    if (!(await this.hasWorkspace(expected.agentName))) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
     if (!bearerScopes) return { ok: false, error: 'invalid CLI token' };
     const profile = await this.getProfile();

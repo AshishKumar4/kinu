@@ -22,7 +22,7 @@ function mcpEnv() {
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasAgent(name: string) { return name === 'jarvis'; },
+    async hasWorkspace(name: string) { return name === 'jarvis'; },
   };
   const agent = {
     async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId }; },

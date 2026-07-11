@@ -23,7 +23,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
         lastUsedAt: null,
       }];
     },
-    async hasAgent(name: string) {
+    async hasWorkspace(name: string) {
       return name === 'jarvis';
     },
     async issueCliAgentConnectTicket(input: { userId: string; agentName: string; cliTokenHash: string }) {
@@ -283,7 +283,7 @@ describe('shared ownership claim status mapping', () => {
           async verifyCliToken(token: string) {
             return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
           },
-          async hasAgent() { return true; },
+          async hasWorkspace() { return true; },
         }),
       },
       OrchestratorAgent: {

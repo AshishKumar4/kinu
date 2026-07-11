@@ -14,7 +14,7 @@
  *   7. AUTH GATE — every other request needs a Proteus browser session
  *      (or DEV_USER_EMAIL in local/staging dev).
  *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
- *   9. /api/agents/<name>/* — owner check via UserDO.hasAgent.
+ *   9. /api/agents/<name>/* — owner check via UserDO.hasWorkspace.
  *   10. /agents/* — Think DOs (chat WebSocket).
  *   11. env.ASSETS fallback — SPA for everything else.
  */
@@ -40,7 +40,7 @@ import {
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
 import { CLI_SCOPES_HEADER } from "./cli/ws-rpc-gate.js";
-import { claimOwnedAgent } from "./user/agent-access.js";
+import { claimOwnedWorkspace } from "./user/workspace-access.js";
 import { err } from "./lib/http.js";
 
 /** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
@@ -93,7 +93,7 @@ async function ensureAgentOwnership(
   identity: AuthIdentity,
   agentName: string,
 ): Promise<Response | null> {
-  const result = await claimOwnedAgent(env, identity.userId, agentName);
+  const result = await claimOwnedWorkspace(env, identity.userId, agentName);
   return result.ok ? null : err(result.status, result.error);
 }
 

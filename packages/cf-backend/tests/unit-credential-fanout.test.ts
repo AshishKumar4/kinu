@@ -21,7 +21,7 @@ function setup() {
     async deleteCredential() {},
     async disconnectCodex() {},
     async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
-    async listAgents() {
+    async listWorkspaces() {
       return [
         { name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, archivedAt: null },
         { name: 'old-bot', displayName: 'Old', createdAt: 1, lastVisited: 1, archivedAt: 123 },

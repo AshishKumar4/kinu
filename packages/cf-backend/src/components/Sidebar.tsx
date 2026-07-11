@@ -17,7 +17,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon } from "@phosphor-icons/react";
-import { listAgents, removeAgent, getProfile, type AgentEntry, type UserProfile } from "../lib/user-api";
+import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { CreateAgentModal } from "./CreateAgentModal";
 import { ModeToggle } from "./mode-toggle";
 
@@ -34,15 +34,15 @@ export default function Sidebar() {
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [agents, setAgents] = useState<WorkspaceEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshAgents = useCallback(async () => {
-    try { setAgents(await listAgents()); }
-    catch (err) { console.warn('[sidebar] listAgents:', (err as Error).message); }
+    try { setAgents(await listWorkspaces()); }
+    catch (err) { console.warn('[sidebar] listWorkspaces:', (err as Error).message); }
   }, []);
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export default function Sidebar() {
     // useAgent socket would auto-reconnect to the destroyed DO name and
     // resurrect an empty ghost agent (idFromName instantiates on connect).
     if (name === agentId) navigate("/");
-    try { await removeAgent(name); await refreshAgents(); }
+    try { await removeWorkspace(name); await refreshAgents(); }
     catch (err) { alert(`Could not remove: ${(err as Error).message}`); }
   }, [agentId, navigate, refreshAgents]);
 

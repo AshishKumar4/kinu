@@ -1,5 +1,5 @@
 /**
- * Open an existing agent for CLI — uses the proper cli-backend runtime
+ * Open an existing workspace for CLI — uses the proper cli-backend runtime
  * (FTS5 memory, sandboxed executor, real MCTS branches) instead of the
  * degraded inline implementations in core/identity/open.ts.
  *
@@ -47,7 +47,7 @@ type AgentDb = {
 };
 
 /**
- * Open an existing agent using the full CLI backend runtime.
+ * Open an existing workspace using the full CLI backend runtime.
  *
  * Unlike core's openWorkspace (which uses degraded inline VFS/Memory/Executor),
  * this uses:
@@ -72,7 +72,7 @@ export function openWorkspaceCLI(
   const identity = sql<{ id: string; name: string; created_at: number }>`
     SELECT id, name, created_at FROM workspace_identity LIMIT 1
   `[0];
-  if (!identity) throw new Error('No agent identity found. Use createWorkspace() to create one.');
+  if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
   // Read SOUL.md
   const soul = readSoul(sql);

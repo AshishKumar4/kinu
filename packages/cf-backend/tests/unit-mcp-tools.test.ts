@@ -32,7 +32,7 @@ function mcpEnv() {
         ? { ok: true, tokenHash: 'ahash', scopes: ['agent.exec'], user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasAgent(name: string) { return name === 'jarvis'; },
+    async hasWorkspace(name: string) { return name === 'jarvis'; },
   };
   const agent = {
     async claimOwner(userId: string) { record('claimOwner', userId); return { owner: userId }; },

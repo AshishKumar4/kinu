@@ -11,7 +11,7 @@ export interface UserProfile {
   lastSeenAt: number;
 }
 
-export interface AgentEntry {
+export interface WorkspaceEntry {
   name: string;
   displayName: string;
   createdAt: number;
@@ -80,14 +80,14 @@ export const getProfile = () => api<UserProfile | null>('GET', '/profile');
 export const getCliSetup = () => api<CliSetup>('GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
-export const listAgents     = () => api<AgentEntry[]>('GET', '/agents');
+export const listWorkspaces     = () => api<WorkspaceEntry[]>('GET', '/agents');
 // `purpose` is the initial mission. When `name` is omitted the server creates
 // the agent identity using the user's connected model.
-export const registerAgent  = (name?: string, purpose?: string, displayName?: string) =>
-  api<AgentEntry>('POST', '/agents', { name, displayName, purpose });
-export const touchAgent     = (name: string) =>
+export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
+  api<WorkspaceEntry>('POST', '/agents', { name, displayName, purpose });
+export const touchWorkspace     = (name: string) =>
   api<{ ok: boolean }>('POST', `/agents/${encodeURIComponent(name)}/touch`);
-export const removeAgent    = (name: string) =>
+export const removeWorkspace    = (name: string) =>
   api<{ ok: boolean }>('DELETE', `/agents/${encodeURIComponent(name)}`);
 
 // ── Devices (user-level laptop/PC tunnel) ──────────────────────────

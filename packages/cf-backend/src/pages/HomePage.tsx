@@ -12,15 +12,15 @@ import {
 import { Loader } from "@cloudflare/kumo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { useCreateAgent } from "@/hooks/use-create-agent";
-import { listAgents, type AgentEntry } from "@/lib/user-api";
+import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [agents, setAgents] = useState<WorkspaceEntry[]>([]);
   const { hasModels, busy, err, create } = useCreateAgent();
 
   useEffect(() => {
-    listAgents().then(setAgents).catch(() => setAgents([]));
+    listWorkspaces().then(setAgents).catch(() => setAgents([]));
   }, []);
 
   const submit = (event?: FormEvent) => {

@@ -15,7 +15,7 @@ import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core
 import type { AlternateTakeSet, FileCheckpointEntry, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
-import { cloudflareReconnectPath, touchAgent, listAvailableModels, type ModelMenuEntry } from "@/lib/user-api";
+import { cloudflareReconnectPath, touchWorkspace, listAvailableModels, type ModelMenuEntry } from "@/lib/user-api";
 import { ModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
@@ -678,7 +678,7 @@ export default function WorkspacePage() {
     el.style.height = `${el.scrollHeight}px`;
   }, [chatInput]);
 
-  useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
+  useEffect(() => { if (agentId) touchWorkspace(agentId).catch(() => {}); }, [agentId]);
 
   // Auto-switch the work surface to the live Preview the moment a new sandbox
   // port is exposed — the running app becomes the centre of attention.

@@ -8,7 +8,7 @@ import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
-import { touchAgent } from "../lib/user-api";
+import { touchWorkspace } from "../lib/user-api";
 
 export interface ExecutorOutput {
   id: string; command: string; stdout: string; stderr: string;
@@ -359,7 +359,7 @@ export function useProteus(agentId?: string) {
     rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
       .then((snap) => {
         setAgentStatus(snap.status);
-        if (agentId) touchAgent(agentId).catch(() => {});
+        if (agentId) touchWorkspace(agentId).catch(() => {});
         setTools(mapToolDescriptions(snap.tools));
         setMemoryContent(snap.memoryContent);
         if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));

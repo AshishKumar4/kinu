@@ -62,7 +62,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
       calls.push(`tokens:revoke:${ref}`);
       return { ok: true as const, revoked: ref === 'ci' };
     },
-    async hasAgent(name: string) {
+    async hasWorkspace(name: string) {
       return name === 'jarvis';
     },
     async issueCliAgentConnectTicket(input: { cliTokenHash: string }) {

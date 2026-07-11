@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createCloudAgentForUser } from '../src/user/agent-create.js';
+import { createCloudWorkspaceForUser } from '../src/user/workspace-create.js';
 import type { UserDO } from '../src/user/user-do.js';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -29,14 +29,14 @@ describe('cloud agent ownership safety', () => {
       async listCredentials() {
         return [];
       },
-      async registerAgent(name: string, displayName?: string) {
+      async registerWorkspace(name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: false,
         };
       },
-      async removeAgent(name: string, ownerUserId: string) {
+      async removeWorkspace(name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -68,7 +68,7 @@ describe('cloud agent ownership safety', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      const entry = await createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+      const entry = await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
         purpose: 'Build a hello world app in react',
       }, {
         waitUntil: (promise) => background.push(promise),
@@ -103,14 +103,14 @@ describe('cloud agent ownership safety', () => {
       async listCredentials() {
         return [];
       },
-      async registerAgent(name: string, displayName?: string) {
+      async registerWorkspace(name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: false,
         };
       },
-      async removeAgent(name: string, ownerUserId: string) {
+      async removeWorkspace(name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -139,7 +139,7 @@ describe('cloud agent ownership safety', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await expect(createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
         name: 'jarvis',
         displayName: 'Jarvis',
         purpose: 'Help with software projects',
@@ -163,16 +163,16 @@ describe('cloud agent ownership safety', () => {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
       async listCredentials() { return []; },
-      // The roster row exists but is ARCHIVED — registerAgent resurrects it
+      // The roster row exists but is ARCHIVED — registerWorkspace resurrects it
       // on name conflict and reports existed: true.
-      async registerAgent(name: string, displayName?: string) {
+      async registerWorkspace(name: string, displayName?: string) {
         calls.push(`register:${name}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: true,
         };
       },
-      async removeAgent(name: string, ownerUserId: string) {
+      async removeWorkspace(name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -189,7 +189,7 @@ describe('cloud agent ownership safety', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await expect(createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
         name: 'jarvis',
       })).rejects.toThrow('boot failure');
     } finally {
@@ -207,8 +207,8 @@ describe('cloud agent ownership safety', () => {
     const userDO = source('src/user/user-do.ts');
     const orchestrator = source('src/orchestrator.ts');
 
-    expect(userRoutes).toContain('stub.removeAgent(decodeURIComponent(agentMatch[1]), identity.userId)');
-    expect(userDO).toContain('async removeAgent(name: string, ownerUserId: string): Promise<void>');
+    expect(userRoutes).toContain('stub.removeWorkspace(decodeURIComponent(agentMatch[1]), identity.userId)');
+    expect(userDO).toContain('async removeWorkspace(name: string, ownerUserId: string): Promise<void>');
     expect(userDO).toContain('await stub.destroyAgent(ownerUserId)');
     expect(orchestrator).toContain('async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }>');
     expect(orchestrator).toContain('Agent owner mismatch; refusing to destroy.');

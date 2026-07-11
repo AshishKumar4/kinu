@@ -35,7 +35,7 @@ import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels, listProviderCatalog } from './available-models.js';
-import { handleCreateAgentRequest, notifyAgentsCredentialsChanged } from './agent-access.js';
+import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access.js';
 import { err, json, safeJson } from '../lib/http.js';
 
 function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
@@ -73,19 +73,19 @@ export async function handleUserRequest(
 
   // ── Agents ─────────────────────────────────────────────────────────
   if (path === '/agents' && method === 'GET') {
-    return json(await stub.listAgents());
+    return json(await stub.listWorkspaces());
   }
   if (path === '/agents' && method === 'POST') {
-    return handleCreateAgentRequest(request, env, identity.userId, stub, ctx);
+    return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);
   }
   const agentTouchMatch = path.match(/^\/agents\/([^/]+)\/touch$/);
   if (agentTouchMatch && method === 'POST') {
-    try { await stub.touchAgent(decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
+    try { await stub.touchWorkspace(decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
   const agentMatch = path.match(/^\/agents\/([^/]+)$/);
   if (agentMatch && method === 'DELETE') {
-    try { await stub.removeAgent(decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
+    try { await stub.removeWorkspace(decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
 
@@ -122,13 +122,13 @@ export async function handleUserRequest(
       if (body === null) return err(400, 'Body must be JSON');
       try { await stub.setCredential(key, body); }
       catch (e) { return err(400, (e as Error).message); }
-      notifyAgentsCredentialsChanged(env, stub, ctx);
+      notifyWorkspacesCredentialsChanged(env, stub, ctx);
       return json({ ok: true });
     }
     if (method === 'DELETE') {
       try { await stub.deleteCredential(key); }
       catch (e) { return err(400, (e as Error).message); }
-      notifyAgentsCredentialsChanged(env, stub, ctx);
+      notifyWorkspacesCredentialsChanged(env, stub, ctx);
       return json({ ok: true });
     }
   }
@@ -139,7 +139,7 @@ export async function handleUserRequest(
   }
   if (path === '/codex' && method === 'DELETE') {
     await stub.disconnectCodex();
-    notifyAgentsCredentialsChanged(env, stub, ctx);
+    notifyWorkspacesCredentialsChanged(env, stub, ctx);
     return json({ ok: true });
   }
   if (path === '/codex/start' && method === 'POST') {
@@ -149,7 +149,7 @@ export async function handleUserRequest(
   if (path === '/codex/poll' && method === 'POST') {
     try {
       const status = await stub.pollCodexDeviceFlow();
-      if (status.connected) notifyAgentsCredentialsChanged(env, stub, ctx);
+      if (status.connected) notifyWorkspacesCredentialsChanged(env, stub, ctx);
       return json(status);
     } catch (e) { return err(502, (e as Error).message); }
   }
@@ -194,7 +194,7 @@ export async function handleUserRequest(
     }
     try { await stub.selectAIGateway(body.id); }
     catch (e) { return err(400, (e as Error).message); }
-    notifyAgentsCredentialsChanged(env, stub, ctx);
+    notifyWorkspacesCredentialsChanged(env, stub, ctx);
     return json({ ok: true });
   }
 

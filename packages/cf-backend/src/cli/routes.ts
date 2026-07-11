@@ -12,7 +12,7 @@ import {
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store.js';
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
-import { claimOwnedAgent, handleCreateAgentRequest } from '../user/agent-access.js';
+import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
 import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
@@ -142,7 +142,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/agents' && method === 'GET') {
-    return json(await cli.userDO.listAgents());
+    return json(await cli.userDO.listWorkspaces());
   }
 
   if (path === '/models' && method === 'GET') {
@@ -150,13 +150,13 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/agents' && method === 'POST') {
-    return handleCreateAgentRequest(request, env, cli.userId, cli.userDO, ctx);
+    return handleCreateWorkspaceRequest(request, env, cli.userId, cli.userDO, ctx);
   }
 
   const connectTicketMatch = path.match(/^\/agents\/([^/]+)\/connect-ticket$/);
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
-    if (!(await cli.userDO.hasAgent(name))) return err(404, `Agent ${name} not found.`);
+    if (!(await cli.userDO.hasWorkspace(name))) return err(404, `Agent ${name} not found.`);
     const issued = await cli.userDO.issueCliAgentConnectTicket({
       userId: cli.userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
@@ -409,7 +409,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 }
 
 async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<DurableObjectStub<OrchestratorAgent> | Response> {
-  const result = await claimOwnedAgent(env, cli.userId, name);
+  const result = await claimOwnedWorkspace(env, cli.userId, name);
   if (!result.ok) return err(result.status, result.error);
   return result.agent;
 }

@@ -54,7 +54,7 @@ describe('auth and desktop security invariants', () => {
     expect(server).toContain('verifyCliAgentConnectTicket');
     expect(server).toContain("url.searchParams.delete('ticket')");
     expect(server).not.toContain('looksInteractive');
-    expect(server).not.toContain('registerAgent(agentName');
+    expect(server).not.toContain('registerWorkspace(agentName');
     expect(cliRoutes).not.toContain('/local-turn/prepare');
     expect(cliRoutes).not.toContain('/local-turn/tool');
     expect(cliRoutes).not.toContain('/local-turn/commit');
@@ -365,7 +365,7 @@ describe('auth and desktop security invariants', () => {
 
   test('web agent creation requires an available model and stores the selected initial model', () => {
     const routes = source('src/user/routes.ts');
-    const createAgent = source('src/user/agent-create.ts');
+    const createAgent = source('src/user/workspace-create.ts');
     expect(routes).toContain('listAvailableModels(env, identity.userId)');
     expect(createAgent).toContain('Cloudflare Workers AI is not connected');
     expect(createAgent).toContain('pickInitialModel');
