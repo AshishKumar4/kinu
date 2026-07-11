@@ -73,6 +73,15 @@ export interface ProductDeploymentRecord {
   deployedAt: number;
 }
 
+/** Full ledger view of one change — what the execution engine reads. */
+export interface ProductChangeDetail {
+  change: ProductChangeRequest;
+  binding: ProductSourceBinding | null;
+  checks: ProductChangeCheck[];
+  approvals: ProductChangeApproval[];
+  deployments: ProductDeploymentRecord[];
+}
+
 export type ProductChangeTransitionResult =
   | { ok: true; from: ProductChangeStatus; to: ProductChangeStatus }
   | { ok: false; from: ProductChangeStatus; to: ProductChangeStatus; error: string };

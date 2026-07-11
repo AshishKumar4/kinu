@@ -131,10 +131,10 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   },
   product_change: {
     name: 'product_change',
-    summary: 'Governed lane for changing the Proteus product/UI itself.',
-    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior.',
+    summary: 'Governed lane for changing the Proteus product/UI itself — plan, then apply/check/preview/deploy/rollback the change for real in the sandbox.',
+    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
     whenNotToUse: 'Do not use for ordinary user project work outside the Proteus product.',
-    result: 'Returns source binding, plan/check/preview/approval/deployment, or rollback metadata.',
+    result: 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.',
   },
 };
 

@@ -45,12 +45,14 @@ import { SessionSearchStore } from '../memory/session-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
-import type {
-  ProductChangeApproval,
-  ProductChangeCheck,
-  ProductChangeStatus,
-  ProductDeploymentRecord,
-  ProductSourceBinding,
+import {
+  isEngineOwnedTransitionTarget,
+  type ProductChangeApproval,
+  type ProductChangeCheck,
+  type ProductChangeEngine,
+  type ProductChangeStatus,
+  type ProductDeploymentRecord,
+  type ProductSourceBinding,
 } from '../product-change/index.js';
 
 /**
@@ -225,6 +227,12 @@ export interface ProductChangeToolDeps {
     deploymentId?: string | null;
     rollbackTarget?: string | null;
   }): Promise<ProductDeploymentRecord>;
+  /** Execution engine beneath the ledger (apply/run_checks/preview/deploy/
+   *  rollback grounded in real sandbox execution). When wired, the tool
+   *  refuses manual transitions into engine-owned states and refuses
+   *  record_deployment — those results are EARNED via the engine actions.
+   *  Absent on backends without an execution substrate. */
+  engine?: Pick<ProductChangeEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
 }
 
 /**
@@ -800,7 +808,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           | 'transition'
           | 'record_check'
           | 'request_approval'
-          | 'record_deployment';
+          | 'record_deployment'
+          | 'apply'
+          | 'run_checks'
+          | 'preview'
+          | 'deploy'
+          | 'rollback';
         binding?: {
           kind?: 'local' | 'github';
           label?: string;
@@ -825,13 +838,23 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           workerVersionId?: string | null;
           deploymentId?: string | null;
           rollbackTarget?: string | null;
+          command?: string;
         };
+        checks?: Array<{ name?: string; command?: string }>;
+        port?: number;
+        startCommand?: string;
       }>({
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment'],
+            enum: [
+              'board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment',
+              'apply', 'run_checks', 'preview', 'deploy', 'rollback',
+            ],
+            description:
+              'apply/run_checks/preview/deploy/rollback DRIVE the change for real in the sandbox ' +
+              '(patch applied + committed, checks = real exit codes, preview = live URL, deploy/rollback verified).',
           },
           binding: {
             type: 'object',
@@ -874,8 +897,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               workerVersionId: { type: 'string' },
               deploymentId: { type: 'string' },
               rollbackTarget: { type: 'string' },
+              command: { type: 'string', description: 'Deploy (or rollback-redeploy) command run in the working copy, e.g. "bunx wrangler deploy". Defaults to the binding deployTarget when that reads like a command.' },
             },
           },
+          checks: {
+            type: 'array',
+            description: 'For action=run_checks: build/test/lint commands run in the working copy; pass/fail comes from real exit codes.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, command: { type: 'string' } },
+              required: ['name', 'command'],
+            },
+          },
+          port: { type: 'number', description: 'For action=preview: the port your server listens on inside the sandbox.' },
+          startCommand: { type: 'string', description: 'For action=preview: optional server start command run in the working copy before exposing the port.' },
         },
         required: ['action'],
       }),
@@ -911,6 +946,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               });
             case 'transition':
               if (!args.changeId || !args.status) return { error: 'transition requires changeId and status' };
+              if (productChanges.engine && isEngineOwnedTransitionTarget(args.status)) {
+                return {
+                  error:
+                    `status '${args.status}' is earned by execution, not asserted — ` +
+                    `use action=apply / run_checks / deploy / rollback to get there for real`,
+                };
+              }
               return await productChanges.transition(args.changeId, args.status);
             case 'record_check':
               if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
@@ -926,12 +968,51 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               return await productChanges.requestApproval(args.changeId, args.approvalType);
             case 'record_deployment':
               if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
+              if (productChanges.engine) {
+                return {
+                  error:
+                    'deployments are recorded from REAL deploy results — use action=deploy; ' +
+                    'the version id and rollback target come from the actual command output',
+                };
+              }
               return await productChanges.recordDeployment(args.changeId, {
                 environment: args.deployment.environment,
                 workerVersionId: args.deployment.workerVersionId,
                 deploymentId: args.deployment.deploymentId,
                 rollbackTarget: args.deployment.rollbackTarget,
               });
+            case 'apply':
+            case 'run_checks':
+            case 'preview':
+            case 'deploy':
+            case 'rollback': {
+              const engine = productChanges.engine;
+              if (!engine) {
+                return { error: `action=${args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
+              }
+              if (!args.changeId) return { error: `${args.action} requires changeId` };
+              switch (args.action) {
+                case 'apply':
+                  return await engine.apply(args.changeId);
+                case 'run_checks':
+                  if (!args.checks?.length) return { error: 'run_checks requires checks: [{ name, command }]' };
+                  return await engine.runChecks(
+                    args.changeId,
+                    args.checks.map((c) => ({ name: c.name ?? '', command: c.command ?? '' })),
+                  );
+                case 'preview':
+                  if (args.port == null) return { error: 'preview requires port (the port your server listens on)' };
+                  return await engine.preview(args.changeId, { port: args.port, ...(args.startCommand ? { startCommand: args.startCommand } : {}) });
+                case 'deploy':
+                  if (!args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
+                  return await engine.deploy(args.changeId, {
+                    environment: args.deployment.environment,
+                    ...(args.deployment.command ? { command: args.deployment.command } : {}),
+                  });
+                case 'rollback':
+                  return await engine.rollback(args.changeId, args.deployment?.command ? { command: args.deployment.command } : undefined);
+              }
+            }
           }
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };

@@ -137,6 +137,8 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
   type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
+  // Product-change execution engine — the driver beneath the governance ledger
+  ProductChangeEngine, createSandboxProductChangeExec,
   // Peer-agent teams (the `team` tool contract)
   type TeamToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
@@ -1079,7 +1081,39 @@ export class OrchestratorAgent extends Think<Env> {
       recordCheck: (changeId, input) => userDO.recordProductChangeCheck(changeId, input),
       requestApproval: (changeId, approvalType) => userDO.requestProductChangeApproval(changeId, approvalType),
       recordDeployment: (changeId, input) => userDO.recordProductDeployment(changeId, input),
+      engine: this.getProductChangeEngine(),
     };
+  }
+
+  private _productChangeEngine: ProductChangeEngine | null = null;
+  /** The execution engine beneath the product-change ledger: apply/checks in
+   *  the agent's sandbox container (raw exit codes), preview through the
+   *  path-style preview proxy, deploy/rollback verified against real command
+   *  output. Ledger writes go through the owner's UserDO so the engine's
+   *  results land on the same governed board the UI reads. */
+  private getProductChangeEngine(): ProductChangeEngine {
+    if (this._productChangeEngine) return this._productChangeEngine;
+    const handle = this.rt.sandboxHandle;
+    const provider = this.rt.executionRouter?.getProvider('sandbox');
+    const userDO = () => this.requireOwnerUserDO();
+    this._productChangeEngine = new ProductChangeEngine({
+      exec: handle && provider ? createSandboxProductChangeExec(handle, provider) : null,
+      ledger: {
+        detail: (changeId) => userDO().getProductChangeDetail(changeId),
+        update: (changeId, patch) => userDO().updateProductChange(changeId, patch),
+        transition: (changeId, to) => userDO().transitionProductChange(changeId, to),
+        recordCheck: (changeId, input) => userDO().recordProductChangeCheck(changeId, input),
+        recordDeployment: (changeId, input) => userDO().recordProductDeployment(changeId, input),
+      },
+      // A stored `github` credential (POST /api/user/credentials/github with a
+      // bearer PAT) authorizes clone/push for github source bindings; absent →
+      // the engine's honest add-a-credential error.
+      gitHubAuth: async () => {
+        const headers = await this.getOwnerUserDO()?.getAuthHeaders('github');
+        return headers?.Authorization ?? null;
+      },
+    });
+    return this._productChangeEngine;
   }
 
   /** Worker calls this on every authenticated request before any other RPC.

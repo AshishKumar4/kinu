@@ -265,7 +265,7 @@ function CheckRow({ check }: { check: ProductChangeCheck }) {
         {check.durationMs != null && <span className="ml-auto text-[10px] p-text-3">{check.durationMs}ms</span>}
       </div>
       {(check.stdout || check.stderr) && (
-        <pre className="mt-1 text-[10px] p-text-3 whitespace-pre-wrap break-words line-clamp-4 font-mono">
+        <pre className="mt-1 text-[10px] p-text-3 whitespace-pre-wrap break-words max-h-40 overflow-y-auto font-mono">
           {[check.stdout, check.stderr].filter(Boolean).join("\n")}
         </pre>
       )}
@@ -281,11 +281,11 @@ function DeploymentRow({ deployment }: { deployment: ProductDeploymentRecord }) 
         <span className="text-xs p-text capitalize">{deployment.environment}</span>
         <span className="ml-auto text-[10px] p-text-3">{timeShort(deployment.deployedAt)}</span>
       </div>
-      {(deployment.deploymentId || deployment.workerVersionId || deployment.rollbackTarget) && (
-        <div className="text-[10px] p-text-3 font-mono truncate mt-1">
-          {deployment.deploymentId ?? deployment.workerVersionId ?? deployment.rollbackTarget}
-        </div>
-      )}
+      <div className="text-[10px] p-text-3 font-mono mt-1 space-y-0.5">
+        {deployment.workerVersionId && <div className="truncate">version {deployment.workerVersionId}</div>}
+        {deployment.deploymentId && <div className="truncate">deployment {deployment.deploymentId}</div>}
+        {deployment.rollbackTarget && <div className="truncate">rollback target {deployment.rollbackTarget}</div>}
+      </div>
     </div>
   );
 }
@@ -340,6 +340,7 @@ function ChangeDetail({
 
       {change.previewUrl && (
         <section>
+          <div className="text-[11px] p-text-3 mb-1">Preview</div>
           <a href={change.previewUrl} target="_blank" rel="noreferrer" className="text-xs p-accent hover:underline break-all">{change.previewUrl}</a>
         </section>
       )}

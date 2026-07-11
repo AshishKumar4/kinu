@@ -41,6 +41,7 @@ import {
   type ProductChangeBoard,
   type ProductChangeApproval,
   type ProductChangeCheck,
+  type ProductChangeDetail,
   type ProductChangeRequest,
   type ProductChangeStatus,
   type ProductDeploymentRecord,
@@ -975,6 +976,12 @@ export class UserDO extends Agent<Env> {
   @callable()
   async getProductChangeBoard(agentName?: string, limit = 20): Promise<ProductChangeBoard> {
     return this.productChanges().board(agentName, limit);
+  }
+
+  /** Full ledger view of one change — the execution engine's read surface. */
+  @callable()
+  async getProductChangeDetail(changeId: string): Promise<ProductChangeDetail> {
+    return this.productChanges().detail(changeId);
   }
 
   // ── Credentials ────────────────────────────────────────────────────

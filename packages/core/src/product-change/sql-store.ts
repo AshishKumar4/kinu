@@ -2,6 +2,7 @@ import { nanoid } from '../utils/nanoid.js';
 import {
   type ProductChangeApproval,
   type ProductChangeCheck,
+  type ProductChangeDetail,
   type ProductChangeRequest,
   type ProductChangeStatus,
   type ProductDeploymentRecord,
@@ -511,6 +512,53 @@ export class ProductChangeStore {
        FROM product_deployments WHERE id = ?`,
       id,
     ).map(mapProductDeployment)[0]!;
+  }
+
+  /** Full ledger view of ONE change — the engine's read surface. */
+  detail(changeId: string): ProductChangeDetail {
+    const change = this.getChange(changeId);
+    if (!change) throw new Error(`unknown product change: ${changeId}`);
+    const bindingRow = this.sql.all<{
+      id: string; kind: string; label: string; repo_url: string | null; default_branch: string | null;
+      local_device_id: string | null; local_root: string | null; deploy_target: string | null;
+      created_at: number; updated_at: number;
+    }>(
+      `SELECT id, kind, label, repo_url, default_branch, local_device_id, local_root, deploy_target, created_at, updated_at
+       FROM product_source_bindings WHERE id = ?`,
+      change.bindingId,
+    )[0];
+    const checks = this.sql.all<{
+      id: string; change_id: string; name: string; status: ProductChangeCheck['status'];
+      stdout: string | null; stderr: string | null; duration_ms: number | null; created_at: number; updated_at: number;
+    }>(
+      `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at
+       FROM product_change_checks WHERE change_id = ? ORDER BY updated_at DESC`,
+      changeId,
+    ).map(mapProductChangeCheck);
+    const approvals = this.sql.all<{
+      id: string; change_id: string; approval_type: ProductChangeApproval['approvalType'];
+      decision: ProductChangeApproval['decision']; approved_by: string | null; note: string | null;
+      created_at: number; decided_at: number | null;
+    }>(
+      `SELECT id, change_id, approval_type, decision, approved_by, note, created_at, decided_at
+       FROM product_change_approvals WHERE change_id = ? ORDER BY created_at DESC`,
+      changeId,
+    ).map(mapProductChangeApproval);
+    const deployments = this.sql.all<{
+      id: string; change_id: string; environment: ProductDeploymentRecord['environment'];
+      worker_version_id: string | null; deployment_id: string | null; rollback_target: string | null; deployed_at: number;
+    }>(
+      `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
+       FROM product_deployments WHERE change_id = ? ORDER BY deployed_at DESC, id DESC`,
+      changeId,
+    ).map(mapProductDeployment);
+    return {
+      change,
+      binding: bindingRow ? mapProductSourceBinding(bindingRow) : null,
+      checks,
+      approvals,
+      deployments,
+    };
   }
 
   board(agentName?: string, limit = 20): ProductChangeBoard {

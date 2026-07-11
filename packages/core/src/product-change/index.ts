@@ -1,6 +1,7 @@
 export type {
   ProductChangeApproval,
   ProductChangeCheck,
+  ProductChangeDetail,
   ProductChangeRequest,
   ProductChangeStatus,
   ProductChangeTransitionResult,
@@ -8,7 +9,26 @@ export type {
   ProductSourceBinding,
   ProductSourceKind,
 } from './types.js';
-export { assertProductChangeTransition, isProductChangeTerminal } from './lifecycle.js';
+export {
+  assertProductChangeTransition,
+  isEngineOwnedTransitionTarget,
+  isProductChangeTerminal,
+} from './lifecycle.js';
+export {
+  ProductChangeEngine,
+  deployTargetAsCommand,
+  parseDeployOutput,
+  type ApplyResult,
+  type CheckRunResult,
+  type DeployResult,
+  type PreviewResult,
+  type ProductChangeEngineOptions,
+  type ProductChangeExec,
+  type ProductChangeLedger,
+  type RollbackResult,
+  type RunChecksResult,
+} from './engine.js';
+export { createSandboxProductChangeExec } from './sandbox-exec.js';
 export {
   isSecretProductPath,
   normalizeProductSourcePath,
