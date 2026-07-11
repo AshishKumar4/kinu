@@ -185,6 +185,32 @@ describe('transformContext through runChat', () => {
     expect(userTexts(prompt())).toEqual(['summary-of-history', 'volatile-tail']);
   });
 
+  test('providerReportedTokens threads into the transform context, and step-finish reports the priced prompt', async () => {
+    const { model } = promptCapturingModel();
+    let sawTokens: number | undefined;
+    const stepTokens: Array<number | undefined> = [];
+    for await (const ev of runChat({
+      model: model as never,
+      system: 'sys',
+      history: [{ role: 'user', content: 'go' }],
+      tools: {},
+      maxSteps: 1,
+      providerReportedTokens: 123_456,
+      extensions: new ExtensionHost().register({
+        name: 'observer',
+        transformContext: async (ctx) => {
+          sawTokens = ctx.providerReportedTokens;
+          return undefined;
+        },
+      }),
+    })) {
+      if (ev.type === 'step-finish') stepTokens.push(ev.inputTokens);
+    }
+    expect(sawTokens).toBe(123_456);
+    // promptCapturingModel reports inputTokens: 1 on its finish chunk.
+    expect(stepTokens).toEqual([1]);
+  });
+
   test('a throwing transform never breaks the turn (fail-open)', async () => {
     const { model, prompt } = promptCapturingModel();
     let doneText = '';

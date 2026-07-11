@@ -23,7 +23,9 @@ export type ChatEvent =
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
   | { type: 'tool-result'; toolName: string; result: string }
-  | { type: 'step-finish'; stepIndex: number }
+  /** `inputTokens` = the step request's provider-reported prompt total, when
+   *  the provider reported one — the caller's measured compaction signal. */
+  | { type: 'step-finish'; stepIndex: number; inputTokens?: number }
   | { type: 'done'; text: string; responseMessages: ModelMessage[] };
 
 export interface ChatOptions {
@@ -43,6 +45,11 @@ export interface ChatOptions {
   turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
   modelContext?: PromptModelContext;
+  /** Provider-reported prompt tokens of the previous turn's final request —
+   *  the measured trigger signal handed to transformContext (chars/4
+   *  estimates lie). Callers persist it from the last turn's step-finish
+   *  `inputTokens`. */
+  providerReportedTokens?: number;
   maxSteps?: number;
   signal?: AbortSignal;
   /** Extension seam (public API): registered extensions observe the turn
@@ -77,7 +84,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
-  const pendingStepEvents: Array<{ stepIndex: number }> = [];
+  const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number }> = [];
   let stepCount = 0;
 
   await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
@@ -92,6 +99,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     system: opts.system,
     contextWindow: opts.modelContext?.contextWindow
       ?? contextWindowForModel(opts.modelContext?.id ?? ''),
+    ...(opts.providerReportedTokens !== undefined
+      ? { providerReportedTokens: opts.providerReportedTokens }
+      : {}),
     trigger: 'auto',
   });
   const durable = transformed ?? opts.history;
@@ -129,9 +139,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         composePrepareStep(extensions, { stepNumber, messages },
           rollTail ? { strategy: cache.strategy } : null),
     } : {}),
-    onStepFinish: () => {
+    onStepFinish: (step) => {
       stepCount++;
-      pendingStepEvents.push({ stepIndex: stepCount });
+      const inputTokens = step.usage?.inputTokens;
+      pendingStepEvents.push({
+        stepIndex: stepCount,
+        ...(typeof inputTokens === 'number' && inputTokens > 0 ? { inputTokens } : {}),
+      });
     },
   });
 
@@ -166,8 +180,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     // Yield any step-finish events that fired via onStepFinish callback
     while (pendingStepEvents.length > 0) {
-      const ev = pendingStepEvents.shift()!;
-      yield { type: 'step-finish' as const, stepIndex: ev.stepIndex };
+      const ev = pendingStepEvents.shift();
+      if (ev) yield { type: 'step-finish' as const, ...ev };
     }
   }
 

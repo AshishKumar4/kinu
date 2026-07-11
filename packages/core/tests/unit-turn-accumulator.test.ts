@@ -55,6 +55,17 @@ describe('TurnAccumulator', () => {
     expect(steps).toEqual([1, 2]);
   });
 
+  test('lastPromptTokens tracks the newest reporting step and survives usage-less steps', () => {
+    const a = new TurnAccumulator();
+    expect(a.lastPromptTokens).toBe(0);
+    a.recordStep({ usage: { inputTokens: 1_000, outputTokens: 40 } });
+    a.recordStep({ usage: { inputTokens: 1_450, outputTokens: 20 } });
+    a.recordStep({}); // a step whose provider reported nothing
+    expect(a.lastPromptTokens).toBe(1_450);
+    a.reset(1);
+    expect(a.lastPromptTokens).toBe(0);
+  });
+
   test('works with no sinks (pure consumer)', () => {
     const a = new TurnAccumulator();
     a.onFirstChunk();

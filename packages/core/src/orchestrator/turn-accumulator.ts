@@ -47,6 +47,10 @@ export class TurnAccumulator {
   toolCalls: ToolCallRecord[] = [];
   stepCount = 0;
   usage = { input: 0, output: 0, cached: 0 };
+  /** Provider-reported prompt tokens of the turn's LAST step — the final
+   *  request's priced input size (0 until a step reports). Backends persist
+   *  it at turn end as the next turn's measured compaction-trigger signal. */
+  lastPromptTokens = 0;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
@@ -58,6 +62,7 @@ export class TurnAccumulator {
     this.toolCalls = [];
     this.stepCount = 0;
     this.usage = { input: 0, output: 0, cached: 0 };
+    this.lastPromptTokens = 0;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
@@ -105,6 +110,11 @@ export class TurnAccumulator {
     this.usage.input += inTok;
     this.usage.output += outTok;
     this.usage.cached += cached;
+    // Each step is one request, so the newest reporting step carries the
+    // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
+    // total). Keep the last non-zero report: a trailing step with absent
+    // usage must not erase a real measurement.
+    if (inTok > 0) this.lastPromptTokens = inTok;
     const extras: string[] = [];
     if (cached > 0) extras.push(`cached=${cached}`);
     if (reasoning > 0) extras.push(`reasoning=${reasoning}`);
