@@ -220,10 +220,50 @@ describe('engine.apply', () => {
     const clone = s.sandbox.commands.find((c) => c.includes('clone'));
     expect(clone).toBeDefined();
     expect(clone).toContain("'https://github.com/acme/site'");
-    expect(clone).toContain("http.extraheader='AUTHORIZATION: Basic dGVzdA=='");
+    expect(clone).toContain(`GIT_CONFIG_GLOBAL='/tmp/${s.changeId}.gitauth'`);
     const checkout = s.sandbox.commands.find((c) => c.includes('checkout -B'));
     expect(checkout).toContain(`'proteus/${s.changeId}'`);
     expect(checkout).toContain("'origin/main'");
+  });
+
+  test('github credential never enters argv: it rides a 0600 config file, removed when done', async () => {
+    const s = setup({
+      binding: { kind: 'github', repoUrl: 'https://github.com/acme/site' },
+      gitHubAuth: async () => 'Basic dGVzdA==',
+    });
+    scriptLocalGit(s.sandbox);
+    expect((await s.engine.apply(s.changeId)).ok).toBe(true);
+
+    // The secret is in NO command string (argv is world-readable via /proc)…
+    expect(s.sandbox.commands.every((c) => !c.includes('dGVzdA=='))).toBe(true);
+    // …it landed at the file seam, locked down, and was cleaned up.
+    const authFile = `/tmp/${s.changeId}.gitauth`;
+    expect(s.sandbox.files.get(authFile)).toBe('[http]\n\textraheader = AUTHORIZATION: Basic dGVzdA==\n');
+    expect(s.sandbox.commands.some((c) => c.includes(`chmod 600 '${authFile}'`))).toBe(true);
+    expect(s.sandbox.commands.some((c) => c.includes(`rm -f '${authFile}'`))).toBe(true);
+  });
+
+  test('github source with an existing clone: fetches the default branch tip before rebasing the change branch', async () => {
+    const s = setup({
+      binding: { kind: 'github', repoUrl: 'https://github.com/acme/site', defaultBranch: 'main' },
+      gitHubAuth: async () => 'Basic dGVzdA==',
+    });
+    s.sandbox
+      .on(/test -e .*\.git/, { stdout: 'yes' })  // clone already present
+      .on(/rev-parse HEAD~1/, { stdout: 'ba5eba5eba5e0000000000000000000000000000' })
+      .on(/rev-parse HEAD/, { stdout: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' });
+
+    const result = await s.engine.apply(s.changeId);
+    expect(result.ok).toBe(true);
+
+    const cmds = s.sandbox.commands;
+    expect(cmds.some((c) => c.includes('clone'))).toBe(false);
+    const fetchIdx = cmds.findIndex((c) => c.includes("fetch origin 'main'"));
+    const checkoutIdx = cmds.findIndex((c) => c.includes('checkout -B'));
+    expect(fetchIdx).toBeGreaterThanOrEqual(0);
+    expect(checkoutIdx).toBeGreaterThan(fetchIdx);
+    // The fetch is a network command — it carries the credential file too.
+    expect(cmds[fetchIdx]).toContain(`GIT_CONFIG_GLOBAL='/tmp/${s.changeId}.gitauth'`);
   });
 
   test('github source without credentials: auth clone failure yields an honest, actionable error', async () => {
@@ -520,6 +560,71 @@ describe('engine.rollback', () => {
     expect(sBadHead()).toBe(APPLY_SHA);
     const detail = s.store.detail(s.changeId);
     expect(detail.change.status).toBe('deployed'); // no ledger flip without verification
+    expect(detail.checks.find((c) => c.name === 'rollback')?.status).toBe('failed');
+  });
+
+  const PLATFORM_TARGET = '0b1d2f3a-4c5e-6789-abcd-ef0123456789';
+
+  /** Deployed change whose latest deployment rolls back to a PLATFORM version
+   *  id (a wrangler UUID), not a git sha — e.g. the second deploy of a
+   *  wrangler-deployed change. */
+  async function platformDeployedSetup(): Promise<Setup & { head: () => string }> {
+    const s = await deployedSetup({ deployTarget: 'bunx wrangler deploy' });
+    s.store.recordDeployment(s.changeId, {
+      environment: 'staging',
+      workerVersionId: 'ffffffff-1111-2222-3333-444444444444',
+      rollbackTarget: PLATFORM_TARGET,
+    });
+    const approval = s.store.requestApproval(s.changeId, 'rollback');
+    s.store.decideApproval(approval.id, 'approved', 'owner-1');
+    return s;
+  }
+
+  test('a platform-version-id target without a rollback command errors up front — no git reset runs', async () => {
+    const s = await platformDeployedSetup();
+    const before = s.sandbox.commands.length;
+
+    const result = await s.engine.rollback(s.changeId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('platform version id');
+      expect(result.error).toContain(`bunx wrangler rollback ${PLATFORM_TARGET}`);
+    }
+    expect(s.sandbox.commands.slice(before).some((c) => c.includes('reset --hard'))).toBe(false);
+    expect(s.store.getChange(s.changeId)?.status).toBe('deployed');
+  });
+
+  test('a platform-version-id target WITH an explicit command rolls back via that command, never git', async () => {
+    const s = await platformDeployedSetup();
+    s.sandbox.on(/wrangler rollback/, { stdout: `Rolled back to version ${PLATFORM_TARGET}` });
+    const before = s.sandbox.commands.length;
+
+    const result = await s.engine.rollback(s.changeId, { command: `bunx wrangler rollback ${PLATFORM_TARGET}` });
+    expect(result).toMatchObject({ ok: true, restored: PLATFORM_TARGET, verified: true, status: 'rolled_back' });
+
+    const after = s.sandbox.commands.slice(before);
+    expect(after.some((c) => c.includes(`wrangler rollback ${PLATFORM_TARGET}`))).toBe(true);
+    expect(after.some((c) => c.includes('reset --hard'))).toBe(false);
+
+    const detail = s.store.detail(s.changeId);
+    expect(detail.change.status).toBe('rolled_back');
+    expect(detail.checks.find((c) => c.name === 'rollback')?.status).toBe('passed');
+    expect(detail.deployments[0]).toMatchObject({
+      workerVersionId: PLATFORM_TARGET,
+      rollbackTarget: 'ffffffff-1111-2222-3333-444444444444', // the version rolled back FROM
+    });
+  });
+
+  test('a failing platform rollback command does NOT flip the ledger', async () => {
+    const s = await platformDeployedSetup();
+    s.sandbox.on(/wrangler rollback/, { exitCode: 1, stderr: 'A version with this ID does not exist' });
+
+    const result = await s.engine.rollback(s.changeId, { command: `bunx wrangler rollback ${PLATFORM_TARGET}` });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('does not exist');
+
+    const detail = s.store.detail(s.changeId);
+    expect(detail.change.status).toBe('deployed');
     expect(detail.checks.find((c) => c.name === 'rollback')?.status).toBe('failed');
   });
 

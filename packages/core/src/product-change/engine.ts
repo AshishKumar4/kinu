@@ -20,10 +20,12 @@
  *               deploy command (workerVersionId parsed from real output,
  *               e.g. wrangler's "Current Version ID:") or promotes the
  *               verified preview (workerVersionId = the real HEAD sha).
- *   rollback  → gated on an approved 'rollback' approval. Restores the
- *               recorded rollbackTarget with `git reset --hard`, VERIFIES
- *               `git rev-parse HEAD` matches, redeploys when a deploy
- *               command exists, and only then flips the ledger state.
+ *   rollback  → gated on an approved 'rollback' approval. A git-sha target is
+ *               restored with `git reset --hard`, VERIFIED via
+ *               `git rev-parse HEAD`, and redeployed when a deploy command
+ *               exists; a platform-version-id target (e.g. a wrangler UUID)
+ *               is rolled back by the explicit rollback command instead —
+ *               only then does the ledger state flip.
  *
  * The engine owns the transitions into validating / preview_ready /
  * applying / deployed / rolled_back (see isEngineOwnedTransitionTarget) —
@@ -242,8 +244,8 @@ export class ProductChangeEngine {
     return /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
   }
 
-  /** Clone (or refresh) the github working copy and check out the change
-   *  branch on a pristine base. Returns an error string on failure. */
+  /** Clone (or fetch-refresh) the github working copy and check out the
+   *  change branch on a pristine base. Returns an error string on failure. */
   private async ensureGithubWorkdir(
     exec: ProductChangeExec,
     changeId: string,
@@ -252,38 +254,59 @@ export class ProductChangeEngine {
   ): Promise<string | null> {
     if (!binding.repoUrl) return 'github source binding has no repoUrl';
     const auth = (await this.gitHubAuth?.()) ?? null;
-    const authFlag = auth ? `-c http.extraheader=${shellQuote(`AUTHORIZATION: ${auth}`)} ` : '';
     const branch = binding.defaultBranch ?? 'main';
-    const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
-    if (!hasRepo) {
-      await this.run(exec, `rm -rf ${shellQuote(workdir)} && mkdir -p ${shellQuote(this.workRoot)}`);
-      const clone = await this.run(
-        exec,
-        `${GIT} ${authFlag}clone --depth 50 --branch ${shellQuote(branch)} ${shellQuote(binding.repoUrl)} ${shellQuote(workdir)}`,
-        { timeout: CLONE_TIMEOUT_MS },
-      );
-      if (clone.exitCode !== 0) {
-        const out = combinedOutput(clone);
-        const authy = /authentication|could not read|403|401|terminal prompts disabled/i.test(out);
-        if (authy && !auth) {
-          return (
-            `git clone of ${binding.repoUrl} failed and no GitHub credential is stored. ` +
-            `Add a GitHub token as a credential named 'github' (a fine-grained PAT with contents read/write ` +
-            `for this repo), then retry apply.\n${cap(out)}`
-          );
-        }
-        return `git clone failed (exit ${clone.exitCode}):\n${cap(out)}`;
-      }
+    // The credential never enters argv (visible to every sandbox process via
+    // /proc/*/cmdline): it lands in a 0600 config file that network git
+    // commands pick up through GIT_CONFIG_GLOBAL, removed when done.
+    const authFile = `/tmp/${changeId}.gitauth`;
+    const netGit = auth ? `GIT_CONFIG_GLOBAL=${shellQuote(authFile)} ${GIT}` : GIT;
+    if (auth) {
+      await exec.writeFile(authFile, `[http]\n\textraheader = AUTHORIZATION: ${auth}\n`);
+      await this.run(exec, `chmod 600 ${shellQuote(authFile)}`);
     }
-    // Pristine base for every (re-)apply: drop local drift, rebuild the
-    // change branch from the fetched default branch tip.
-    const checkout = await this.run(
-      exec,
-      `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`proteus/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
-      { cwd: workdir },
-    );
-    if (checkout.exitCode !== 0) return `git checkout failed (exit ${checkout.exitCode}):\n${cap(combinedOutput(checkout))}`;
-    return null;
+    try {
+      const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
+      if (!hasRepo) {
+        await this.run(exec, `rm -rf ${shellQuote(workdir)} && mkdir -p ${shellQuote(this.workRoot)}`);
+        const clone = await this.run(
+          exec,
+          `${netGit} clone --depth 50 --branch ${shellQuote(branch)} ${shellQuote(binding.repoUrl)} ${shellQuote(workdir)}`,
+          { timeout: CLONE_TIMEOUT_MS },
+        );
+        if (clone.exitCode !== 0) {
+          const out = combinedOutput(clone);
+          const authy = /authentication|could not read|403|401|terminal prompts disabled/i.test(out);
+          if (authy && !auth) {
+            return (
+              `git clone of ${binding.repoUrl} failed and no GitHub credential is stored. ` +
+              `Add a GitHub token as a credential named 'github' (a fine-grained PAT with contents read/write ` +
+              `for this repo), then retry apply.\n${cap(out)}`
+            );
+          }
+          return `git clone failed (exit ${clone.exitCode}):\n${cap(out)}`;
+        }
+      } else {
+        // The pristine base below is origin/<branch> — fetch its CURRENT tip
+        // so a re-apply never builds on a stale clone.
+        const fetched = await this.run(
+          exec,
+          `${netGit} fetch origin ${shellQuote(branch)}`,
+          { cwd: workdir, timeout: CLONE_TIMEOUT_MS },
+        );
+        if (fetched.exitCode !== 0) return `git fetch failed (exit ${fetched.exitCode}):\n${cap(combinedOutput(fetched))}`;
+      }
+      // Pristine base for every (re-)apply: drop local drift, rebuild the
+      // change branch from the fetched default branch tip.
+      const checkout = await this.run(
+        exec,
+        `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`proteus/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
+        { cwd: workdir },
+      );
+      if (checkout.exitCode !== 0) return `git checkout failed (exit ${checkout.exitCode}):\n${cap(combinedOutput(checkout))}`;
+      return null;
+    } finally {
+      if (auth) await this.run(exec, `rm -f ${shellQuote(authFile)}`);
+    }
   }
 
   /** Init (or reset) the local working copy. First apply snapshots whatever
@@ -588,6 +611,16 @@ export class ProductChangeEngine {
       return { ok: false, error: 'no rollback target recorded on the latest deployment — nothing to restore' };
     }
     const target = latest.rollbackTarget;
+    const isCommitTarget = /^[0-9a-f]{7,40}$/.test(target);
+    const explicitCommand = opts?.command?.trim() || null;
+    if (!isCommitTarget && !explicitCommand) {
+      return {
+        ok: false,
+        error:
+          `rollback target ${target} is a platform version id, not a git commit — no git reset can restore it. ` +
+          `Pass deployment.command with an explicit rollback command (e.g. "bunx wrangler rollback ${target}")`,
+      };
+    }
 
     const workdir = this.workdirFor(changeId);
     if (!(await this.pathExists(exec, `${workdir}/.git`))) {
@@ -605,14 +638,36 @@ export class ProductChangeEngine {
     }
 
     const started = Date.now();
+
+    // Platform-version-id target: the explicit command IS the rollback —
+    // there is nothing for git to restore, so no git reset runs at all.
+    if (!isCommitTarget) {
+      const res = await this.run(exec, explicitCommand!, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
+      await this.ledger.recordCheck(changeId, {
+        name: 'rollback',
+        status: res.exitCode === 0 ? 'passed' : 'failed',
+        stdout: cap(res.stdout),
+        stderr: cap(res.stderr || (res.exitCode !== 0 ? `rollback command exited ${res.exitCode}` : '')),
+        durationMs: Date.now() - started,
+      });
+      if (res.exitCode !== 0) {
+        return { ok: false, error: `rollback command exited ${res.exitCode}:\n${cap(combinedOutput(res))}` };
+      }
+      await this.ledger.recordDeployment(changeId, {
+        environment: latest.environment,
+        workerVersionId: target,
+        deploymentId: `rollback of ${latest.workerVersionId ?? latest.id}`,
+        rollbackTarget: latest.workerVersionId,
+      });
+      const updated = await this.ledger.transition(changeId, 'rolled_back');
+      return { ok: true, restored: target, verified: true, status: updated.status };
+    }
+
     const reset = await this.run(exec, `${GIT} reset --hard ${shellQuote(target)} && ${GIT} clean -fd`, { cwd: workdir });
     if (reset.exitCode !== 0) {
       return {
         ok: false,
-        error:
-          `git reset --hard ${target} failed (exit ${reset.exitCode}) — the rollback target may be a platform ` +
-          `version id rather than a commit; pass deployment.command with an explicit rollback command ` +
-          `(e.g. "bunx wrangler rollback ${target}")\n${cap(combinedOutput(reset))}`,
+        error: `git reset --hard ${target} failed (exit ${reset.exitCode})\n${cap(combinedOutput(reset))}`,
       };
     }
     const restoredSha = await this.headSha(exec, workdir);
@@ -629,7 +684,7 @@ export class ProductChangeEngine {
 
     // Re-deploy the restored state when a deploy command exists; a promoted
     // preview serves the workdir directly, so the reset already took effect.
-    const command = opts?.command?.trim() || deployTargetAsCommand(binding?.deployTarget ?? null);
+    const command = explicitCommand ?? deployTargetAsCommand(binding?.deployTarget ?? null);
     let redeployNote = 'preview workdir restored in place';
     if (command) {
       const res = await this.run(exec, command, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
