@@ -18,7 +18,7 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
-  IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
+  IngressDescriptor, ProteusEvent, EventVariant,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
 } from '@proteus/core';
@@ -407,16 +407,6 @@ export class LocalAgentSession implements BackendHost {
 
   listRecentEvents(opts: { variant?: EventVariant; since?: number; limit?: number } = {}): ProteusEvent[] {
     return this.eventLog.query(opts);
-  }
-
-  deferEvent(eventId: string, revisitAt: RevisitCondition): { ok: true } {
-    this.eventLog.defer(eventId, revisitAt);
-    return { ok: true };
-  }
-
-  dismissEvent(eventId: string, reason: string): { ok: true } {
-    this.eventLog.dismiss(eventId, reason, 'tool');
-    return { ok: true };
   }
 
   listTriggers(): { triggers: LocalTriggerView[] } {

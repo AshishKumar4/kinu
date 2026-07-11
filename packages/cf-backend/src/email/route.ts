@@ -8,7 +8,7 @@
  * existence oracle for probes.
  */
 
-import { agentNameFromRecipient, parseInboundMime } from './inbound.js';
+import { agentNameFromRecipient, isAutoReplyEmail, parseInboundMime } from './inbound.js';
 
 /** The structural slice of ForwardableEmailMessage this routing consumes —
  *  the mock seam for tests. */
@@ -45,6 +45,11 @@ export async function routeInboundEmail(
   const agentName = agentNameFromRecipient(message.to, emailDomain);
   if (!agentName) {
     return { outcome: 'dropped', reason: `unroutable recipient ${message.to}` };
+  }
+  // Drop auto-replies (RFC 3834) before waking a turn: Proteus replies
+  // on-thread, so admitting a vacation responder or peer agent would loop.
+  if (isAutoReplyEmail(message.headers)) {
+    return { outcome: 'dropped', agent: agentName, reason: 'auto-reply (RFC 3834)' };
   }
   // message.raw is single-use — buffer before parsing.
   const raw = await new Response(message.raw).arrayBuffer();

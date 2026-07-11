@@ -66,14 +66,16 @@ export function createEmailThreadDispatcher(
         return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
       }
       const text = payloadText(payload);
-      const headers = threadingHeaders(addr);
+      // RFC 3834: mark our reply auto-replied so peers (and our own inbound
+      // guard) don't bounce it back into an infinite thread loop.
+      const headers = { 'Auto-Submitted': 'auto-replied', ...threadingHeaders(addr) };
       try {
         await ctx.email.send({
           from: { email: addr.from, name: ctx.agentDisplayName },
           to: addr.to,
           subject: replySubject(addr.subject),
           text,
-          ...(Object.keys(headers).length > 0 ? { headers } : {}),
+          headers,
         });
         return { delivered: true };
       } catch (err) {
@@ -143,6 +145,7 @@ export async function sendOwnerEmail(
       to: deps.ownerEmail,
       subject: `[${deps.agentDisplayName}] ${note.subject}`,
       text: note.text,
+      headers: { 'Auto-Submitted': 'auto-generated' },
     });
     return true;
   } catch (err) {

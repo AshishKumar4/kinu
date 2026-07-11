@@ -98,9 +98,6 @@ import {
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, type HybridHit,
-  // SKILL.md export/import (git-friendly crafted-tool format)
-  exportAllSkillsToVfs, importSkillsFromVfs,
-  type ExportSkillsResult, type ImportSkillsResult,
   type CompletedTurn, type ToolCallRecord, type AgentRuntime,
   type SessionWriter, type SessionMessage, type SqlExecutor,
   // Adaptive reasoning_effort per stage
@@ -2836,11 +2833,6 @@ export class OrchestratorAgent extends Think<Env> {
     };
   }
 
-  @callable() async getEvolutionEvents(limit: number = 50) {
-    return this.sql`SELECT id, type, message, data, created_at
-      FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
-  }
-
   // ── Evolution Changelog — the self-change digest + revert (core builder) ──
 
   /** The "what I changed about myself" digest, assembled on demand from the
@@ -3421,18 +3413,6 @@ export class OrchestratorAgent extends Think<Env> {
     return { ok: true, messageId, feedback, rescored };
   }
 
-  /** Read recorded feedback for a message. Returns null if none. */
-  @callable()
-  async getTurnFeedback(messageId: string): Promise<{ feedback: 'positive' | 'negative' | null }> {
-    try {
-      const rows = this.sql<{ feedback: 'positive' | 'negative' }>`
-        SELECT feedback FROM turn_feedback WHERE message_id = ${messageId} LIMIT 1`;
-      return { feedback: rows[0]?.feedback ?? null };
-    } catch {
-      return { feedback: null };
-    }
-  }
-
   /** All recorded feedback keyed by message id — one round-trip so the chat
    *  hydrates its thumbs marks on load instead of forgetting them. */
   @callable()
@@ -3468,12 +3448,6 @@ export class OrchestratorAgent extends Think<Env> {
     }
     this.config.set(key, value);
     return { ok: true, key, value };
-  }
-
-  /** Read an agent_config value by key. Returns null if unset. */
-  @callable()
-  async getAgentConfig(key: string): Promise<{ key: string; value: string | null }> {
-    return { key, value: this.config.get(key) };
   }
 
   /** The scaffold variant archive: recent versions with status, DGM lineage
@@ -3971,12 +3945,6 @@ export class OrchestratorAgent extends Think<Env> {
     });
   }
 
-  /** Count events for a single run — for UI badges. */
-  @callable()
-  async countRunEvents(runId: string): Promise<number> {
-    return this.eventRecorder.count(runId);
-  }
-
   // ── MCP server bridge — small RPCs the MCP handler needs ──
   /** Used by the /mcp/v1/<name> save_note tool. Routes through the same
    *  appendMemoryNote primitive as workspace.saveNote + the `memory` builtin. */
@@ -4037,33 +4005,8 @@ export class OrchestratorAgent extends Think<Env> {
     return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, { finalK: limit });
   }
 
-  /** Returns whether semantic memory is enabled on this deployment. */
-  @callable()
-  async vectorStoreStatus(): Promise<{ available: boolean }> {
-    return { available: this.rt.vectorStore.available };
-  }
-
   // ── SKILL.md export/import — make crafted tools git-friendly ──
 
-  /**
-   * Export every crafted tool to a SKILL.md file under `skills/` in the VFS.
-   * Returns counts + per-tool error list. Skips tools whose code is empty
-   * or comment-only.
-   */
-  @callable()
-  async exportSkillsToVfs(dir?: string): Promise<ExportSkillsResult> {
-    return exportAllSkillsToVfs(this.rt.storage.vfs, this.rt.craftStore, { dir });
-  }
-
-  /**
-   * Import every SKILL.md file under `skills/` in the VFS back into the
-   * CraftStore. For existing tools: update in place. For new ones: create.
-   * Parse errors are reported per-file but don't halt the import.
-   */
-  @callable()
-  async importSkillsFromVfs(dir?: string): Promise<ImportSkillsResult> {
-    return importSkillsFromVfs(this.rt.storage.vfs, this.rt.craftStore, { dir });
-  }
 
   /** Build a streaming LLM callback the scaffold executor calls via
    *  `host.llmStream(opts)` — text chunks come back as 'text_delta' events.
@@ -4121,21 +4064,6 @@ export class OrchestratorAgent extends Think<Env> {
   @callable() async getMemoryContent() {
     try { return await this.rt.memory.read("memory/MEMORY.md") ?? ""; }
     catch { return ""; }
-  }
-
-  /**
-   * Phase D evidence RPC: returns the LIVE execute_tools.description string —
-   * the exact text the LLM sees in its tool list. Used by the evidence script
-   * to assert that crafted tools appear under `codemode.<name>` in the
-   * generated TypeScript-like interface codemode emits.
-   *
-   * This is introspection-only: it calls the same getTools() the chat loop
-   * does, then extracts the description. No side effects.
-   */
-  @callable() async getExecuteToolsDescription() {
-    const tools = this.getRawTools();
-    const et = tools.execute_tools as { description?: string } | undefined;
-    return { description: et?.description ?? '' };
   }
 
   @callable() async getToolDescriptions() {
@@ -4350,25 +4278,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /**
-   * Direct RPC to the sandbox executor's exposePort tool. Used by the UI
-   * and by integration tests to pin a port to the preview iframe grid.
-   * Returns the public URL on success.
-   */
-  @callable() async exposeSandboxPort(port: number, name?: string): Promise<{ url?: string; error?: string }> {
-    const provider = this.rt.executionRouter?.getProvider('sandbox');
-    if (!provider) return { error: 'sandbox executor not available' };
-    const tool = provider.tools.exposePort;
-    if (!tool) return { error: 'sandbox executor has no exposePort' };
-    try {
-      const raw = name ? await tool.execute(port, name) : await tool.execute(port);
-      const url = typeof raw === 'string' ? raw : undefined;
-      return { url };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  /**
    * Return the current list of exposed ports for a given executor. Powers
    * the auto-refreshing preview grid in the Executors tab. Sandbox returns
    * its active `exposePort(...)` registrations; other executors return [].
@@ -4486,51 +4395,6 @@ export class OrchestratorAgent extends Think<Env> {
     return { soul: text, purpose: summarizeSoul(text) };
   }
 
-  @callable() async clearMemory() {
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    execRaw("DELETE FROM vfs_files WHERE path LIKE 'memory/%'");
-    execRaw("DELETE FROM memory_chunks");
-    try { execRaw("DELETE FROM memory_chunks_fts"); } catch { /* FTS table may not exist */ }
-    return { cleared: true };
-  }
-
-  @callable() async resetMctsTree() {
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    execRaw("DELETE FROM search_nodes");
-    return { cleared: true };
-  }
-
-  @callable() async getLogs(limit = 100) {
-    type LogType = "connection" | "tool" | "evolution" | "error" | "info";
-    const evoRows = this.sql<{ id: string; type: string; message: string; created_at: number }>`
-      SELECT id, type, message, created_at FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
-    const evoLogs = evoRows.map(e => ({
-      id: e.id,
-      time: e.created_at,
-      type: (e.type.includes("error") ? "error" : "evolution") as LogType,
-      message: `[${e.type}] ${e.message}`,
-    }));
-    let actLogs: Array<{ id: string; time: number; type: LogType; message: string; detail?: string }> = [];
-    try {
-      const actRows = this.sql<{ id: string; event: string; detail: string | null; elapsed_ms: number; created_at: number }>`
-        SELECT id, event, detail, elapsed_ms, created_at FROM activity_log ORDER BY created_at DESC LIMIT ${limit}`;
-      actLogs = actRows.map(a => {
-        // Color-code by latency: info (green) <1s, tool (amber) 1-5s, error (red) >5s
-        const type: LogType = a.elapsed_ms > 5000 ? "error" : a.elapsed_ms > 1000 ? "tool" : "info";
-        return {
-          id: a.id,
-          time: a.created_at,
-          type,
-          message: `[${a.elapsed_ms}ms] ${a.event}`,
-          detail: a.detail ?? undefined,
-        };
-      });
-    } catch { /* table may not exist yet */ }
-    const merged = [...evoLogs, ...actLogs];
-    merged.sort((a, b) => b.time - a.time);
-    return merged.slice(0, limit);
-  }
-
   @callable() async getMctsConfig() {
     // Effective values: stored overrides over the engine defaults — exactly
     // what the think-tool path and lifetime evolution will run with.
@@ -4623,15 +4487,6 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       console.warn("[proteus] broadcastMctsProgress failed:", err);
     }
-  }
-
-  @callable()
-  async getActivityLog(limit = 100) {
-    try {
-      return this.sql<{ id: string; event: string; detail: string | null; elapsed_ms: number; created_at: number }>`
-        SELECT id, event, detail, elapsed_ms, created_at FROM activity_log
-        ORDER BY created_at DESC LIMIT ${limit}`;
-    } catch { return []; }
   }
 
   // ── Fork RPCs ──────────────────────────────────────────────────
@@ -4744,12 +4599,6 @@ export class OrchestratorAgent extends Think<Env> {
     });
 
     return { ok: true, agentId: this.ctx.id.toString() };
-  }
-
-  /** Expose the single-row fork_lineage for the UI lineage chip. */
-  @callable()
-  async getForkLineage() {
-    return readForkLineage(this.boundSql);
   }
 
   /**
@@ -4939,32 +4788,6 @@ export class OrchestratorAgent extends Think<Env> {
       next_fire_at: nextFireAt ?? undefined,
     }, now);
     return { id, kind, nextFireAt };
-  }
-
-  /**
-   * Enable/disable continuous self-optimization. Auto-GEPA is TRACE-driven, not
-   * clock-driven: it runs after `everyNTurns` turns of new execution history
-   * accrue (gated on no pending scaffold), so it fires when there's genuinely
-   * new material to learn from and pauses automatically when the agent is idle —
-   * a wall-clock cron would waste passes on identical eval sets. 0/null disables.
-   * Operator-gated; pairs with `auto_promote_scaffold` for a fully-autonomous
-   * improve→shadow-eval→promote/rollback cycle.
-   */
-  @callable()
-  async setAutoGepa(everyNTurns: number | null): Promise<{ ok: true; everyNTurns: number }> {
-    // Clean up any trigger from the prior cron-based design.
-    const prev = this.config.get('auto_gepa_trigger_id');
-    if (prev) { this.triggerRegistry.revoke(prev, Date.now()); this.config.delete('auto_gepa_trigger_id'); }
-    this.config.delete('auto_gepa_cron');
-    this.config.setAutoGepaEveryNTurns(everyNTurns ?? 0);
-    this._turnsSinceGepa = 0;
-    return { ok: true, everyNTurns: this.config.getAutoGepaEveryNTurns() };
-  }
-
-  /** Current auto-GEPA cadence (turns of new traces between passes; 0 = off). */
-  @callable()
-  async getAutoGepa(): Promise<{ everyNTurns: number }> {
-    return { everyNTurns: this.config.getAutoGepaEveryNTurns() };
   }
 
   /**
@@ -5311,53 +5134,6 @@ export class OrchestratorAgent extends Think<Env> {
         received_at: e.received_at,
       })),
     };
-  }
-
-  /** Currently-pending (unbound) events. The agent's LLM calls this via
-   *  the `list_pending_events` tool. */
-  @callable()
-  async listPendingEvents() {
-    const events = this.eventLog.pending({ limit: 50 });
-    return {
-      events: events.map((e) => ({
-        id: e.id,
-        variant: e.variant,
-        trust: e.trust,
-        priority: e.priority,
-        triggered_by: e.ingress,
-        received_at: e.received_at,
-      })),
-    };
-  }
-
-  /** Defer an event with an enumerated revisit condition (LLM-facing). */
-  @callable()
-  async deferEvent(event_id: string, revisit_at: RevisitCondition) {
-    this.eventLog.defer(event_id, revisit_at);
-    return { ok: true };
-  }
-
-  /** Explicit drop (LLM-facing). */
-  @callable()
-  async dismissEvent(event_id: string, reason: string = 'agent dismissed') {
-    this.eventLog.dismiss(event_id, reason, 'tool');
-    return { ok: true };
-  }
-
-  @callable()
-  async triggerEvolution(budget = 5) {
-    // Outer fiber for durability + checkpointing. Nested fibers are supported
-    // in the Agent SDK (each gets its own ID, cf_agents_runs row, ALS context).
-    return this.runFiber("lifetime-evolution", async (ctx) => {
-      ctx.stash({ phase: "starting", budget });
-      this.broadcastMctsProgress("starting", 0, budget);
-      const session = this.createMCTSSession();
-      ctx.stash({ phase: "mcts", budget });
-      await this.engine.onLifetimeEvolution(session);
-      this.broadcastMctsProgress("completed");
-      ctx.stash({ phase: "completed" });
-      return { status: "completed", budget };
-    });
   }
 
   // ── Internal: timing-safe string compare for webhook auth ──────

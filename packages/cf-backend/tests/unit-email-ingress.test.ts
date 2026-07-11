@@ -221,7 +221,7 @@ describe('acceptInboundEmail — the trust gate', () => {
 });
 
 describe('routeInboundEmail — the Worker seam', () => {
-  function mockMessage(opts: { from?: string; to?: string; raw?: string } = {}) {
+  function mockMessage(opts: { from?: string; to?: string; raw?: string; headers?: Record<string, string> } = {}) {
     const raw = opts.raw ?? [
       'From: owner@example.com',
       `To: ${opts.to ?? `scout-a1b2c3@${DOMAIN}`}`,
@@ -234,7 +234,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     return {
       from: opts.from ?? 'owner@example.com',
       to: opts.to ?? `scout-a1b2c3@${DOMAIN}`,
-      headers: new Headers({ 'message-id': '<abc@mail.example.com>' }),
+      headers: new Headers({ 'message-id': '<abc@mail.example.com>', ...opts.headers }),
       raw: new Response(raw).body as ReadableStream<Uint8Array>,
     };
   }
@@ -274,6 +274,31 @@ describe('routeInboundEmail — the Worker seam', () => {
     );
     expect(result.outcome).toBe('dropped');
     expect(resolves).toBe(0);
+  });
+
+  test('auto-reply / bulk mail (RFC 3834) is dropped before any agent is touched', async () => {
+    let resolves = 0;
+    for (const headers of [
+      { 'auto-submitted': 'auto-replied' },
+      { precedence: 'bulk' },
+      { 'list-id': '<newsletter.example.com>' },
+      { 'x-auto-response-suppress': 'All' },
+    ]) {
+      const result = await routeInboundEmail(mockMessage({ headers }), DOMAIN, async () => {
+        resolves++;
+        return { acceptEmailDelivery: async () => ({ admitted: true }) };
+      });
+      expect(result).toEqual({ outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'auto-reply (RFC 3834)' });
+    }
+    expect(resolves).toBe(0);
+  });
+
+  test('Auto-Submitted: no is human mail and still drives a turn', async () => {
+    const target: EmailDeliveryTarget = { acceptEmailDelivery: async () => ({ admitted: true, duplicate: false }) };
+    const result = await routeInboundEmail(
+      mockMessage({ headers: { 'auto-submitted': 'no' } }), DOMAIN, async () => target,
+    );
+    expect(result).toEqual({ outcome: 'admitted', agent: 'scout-a1b2c3' });
   });
 
   test('a gate rejection surfaces as dropped with the agent reason', async () => {

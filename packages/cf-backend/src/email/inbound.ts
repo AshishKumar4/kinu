@@ -42,6 +42,25 @@ export function agentEmailAddress(agentName: string, emailDomain: string): strin
   return `${agentName.toLowerCase()}@${emailDomain.trim().toLowerCase()}`;
 }
 
+/**
+ * RFC 3834 auto-reply / bulk-mail detection. Since Proteus auto-replies
+ * on-thread, admitting another machine's auto-reply (a vacation responder, or
+ * a second agent) would loop the two forever — so these are dropped inbound.
+ * Adopted from the Agents SDK's `isAutoReplyEmail`.
+ */
+export function isAutoReplyEmail(headers: Headers): boolean {
+  // RFC 3834: "no" is the only value that marks human-sent mail.
+  const autoSubmitted = headers.get('auto-submitted');
+  if (autoSubmitted && autoSubmitted.trim().toLowerCase() !== 'no') return true;
+  // Any value means the sender doesn't want auto-replies.
+  if (headers.get('x-auto-response-suppress')) return true;
+  const precedence = headers.get('precedence')?.trim().toLowerCase();
+  if (precedence === 'bulk' || precedence === 'junk' || precedence === 'list') return true;
+  // Mailing-list mail carries List-* headers (RFC 2919/2369).
+  if (headers.has('list-id') || headers.has('list-unsubscribe')) return true;
+  return false;
+}
+
 // ── Quoted-history stripping ─────────────────────────────────────
 
 /** Markers that begin quoted history / signatures in common mail clients.

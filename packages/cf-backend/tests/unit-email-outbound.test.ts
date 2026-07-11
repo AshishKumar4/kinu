@@ -113,6 +113,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       subject: 'Re: Check the deploy',
       text: 'Yes — staging is green. All 1,470 tests pass.',
       headers: {
+        'Auto-Submitted': 'auto-replied',
         'In-Reply-To': '<abc@mail.example.com>',
         References: '<root@mail.example.com> <abc@mail.example.com>',
       },
@@ -193,6 +194,7 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
       to: 'owner@example.com',
       subject: '[Scout] Evolution changelog digest',
       text: 'Self-change digest: 3 entries…',
+      headers: { 'Auto-Submitted': 'auto-generated' },
     });
   });
 
