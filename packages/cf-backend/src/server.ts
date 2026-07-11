@@ -21,6 +21,7 @@
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
+import { extractOrchestratorAgentName, isForeignAgentNamespacePath } from "./agent-routing.js";
 import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
@@ -163,16 +164,6 @@ async function authenticateCliAgentTicketRequest(
   }
 }
 
-// Anchored: a connect ticket is only valid for the agent's root websocket
-// path. Sub-paths (e.g. facet routing under the agent) would expose a child
-// agent's @callable surface to scoped sockets, so they never ticket-auth.
-const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(`^/agents/${ORCHESTRATOR_AGENT_SLUG}/([^/]+)$`);
-
-function extractOrchestratorAgentName(pathname: string): string | null {
-  const match = pathname.match(ORCHESTRATOR_AGENT_PATH_RE);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
@@ -253,6 +244,14 @@ export default {
     // 10. Per-agent routes — verify ownership.
     const agentName = extractAgentName(url.pathname);
     if (agentName) {
+      // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
+      // binding by slug. Only the orchestrator namespace is client-reachable;
+      // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* are worker-side-only
+      // (env.<NS>.get(id).method() stubs — no HTTP route, no @callable surface).
+      // Reject any other /agents/<slug>/… before it can route to a foreign DO.
+      if (isForeignAgentNamespacePath(url.pathname)) {
+        return withD1Bookmark(err(404, 'Not found'), identity);
+      }
       const denial = await ensureAgentOwnership(env, identity, agentName);
       if (denial) return withD1Bookmark(denial, identity);
       // Inject the userId so downstream handlers can resolve UserDO without

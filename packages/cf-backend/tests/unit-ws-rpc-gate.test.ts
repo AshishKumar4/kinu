@@ -104,8 +104,9 @@ describe('wiring invariants (edge → ticket → DO)', () => {
     expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
     expect(server).toContain('cliScopes: verified.scopes');
     // Tickets only authenticate the agent's root websocket path — sub-paths
-    // would expose child-agent callables to scoped sockets.
-    expect(server).toContain('([^/]+)$');
+    // would expose child-agent callables to scoped sockets. The anchored path
+    // regex lives in the agent-routing policy module server.ts routes through.
+    expect(source('src/agent-routing.ts')).toContain('([^/]+)$');
   });
 
   test('ticket verification resolves the bearer scopes at verify time', () => {
