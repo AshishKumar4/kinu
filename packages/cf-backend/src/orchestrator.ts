@@ -718,7 +718,7 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── Peer transport endpoint (agent teams) ────────────────────────────────
   // Sender: peer_outbox rows dispatched via DO RPC (inline + alarm retry).
-  // Receiver: the receivePeerMessage @callable below. The `team` tool's
+  // Receiver: the receivePeerMessage cross-DO RPC below. The `team` tool's
   // ask/send/reply actions ride this hub; spawn adds the create-agent path.
   private _peerHub: PeerHub | null = null;
   protected get peerHub(): PeerHub {
@@ -2411,7 +2411,6 @@ export class OrchestratorAgent extends Think<Env> {
   // the cf adapter over it + the BackgroundJobStore.
 
   /** Read a background job's result (the synthesis turn calls this). */
-  @callable()
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
     try { return this.jobs.get(jobId); } catch { return null; }
   }
@@ -2868,7 +2867,6 @@ export class OrchestratorAgent extends Think<Env> {
     return this.requireOwnerUserDO().updateProductChange(changeId, patch);
   }
 
-  @callable()
   async transitionProductChange(changeId: string, status: ProductChangeStatus) {
     return this.requireOwnerUserDO().transitionProductChange(changeId, status);
   }
@@ -2904,7 +2902,6 @@ export class OrchestratorAgent extends Think<Env> {
     return this.requireOwnerUserDO().recordProductDeployment(changeId, input);
   }
 
-  @callable()
   async getAgentStatus() {
     try {
       const soul = readSoul(this.boundSql) ?? "";
@@ -2949,7 +2946,6 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  @callable()
   async getChatHistory(limit = 100): Promise<Array<{ id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string | number }>> {
     const bounded = Math.max(1, Math.min(200, Math.floor(limit)));
     try {
@@ -2985,7 +2981,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  @callable() async getToolList() {
+  async getToolList() {
     const crafted = this.rt.craftStore.list().map(t => {
       const scoreRow = this.sql<{ score: number; uses: number }>`
         SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;
@@ -3343,7 +3339,6 @@ export class OrchestratorAgent extends Think<Env> {
    * When `useShadowOverride` is true, runs the pending scaffold instead of
    * the current one (if a pending exists).
    */
-  @callable()
   async runScaffoldOnce(
     task: string,
     opts?: { useShadowOverride?: boolean; timeoutMs?: number },
@@ -3370,7 +3365,6 @@ export class OrchestratorAgent extends Think<Env> {
    * gate (runShadowEvalSampled) like any other proposal — no new safety
    * surface.
    */
-  @callable()
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
     const result = await modifyScaffold(
       this.rt, rationale, code,
@@ -3388,7 +3382,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
-  @callable()
   async getShadowStatus() {
     const pending = getPendingScaffold(this.boundSql);
     if (!pending) {
@@ -3924,7 +3917,6 @@ export class OrchestratorAgent extends Think<Env> {
    * captured lazily on first call (returns empty + baselineJustCaptured) and
    * re-markable via resetWorkspaceBaseline ("mark reviewed").
    */
-  @callable()
   async getWorkspaceDiff(): Promise<{ files: FileDiff[]; baselineJustCaptured: boolean }> {
     const current = await this.readWorkspaceFiles();
     let baselineRows: Array<{ path: string; content: string }> = [];
@@ -4014,7 +4006,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** A head writes a finding; namespaced under its headId so writes never collide. */
-  @callable()
   async sharedScratchWrite(headId: string, relPath: string, content: string): Promise<{ ok: boolean; path: string }> {
     const ns = (headId || 'head').replace(/[^a-zA-Z0-9_-]/g, '_');
     const rel = this.sanitizeSharedPath(relPath) || 'note.md';
@@ -4027,7 +4018,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Read any head's finding by path relative to shared/findings/. */
-  @callable()
   async sharedScratchRead(relPath: string): Promise<string | null> {
     const rel = this.sanitizeSharedPath(relPath);
     if (!rel) return null;
@@ -4040,7 +4030,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** List every finding in the shared scratch (paths relative to its root). */
-  @callable()
   async sharedScratchList(): Promise<string[]> {
     const vfs = this.rt.storage.vfs;
     const root = OrchestratorAgent.SHARED_FINDINGS_ROOT;
@@ -4064,8 +4053,8 @@ export class OrchestratorAgent extends Think<Env> {
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
    *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and no
    *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
-   *  the DO wipe (storage + alarm) always runs. */
-  @callable()
+   *  the DO wipe (storage + alarm) always runs. Deliberately NOT @callable:
+   *  destruction goes through UserDO's ownership check, never the raw websocket. */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
     const ownerUserId = this.getOwnerUserId();
@@ -4133,13 +4122,11 @@ export class OrchestratorAgent extends Think<Env> {
    * the last seen `since` index and the recorder returns events strictly
    * after it.
    */
-  @callable()
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return this.eventRecorder.read(runId, opts ?? {});
   }
 
   /** List the agent's recent runs with their latest timestamp + event count. */
-  @callable()
   async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
     return this.eventRecorder.listRuns(limit);
   }
@@ -4220,7 +4207,6 @@ export class OrchestratorAgent extends Think<Env> {
    * Returns enriched HybridHit[] with sources, RRF score, and individual
    * lexical/semantic scores when available.
    */
-  @callable()
   async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
@@ -4330,7 +4316,7 @@ export class OrchestratorAgent extends Think<Env> {
     return { displayName };
   }
 
-  @callable() async setAutoDisplayName(displayName: string) {
+  async setAutoDisplayName(displayName: string) {
     await this.propagateDisplayName(displayName);
     this.config.setNameOrigin('auto');
     return { displayName };
@@ -4361,7 +4347,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  @callable() async getExecutorOutput(executorId: string, limit: number = 50) {
+  async getExecutorOutput(executorId: string, limit: number = 50) {
     return this.sql`SELECT id, executor, command, stdout, stderr, exit_code, created_at
       FROM executor_output WHERE executor = ${executorId}
       ORDER BY created_at DESC LIMIT ${limit}`;
@@ -4966,7 +4952,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Cancel a trigger (revoke). Idempotent. */
-  @callable()
   async cancelTrigger(trigger_id: string) {
     const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
     return { ok: true, changed };
@@ -5184,8 +5169,9 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Look up a webhook secret by trigger id. Used by the webhook ingress at
-   *  request time. Returns null if the trigger has no secret or doesn't exist. */
-  @callable()
+   *  request time. Returns null if the trigger has no secret or doesn't exist.
+   *  Deliberately NOT @callable: secret material must never be readable over
+   *  the browser websocket. */
   async getWebhookSecret(trigger_id: string): Promise<{ secret: string | null }> {
     try {
       const rows = this.ctx.storage.sql.exec(
@@ -5264,7 +5250,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** The agent's email surface for the operator UI / routes. */
-  @callable()
   async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
     const domain = this.env.EMAIL_DOMAIN;
     return {
@@ -5279,7 +5264,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  (creator_trust recorded like every ingress) holds the extra senders, and
    *  an empty list just revokes it. Reached only through the owner-
    *  authenticated + step-up route. */
-  @callable()
   async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
     const cleaned = [...new Set(
       allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
@@ -5297,7 +5281,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Toggle owner-email notifications (changelog digests, job completions). */
-  @callable()
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
     this.config.setEmailNotificationsEnabled(enabled);
     return { notifications: this.config.getEmailNotificationsEnabled() };
@@ -5325,7 +5308,6 @@ export class OrchestratorAgent extends Think<Env> {
 
   /** Recent events for the operator UI's events sidebar. Mirrors
    *  events_v ordering (received_at desc). */
-  @callable()
   async listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }) {
     const events = this.eventLog.query({
       variant: opts?.variant as never,
