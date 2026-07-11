@@ -32,6 +32,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
+import { buildWorkspaceAgents } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextCronFire } from "./lib/cron.js";
 import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
@@ -4167,22 +4168,12 @@ export class OrchestratorAgent extends Think<Env> {
    *  and spawnable via the `team` tool. Unowned workspaces have only their
    *  default agent. */
   @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
-    const self: WorkspaceAgent = {
-      name: this.name,
-      displayName: this.getDisplayName(),
-      role: 'orchestrator',
-    };
-    if (!this.getOwnerUserId()) return [self];
+    const self = { name: this.name, displayName: this.getDisplayName() };
+    if (!this.getOwnerUserId()) return buildWorkspaceAgents(self, []);
     try {
-      const workspaces = await this.requireOwnerUserDO().listWorkspaces();
-      return [
-        self,
-        ...workspaces
-          .filter((w) => w.name !== this.name)
-          .map((w): WorkspaceAgent => ({ name: w.name, displayName: w.displayName, role: 'peer' })),
-      ];
+      return buildWorkspaceAgents(self, await this.requireOwnerUserDO().listWorkspaces());
     } catch {
-      return [self];
+      return buildWorkspaceAgents(self, []);
     }
   }
 
