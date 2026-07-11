@@ -383,7 +383,31 @@ describe('fnv1a64', () => {
     expect(fnv1a64('abc')).not.toBe(fnv1a64('abd'));
     expect(fnv1a64('')).toHaveLength(16);
   });
+
+  test('matches genuine FNV-1a 64 (the limb-multiply rewrite must never drift)', () => {
+    // Standard FNV-1a 64 test vectors — persisted compaction rangeHashes and
+    // content-hash keys depend on these exact digests.
+    expect(fnv1a64('')).toBe('cbf29ce484222325');
+    expect(fnv1a64('a')).toBe('af63dc4c8601ec8c');
+    expect(fnv1a64('foobar')).toBe('85944171f73967e8');
+    // UTF-16 code units above the byte range XOR into the low limb, matching
+    // the previous BigInt implementation exactly.
+    expect(fnv1a64('🚀 — ✦')).toBe(referenceFnv1a64('🚀 — ✦'));
+    const long = 'chunk-of-history '.repeat(5_000) + '端末🚀';
+    expect(fnv1a64(long)).toBe(referenceFnv1a64(long));
+  });
 });
+
+/** The original BigInt implementation, kept as the test oracle. */
+function referenceFnv1a64(text: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= BigInt(text.charCodeAt(i));
+    hash = (hash * prime) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, '0');
+}
 
 describe('active-skill budget priority (activation precedence, stable render order)', () => {
   test('an alphabetically-early giant skill cannot crowd out an earlier-activated one', () => {

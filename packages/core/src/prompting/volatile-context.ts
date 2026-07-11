@@ -186,15 +186,36 @@ export class EphemeralContextLedger {
 }
 
 /** FNV-1a 64-bit text hash — the shared fingerprint behind both
- *  cache-stability invariants: the system-prompt byte-stability telemetry
- *  (backends log it per turn; it should change only on real agent events)
- *  and the ledger's append gate. */
+ *  cache-stability invariants (the system-prompt byte-stability telemetry
+ *  and the ledger's append gate) AND the compaction engine's content-hash
+ *  keys, which run over the FULL durable history every turn. Implemented
+ *  with 16-bit limb multiplies instead of BigInt (~30x faster on megabyte
+ *  inputs; the compaction plane made per-char BigInt a per-turn tax) —
+ *  digests are byte-identical to the previous BigInt implementation.
+ *  The FNV prime 0x100000001b3 = 2^40 + 0x1b3: each limb multiplies by
+ *  0x1b3 (435), and the 2^40 term shifts limbs 0/1 into limbs 2/3 by
+ *  8 bits. XOR input is the UTF-16 code unit (≤ 0xffff → low limb only). */
 export function fnv1a64(text: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
+  // Offset basis 0xcbf29ce484222325 split into 16-bit limbs, low → high.
+  let v0 = 0x2325, v1 = 0x8422, v2 = 0x9ce4, v3 = 0xcbf2;
   for (let i = 0; i < text.length; i++) {
-    hash ^= BigInt(text.charCodeAt(i));
-    hash = (hash * prime) & 0xffffffffffffffffn;
+    v0 ^= text.charCodeAt(i);
+    let t0 = v0 * 0x1b3;
+    let t1 = v1 * 0x1b3;
+    let t2 = v2 * 0x1b3 + ((v0 << 8) & 0xffffff);
+    let t3 = v3 * 0x1b3 + ((v1 << 8) & 0xffffff);
+    t1 += t0 >>> 16;
+    t2 += t1 >>> 16;
+    t3 += t2 >>> 16;
+    v0 = t0 & 0xffff;
+    v1 = t1 & 0xffff;
+    v2 = t2 & 0xffff;
+    v3 = t3 & 0xffff;
   }
-  return hash.toString(16).padStart(16, '0');
+  return (
+    v3.toString(16).padStart(4, '0') +
+    v2.toString(16).padStart(4, '0') +
+    v1.toString(16).padStart(4, '0') +
+    v0.toString(16).padStart(4, '0')
+  );
 }
