@@ -28,7 +28,7 @@ export async function setupCommand(opts: {
   let cloudSkipped = Boolean(opts.skipCloud);
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
-    console.log(DIM('Local agents you create signed in get free Workers AI (no key needed).'));
+    console.log(DIM('Local workspaces you create signed in get free Workers AI (no key needed).'));
   }
 
   if (!opts.skipCloud && !config.accessToken) {
@@ -47,8 +47,8 @@ export async function setupCommand(opts: {
   if (opts.accountOnly) {
     if (cloudReady) {
       console.log(`${OK('✓')} Proteus account ready.`);
-      console.log(DIM('Cloud agents can use Workers AI through your Cloudflare account when Cloudflare sign-in granted AI permissions.'));
-      console.log(DIM('Run proteus provider connect codex for local agents that should use your ChatGPT Codex subscription.'));
+      console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account when Cloudflare sign-in granted AI permissions.'));
+      console.log(DIM('Run proteus provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
     } else {
       console.log(`${WARN('!')} Proteus account was not connected.`);
       console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
@@ -64,7 +64,7 @@ export async function setupCommand(opts: {
       console.log(`${WARN('!')} Proteus account was not connected (no interactive terminal).`);
       console.log(DIM(`Run proteus auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
     }
-    console.log(DIM('Run proteus provider connect <provider> to configure local agent model access.'));
+    console.log(DIM('Run proteus provider connect <provider> to configure local workspace model access.'));
     return;
   }
 
@@ -72,8 +72,8 @@ export async function setupCommand(opts: {
   if (provider === 'skip') {
     console.log(`${WARN('!')} Skipped local model setup.`);
     console.log(DIM(cloudReady
-      ? 'Cloud agents remain ready. Run proteus provider connect <provider> later for local agents.'
-      : 'Run proteus setup later before creating agents.'));
+      ? 'Cloud workspaces remain ready. Run proteus provider connect <provider> later for local workspaces.'
+      : 'Run proteus setup later before creating workspaces.'));
     return;
   }
 

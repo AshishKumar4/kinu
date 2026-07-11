@@ -5,29 +5,29 @@ import { ask, canPrompt } from '../prompt.js';
 
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
-  mode?: string; alias?: string; aliasAgent?: boolean; origin?: string;
+  mode?: string; alias?: string; aliasShim?: boolean; origin?: string;
 }): Promise<void> {
   ensureAgentHome();
   const interactive = canPrompt() && (!name || !opts.mode);
   if (!name) {
     name = interactive
-      ? await ask('Agent name', 'jarvis')
+      ? await ask('Workspace name', 'jarvis')
       : undefined;
   }
-  if (!name) throw new Error('Agent name required.');
+  if (!name) throw new Error('Workspace name required.');
   const mode = await resolveMode(opts.mode, interactive);
   const purpose = opts.purpose ?? `A helpful AI assistant named ${name}.`;
-  const alias = opts.aliasAgent === false
+  const alias = opts.aliasShim === false
     ? undefined
     : opts.alias ?? (interactive ? await ask('Alias command', name) : name);
 
   if (mode === 'cloud') {
-    const spinner = createSpinner('Creating cloud agent...');
+    const spinner = createSpinner('Creating cloud workspace...');
     spinner.start();
     try {
       const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
-      spinner.stop('Cloud agent created');
-      console.log(`\n${OK('✓')} ${ACCENT(name)} ${DIM('cloud agent')}`);
+      spinner.stop('Cloud workspace created');
+      console.log(`\n${OK('✓')} ${ACCENT(name)} ${DIM('cloud workspace')}`);
       if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
       const hint = pathHint();
       if (hint) console.log(DIM(hint));
@@ -40,11 +40,11 @@ export async function createCommand(name: string | undefined, opts: {
     return;
   }
 
-  const spinner = createSpinner('Creating agent...');
+  const spinner = createSpinner('Creating workspace...');
   spinner.start();
   try {
     const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
-    spinner.stop('Agent created');
+    spinner.stop('Workspace created');
     printCreatedCard(name, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
     const hint = pathHint();
     if (hint) console.log(DIM(hint));

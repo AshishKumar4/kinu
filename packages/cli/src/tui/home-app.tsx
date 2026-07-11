@@ -61,8 +61,8 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   }, [cloudReady]);
 
   const modeLabel = useMemo(() => {
-    if (mode === 'cloud') return cloudReady ? 'Cloud agent' : 'Cloud agent - sign in required';
-    return localReady ? 'Local agent' : 'Local agent - provider required';
+    if (mode === 'cloud') return cloudReady ? 'Cloud workspace' : 'Cloud workspace - sign in required';
+    return localReady ? 'Local workspace' : 'Local workspace - provider required';
   }, [cloudReady, localReady, mode]);
 
   const selectAgentIndex = useCallback((index: number) => {
@@ -83,7 +83,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     setError(null);
     try {
       if (setupRequired) throw new Error('Run proteus setup to connect your account or a local model provider.');
-      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud agent.');
+      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud workspace.');
       if (mode === 'local' && !localReady) throw new Error('Connect a local provider with proteus provider connect, or switch to cloud after sign-in.');
       // Cloud naming is server-side (async display-name generation after
       // create); only local agents need a locally generated identity.
@@ -179,10 +179,10 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'Start with a mission' : 'What should Proteus do next?'}</strong>{'\n'}
           <span fg={tuiColors.muted}>
             {setupRequired
-              ? 'Connect Proteus once, then this screen can create and open agents directly.'
+              ? 'Connect Proteus once, then this screen can create and open workspaces directly.'
               : agents.length === 0
-              ? 'Describe the work. Proteus will create an agent and send this as its first turn.'
-              : 'Select an agent, or write a mission to create a new one.'}
+              ? 'Describe the work. Proteus will create a workspace and send this as its first turn.'
+              : 'Select a workspace, or write a mission to create a new one.'}
           </span>
         </text>
 
@@ -190,7 +190,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: tuiColors.borderSubtle, paddingLeft: 1, paddingRight: 1 }}>
             <text><strong fg={tuiColors.text}>Setup required</strong></text>
             <text><span fg={tuiColors.muted}>  proteus setup</span> <span fg={tuiColors.text}>connect account and optional local provider</span></text>
-            <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud agents only</span></text>
+            <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud workspaces only</span></text>
             <text><span fg={tuiColors.muted}>  proteus provider connect codex</span> <span fg={tuiColors.text}>connect local model access</span></text>
           </box>
         )}
@@ -198,7 +198,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         {agents.length > 0 && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1 }}>
             <text>
-              <span fg={focusArea === 'agents' ? tuiColors.accentStrong : tuiColors.accentDeep}>Agents</span>
+              <span fg={focusArea === 'agents' ? tuiColors.accentStrong : tuiColors.accentDeep}>Workspaces</span>
               <span fg={tuiColors.muted}>  {focusArea === 'agents' ? '↑/↓ select · Enter open' : 'Tab to focus'}</span>
             </text>
             {visibleAgents.map((agent, index) => {

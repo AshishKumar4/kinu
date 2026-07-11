@@ -102,7 +102,7 @@ export async function runCommand(name: string, promptParts: string[], opts: OneS
 }
 
 export interface ExecOptions extends OneShotLlmOpts {
-  agent?: string;
+  workspace?: string;
   json?: boolean;
   resume?: string;
   session?: string | false;
@@ -120,9 +120,9 @@ export interface ExecOptions extends OneShotLlmOpts {
 export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
   const rawPrompt = await buildPrompt(promptParts);
   if (!rawPrompt) {
-    throw new Error('A task prompt is required. Usage: proteus exec "task" [--agent <name>] [--json]');
+    throw new Error('A task prompt is required. Usage: proteus exec "task" [--workspace <name>] [--json]');
   }
-  const target = resolveAgentTarget(resolveExecAgentName(opts.agent));
+  const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
   const failed = await runOneShot(target, rawPrompt, {
     model: opts.model,
     baseUrl: opts.baseUrl,
@@ -137,15 +137,15 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
   process.exitCode = failed ? 1 : 0;
 }
 
-/** exec is non-interactive, so an omitted --agent only works when there is
- *  exactly one configured agent to mean. */
-function resolveExecAgentName(explicit?: string): string {
+/** exec is non-interactive, so an omitted --workspace only works when there
+ *  is exactly one configured workspace to mean. */
+function resolveExecWorkspaceName(explicit?: string): string {
   if (explicit?.trim()) return explicit.trim();
   const agents = listConfiguredAgentRefs();
   if (agents.length === 1) return agents[0]!.name;
   throw new Error(agents.length === 0
-    ? 'No agents configured. Create one with: proteus create <name>, or pass --agent <name>.'
-    : `Multiple agents configured — pass --agent <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
+    ? 'No workspaces configured. Create one with: proteus create <name>, or pass --workspace <name>.'
+    : `Multiple workspaces configured — pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
 /**
@@ -248,7 +248,7 @@ async function runRpc(
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const client = createAgentClient(target, clientOpts);
-    output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'cloud', cwd: process.cwd() });
+    output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() });
     const unsubscribe = client.subscribe((event) => output({ type: 'event', event }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     try {
@@ -287,7 +287,7 @@ async function runRpc(
   ensureLocalDaemonRunning();
   const client = createAgentClient(target, clientOpts);
   client.subscribe((event) => output({ type: 'event', event }));
-  output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'local', cwd: process.cwd() });
+  output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() });
   // Defer MCP connection and job recovery until the first prompt.
   let connected = false;
   const ensureConnected = async () => {
@@ -514,7 +514,7 @@ function createJsonEventWriter(client: AgentClient): (event: AgentClientEvent) =
   return (event) => {
     if (!wroteHeader) {
       wroteHeader = true;
-      output({ type: 'session', id: client.cliSession.id, agent: client.agentName, backend: client.mode, cwd: process.cwd() });
+      output({ type: 'session', id: client.cliSession.id, workspace: client.agentName, backend: client.mode, cwd: process.cwd() });
     }
     for (const value of jsonEvents(event)) output(value);
   };

@@ -42,11 +42,11 @@ export function createAgentClient(target: AgentTarget, opts: AgentClientFlags & 
 function rejectLocalLlmFlags(opts: AgentClientFlags): void {
   if (opts.model) {
     throw new Error(
-      '--model is a session-scoped override for local agents and does not apply to cloud agents.\n' +
-      '  Change the cloud agent durably with: proteus model <agent> <spec> (or /model in chat).',
+      '--model is a session-scoped override for local workspaces and does not apply to cloud workspaces.\n' +
+      '  Change the cloud workspace durably with: proteus model <workspace> <spec> (or /model in chat).',
     );
   }
   if (opts.baseUrl || opts.auth) {
-    throw new Error('--base-url and --auth configure local model access and do not apply to cloud agents.');
+    throw new Error('--base-url and --auth configure local model access and do not apply to cloud workspaces.');
   }
 }

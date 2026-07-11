@@ -73,7 +73,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
 async function connectClaude(): Promise<void> {
   console.log('');
   console.log(ACCENT('Claude subscription (via Claude Code)'));
-  console.log(DIM('Drives the official `claude` binary with your Claude Code login. Local agents only.'));
+  console.log(DIM('Drives the official `claude` binary with your Claude Code login. Local workspaces only.'));
   const { binary, loggedIn } = await checkClaudeAvailability();
   console.log('');
   if (binary && loggedIn) {
@@ -84,7 +84,7 @@ async function connectClaude(): Promise<void> {
     console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
     console.log(DIM('Then run `claude` once to sign in.'));
   }
-  console.log(DIM('Cloud agents cannot use the subscription — connect an Anthropic API key for those.'));
+  console.log(DIM('Cloud workspaces cannot use the subscription — connect an Anthropic API key for those.'));
 }
 
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): {
@@ -139,8 +139,8 @@ async function printProviders(): Promise<void> {
 
   if (config.accessToken) {
     connected('Proteus account', config.user?.email);
-    console.log(`    ${DIM('Cloud agents use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
-    console.log(`    ${DIM('Signed-in local agents also get free Workers AI (no key) through the proxy.')}`);
+    console.log(`    ${DIM('Cloud workspaces use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
+    console.log(`    ${DIM('Signed-in local workspaces also get free Workers AI (no key) through the proxy.')}`);
   } else {
     missing('Proteus account', 'proteus provider connect cloudflare');
   }

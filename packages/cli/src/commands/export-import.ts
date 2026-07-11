@@ -6,7 +6,7 @@ import { printError, OK, ACCENT, DIM } from '../display.js';
 export async function exportCommand(name: string, opts: { output?: string }): Promise<void> {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    printError(`Agent "${name}" not found.`);
+    printError(`Workspace "${name}" not found.`);
     process.exit(1);
   }
   const output = opts.output ?? `${name}.agent.db`;
@@ -30,10 +30,10 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   const dir = agentDir(name);
   const dbPath = agentDbPath(name);
   if (existsSync(dbPath)) {
-    printError(`Agent "${name}" already exists.`, 'Use --name to choose a different name');
+    printError(`Workspace "${name}" already exists.`, 'Use --name to choose a different name');
     process.exit(1);
   }
   mkdirSync(dir, { recursive: true });
   copyFileSync(file, dbPath);
-  console.log(`\n${OK('✓')} Imported agent ${ACCENT(name)} from ${DIM(file)}\n`);
+  console.log(`\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}\n`);
 }

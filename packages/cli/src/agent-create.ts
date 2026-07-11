@@ -130,7 +130,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   }
 
   const name = input.name;
-  if (!name) throw new Error('Agent name required for local agents.');
+  if (!name) throw new Error('Workspace name required for local workspaces.');
   const displayName = input.displayName ?? name;
   const dir = agentDir(name);
   const dbPath = agentDbPath(name);

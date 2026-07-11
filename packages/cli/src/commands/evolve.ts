@@ -14,14 +14,14 @@ export async function evolveCommand(name: string, opts: {
 }): Promise<void> {
   const configured = resolveAgentRef(name);
   if (configured?.mode === 'cloud') {
-    console.log(`\n${DIM('Cloud agent evolution runs in the Durable Object backend after turns.')}`);
+    console.log(`\n${DIM('Cloud workspace evolution runs in the Durable Object backend after turns.')}`);
     console.log(`${DIM('Use:')} ${ACCENT(`proteus run ${configured.name} "improve yourself"`)}\n`);
     return;
   }
   name = configured?.localName ?? configured?.name ?? name;
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
+    printError(`Workspace "${name}" not found.`, `Create it with: proteus create ${name}`);
     process.exit(1);
   }
 

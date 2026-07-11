@@ -28,7 +28,7 @@ export async function listCommand(): Promise<void> {
   for (const agent of registryOnly) {
     agentInfos.push({
       name: agent.alias ? `${agent.name} (${agent.alias})` : agent.name,
-      purpose: `${agent.mode} agent`,
+      purpose: `${agent.mode} workspace`,
       scaffoldVersion: 0,
       toolCount: 0,
       dbSize: undefined,

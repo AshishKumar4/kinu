@@ -26,16 +26,16 @@ export async function chatCommand(name: string | undefined, opts: {
     }
     const agents = listKnownAgents();
     if (agents.length === 0) {
-      printError('No agents found.', 'Run proteus in a terminal to create one from a mission.');
+      printError('No workspaces found.', 'Run proteus in a terminal to create one from a mission.');
       process.exit(1);
     }
     if (agents.length === 1) {
       name = agents[0]!.name;
     } else {
-      console.log(`\n${DIM('Select an agent:')}`);
+      console.log(`\n${DIM('Select a workspace:')}`);
       agents.forEach((a, i) => console.log(`  ${ACCENT(String(i + 1))} ${a.label}`));
       console.log('');
-      const answer = await ask('Agent #');
+      const answer = await ask('Workspace #');
       const idx = parseInt(answer, 10) - 1;
       if (idx < 0 || idx >= agents.length) {
         printError('Invalid selection.');
@@ -46,7 +46,7 @@ export async function chatCommand(name: string | undefined, opts: {
   }
 
   if (!resolveAgentRef(name) && !existsSync(agentDbPath(name))) {
-    printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
+    printError(`Workspace "${name}" not found.`, `Create it with: proteus create ${name}`);
     process.exit(1);
   }
 

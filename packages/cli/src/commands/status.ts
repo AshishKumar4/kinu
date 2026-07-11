@@ -28,7 +28,7 @@ export async function statusCommand(name: string): Promise<void> {
   name = target.localName;
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
+    printError(`Workspace "${name}" not found.`, `Create it with: proteus create ${name}`);
     process.exit(1);
   }
 
@@ -50,7 +50,7 @@ function printCloudStatus(
   },
 ): void {
   console.log('');
-  console.log(`${ACCENT(name)} ${DIM('cloud agent')}`);
+  console.log(`${ACCENT(name)} ${DIM('cloud workspace')}`);
   console.log(`${DIM('State')}      ${OK('connected')}`);
   console.log(`${DIM('Mission')}    ${status.purpose || DIM('(none)')}`);
   console.log(`${DIM('Model')}      ${status.model ?? DIM('(default)')}`);

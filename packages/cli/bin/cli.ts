@@ -40,7 +40,7 @@ const program = new Command();
 
 program
   .name('proteus')
-  .description('Create, chat with, and evolve persistent AI agents')
+  .description('Create and chat with self-evolving agent workspaces')
   .version('0.1.0', '-v, --version')
   .addHelpCommand(false);
 
@@ -53,12 +53,12 @@ const llmOpts = (cmd: Command) => cmd
 llmOpts(
   program
     .command('create [name]')
-    .description('Create a new agent identity')
-    .option('--purpose <text>', 'Agent purpose')
-    .option('--mode <mode>', 'Agent mode: cloud or local')
+    .description('Create a new workspace')
+    .option('--purpose <text>', 'Workspace purpose')
+    .option('--mode <mode>', 'Workspace mode: cloud or local')
     .option('--alias <name>', 'Create an executable alias command')
     .option('--origin <url>', 'Proteus app origin for first-use sign-in')
-    .option('--no-alias-agent', 'Do not create an alias shim'),
+    .option('--no-alias-shim', 'Do not create an alias shim'),
 ).action(wrapAction(createCommand));
 
 program
@@ -110,7 +110,7 @@ program
 llmOpts(
   program
     .command('run <name> [prompt...]')
-    .description('Run an agent once, or open chat when no prompt is provided')
+    .description('Run a workspace once, or open chat when no prompt is provided')
     .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
     .option('-c, --continue', 'Continue the latest recorded CLI session')
     .option('-r, --resume', 'Resume the latest recorded CLI session')
@@ -124,7 +124,7 @@ llmOpts(
 llmOpts(
   program
     .command('chat [name]')
-    .description('Interactive conversation with an agent')
+    .description('Interactive conversation with a workspace')
     .option('--classic', 'Use classic readline interface instead of TUI')
     .option('-c, --continue', 'Continue the latest recorded CLI session')
     .option('-r, --resume', 'Resume the latest recorded CLI session')
@@ -145,25 +145,25 @@ llmOpts(
 llmOpts(
   program
     .command('status <name>')
-    .description('Show agent state and evolution history'),
+    .description('Show workspace state and evolution history'),
 ).action(wrapAction(statusCommand));
 
 llmOpts(
   program
     .command('model <name> [spec]')
-    .description('Show or change an agent model'),
+    .description('Show or change a workspace model'),
 ).action(wrapAction(modelCommand));
 
 llmOpts(
   program
     .command('tools <name>')
-    .description('List an agent tool surface'),
+    .description('List a workspace tool surface'),
 ).action(wrapAction(toolsCommand));
 
 llmOpts(
   program
     .command('triggers <name> [action] [value]')
-    .description('List, schedule, cancel, or create agent triggers')
+    .description('List, schedule, cancel, or create workspace triggers')
     .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
     .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
     .option('--content-type <type>', 'Accepted webhook content type')
@@ -178,7 +178,7 @@ llmOpts(
 
 program
   .command('list')
-  .description('List all agents')
+  .description('List all workspaces')
   .action(wrapAction(listCommand));
 
 program
@@ -189,20 +189,20 @@ program
 
 program
   .command('state <name>')
-  .description('Show the durable agent state snapshot')
+  .description('Show the durable workspace state snapshot')
   .option('--json', 'Print raw JSON')
   .action(wrapAction(stateCommand));
 
 program
   .command('memory <name> [query...]')
-  .description('Read or search agent memory')
+  .description('Read or search workspace memory')
   .option('--limit <n>', 'Search result limit')
   .option('--json', 'Print raw JSON')
   .action(wrapAction(memoryCommand));
 
 program
   .command('events <name>')
-  .description('List recent agent events')
+  .description('List recent workspace events')
   .option('--variant <name>', 'Filter by event variant')
   .option('--since <time>', 'Filter events after a timestamp or date')
   .option('--limit <n>', 'Event limit')
@@ -245,8 +245,8 @@ program
 llmOpts(
   program
     .command('exec [prompt...]')
-    .description('Run one agent task headlessly and exit (CI-friendly; executor passthrough lives under `executors`)')
-    .option('-a, --agent <name>', 'Agent to run (defaults to the only configured agent)')
+    .description('Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`)')
+    .option('-w, --workspace <name>', 'Workspace to run (defaults to the only configured workspace)')
     .option('--json', 'Emit line-delimited JSON events')
     .option('--resume <sessionId>', 'Continue a recorded CLI session')
     .option('--session-dir <dir>', 'Override CLI session storage directory')
@@ -263,7 +263,7 @@ program
 
 program
   .command('webhook <name> <label>')
-  .description('Create a durable webhook trigger for a cloud agent')
+  .description('Create a durable webhook trigger for a cloud workspace')
   .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
   .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
   .option('--content-type <type>', 'Accepted webhook content type')
@@ -272,8 +272,8 @@ program
   .action(wrapAction(webhookCommand));
 
 program
-  .command('alias <agent> [alias]')
-  .description('Create an executable command alias for an agent')
+  .command('alias <workspace> [alias]')
+  .description('Create an executable command alias for a workspace')
   .action(wrapAction(aliasCommand));
 
 program
@@ -283,11 +283,11 @@ program
 
 program
   .command('aliases')
-  .description('List configured agent aliases')
+  .description('List configured workspace aliases')
   .action(wrapAction(aliasesCommand));
 
 program
-  .command('sessions [agent]')
+  .command('sessions [workspace]')
   .description('List recorded CLI sessions')
   .option('--session-dir <dir>', 'Override CLI session storage directory')
   .option('--path', 'Show session file paths')
@@ -302,7 +302,7 @@ program
 
 program
   .command('daemon [action]')
-  .description('Manage the local scheduler daemon for local agent alarms')
+  .description('Manage the local scheduler daemon for local workspace alarms')
   .action(wrapAction(daemonCommand));
 
 program
@@ -313,14 +313,14 @@ program
 
 program
   .command('export <name>')
-  .description('Export agent database')
+  .description('Export workspace database')
   .option('-o, --output <file>', 'Output file path')
   .action(wrapAction(exportCommand));
 
 program
   .command('import <file>')
-  .description('Import agent database')
-  .option('-n, --name <name>', 'Agent name (default: derived from filename)')
+  .description('Import workspace database')
+  .option('-n, --name <name>', 'Workspace name (default: derived from filename)')
   .action(wrapAction(importCommand));
 
 program

@@ -110,7 +110,7 @@ export async function triggersCommand(
     return;
   }
 
-  if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud agent.');
+  if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
 
   if (normalized === 'list') {
     printTriggers(listLocalTriggers(target.localName).triggers as Parameters<typeof printTriggers>[0]);
