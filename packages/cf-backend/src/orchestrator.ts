@@ -1122,7 +1122,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  ensureSchema() creates all required tables so the SELECT/UPDATE never hits
    *  a missing table or column, and is flag-gated so onStart won't repeat it.
    */
-  @callable()
   async claimOwner(userId: string): Promise<{ owner: string }> {
     if (!userId) throw new Error('userId required');
     try {
@@ -3949,7 +3948,6 @@ export class OrchestratorAgent extends Think<Env> {
   // ── MCP server bridge — small RPCs the MCP handler needs ──
   /** Used by the /mcp/v1/<name> save_note tool. Routes through the same
    *  appendMemoryNote primitive as workspace.saveNote + the `memory` builtin. */
-  @callable()
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
     await appendMemoryNote(this.rt.memory, content);
     return { ok: true };
@@ -3958,7 +3956,6 @@ export class OrchestratorAgent extends Think<Env> {
   /** MCP `run_task`: inject a turn into the SAME serialized loop the event→turn
    *  reactor and background-job wake use (host.enqueueTurn → Think.saveMessages).
    *  Not a new execution path — the identical programmatic-turn seam. */
-  @callable()
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new Error('run_task requires non-empty text');
@@ -3968,7 +3965,6 @@ export class OrchestratorAgent extends Think<Env> {
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
    *  agents over the exact `team` tool transport (owner + same-owner roster
    *  gate enforced inside getTeamToolDeps). */
-  @callable()
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
     if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
     return this.getTeamToolDeps().send({
@@ -3979,7 +3975,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** MCP `send_peer` roster helper — the owner's other agents (self excluded). */
-  @callable()
   async listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>> {
     return this.getTeamToolDeps().listPeers();
   }
@@ -4690,11 +4685,10 @@ export class OrchestratorAgent extends Think<Env> {
 
   /**
    * Receive a fork payload from a source agent. INTERNAL — called only by
-   * the source DO's forkAgent RPC via cross-DO stub. Exposed as @callable
-   * because that's how cross-DO RPC reaches us; there's no hostile client
-   * risk here because the fork DO is freshly-provisioned at call time.
+   * the source DO's forkAgent RPC via cross-DO stub. NOT @callable: cross-DO
+   * stub RPC never needed the decorator, and this is a raw storage write that
+   * must never be reachable over the public agents WS/HTTP transport.
    */
-  @callable()
   async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
     // Apply the FULL schema before copying rows. onStart runs on first access,
     // but this RPC can be invoked before it completes — ensureSchema creates
@@ -4978,7 +4972,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  RPC is invoked by the top-level webhook route (`handleHubRequest`) so
    *  the publish + dedupe + reply channel open run atomically in the agent's
    *  storage context. */
-  @callable()
   async acceptWebhookDelivery(opts: {
     trigger_id: string;
     method: string;
@@ -5143,7 +5136,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  from the sender's claim beyond intra-Worker honesty); an admitted event
    *  either resolves the local ask waiter inline (a reply envelope) or wakes
    *  the agent through the standard drain → programmatic turn path. */
-  @callable()
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
     this.ensureSchema();
     return this.peerHub.receive(msg);
@@ -5176,7 +5168,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  parses MIME + resolves the agent; the trust gate (owner email /
    *  email_route allowlist), publish, and thread reply channel run here
    *  atomically. Unauthorized senders never produce an event row. */
-  @callable()
   async acceptEmailDelivery(opts: {
     from: string;
     to: string;
