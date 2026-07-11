@@ -61,6 +61,13 @@ export interface BackendHost {
    *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
+  /** One-shot platform timer — the drain-debounce primitive (DrainScheduler).
+   *  The implementation MUST keep the platform alive until `fn` settles and
+   *  must swallow (log) `fn`'s rejection. CF: setTimeout inside keepAliveWhile
+   *  so the DO survives the window + the drain. CLI: plain setTimeout. A lost
+   *  timer (eviction) only delays work that is durable elsewhere. */
+  setTimer(fn: () => Promise<void>, ms: number): void;
+
   /** Head spawner + merge LLM (HeadController's existing seam). CF:
    *  createCFHeadRuntime (Facet sub-agents). CLI: subprocess-backed. Required
    *  for full think({strategy:'heads'}) parity. */

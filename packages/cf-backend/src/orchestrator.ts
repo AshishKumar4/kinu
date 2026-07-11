@@ -438,6 +438,22 @@ export class OrchestratorAgent extends Think<Env> {
           }]);
           return { status: result.status === 'skipped' ? 'skipped' : 'queued' };
         },
+        // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
+        // the evolution hooks already rely on) holds the DO through the window
+        // + the drain so the debounced drain completes within the live
+        // activation instead of racing eviction. If the DO dies anyway, the
+        // events are still durable in the EventLog — the next ingress / cron
+        // alarm / post-turn drain picks them up (delayed, never dropped).
+        setTimer: (fn, ms) => {
+          void agent.keepAliveWhile(() => new Promise<void>((resolve) => {
+            setTimeout(() => {
+              fn().catch((err: unknown) =>
+                console.warn('[proteus] drain timer callback failed:', (err as Error).message),
+              ).finally(resolve);
+            }, ms);
+          })).catch((err: unknown) =>
+            console.warn('[proteus] drain timer keepAlive failed:', (err as Error).message));
+        },
         // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
         // heads need the owner for UserDO auth, set by first-turn time. undefined
         // before then ⇒ heads degrade (getHeadController throws the no-owner error).
@@ -647,7 +663,7 @@ export class OrchestratorAgent extends Think<Env> {
           }
         },
         scheduleDispatch: (at) => orchestrator.scheduleAlarmAt(at),
-        onAdmitted: () => { void orchestrator.orch.drainPendingEvents(); },
+        onAdmitted: () => { orchestrator.orch.scheduleDrain(); },
       });
     }
     return this._peerHub;
@@ -1646,8 +1662,9 @@ export class OrchestratorAgent extends Think<Env> {
 
   // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
   // (it binds selected pending events via markConsumed, then injects one
-  // programmatic turn via host.enqueueTurn → saveMessages). Callers below use
-  // `this.orch.drainPendingEvents()`.
+  // programmatic turn via host.enqueueTurn → saveMessages). Ingress paths use
+  // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
+  // immediately via `this.orch.drainPendingEvents()`.
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this.acc.reset(Date.now());
@@ -2132,7 +2149,9 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Reactor drain-then-stop: handle any external events still pending (arrived
     // during this turn, or queued before a chat turn). No-op when none — so this
-    // self-terminates once the external event backlog is empty.
+    // self-terminates once the external event backlog is empty. Deliberately
+    // IMMEDIATE (not scheduleDrain): the just-finished turn already coalesced
+    // everything that arrived during it, so there is no burst left to debounce.
     void this.orch.drainPendingEvents();
   }
 
@@ -2676,8 +2695,9 @@ export class OrchestratorAgent extends Think<Env> {
       }
 
       // Wake the agent to act on the freshly-published timer events (and any
-      // other pending events) — an autonomous turn. Fire-and-forget.
-      if (due.length > 0) void this.orch.drainPendingEvents();
+      // other pending events) — an autonomous turn, debounced so events
+      // arriving alongside the alarm coalesce into it.
+      if (due.length > 0) this.orch.scheduleDrain();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
@@ -5041,9 +5061,10 @@ export class OrchestratorAgent extends Think<Env> {
       reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
     });
 
-    // Wake the agent to act on the new webhook event — an autonomous turn.
-    // Only when newly admitted (a duplicate is already bound or in flight).
-    if (admitted) void this.orch.drainPendingEvents();
+    // Wake the agent to act on the new webhook event — an autonomous turn,
+    // debounced so a delivery burst drains as ONE turn. Only when newly
+    // admitted (a duplicate is already bound or in flight).
+    if (admitted) this.orch.scheduleDrain();
 
     return { status: 'admitted', event_id: id, admitted };
   }
@@ -5134,9 +5155,9 @@ export class OrchestratorAgent extends Think<Env> {
         tryConsumeWebhookRateLimit(this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now).allowed,
     }, opts);
     if (!result.admitted) return { admitted: false, reason: result.reason };
-    // Wake the agent for a turn — only on fresh admission (a duplicate
-    // delivery is already bound or in flight).
-    if (!result.duplicate) void this.orch.drainPendingEvents();
+    // Wake the agent for a turn, debounced — only on fresh admission (a
+    // duplicate delivery is already bound or in flight).
+    if (!result.duplicate) this.orch.scheduleDrain();
     return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
   }
 

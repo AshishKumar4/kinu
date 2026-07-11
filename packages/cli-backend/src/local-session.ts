@@ -397,14 +397,15 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Local ingress parity with the DO EventsHub routes: publish through the
-   *  append-only EventLog, then wake the same serialized turn queue. */
+   *  append-only EventLog, then wake the same serialized turn queue (debounced,
+   *  so an event burst drains as ONE programmatic turn). */
   async publishEvent(input: LocalPublishEventInput): Promise<LocalPublishEventResult> {
     const { id, admitted } = this.eventLog.publish({
       descriptor: input.descriptor,
       now: input.now ?? Date.now(),
       caused_by: input.caused_by,
     });
-    await this.orch.drainPendingEvents();
+    this.orch.scheduleDrain();
     return { event_id: id, admitted };
   }
 
@@ -476,7 +477,7 @@ export class LocalAgentSession implements BackendHost {
       }
     }
 
-    if (fired > 0) await this.orch.drainPendingEvents();
+    if (fired > 0) this.orch.scheduleDrain();
     this.rearmLocalAlarm();
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
   }
@@ -616,6 +617,17 @@ export class LocalAgentSession implements BackendHost {
   /** BackendHost seam — the connected MCP tools, merged into each turn. */
   resolveExtraTools(): ToolSet {
     return this.extraTools;
+  }
+
+  /** The drain-debounce timer (BackendHost seam) — a plain one-shot timeout.
+   *  Skips a window that outlives the session so consumed events are never
+   *  bound to a turn a dead pump will not run. */
+  setTimer(fn: () => Promise<void>, ms: number): void {
+    setTimeout(() => {
+      if (this.ended) return;
+      void fn().catch((err: unknown) =>
+        console.warn('[proteus] drain timer callback failed:', (err as Error).message));
+    }, ms);
   }
 
   /** Inject a programmatic turn into the same serialized loop the user drives —

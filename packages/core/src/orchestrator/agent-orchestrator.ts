@@ -9,6 +9,7 @@
 // control plane stay on each backend; this owns the LOGIC.
 
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
+import { DrainScheduler } from './drain-scheduler.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
 import type { BackendHost } from '../types/backend-host.js';
@@ -37,10 +38,16 @@ export class AgentOrchestrator {
    *  next user message grades it (engine.reviewTurn); a session flush grades
    *  it as abandoned. */
   private pendingReview: CompletedTurn | null = null;
+  /** Debounces ingress-triggered drains so an event burst → ONE turn. */
+  private readonly drains: DrainScheduler;
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks);
     this.reflectionInterval = deps.sessionReflectionInterval ?? 5;
+    this.drains = new DrainScheduler(
+      () => this.drainPendingEvents(),
+      (fn, ms) => deps.host.setTimer(fn, ms),
+    );
   }
 
   /** Completed turns in the current session — the turn index for run events. */
@@ -129,6 +136,17 @@ export class AgentOrchestrator {
     this.sessionTurns = [];
     this.sessionStartedAt = Date.now();
     return data;
+  }
+
+  /**
+   * Ingress trigger: a fresh external event was admitted (webhook, email,
+   * peer message, timer). Debounced (~250ms fixed window) so a burst drains
+   * into ONE turn — the post-turn drain path stays immediate (completeTurn /
+   * the backend's post-turn hook) because it is already serialized behind a
+   * just-finished turn and coalesced everything that arrived during it.
+   */
+  scheduleDrain(): void {
+    this.drains.schedule();
   }
 
   /**

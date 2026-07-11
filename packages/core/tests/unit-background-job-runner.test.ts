@@ -35,6 +35,7 @@ function fakeHost() {
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async (i) => { enqueued.push(i); return { status }; },
+    setTimer: () => {},
   };
   return { host, enqueued, setStatus: (s: 'queued' | 'skipped') => { status = s; } };
 }

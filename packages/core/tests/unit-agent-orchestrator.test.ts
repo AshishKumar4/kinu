@@ -26,10 +26,10 @@ function newEventLog(): EventLog {
   initEventsHubTables(sql as never);
   return new EventLog(sql as never);
 }
-function webhook(deliveryId: string): IngressDescriptor {
+function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): IngressDescriptor {
   return {
     ingress: 'webhook_hmac', variant: 'webhook',
-    payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body: { x: 1 }, delivery_id: deliveryId },
+    payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body, delivery_id: deliveryId },
     auth_outcome: 'verified', webhook_id: 'w1',
   } as IngressDescriptor;
 }
@@ -46,11 +46,13 @@ function fakeEngine() {
 }
 function fakeHost() {
   const enqueued: ProgrammaticTurn[] = [];
+  const timers: Array<{ fn: () => Promise<void>; ms: number }> = [];
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async (i) => { enqueued.push(i); return { status: 'queued' }; },
+    setTimer: (fn, ms) => { timers.push({ fn, ms }); },
   };
-  return { host, enqueued };
+  return { host, enqueued, timers };
 }
 const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({
   userMessage: `t${i}`, assistantResponse: 'r', toolCalls: [], durationMs: 1, steps: 1,
@@ -150,5 +152,51 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(0);
+  });
+});
+
+describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () => {
+  test('an event burst schedules ONE window that drains into ONE turn', async () => {
+    const log = newEventLog();
+    const { engine } = fakeEngine();
+    const { host, enqueued, timers } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    // The ingress pattern: publish, then scheduleDrain — a burst of three.
+    for (let i = 0; i < 3; i++) {
+      log.publish({ descriptor: webhook(`d${i}`, { seq: i }), now: i + 1 });
+      orch.scheduleDrain();
+    }
+    expect(timers).toHaveLength(1);                  // calls 2..3 absorbed
+    expect(enqueued).toHaveLength(0);                // nothing drains inside the window
+
+    await timers[0]!.fn();                           // the window fires
+    expect(enqueued).toHaveLength(1);                // ONE coalesced turn…
+    const bound = log.query({ turn_id: enqueued[0]!.metadata?.drainTurnId as string });
+    expect(bound).toHaveLength(3);                   // …binding all three events
+  });
+
+  test('a schedule after the window fired opens a second window → a second turn', async () => {
+    const log = newEventLog();
+    const { engine } = fakeEngine();
+    const { host, enqueued, timers } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    log.publish({ descriptor: webhook('a', { seq: 'a' }), now: 1 });
+    orch.scheduleDrain();
+    await timers[0]!.fn();
+    log.publish({ descriptor: webhook('b', { seq: 'b' }), now: 2 });
+    orch.scheduleDrain();
+    await timers[1]!.fn();
+    expect(enqueued).toHaveLength(2);
+  });
+
+  test('a window firing with nothing pending injects no turn', async () => {
+    const { engine } = fakeEngine();
+    const { host, enqueued, timers } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    orch.scheduleDrain();
+    await timers[0]!.fn();
+    expect(enqueued).toHaveLength(0);                // buildDrainBatch null → no enqueueTurn
   });
 });
