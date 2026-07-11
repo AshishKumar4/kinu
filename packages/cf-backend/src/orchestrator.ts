@@ -28,7 +28,7 @@ import { Think, Session } from "@cloudflare/think";
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
 import { streamText, generateText, tool, jsonSchema, stepCountIs } from "ai";
-import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
@@ -43,6 +43,7 @@ import { deriveWorkspaceTitle } from "./lib/agent-naming.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
   ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
+  PrepareStepContext, StepConfig,
 } from "@cloudflare/think";
 import {
   EvolutionEngine,
@@ -157,9 +158,13 @@ import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "@proteus/core";
+import {
+  agentAffinityKey,
+  // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
+  resolvePromptCacheStrategy, cacheableSystem, markCacheTail, promptCacheOptions,
+  hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
+} from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
-import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
 import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
@@ -1754,6 +1759,7 @@ export class OrchestratorAgent extends Think<Env> {
     // ONE volatile context message appended at the END of the turn's messages
     // (prompting/volatile-context.ts), so it never re-prefills the prefix.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
+    const model = this.promptModelContext();
     const systemOverride = buildSystemPromptSync(this.rt, {
       executors: execs,
       availableTools: activeTools,
@@ -1761,7 +1767,7 @@ export class OrchestratorAgent extends Think<Env> {
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
-      model: this.promptModelContext(),
+      model,
       currentDate: currentDateForPrompt(),
     });
     this.recordSystemPromptHash(systemOverride);
@@ -1775,7 +1781,33 @@ export class OrchestratorAgent extends Think<Env> {
       ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
     });
     if (effectiveTools) cfg.tools = effectiveTools;
+
+    // Prompt-cache plan for this turn (core prompting/cache-breakpoints.ts).
+    // Request-level cache routing (prompt_cache_key / promptCacheKey) rides
+    // TurnConfig.providerOptions; the cache-eligible system message + rolling
+    // tail breakpoints for marker providers (Anthropic) ride beforeStep —
+    // PrepareStepResult carries typed system/messages overrides for every
+    // step's request, whereas TurnConfig.system is string-typed.
+    const cacheStrategy = resolvePromptCacheStrategy(model.provider, model.id);
+    this._turnCachePlan = hasCacheMarkers(cacheStrategy)
+      ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
+      : null;
+    const cacheOptions = promptCacheOptions(cacheStrategy, agentAffinityKey(this.name));
+    if (cacheOptions) cfg.providerOptions = cacheOptions;
     return cfg;
+  }
+
+  /** The in-flight turn's prompt-cache plan — set in beforeTurn, non-null only
+   *  for marker strategies (Anthropic / OpenRouter-Claude), whose breakpoints
+   *  beforeStep re-rolls onto the newest tail each step. */
+  private _turnCachePlan: { strategy: PromptCacheStrategy; system: string | SystemModelMessage } | null = null;
+
+  beforeStep(ctx: PrepareStepContext): StepConfig | void {
+    const plan = this._turnCachePlan;
+    if (!plan) return;
+    // Roll the tail breakpoints onto this step's newest messages so each
+    // request of the agentic loop reads the prefix the previous step wrote.
+    return { system: plan.system, messages: markCacheTail(ctx.messages, plan.strategy) };
   }
 
   /** The byte-stability invariant as telemetry: the system prompt hash should

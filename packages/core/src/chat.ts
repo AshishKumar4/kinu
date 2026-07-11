@@ -13,6 +13,7 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile.js';
+import { applyCacheBreakpoints, hasCacheMarkers, markCacheTail } from './prompting/cache-breakpoints.js';
 import type { ExtensionHost } from './extension.js';
 
 export type ChatEvent =
@@ -35,6 +36,12 @@ export interface ChatOptions {
    *  (prepareStep — the mid-turn steering drain rides this), and contribute
    *  tools (registerTools). One host drives internal consumers and plugins. */
   extensions?: ExtensionHost;
+  /** Prompt-cache identity: the registry provider id the model resolved
+   *  through + a stable per-conversation key. When present, provider-native
+   *  cache markers land on the wire — Anthropic breakpoints (end-of-system +
+   *  a tail rolled forward every step) or prompt_cache_key routing for the
+   *  OpenAI-compatible family. See prompting/cache-breakpoints.ts. */
+  cache?: { providerId?: string; modelId?: string; sessionKey: string };
 }
 
 /**
@@ -61,17 +68,32 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
 
-  const result = streamText({
-    model: opts.model,
+  // Provider prompt-cache plan: cache-eligible system + request-level cache
+  // routing at turn assembly; marker strategies additionally re-roll the tail
+  // breakpoints in prepareStep so every request of the agentic loop reads the
+  // previous step's prefix. Without opts.cache the plan is a pass-through.
+  const cache = applyCacheBreakpoints({
+    providerId: opts.cache?.providerId,
+    modelId: opts.cache?.modelId ?? opts.modelContext?.id,
     system: opts.system,
     messages: opts.history,
+    sessionKey: opts.cache?.sessionKey ?? '',
+  });
+  const rollTail = hasCacheMarkers(cache.strategy);
+
+  const result = streamText({
+    model: opts.model,
+    system: cache.system,
+    messages: cache.messages,
     tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
-    ...(extensions ? {
+    ...(cache.providerOptions ? { providerOptions: cache.providerOptions } : {}),
+    ...(extensions || rollTail ? {
       prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) => {
-        const next = extensions.runPrepareStep({ stepNumber, messages });
-        return next ? { messages: next } : undefined;
+        const steered = extensions?.runPrepareStep({ stepNumber, messages }) ?? null;
+        if (rollTail) return { messages: markCacheTail(steered ?? messages, cache.strategy) };
+        return steered ? { messages: steered } : undefined;
       },
     } : {}),
     onStepFinish: () => {

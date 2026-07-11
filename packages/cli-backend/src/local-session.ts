@@ -37,6 +37,7 @@ import {
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
+  parseModelSpec, agentAffinityKey,
   ExtensionHost,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   appendVolatileContextMessage, hashSystemPrompt,
@@ -909,6 +910,7 @@ export class LocalAgentSession implements BackendHost {
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
         extensions,
+        cache: this.cacheIdentity(),
       })) {
         switch (ev.type) {
           case 'text-delta':
@@ -1047,6 +1049,20 @@ export class LocalAgentSession implements BackendHost {
       return this.rt.storage.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name ?? 'local';
     } catch {
       return 'local';
+    }
+  }
+
+  /** Prompt-cache identity for runChat: the resolved provider/model plus a
+   *  stable per-conversation key (the agent's affinity key + session id —
+   *  same `proteus-<name>` scheme Workers AI affinity pins with). */
+  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string } {
+    const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
+    const spec = this.cachedModelSpec ?? this.fallbackModelSpec;
+    try {
+      const { provider, modelId } = parseModelSpec(spec);
+      return { providerId: provider, modelId, sessionKey };
+    } catch {
+      return { sessionKey };
     }
   }
 

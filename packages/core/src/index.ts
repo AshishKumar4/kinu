@@ -236,6 +236,19 @@ export {
   type VolatileTurnContext,
 } from './prompting/volatile-context.js';
 export {
+  applyCacheBreakpoints,
+  cacheableSystem,
+  hasCacheMarkers,
+  markCacheTail,
+  markLastToolForAnthropicCache,
+  promptCacheOptions,
+  resolvePromptCacheStrategy,
+  ANTHROPIC_MAX_BREAKPOINTS,
+  type CacheBreakpointInput,
+  type CacheBreakpointPlan,
+  type PromptCacheStrategy,
+} from './prompting/cache-breakpoints.js';
+export {
   extractJsonArray,
   extractJsonObject,
   jsonArrayOnlyInstruction,
