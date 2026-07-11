@@ -1,27 +1,5 @@
 import * as readline from 'node:readline';
-import {
-  createCloudWebhookTrigger,
-  executeCloudExecutor,
-  getCloudAgentModel,
-  getCloudAgentState,
-  getCloudAgentStatus,
-  getCloudAgentTools,
-  getCloudGepaRun,
-  getCloudMctsNode,
-  getCloudMemoryContent,
-  getCloudMctsTree,
-  getCloudProductBoard,
-  listCloudEvents,
-  listCloudExecutors,
-  listCloudGepaRuns,
-  listCloudHeads,
-  listCloudJobs,
-  listCloudTimeline,
-  listCloudTriggers,
-  searchCloudMemory,
-  setCloudAgentModel,
-  stopCloudAgent,
-} from '../cloud-api.js';
+import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { createAgentClient } from '../client-factory.js';
@@ -327,60 +305,61 @@ async function runRpc(
 }
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: Record<string, unknown>): Promise<unknown> {
+  const rpc = (method: string, args: unknown[] = []) => callAgentRpc(origin, token, name, method, args);
   const type = String(cmd.type);
   switch (type) {
     case 'get_state':
     case 'state':
-      return getCloudAgentState(origin, token, name);
+      return rpc('getWorkspaceSnapshot');
     case 'status':
-      return getCloudAgentStatus(origin, token, name);
+      return rpc('getAgentStatus');
     case 'tools':
-      return getCloudAgentTools(origin, token, name);
+      return rpc('getToolDescriptions');
     case 'model': {
       const spec = stringField(cmd, 'spec');
-      return spec ? setCloudAgentModel(origin, token, name, spec) : getCloudAgentModel(origin, token, name);
+      return spec ? rpc('setModel', [spec]) : rpc('getStoredModelSpec');
     }
     case 'triggers':
-      return listCloudTriggers(origin, token, name);
+      return rpc('listTriggers');
     case 'jobs':
-      return listCloudJobs(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return rpc('listBackgroundJobs', [numberField(cmd, 'limit') ?? 20]);
     case 'memory': {
       const query = stringField(cmd, 'query');
       return query
-        ? searchCloudMemory(origin, token, name, query, numberField(cmd, 'limit') ?? 10)
-        : getCloudMemoryContent(origin, token, name);
+        ? rpc('searchMemoryHybrid', [query, numberField(cmd, 'limit') ?? 10])
+        : { content: await rpc('getMemoryContent') };
     }
     case 'events':
-      return listCloudEvents(origin, token, name, {
+      return rpc('listRecentEvents', [{
         variant: stringField(cmd, 'variant'),
         since: numberField(cmd, 'since'),
         limit: numberField(cmd, 'limit') ?? 50,
-      });
+      }]);
     case 'timeline':
-      return listCloudTimeline(origin, token, name, { limit: numberField(cmd, 'limit') ?? 100 });
+      return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
     case 'mcts': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
-      return nodeId ? getCloudMctsNode(origin, token, name, nodeId) : getCloudMctsTree(origin, token, name);
+      return nodeId ? rpc('getMctsNodeDetail', [nodeId]) : rpc('getMctsTree');
     }
     case 'heads':
-      return listCloudHeads(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return rpc('getHeadRuns', [numberField(cmd, 'limit') ?? 20]);
     case 'gepa': {
       const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-      return runId ? getCloudGepaRun(origin, token, name, runId) : listCloudGepaRuns(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return runId ? rpc('getGepaRun', [runId]) : rpc('getGepaRuns', [numberField(cmd, 'limit') ?? 20]);
     }
     case 'executors':
-      return listCloudExecutors(origin, token, name);
+      return rpc('getExecutors');
     case 'exec': {
       const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
       const command = stringField(cmd, 'command');
       if (!executor) throw new Error('executor required');
       if (!command) throw new Error('command required');
-      return executeCloudExecutor(origin, token, name, executor, command);
+      return rpc('executeInExecutor', [executor, command]);
     }
     case 'product':
-      return getCloudProductBoard(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return rpc('getProductChangeBoard', [numberField(cmd, 'limit') ?? 20]);
     case 'stop':
-      return stopCloudAgent(origin, token, name);
+      return rpc('cancelCurrentWork');
     case 'webhook': {
       const label = stringField(cmd, 'label');
       if (!label) throw new Error('label required');

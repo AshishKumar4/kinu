@@ -40,7 +40,7 @@ import {
 } from "./auth/session.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
-import { CLI_SCOPES_HEADER } from "./cli/ws-rpc-gate.js";
+import { CLI_SCOPES_HEADER } from "./cli/rpc-gate.js";
 import { claimOwnedWorkspace } from "./user/workspace-access.js";
 import { err } from "./lib/http.js";
 

@@ -418,11 +418,11 @@ export function useProteus(agentId?: string) {
       if (memoryContent) setMemory(parseMemoryContent(memoryContent));
       return;
     }
-    rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; score: number }>>("doSearchMemory", [q])
+    rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q])
       .then((results) => setMemory((results ?? []).map(r => ({
         path: r.path,
         content: r.snippet,
-        matchScore: r.score,
+        matchScore: r.rrfScore,
         updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
       }))))
       .catch(() => {});

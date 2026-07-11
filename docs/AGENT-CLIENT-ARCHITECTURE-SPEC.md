@@ -280,15 +280,21 @@ or bootstrap APIs, not agent turn execution:
 
 ### 8.2 Agent APIs
 
-Agent-scoped chat and live control should go through the agent websocket and
-`@callable` RPC where possible.
+Agent-scoped chat goes through the agent websocket; live-session control uses
+`@callable` RPC on that socket.
 
-Do not keep HTTP duplicates for status, tools, messages, model, triggers, jobs,
-memory, timeline, MCTS, executors, or product surfaces unless a concrete
-non-websocket external boundary requires them.
+Method-shaped agent operations that need HTTP (inspection commands, consent
+polling before a socket exists, CI tokens) go through the ONE generic
+transport — `POST /api/cli/workspaces/:name/rpc` with `{ method, args }` —
+gated by the `AGENT_RPC_ACCESS` table in `cf-backend/src/cli/rpc-gate.ts`.
+That table is the single scope policy for both the HTTP dispatcher and the
+websocket frame gate; table membership is the dispatch allowlist.
 
-If a route remains temporarily for implementation sequencing, the spec and code
-must mark it transitional and list the deletion condition.
+Do not add per-method HTTP routes for status, tools, messages, model,
+triggers, jobs, memory, timeline, MCTS, executors, or product surfaces —
+those N-per-operation duplicates were deleted when the generic transport
+landed. Only resource-shaped routes (streams, downloads, webhooks, step-up
+gated creation, capability minting) may exist as dedicated paths.
 
 ### 8.3 Forbidden Cloud APIs
 

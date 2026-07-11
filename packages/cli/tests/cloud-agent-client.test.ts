@@ -35,7 +35,7 @@ function startMockAgentServer(): MockAgentServer {
 
   const server = Bun.serve({
     port: 0,
-    fetch(req, srv) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
       const ticketMatch = url.pathname.match(/^\/api\/cli\/workspaces\/([^/]+)\/connect-ticket$/);
       if (ticketMatch && req.method === 'POST') {
@@ -45,8 +45,10 @@ function startMockAgentServer(): MockAgentServer {
         });
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
-      if (/^\/api\/cli\/workspaces\/[^/]+\/messages$/.test(url.pathname)) {
-        return Response.json(chatMessages);
+      if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
+        const { method } = await req.json() as { method: string };
+        if (method === 'getChatHistory') return Response.json({ result: chatMessages });
+        return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
         connectUrls.push(url);

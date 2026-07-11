@@ -13,15 +13,11 @@ import {
   setLocalStoredModel,
 } from '../local-inspection.js';
 import {
-  cancelCloudJob,
-  cancelCloudTrigger,
-  createCloudTimerTrigger,
+  callAgentRpc,
   createCloudWebhookTrigger,
-  getCloudAgentModel,
-  getCloudAgentTools,
-  listCloudJobs,
-  listCloudTriggers,
-  setCloudAgentModel,
+  type CloudBackgroundJob,
+  type CloudToolDescriptions,
+  type CloudTriggerList,
 } from '../cloud-api.js';
 import { ACCENT, DIM, OK } from '../display.js';
 
@@ -41,8 +37,8 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const result = spec
-      ? await setCloudAgentModel(auth.origin, auth.token, target.cloudName, spec)
-      : await getCloudAgentModel(auth.origin, auth.token, target.cloudName);
+      ? await callAgentRpc<{ ok: true; spec: string }>(auth.origin, auth.token, target.cloudName, 'setModel', [spec])
+      : await callAgentRpc<{ spec: string | null }>(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec');
     console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
     return;
   }
@@ -55,7 +51,7 @@ export async function toolsCommand(name: string, opts: ControlOpts): Promise<voi
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const tools = await getCloudAgentTools(auth.origin, auth.token, target.cloudName);
+    const tools = await callAgentRpc<CloudToolDescriptions>(auth.origin, auth.token, target.cloudName, 'getToolDescriptions');
     printTools([
       ...tools.builtIn.map((tool) => ({ ...tool, group: 'built-in' })),
       ...tools.crafted.map((tool) => ({ ...tool, group: 'crafted' })),
@@ -83,12 +79,13 @@ export async function triggersCommand(
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     if (normalized === 'list') {
-      printTriggers((await listCloudTriggers(auth.origin, auth.token, target.cloudName)).triggers);
+      printTriggers((await callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers')).triggers);
       return;
     }
     if (normalized === 'cancel') {
       if (!value) throw new Error('trigger id required');
-      console.log(`${OK('cancelled')} ${(await cancelCloudTrigger(auth.origin, auth.token, target.cloudName, value)).changed ? value : `${value} (already inactive)`}`);
+      const cancelled = await callAgentRpc<{ ok: true; changed: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelTrigger', [value]);
+      console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`);
       return;
     }
     if (normalized === 'webhook') {
@@ -105,7 +102,11 @@ export async function triggersCommand(
       return;
     }
     const input = timerInput(normalized, value);
-    const created = await createCloudTimerTrigger(auth.origin, auth.token, target.cloudName, input);
+    // trust:'owner' — an interactive session token IS the owner (the old
+    // per-route matcher stamped the same value server-side).
+    const created = await callAgentRpc<{ id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null }>(
+      auth.origin, auth.token, target.cloudName, 'createTimerTrigger', [{ ...input, trust: 'owner' }],
+    );
     console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.nextFireAt)}`);
     return;
   }
@@ -132,10 +133,11 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
     const auth = requireAuthConfig();
     if (normalized === 'cancel') {
       if (!id) throw new Error('job id required');
-      console.log(`${OK('cancelled')} ${(await cancelCloudJob(auth.origin, auth.token, target.cloudName, id)).ok ? id : `${id} (not running)`}`);
+      const cancelled = await callAgentRpc<{ ok: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelBackgroundJob', [id]);
+      console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`);
       return;
     }
-    printJobs(await listCloudJobs(auth.origin, auth.token, target.cloudName));
+    printJobs(await callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [20]));
     return;
   }
 

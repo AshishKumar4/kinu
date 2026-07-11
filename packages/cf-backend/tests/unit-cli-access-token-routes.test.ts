@@ -131,6 +131,9 @@ const jsonInit = (body: unknown, method = 'POST'): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+const rpcInit = (method: string, args: unknown[] = []): RequestInit => jsonInit({ method, args });
+const RPC = '/api/cli/workspaces/jarvis/rpc';
+
 describe('access token scope enforcement', () => {
   test('workspace.exec token can mint connect tickets, stop work, and run executors', async () => {
     const { env, calls } = setupEnv();
@@ -138,19 +141,17 @@ describe('access token scope enforcement', () => {
     expect(ticket?.status).toBe(200);
     expect(calls).toContain('connect-ticket:exec-hash');
 
-    const stop = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/stop', { method: 'POST' }), env);
+    const stop = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('cancelCurrentWork')), env);
     expect(stop?.status).toBe(200);
 
-    const exec = await handleCliRequest(
-      req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/executors/workspace/exec', jsonInit({ command: 'pwd' })),
-      env,
-    );
+    const exec = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
     expect(exec?.status).toBe(200);
+    expect(calls).toContain('executors:exec:workspace:pwd');
   });
 
   test('workspace.exec token cannot read agent state without workspace.read', async () => {
     const { env, calls } = setupEnv();
-    const res = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/workspaces/jarvis/status'), env);
+    const res = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('getAgentStatus')), env);
     expect(res?.status).toBe(403);
     expect((await res?.json() as { error: string }).error).toContain('workspace.read');
     expect(calls).not.toContain('status');
@@ -158,9 +159,13 @@ describe('access token scope enforcement', () => {
 
   test('workspace.read token can read but cannot exec', async () => {
     const { env, calls } = setupEnv();
-    const status = await handleCliRequest(req(READ_TOKEN, '/api/cli/workspaces/jarvis/status'), env);
+    const status = await handleCliRequest(req(READ_TOKEN, RPC, rpcInit('getAgentStatus')), env);
     expect(status?.status).toBe(200);
-    expect(await status?.json()).toMatchObject({ name: 'jarvis' });
+    expect(((await status?.json()) as { result: { name: string } }).result).toMatchObject({ name: 'jarvis' });
+
+    const exec = await handleCliRequest(req(READ_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
+    expect(exec?.status).toBe(403);
+    expect((await exec?.json() as { error: string }).error).toContain('workspace.exec');
 
     const ticket = await handleCliRequest(req(READ_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(403);
@@ -172,12 +177,12 @@ describe('access token scope enforcement', () => {
     const { env, calls } = setupEnv({ sessionMintedAt: Date.now() });
     const forbidden: Array<[string, RequestInit]> = [
       ['/api/cli/workspaces/jarvis/triggers/webhook', jsonInit({ label: 'ci', auth_mode: 'hmac' })],
-      ['/api/cli/workspaces/jarvis/triggers/timer', jsonInit({ atMs: Date.now() + 1000 })],
+      [RPC, rpcInit('createTimerTrigger', [{ atMs: Date.now() + 1000, trust: 'owner' }])],
       ['/api/cli/devices', jsonInit({ label: 'pc' })],
       ['/api/cli/devices', { method: 'GET' }],
       ['/api/cli/workspaces', jsonInit({ name: 'new-agent' })],
-      ['/api/cli/workspaces/jarvis/consents/cons-1', jsonInit({ decision: 'always' })],
-      ['/api/cli/workspaces/jarvis/model', jsonInit({ spec: 'openai/gpt-5.1' }, 'PUT')],
+      [RPC, rpcInit('resolveDeviceConsent', ['cons-1', 'always'])],
+      [RPC, rpcInit('setModel', ['openai/gpt-5.1'])],
       ['/api/cli/tokens', jsonInit({ name: 'more', scopes: ['workspace.exec'] })],
       ['/api/cli/tokens', { method: 'GET' }],
       ['/api/cli/tokens/ci', { method: 'DELETE' }],
@@ -189,6 +194,13 @@ describe('access token scope enforcement', () => {
       expect((await res?.json() as { error: string }).error).toContain('interactive CLI session token');
     }
     expect(calls.filter((c) => !c.startsWith('connect-ticket'))).toEqual([]);
+  });
+
+  test('off-table rpc methods are 404s for scoped tokens without dispatch', async () => {
+    const { env, calls } = setupEnv();
+    const res = await handleCliRequest(req(BOTH_TOKEN, RPC, rpcInit('destroyAgent', ['someone'])), env);
+    expect(res?.status).toBe(404);
+    expect(calls).toEqual([]);
   });
 
   test('/me works for any valid bearer and reports kind and scopes', async () => {

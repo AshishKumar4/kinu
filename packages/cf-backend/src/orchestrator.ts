@@ -17,7 +17,7 @@
  */
 
 import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
-import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/ws-rpc-gate.js";
+import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, initCompactionStateTable,
@@ -2968,8 +2968,6 @@ export class OrchestratorAgent extends Think<Env> {
     };
   }
 
-  @callable() async doSearchMemory(query: string) { return this.rt.memory.search(query, 10); }
-
   @callable() async getMctsTree() {
     return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
       FROM search_nodes ORDER BY depth, created_at`;
@@ -4144,9 +4142,11 @@ export class OrchestratorAgent extends Think<Env> {
    * Falls back to pure FTS5 when the Vectorize binding isn't configured.
    *
    * Returns enriched HybridHit[] with sources, RRF score, and individual
-   * lexical/semantic scores when available.
+   * lexical/semantic scores when available. THE one memory-search surface for
+   * every remote caller — browser rpc, the CLI /rpc transport, MCP
+   * search_memory — one behavior everywhere.
    */
-  async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
+  @callable() async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
       return results.map((r) => ({

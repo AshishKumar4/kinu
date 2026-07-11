@@ -129,12 +129,6 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ content }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        // Use the existing search_memory tool route via @callable; the
-        // orchestrator doesn't yet expose a direct save_note RPC, so we
-        // route through doSearchMemory's underlying memory primitive by
-        // calling the chat-side save_note tool's same SQL path manually.
-        // Cleaner: add an @callable saveNote(). For now, defer to the
-        // builtin tool by invoking it through a tiny callable below.
         await agent.saveNoteFromMcp(content);
         return { content: [{ type: "text", text: "Note saved." }] };
       } catch (err) {
