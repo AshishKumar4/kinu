@@ -58,7 +58,8 @@ export function initCompactionStateTable(execRaw: RawSqlExec): void {
     CREATE TABLE IF NOT EXISTS compaction_state (
       session_key        TEXT PRIMARY KEY,
       plan_json          TEXT,
-      last_prompt_tokens INTEGER
+      last_prompt_tokens INTEGER,
+      measured_at_length INTEGER
     )
   `);
 }
@@ -68,13 +69,21 @@ export function initCompactionStateTable(execRaw: RawSqlExec): void {
  * provider-reported prompt-token signal of the last completed turn — the
  * measured trigger the next turn's transform runs on. One row per session;
  * clearing a stale plan keeps the token signal and vice versa.
+ *
+ * The token signal is only meaningful for the history it measured, so it is
+ * bound to the durable-history length at measurement time: history is
+ * append-only, so a SHORTER history at read time means a rewrite (undo,
+ * restore truncation) happened and the measurement describes a request this
+ * history can no longer produce — it reads as absent rather than poisoning
+ * the trigger with a huge phantom overhead.
  */
 export interface CompactionStateStore {
   plans: PlanStore;
   /** Provider-reported prompt tokens of the session's last completed turn,
-   *  or null when no turn has reported yet. */
-  loadPromptTokens(sessionKey: string): number | null;
-  savePromptTokens(sessionKey: string, tokens: number): void;
+   *  or null when no turn has reported yet — or when `historyLength` is
+   *  shorter than the length the measurement was taken against. */
+  loadPromptTokens(sessionKey: string, historyLength: number): number | null;
+  savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
 }
 
 export function createCompactionStateStore(sql: SqlExecutor): CompactionStateStore {
@@ -97,17 +106,26 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
             ON CONFLICT(session_key) DO UPDATE SET plan_json = excluded.plan_json`;
       },
     },
-    loadPromptTokens(sessionKey) {
-      const rows = sql<{ last_prompt_tokens: number | null }>`
-        SELECT last_prompt_tokens FROM compaction_state WHERE session_key = ${sessionKey} LIMIT 1`;
-      const tokens = rows[0]?.last_prompt_tokens;
-      return typeof tokens === 'number' && tokens > 0 ? tokens : null;
+    loadPromptTokens(sessionKey, historyLength) {
+      const rows = sql<{ last_prompt_tokens: number | null; measured_at_length: number | null }>`
+        SELECT last_prompt_tokens, measured_at_length FROM compaction_state
+        WHERE session_key = ${sessionKey} LIMIT 1`;
+      const row = rows[0];
+      const tokens = row?.last_prompt_tokens;
+      if (typeof tokens !== 'number' || tokens <= 0) return null;
+      const measuredAt = row?.measured_at_length;
+      if (typeof measuredAt === 'number' && historyLength < measuredAt) return null;
+      return tokens;
     },
-    savePromptTokens(sessionKey, tokens) {
+    savePromptTokens(sessionKey, tokens, historyLength) {
       if (!Number.isFinite(tokens) || tokens <= 0) return;
       const value = Math.floor(tokens);
-      sql`INSERT INTO compaction_state (session_key, last_prompt_tokens) VALUES (${sessionKey}, ${value})
-          ON CONFLICT(session_key) DO UPDATE SET last_prompt_tokens = excluded.last_prompt_tokens`;
+      const length = Number.isFinite(historyLength) && historyLength > 0 ? Math.floor(historyLength) : 0;
+      sql`INSERT INTO compaction_state (session_key, last_prompt_tokens, measured_at_length)
+          VALUES (${sessionKey}, ${value}, ${length})
+          ON CONFLICT(session_key) DO UPDATE SET
+            last_prompt_tokens = excluded.last_prompt_tokens,
+            measured_at_length = excluded.measured_at_length`;
     },
   };
 }

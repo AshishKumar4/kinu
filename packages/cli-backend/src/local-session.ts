@@ -965,8 +965,11 @@ export class LocalAgentSession implements BackendHost {
       .register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
     const cache = this.cacheIdentity();
     // The measured trigger: the previous turn's final request as the provider
-    // actually priced it, persisted at turn end below.
-    const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey);
+    // actually priced it, persisted at turn end below — voided by the length
+    // guard when the durable history shrank (restart truncation) since the
+    // measurement.
+    const historyLength = this.history.length;
+    const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey, historyLength);
 
     try {
       for await (const ev of runChat({
@@ -1038,9 +1041,10 @@ export class LocalAgentSession implements BackendHost {
 
     // Persist the turn's final provider-priced prompt size — the NEXT turn's
     // measured compaction trigger. Any step that reported was a real priced
-    // request, so errored turns record too.
+    // request, so errored turns record too. Bound to the turn's durable
+    // history length so a later shrink voids it.
     if (this.orch.acc.lastPromptTokens > 0) {
-      this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens);
+      this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens, historyLength);
     }
 
     // Steers that never saw a step boundary (the model was already finishing)

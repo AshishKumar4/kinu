@@ -120,32 +120,44 @@ describe('createCompactionStateStore', () => {
 
   test('save(null) clears a stale plan but keeps the prompt-token signal', () => {
     const { store } = stateRig();
-    store.savePromptTokens('s1', 12_345);
+    store.savePromptTokens('s1', 12_345, 30);
     store.plans.save('s1', snapshot('s1'));
     store.plans.save('s1', null);
     expect(store.plans.load('s1')).toBeNull();
-    expect(store.loadPromptTokens('s1')).toBe(12_345);
+    expect(store.loadPromptTokens('s1', 30)).toBe(12_345);
   });
 
   test('prompt-token updates never clobber the stored plan', () => {
     const { store } = stateRig();
     const snap = snapshot('s1');
     store.plans.save('s1', snap);
-    store.savePromptTokens('s1', 9_000);
-    store.savePromptTokens('s1', 11_000);
+    store.savePromptTokens('s1', 9_000, 30);
+    store.savePromptTokens('s1', 11_000, 33);
     expect(store.plans.load('s1')).toEqual(snap);
-    expect(store.loadPromptTokens('s1')).toBe(11_000);
+    expect(store.loadPromptTokens('s1', 33)).toBe(11_000);
+  });
+
+  test('a shrunken history voids the measurement; regrowth past it revalidates', () => {
+    const { store } = stateRig();
+    store.savePromptTokens('s1', 200_000, 120);
+    expect(store.loadPromptTokens('s1', 121)).toBe(200_000); // grew — valid
+    expect(store.loadPromptTokens('s1', 120)).toBe(200_000); // exact — valid
+    // Restart truncation / undo: the history this measured no longer exists.
+    expect(store.loadPromptTokens('s1', 41)).toBeNull();
+    // A fresh measurement over the shrunken stream re-arms the signal.
+    store.savePromptTokens('s1', 3_000, 41);
+    expect(store.loadPromptTokens('s1', 41)).toBe(3_000);
   });
 
   test('sessions are isolated and invalid token values are ignored', () => {
     const { store } = stateRig();
-    store.savePromptTokens('s1', 100);
-    store.savePromptTokens('s2', 0);
-    store.savePromptTokens('s3', Number.NaN);
-    expect(store.loadPromptTokens('s1')).toBe(100);
-    expect(store.loadPromptTokens('s2')).toBeNull();
-    expect(store.loadPromptTokens('s3')).toBeNull();
-    expect(store.loadPromptTokens('missing')).toBeNull();
+    store.savePromptTokens('s1', 100, 10);
+    store.savePromptTokens('s2', 0, 10);
+    store.savePromptTokens('s3', Number.NaN, 10);
+    expect(store.loadPromptTokens('s1', 10)).toBe(100);
+    expect(store.loadPromptTokens('s2', 10)).toBeNull();
+    expect(store.loadPromptTokens('s3', 10)).toBeNull();
+    expect(store.loadPromptTokens('missing', 10)).toBeNull();
   });
 
   test('a corrupt plan_json row degrades to null instead of throwing', () => {

@@ -393,6 +393,10 @@ export class OrchestratorAgent extends Think<Env> {
    *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
   private readonly compactionState: CompactionStateStore;
 
+  /** Durable-history length (ModelMessage count) at the in-flight turn's
+   *  assembly — the length the turn's prompt-token measurement is bound to. */
+  private _turnDurableLength = 0;
+
   /** Better-compact is THE default (and only) compaction path: the staged
    *  pruning ladder runs as a transformContext extension once per turn
    *  assembly, replaying its persisted plan byte-stably until the context
@@ -1864,8 +1868,10 @@ export class OrchestratorAgent extends Think<Env> {
     // The measured trigger: the previous turn's final request as the provider
     // actually priced it, persisted at turn end (onChatResponse). Null until
     // the session's first turn completes — the engine's char estimate gates
-    // alone until then.
-    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name);
+    // alone until then — and voided by the length guard when the durable
+    // history shrank (undo/restore) since the measurement.
+    this._turnDurableLength = baseMessages.length;
+    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, baseMessages.length);
     const transformed = await this.extensions.runTransformContext({
       sessionKey: this.name,
       messages: baseMessages,
@@ -2004,9 +2010,10 @@ export class OrchestratorAgent extends Think<Env> {
     this._cliCwd = null;
     // Persist the turn's final provider-priced prompt size — the NEXT turn's
     // measured compaction trigger. Recorded even on aborted/errored turns:
-    // any step that reported was a real priced request.
+    // any step that reported was a real priced request. Bound to the turn's
+    // durable-history length so a later shrink voids it.
     if (this.acc.lastPromptTokens > 0) {
-      this.compactionState.savePromptTokens(this.name, this.acc.lastPromptTokens);
+      this.compactionState.savePromptTokens(this.name, this.acc.lastPromptTokens, this._turnDurableLength);
     }
     // Emit turn_end + run_end into the durable event log.
     try {
