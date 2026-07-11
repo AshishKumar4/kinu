@@ -122,9 +122,12 @@ contract above:
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult` |
 | `onChatResponse` (completed) | `emitTurnEnd` |
 
-The compaction extension registers on this host at DO construction
-(`registerCompactionExtension`); mid-turn event injection is the next planned
-registrant.
+Both default registrants attach on this host at DO construction: the compaction
+extension (`registerCompactionExtension`) and the mid-turn event-injection
+extension (`proteus.event-injection`, a `prepareStep` hook that drains
+background events which arrived mid-turn into the active turn's next step —
+the DO counterpart of the CLI steering drain, sharing the same `StepInjections`
+splice math).
 
 ## Notes
 
