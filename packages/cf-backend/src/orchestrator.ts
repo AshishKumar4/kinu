@@ -383,12 +383,15 @@ export class OrchestratorAgent extends Think<Env> {
       }
       return dispatchMessage.call(this, connection, message);
     };
+    // Constructor body (not a field initializer): boundSql's memo field must
+    // be initialized before the getter caches its closure.
+    this.compactionState = createCompactionStateStore(this.boundSql);
     this.registerCompactionExtension();
   }
 
   /** Durable per-session compaction state (plan snapshot + the measured
    *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
-  private readonly compactionState: CompactionStateStore = createCompactionStateStore(this.boundSql);
+  private readonly compactionState: CompactionStateStore;
 
   /** Better-compact is THE default (and only) compaction path: the staged
    *  pruning ladder runs as a transformContext extension once per turn
