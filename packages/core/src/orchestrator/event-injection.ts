@@ -21,9 +21,9 @@ import type { MidTurnEventBatch } from '../types/backend-host.js';
 import { StepInjections } from '../prompting/step-injections.js';
 
 export interface SettledInjections {
-  /** Batch turn ids the turn actually absorbed (the model saw them) — the
-   *  backend dispatches the turn's answer to their reply channels. */
-  readonly absorbed: string[];
+  /** Batches the turn actually absorbed (the model saw them) — the backend
+   *  dispatches the turn's answer to their reply channels by batch turn id. */
+  readonly absorbed: MidTurnEventBatch[];
   /** Batches that never reached a step boundary (the model was already
    *  finishing) — re-enqueue each as a programmatic drain turn. */
   readonly leftover: MidTurnEventBatch[];
@@ -31,7 +31,14 @@ export interface SettledInjections {
 
 export class EventInjectionBuffer {
   private pending: MidTurnEventBatch[] = [];
-  private absorbed: string[] = [];
+  private absorbed: MidTurnEventBatch[] = [];
+  /** The previous turn's absorbed batches, held one turn so a CONTINUATION
+   *  (Think auto-continue / recovery — a separate queued turn) can re-absorb
+   *  them: the enqueued drain path self-heals across continuations because
+   *  the durable drain message rides into every one of them, and injected
+   *  batches must match — re-seen text (the prior handling is visible in the
+   *  transcript) and re-dispatch (a settled reply channel no-ops). */
+  private settled: MidTurnEventBatch[] = [];
   private readonly injections = new StepInjections<{ readonly message: ModelMessage }>();
 
   /** Buffer a drained batch for the live turn's next step boundary. */
@@ -45,7 +52,7 @@ export class EventInjectionBuffer {
    *  later step. */
   prepareStep(ctx: PrepareStepContext): ModelMessage[] | undefined {
     const drained = this.pending.splice(0);
-    if (drained.length > 0) this.absorbed.push(...drained.map((batch) => batch.turnId));
+    this.absorbed.push(...drained);
     return this.injections.drain(ctx, drained.length > 0
       ? [{ message: { role: 'user', content: drained.map((batch) => batch.stepText).join('\n\n') } }]
       : []);
@@ -54,19 +61,21 @@ export class EventInjectionBuffer {
   /** Turn over: report what was absorbed vs left waiting, and reset for the
    *  next turn. Call exactly once per turn, before anything that can throw. */
   settle(): SettledInjections {
-    const result = { absorbed: this.absorbed, leftover: this.pending.splice(0) };
+    this.settled = this.absorbed;
+    const result = { absorbed: [...this.absorbed], leftover: this.pending.splice(0) };
     this.absorbed = [];
     this.injections.reset();
     return result;
   }
 
-  /** Turn start: drop splice state a dead turn may have leaked (a turn that
-   *  never reached its response hook leaves entry indices that are meaningless
-   *  against the new turn's messages — and absorbed ids whose answer never
-   *  came). Buffered batches stay: the new turn absorbs them at its first
-   *  step boundary. */
-  beginTurn(): void {
+  /** Turn start: drop splice state a dead turn may have leaked (entry indices
+   *  are meaningless against the new turn's messages). A continuation turn
+   *  re-queues the just-settled batches (see `settled`); a regular turn drops
+   *  them — their turn answered. Batches still waiting inject either way. */
+  beginTurn(continuation: boolean): void {
     this.absorbed = [];
     this.injections.reset();
+    if (continuation) this.pending.unshift(...this.settled);
+    this.settled = [];
   }
 }

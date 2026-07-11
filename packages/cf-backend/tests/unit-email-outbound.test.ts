@@ -166,7 +166,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { absorbed, leftover } = buffer.settle();
     expect(leftover).toEqual([]);
     expect(absorbed).toHaveLength(1);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!, 'Green.', 2_000)).toBe(1);
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.turnId, 'Green.', 2_000)).toBe(1);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
     expect(replies.findOpenByEvent(eventId)).toBeNull();

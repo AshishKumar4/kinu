@@ -1732,9 +1732,11 @@ export class OrchestratorAgent extends Think<Env> {
     this.acc.reset(Date.now());
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
-    // Drop event-injection splice state a turn that died before its response
-    // hook may have leaked; batches still waiting inject into THIS turn.
-    this._eventInjections.beginTurn();
+    // Reset event-injection splice state; a continuation turn re-absorbs the
+    // just-settled batches so injected events ride into it the same way the
+    // enqueued drain path's durable message does. Batches still waiting
+    // inject into this turn either way.
+    this._eventInjections.beginTurn(ctx.continuation);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // A real user message is the verdict on the previous turn — dispatch the
@@ -2177,10 +2179,10 @@ export class OrchestratorAgent extends Think<Env> {
     }
     // Mid-turn injected batches feed the SAME dispatch, keyed by the batch
     // turn ids this turn absorbed at its step boundaries.
-    for (const injectedTurnId of injectedEvents.absorbed) {
+    for (const injected of injectedEvents.absorbed) {
       void dispatchEmailRepliesForTurn(
         { log: this.eventLog, replies: this.replyChannels },
-        injectedTurnId, assistantText, Date.now(),
+        injected.turnId, assistantText, Date.now(),
       ).catch((err) => console.warn('[proteus] email reply dispatch failed:', err));
     }
 
