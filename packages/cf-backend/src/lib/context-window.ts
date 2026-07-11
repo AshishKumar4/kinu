@@ -1,4 +1,4 @@
-export { COMPACT_AT_UTILIZATION, compactionThreshold, compactionThresholdForWindow, contextWindowForModel } from '@proteus/core';
+export { contextWindowForModel } from '@proteus/core';
 
 import type { ModelProvider, ProviderDeps } from '@proteus/core';
 

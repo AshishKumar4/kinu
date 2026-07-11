@@ -18,7 +18,11 @@
 
 import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/ws-rpc-gate.js";
-import { createProteusCompactFunction } from "./lib/compaction.js";
+import {
+  createCompactionExtension, createVfsTranscriptStore,
+  createCompactionStateStore, initCompactionStateTable,
+  type CompactionStateStore, type Logger as CompactionLogger,
+} from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
 import { Think, Session } from "@cloudflare/think";
 // preamble-injection pattern: we construct the codemode tool
@@ -35,7 +39,7 @@ import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
-import { contextWindowForModel, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
+import { contextWindowForModel, catalogContextWindow } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
@@ -241,6 +245,16 @@ function prefixCliCwdContent(content: unknown, prefix: string): unknown {
   return prefix;
 }
 
+/** One activity-log line per compaction engine event: message + compact JSON. */
+function compactionLogDetail(message: string, data?: unknown): string {
+  if (data === undefined) return message;
+  try {
+    return `${message} ${JSON.stringify(data)}`;
+  } catch {
+    return message;
+  }
+}
+
 function executorOutputIsError(output: string): boolean {
   const text = output.trim();
   if (!text) return false;
@@ -369,6 +383,48 @@ export class OrchestratorAgent extends Think<Env> {
       }
       return dispatchMessage.call(this, connection, message);
     };
+    this.registerCompactionExtension();
+  }
+
+  /** Durable per-session compaction state (plan snapshot + the measured
+   *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
+  private readonly compactionState: CompactionStateStore = createCompactionStateStore(this.boundSql);
+
+  /** Better-compact is THE default (and only) compaction path: the staged
+   *  pruning ladder runs as a transformContext extension once per turn
+   *  assembly, replaying its persisted plan byte-stably until the context
+   *  regrows. Registered unconditionally at construction; every port
+   *  dereferences `this` lazily, so nothing heavy (the CF runtime, the model)
+   *  is built before it is first needed. */
+  private registerCompactionExtension(): void {
+    const logger: CompactionLogger = {
+      info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
+      debug: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
+      warn: (message, data) => {
+        console.warn(`[proteus:compaction] ${message}`, data ?? '');
+        this.logActivity('compaction_warn', compactionLogDetail(message, data));
+      },
+      error: (message, data) => {
+        console.error(`[proteus:compaction] ${message}`, data ?? '');
+        this.logActivity('compaction_error', compactionLogDetail(message, data));
+      },
+    };
+    this.extensions.register(createCompactionExtension({
+      ports: {
+        transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
+        plans: this.compactionState.plans,
+        logger,
+      },
+      summarize: (prompt) => generateText({ model: this.getModel(), prompt }).then((r) => r.text),
+      onOutcome: ({ outcome }) => {
+        // A NEW plan rewrote the durable stream — the ephemeral ledger's
+        // frozen block positions are meaningless against it. This fires
+        // inside runTransformContext, BEFORE beforeTurn's weave, so the next
+        // weave starts over with one fresh block at the compacted tail. A
+        // byte-stable replay keeps the frozen positions valid — no reset.
+        if (outcome === 'planned') this.ephemeralLedger.reset();
+      },
+    }));
   }
 
   /** Persist the verified connect-ticket scopes (edge-set header, see
@@ -805,17 +861,15 @@ export class OrchestratorAgent extends Think<Env> {
    *  hooks: beforeTurn → onTurnStart + transformContext, beforeStep → the
    *  shared step pipeline (composePrepareStep), beforeToolCall/afterToolCall
    *  → onToolCall/onToolResult, onChatResponse → onTurnEnd. Persistent for
-   *  the DO activation. No internal cf consumer registers yet (the CLI's
-   *  steering drain is CLI-local; cf steering is turn-queued) — the Wave-2
-   *  compaction plugin and mid-turn event injection are the first
-   *  registrants. */
+   *  the DO activation. The default compaction extension registers here at
+   *  construction (registerCompactionExtension). */
   private readonly extensions = new ExtensionHost();
 
   /** Ephemeral system-state blocks for this DO activation (core
    *  volatile-context.ts). In-memory only — hibernation/reset empties it, so
-   *  a cold start attaches exactly one fresh block; a landed compaction
-   *  resets it explicitly (summarizeForCompaction) because the frozen block
-   *  positions are meaningless against the rewritten stream. */
+   *  a cold start attaches exactly one fresh block; the compaction
+   *  extension's onOutcome resets it on a fresh plan ('planned') because the
+   *  frozen block positions are meaningless against the rewritten stream. */
   private readonly ephemeralLedger = new EphemeralContextLedger();
   private _cliCwd: string | null = null;
   // Current turn identity for the device daemon's pre-mutation shadow-git
@@ -1548,14 +1602,11 @@ export class OrchestratorAgent extends Think<Env> {
   configureSession(session: Session): Session {
     // The agent's durable context is `getSystemPrompt()` (soul + tools) plus
     // the persisted conversation and the ephemeral/turn-local context split —
-    // a single source of truth, not Think's freezable context blocks. The only Session
-    // policy we attach is compaction: the chat window compacts at ~85% of the
-    // active model's context window (≈15% headroom for the streaming response),
-    // and a registered summarizer turns the middle of the transcript into a
-    // summary overlay instead of dropping messages (hermes head/tail protection).
-    return session
-      .compactAfter(this.sessionCompactionThreshold())
-      .onCompaction(this.summarizeForCompaction());
+    // a single source of truth, not Think's freezable context blocks. No
+    // Session policy attaches here: compaction is the transformContext
+    // extension (registerCompactionExtension), which rewrites the turn's
+    // model-visible history without ever touching the stored messages.
+    return session;
   }
 
   /** Resolved `<provider>/<modelId>` the next turn will actually use — the
@@ -1593,8 +1644,8 @@ export class OrchestratorAgent extends Think<Env> {
    *  it lands, the static fallback table answers. */
   private _catalogWindow: { spec: string; window: number | null } | null = null;
   /** The resolved model's context window: catalog-reported when the async
-   *  lookup has landed, else the static fallback table. Feeds both the
-   *  compaction threshold and the extension transformContext seam. */
+   *  lookup has landed, else the static fallback table. Feeds the compaction
+   *  extension through the transformContext seam. */
   private sessionContextWindow(): number {
     const spec = this.effectiveModelSpec();
     if (this._catalogWindow?.spec !== spec) {
@@ -1602,10 +1653,6 @@ export class OrchestratorAgent extends Think<Env> {
       void this.lookupCatalogWindow(spec);
     }
     return this._catalogWindow.window ?? contextWindowForModel(spec);
-  }
-
-  private sessionCompactionThreshold(): number {
-    return compactionThresholdForWindow(this.sessionContextWindow());
   }
 
   private async lookupCatalogWindow(spec: string): Promise<void> {
@@ -1616,25 +1663,6 @@ export class OrchestratorAgent extends Think<Env> {
       const window = await catalogContextWindow(reg.registry.get(provider), reg.deps, modelId);
       if (window && this._catalogWindow?.spec === spec) this._catalogWindow.window = window;
     } catch { /* catalog unavailable — the static fallback table stays authoritative */ }
-  }
-
-  /** Hermes-style compaction fn: summarizes the middle of an over-long
-   *  transcript via the agent's own model with the structured handoff
-   *  template, protecting head + a 40k-token recent tail and pruning old
-   *  tool outputs before the summarizer call (lib/compaction.ts). */
-  private summarizeForCompaction() {
-    const compact = createProteusCompactFunction({
-      summarize: (prompt) =>
-        generateText({ model: this.getModel(), prompt }).then((r) => r.text),
-    });
-    return async (messages: Parameters<typeof compact>[0]) => {
-      const result = await compact(messages);
-      // A landed compaction rewrites the durable stream — the ephemeral
-      // ledger's frozen block positions are meaningless against it, so the
-      // next turn starts over with one fresh system-state block.
-      if (result) this.ephemeralLedger.reset();
-      return result;
-    };
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -1672,11 +1700,6 @@ export class OrchestratorAgent extends Think<Env> {
     this._cliCwd = readCliCwd(ctx.body);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
-    // Re-arm the compaction threshold each turn: configureSession runs at
-    // onStart, which can precede claimOwner (no resolvable model yet) and
-    // never sees mid-activation model switches or the async catalog window
-    // landing. compactAfter is a cheap setter.
-    this.session.compactAfter(this.sessionCompactionThreshold());
     // A real user message is the verdict on the previous turn — dispatch the
     // detached outcome review (Hermes-style forked background review). Runs
     // concurrently with this turn; never blocks it. Programmatic turns
@@ -1835,11 +1858,17 @@ export class OrchestratorAgent extends Think<Env> {
     // and the turn-local tail are woven/spliced after it, so a compaction
     // plugin can never see (or persist) either.
     await this.extensions.emitTurnStart({ system: systemOverride, history: baseMessages });
+    // The measured trigger: the previous turn's final request as the provider
+    // actually priced it, persisted at turn end (onChatResponse). Null until
+    // the session's first turn completes — the engine's char estimate gates
+    // alone until then.
+    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name);
     const transformed = await this.extensions.runTransformContext({
       sessionKey: this.name,
       messages: baseMessages,
       system: systemOverride,
       contextWindow: this.sessionContextWindow(),
+      ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
       trigger: 'auto',
     });
     const woven = this.ephemeralLedger.weave(transformed ?? baseMessages, {
@@ -1970,6 +1999,12 @@ export class OrchestratorAgent extends Think<Env> {
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;
+    // Persist the turn's final provider-priced prompt size — the NEXT turn's
+    // measured compaction trigger. Recorded even on aborted/errored turns:
+    // any step that reported was a real priced request.
+    if (this.acc.lastPromptTokens > 0) {
+      this.compactionState.savePromptTokens(this.name, this.acc.lastPromptTokens);
+    }
     // Emit turn_end + run_end into the durable event log.
     try {
       if (this._currentRunId) {
@@ -2578,6 +2613,10 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Background-job registry — work auto-detached past the 30s threshold.
     initBackgroundJobsTable(execRaw);
+
+    // Compaction: the replayable plan snapshot + the measured prompt-token
+    // trigger signal, one row per session (@proteus/compaction stores).
+    initCompactionStateTable(execRaw);
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL

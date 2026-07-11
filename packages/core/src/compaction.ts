@@ -1,12 +1,10 @@
 /**
  * Compaction content spec — the structured handoff template the summarizer
- * uses when the conversation middle is compressed (hermes context_compressor
+ * uses when the conversation prefix is compressed (hermes context_compressor
  * / Codex compact-prompt lineage). This module owns WHAT a compaction
- * summary must say; the boundary/overlay machinery (head/tail protection,
- * tool-pair alignment, storage) is the agents-SDK Session seam. Today only
- * the CF backend compacts (cf-backend/lib/compaction.ts consumes these
- * helpers); the CLI backend has no compaction yet — when it grows one it
- * must wire this same spec rather than invent a second.
+ * summary must say; the boundary/prune/replay machinery is
+ * @proteus/compaction (the better-compact ladder), whose last-resort prefix
+ * summary builds its prompt here — one content spec, both backends.
  *
  * Tuning order is recall first, then precision: a successor that re-asks a
  * resolved question or re-reads a summarized file wastes more than a few
@@ -34,49 +32,6 @@ export function stripCheckpointPreamble(summary: string): string {
   if (!summary.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return summary.trim();
   const bodyStart = summary.indexOf('\n\n');
   return bodyStart === -1 ? '' : summary.slice(bodyStart + 2).trim();
-}
-
-/** Minimal message shape the transcript renderer needs — structurally
- *  compatible with the agents-SDK SessionMessage parts, duck-typed so core
- *  carries no dependency on the SDK. */
-export interface CompactableMessagePart {
-  type: string;
-  text?: string;
-  toolName?: string;
-  input?: unknown;
-  output?: unknown;
-}
-export interface CompactableMessage {
-  id: string;
-  role: string;
-  parts: CompactableMessagePart[];
-}
-
-/** Render messages into the transcript the summarizer reads. Callers prune
- *  oversize tool outputs FIRST (the pre-compaction prune pass) — this
- *  renderer is faithful, not a budget. */
-export function renderCompactionTranscript(messages: ReadonlyArray<CompactableMessage>): string {
-  return messages
-    .map((msg) => {
-      const text = msg.parts
-        .filter((p) => p.type === 'text' && p.text)
-        .map((p) => p.text)
-        .join('\n');
-      const tools = msg.parts
-        .filter((p) => p.type.startsWith('tool-') || p.type === 'dynamic-tool')
-        .map((p) => {
-          const lines = [`[Tool: ${p.toolName ?? 'unknown'}]`];
-          if (p.input !== undefined) lines.push(`Input: ${JSON.stringify(p.input)}`);
-          if (p.output !== undefined) {
-            const out = typeof p.output === 'string' ? p.output : JSON.stringify(p.output);
-            lines.push(`Output: ${out}`);
-          }
-          return lines.join('\n');
-        })
-        .join('\n');
-      return `[${msg.role}]\n${text}${tools ? (text ? '\n' : '') + tools : ''}`;
-    })
-    .join('\n\n---\n\n');
 }
 
 export interface CompactionSummaryPromptInput {

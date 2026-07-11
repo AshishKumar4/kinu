@@ -149,15 +149,12 @@ export { composePrepareStep, type StepCachePlan } from './prompting/prepare-step
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
-export { COMPACT_AT_UTILIZATION, compactionThreshold, compactionThresholdForWindow, contextWindowForModel } from './context-window.js';
+export { contextWindowForModel } from './context-window.js';
 export {
   buildCompactionSummaryPrompt,
-  renderCompactionTranscript,
   wrapCompactionSummary,
   stripCheckpointPreamble,
   CONTEXT_CHECKPOINT_PREFIX,
-  type CompactableMessage,
-  type CompactableMessagePart,
   type CompactionSummaryPromptInput,
 } from './compaction.js';
 
