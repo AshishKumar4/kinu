@@ -26,8 +26,10 @@ export interface RawSqlExec {
 }
 
 /**
- * VFS interface — matches SqliteFS from agent-utils.
- * Backed by a single vfs_files table with 1.8 MB chunking.
+ * VFS interface — SqliteFS (agent-utils) implements it directly; the 3 mount
+ * adapters and the CompositeVFS also satisfy it. `stat` names its time field
+ * `mtimeMs` (Node fs.Stats convention) so SqliteFS's native stat is assignable
+ * with no adapter. Backed by a single vfs_files table with 1.8 MB chunking.
  *
  * In production `Storage.vfs` is a CompositeVFS (vfs/composite.ts): the same
  * 7 methods over a mount table (/local = SqliteFS, plus /sandbox /nimbus /pc
@@ -38,7 +40,7 @@ export interface VFS {
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
-  stat(path: string): Promise<{ size: number; mtime: number; isDir: boolean } | null>;
+  stat(path: string): Promise<{ size: number; mtimeMs: number; isDir: boolean } | null>;
   unlink(path: string): Promise<void>;
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;

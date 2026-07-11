@@ -407,10 +407,11 @@ export {
 
 // File plane — CompositeVFS mount table + raw-handle mount adapters
 export {
-  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath, makeVfsError,
+  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
+  makeVfsError, isVfsError, ERRNO,
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type VfsError, type DeviceMountConsent,
+  type ResolvedPath, type VfsError, type VfsErrorCode, type DeviceMountConsent,
 } from './vfs/index.js';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)

@@ -65,31 +65,6 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
 }
 
 /**
- * Adapt agent-utils SqliteFS to core VFS interface.
- * Core VFS has a simpler stat() return shape than agent-utils'.
- */
-function adaptVFS(sqliteFs: SqliteFS): VFS {
-  return {
-    // core VFS encoding is the looser `string`; SqliteFS wants the `'utf8'`
-    // literal. Only utf8 is meaningful — narrow it; anything else = binary.
-    readFile: (path, opts) => sqliteFs.readFile(path, opts?.encoding ? { encoding: 'utf8' } : undefined),
-    writeFile: (path, data) => sqliteFs.writeFile(path, data),
-    readdir: (path) => sqliteFs.readdir(path),
-    async stat(path) {
-      try {
-        const s = await sqliteFs.stat(path);
-        return { size: s.size, mtime: s.mtimeMs, isDir: s.isDirectory() };
-      } catch {
-        return null;
-      }
-    },
-    unlink: (path) => sqliteFs.unlink(path),
-    mkdir: (path, opts) => sqliteFs.mkdir(path, opts),
-    exists: (path) => sqliteFs.exists(path),
-  };
-}
-
-/**
  * Adapt agent-utils MemoryStore to core Memory interface.
  */
 function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
@@ -217,11 +192,12 @@ export function createCLIRuntime(
   // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
   const sqliteFs = new SqliteFS(sql);
   sqliteFs.init();
-  // Storage.vfs is the CompositeVFS mount table; locally only /local (SqliteFS)
-  // is mounted — remote environments have no raw handles on this backend.
-  const vfs = new CompositeVFS({ local: adaptVFS(sqliteFs) });
+  // Storage.vfs is the CompositeVFS mount table; locally only /local (SqliteFS,
+  // which implements the core VFS directly) is mounted — remote environments
+  // have no raw handles on this backend.
+  const vfs = new CompositeVFS({ local: sqliteFs });
 
-  // MemoryStore needs the full agent-utils VFS (SqliteFS), not the adapted core VFS
+  // MemoryStore consumes the full agent-utils VFS surface (FTS index walks).
   const memoryStore = new MemoryStore(sqliteFs as any, sql);
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, vfs);

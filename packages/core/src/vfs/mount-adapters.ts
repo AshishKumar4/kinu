@@ -19,10 +19,10 @@ import type { VFS } from '../types/primitives.js';
 import type { SandboxHandle } from '../execution/sandbox.js';
 import type { NimbusSandboxHandle } from '../execution/nimbus.js';
 import type { DeviceTransport } from '../execution/ssh.js';
-import { makeVfsError } from './composite.js';
+import { makeVfsError } from './errno.js';
 import { shellQuote } from '../utils/shell.js';
 
-type Stat = { size: number; mtime: number; isDir: boolean } | null;
+type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 
 function dirname(path: string): string {
   const i = path.lastIndexOf('/');
@@ -118,7 +118,7 @@ export function createSandboxMountVFS(handle: SandboxHandle): VFS {
     },
 
     async stat(path): Promise<Stat> {
-      if (path === '/') return { size: 0, mtime: 0, isDir: true };
+      if (path === '/') return { size: 0, mtimeMs: 0, isDir: true };
       const name = basename(path);
       let files: Awaited<ReturnType<SandboxHandle['listFiles']>>['files'];
       try {
@@ -128,7 +128,7 @@ export function createSandboxMountVFS(handle: SandboxHandle): VFS {
       }
       const entry = files.find((f) => entryName(f) === name);
       if (!entry) return null;
-      return { size: entry.size ?? 0, mtime: 0, isDir: entryIsDir(entry) };
+      return { size: entry.size ?? 0, mtimeMs: 0, isDir: entryIsDir(entry) };
     },
 
     async unlink(path) {
@@ -332,5 +332,5 @@ export function createDeviceMountVFS(transport: DeviceTransport, consent: Device
 function parseStatLine(stdout: string): Stat {
   const m = stdout.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
   if (!m) return null;
-  return { size: Number(m[1]), mtime: Number(m[2]) * 1000, isDir: /directory/i.test(m[3]) };
+  return { size: Number(m[1]), mtimeMs: Number(m[2]) * 1000, isDir: /directory/i.test(m[3]) };
 }

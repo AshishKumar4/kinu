@@ -183,11 +183,11 @@ describe('sandbox mount adapter (raw SandboxHandle)', () => {
   test('stat is synthesized from the parent listing (no native stat)', async () => {
     const { handle } = fakeSandboxHandle();
     const vfs = createSandboxMountVFS(handle);
-    expect(await vfs.stat('/workspace/app.ts')).toEqual({ size: 9, mtime: 0, isDir: false });
-    expect(await vfs.stat('/workspace/src')).toEqual({ size: 0, mtime: 0, isDir: true });
+    expect(await vfs.stat('/workspace/app.ts')).toEqual({ size: 9, mtimeMs: 0, isDir: false });
+    expect(await vfs.stat('/workspace/src')).toEqual({ size: 0, mtimeMs: 0, isDir: true });
     expect(await vfs.stat('/workspace/missing.ts')).toBeNull();
     expect(await vfs.stat('/nope/deep')).toBeNull();
-    expect(await vfs.stat('/')).toEqual({ size: 0, mtime: 0, isDir: true });
+    expect(await vfs.stat('/')).toEqual({ size: 0, mtimeMs: 0, isDir: true });
   });
 
   test('mkdir/exists are synthesized via exec; readdir/unlink use the handle', async () => {
@@ -234,8 +234,8 @@ describe('nimbus mount adapter (raw NimbusSandboxHandle)', () => {
   test('stat is synthesized via stat(1) with real size + mtime', async () => {
     const { box } = fakeNimbusBox();
     const vfs = createNimbusMountVFS(box);
-    expect(await vfs.stat('/home/user/notes.md')).toEqual({ size: 4, mtime: 1700000100000, isDir: false });
-    expect(await vfs.stat('/home/user')).toEqual({ size: 4096, mtime: 1700000000000, isDir: true });
+    expect(await vfs.stat('/home/user/notes.md')).toEqual({ size: 4, mtimeMs: 1700000100000, isDir: false });
+    expect(await vfs.stat('/home/user')).toEqual({ size: 4096, mtimeMs: 1700000000000, isDir: true });
     expect(await vfs.stat('/home/user/none.md')).toBeNull();
   });
 
@@ -272,7 +272,7 @@ describe('device mount adapter (raw DeviceTransport + consent scope)', () => {
     const vfs = createDeviceMountVFS(transport, subtreeConsent('/home/me/proj'));
     expect(await vfs.readFile('/home/me/proj/readme.md', { encoding: 'utf8' })).toBe('hello');
     expect(await vfs.readdir('/home/me/proj')).toEqual(['readme.md']);
-    expect(await vfs.stat('/home/me/proj/readme.md')).toEqual({ size: 5, mtime: 1700000200000, isDir: false });
+    expect(await vfs.stat('/home/me/proj/readme.md')).toEqual({ size: 5, mtimeMs: 1700000200000, isDir: false });
     expect(await vfs.exists('/home/me/proj/readme.md')).toBe(true);
     await vfs.writeFile('/home/me/proj/out.txt', 'x');
     expect(files.get('/home/me/proj/out.txt')).toBe('x');

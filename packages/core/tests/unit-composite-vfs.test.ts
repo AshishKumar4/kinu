@@ -88,7 +88,7 @@ describe('Phase 0 — compat routing to /local', () => {
     expect(await vfs.readdir('/local/proj/src')).toEqual(['main.ts']);
     expect(await vfs.exists('/proj/src/main.ts')).toBe(true);
     const st = await vfs.stat('proj/src/main.ts');
-    expect(st).toEqual({ size: 1, mtime: st!.mtime, isDir: false });
+    expect(st).toEqual({ size: 1, mtimeMs: st!.mtimeMs, isDir: false });
     expect((await vfs.stat('/local/proj'))!.isDir).toBe(true);
 
     await vfs.unlink('/local/proj/src/main.ts');
@@ -112,7 +112,7 @@ function recordingVFS() {
     async readFile(path: string) { calls.push(`read:${path}`); return files.get(path) ?? ''; },
     async writeFile(path: string, data: string | Uint8Array) { calls.push(`write:${path}`); files.set(path, String(data)); },
     async readdir(path: string) { calls.push(`readdir:${path}`); return [...files.keys()]; },
-    async stat(path: string) { calls.push(`stat:${path}`); return { size: 0, mtime: 1, isDir: path === '/' }; },
+    async stat(path: string) { calls.push(`stat:${path}`); return { size: 0, mtimeMs: 1, isDir: path === '/' }; },
     async unlink(path: string) { calls.push(`unlink:${path}`); files.delete(path); },
     async mkdir(path: string) { calls.push(`mkdir:${path}`); },
     async exists(path: string) { calls.push(`exists:${path}`); return files.has(path); },
@@ -137,7 +137,7 @@ describe("Phase 1 — synthetic read-only '/'", () => {
 
   test("stat('/') and exists('/') describe the synthetic root", async () => {
     const { vfs } = createComposite();
-    expect(await vfs.stat('/')).toEqual({ size: 0, mtime: 0, isDir: true });
+    expect(await vfs.stat('/')).toEqual({ size: 0, mtimeMs: 0, isDir: true });
     expect(await vfs.exists('/')).toBe(true);
     expect(await vfs.readFile('/').catch((e: { code?: string }) => e.code)).toBe('EISDIR');
     expect(await vfs.writeFile('/', 'x').catch((e: { code?: string }) => e.code)).toBe('EISDIR');
@@ -239,7 +239,7 @@ describe("Phase 1 — synthetic read-only '/'", () => {
     await vfs.writeFile('/local/../sandbox/x', 'hop');
     expect(sandbox.calls).toEqual(['write:/x']);
     // /local/.. is the synthetic root itself.
-    expect(await vfs.stat('/local/..')).toEqual({ size: 0, mtime: 0, isDir: true });
+    expect(await vfs.stat('/local/..')).toEqual({ size: 0, mtimeMs: 0, isDir: true });
   });
 
   test('read-only mounts refuse writes with EROFS', async () => {

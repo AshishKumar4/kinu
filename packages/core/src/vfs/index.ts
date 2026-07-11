@@ -3,10 +3,14 @@
  */
 
 export {
-  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath, makeVfsError,
+  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type VfsError,
+  type ResolvedPath,
 } from './composite.js';
+export {
+  makeVfsError, isVfsError, ERRNO,
+  type VfsError, type VfsErrorCode,
+} from './errno.js';
 export {
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   type DeviceMountConsent,

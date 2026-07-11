@@ -90,7 +90,9 @@ function fakeVfs(files: Record<string, string>): VFS {
   } as unknown as VFS;
 }
 
-function fakeSandbox(opts: { active: boolean; read?: string | (() => Promise<string>) }): ExecutorProvider {
+/** Only `getStatus().active` matters now — the sandbox file is read through
+ *  the composite VFS, never the provider's tools. */
+function fakeSandbox(opts: { active: boolean }): ExecutorProvider {
   const status: ExecutorStatus = {
     configured: true, available: true, active: opts.active,
     status: opts.active ? 'active' : 'idle',
@@ -100,48 +102,40 @@ function fakeSandbox(opts: { active: boolean; read?: string | (() => Promise<str
     isAvailable: () => true,
     getStatus: () => status,
     connect: async () => {}, disconnect: async () => {},
-    tools: opts.read === undefined ? {} : {
-      readFile: {
-        description: 'read',
-        execute: async () => (typeof opts.read === 'function' ? opts.read() : opts.read),
-      },
-    },
+    tools: {},
   } as unknown as ExecutorProvider;
 }
 
 describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   test('reads the VFS root file and the active sandbox workspace, nearest last', async () => {
     const files = await collectWorkspaceAgentsMd(
-      fakeVfs({ 'AGENTS.md': 'workspace defaults' }),
-      fakeSandbox({ active: true, read: 'sandbox project rules' }),
+      fakeVfs({
+        'AGENTS.md': 'workspace defaults',
+        '/sandbox/workspace/AGENTS.md': 'sandbox project rules',
+      }),
+      fakeSandbox({ active: true }),
     );
     expect(files.map((f) => f.content)).toEqual(['workspace defaults', 'sandbox project rules']);
     expect(files[0]!.path).toContain('agent workspace');
     expect(files[1]!.path).toContain('sandbox');
   });
 
-  test('never touches an inactive sandbox and survives a missing VFS file', async () => {
-    let touched = false;
+  test('never touches an inactive sandbox mount, even when its file exists', async () => {
     const files = await collectWorkspaceAgentsMd(
-      fakeVfs({}),
-      fakeSandbox({ active: false, read: async () => { touched = true; return 'x'; } }),
+      fakeVfs({ '/sandbox/workspace/AGENTS.md': 'should be ignored' }),
+      fakeSandbox({ active: false }),
     );
     expect(files).toEqual([]);
-    expect(touched).toBe(false);
   });
 
-  test('treats sandbox error strings and read failures as absent', async () => {
-    for (const read of [
-      'read error: exit 1',
-      'Sandbox executor not configured. Add the @cloudflare/sandbox binding',
-      async (): Promise<string> => { throw new Error('rpc dropped'); },
-    ]) {
-      const files = await collectWorkspaceAgentsMd(
-        fakeVfs({ 'AGENTS.md': 'defaults' }),
-        fakeSandbox({ active: true, read }),
-      );
-      expect(files.map((f) => f.content)).toEqual(['defaults']);
-    }
+  test('a missing or unreadable sandbox file falls back to defaults', async () => {
+    // No /sandbox entry → the composite read throws; the tool-string parsing
+    // that once let 'read error: …' masquerade as content is gone entirely.
+    const files = await collectWorkspaceAgentsMd(
+      fakeVfs({ 'AGENTS.md': 'defaults' }),
+      fakeSandbox({ active: true }),
+    );
+    expect(files.map((f) => f.content)).toEqual(['defaults']);
   });
 
   test('works with no sandbox provider at all', async () => {

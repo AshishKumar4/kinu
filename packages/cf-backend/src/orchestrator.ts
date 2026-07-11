@@ -38,7 +38,7 @@ import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
-import { parseReaddirEntries, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
+import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
 import { deriveWorkspaceTitle } from "./lib/agent-naming.js";
 import type {
   TurnContext, TurnConfig, ChatResponseResult,
@@ -4201,63 +4201,44 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Typed directory listing for the file manager. Workspace is read straight
-   *  off the VFS (accurate types + sizes); other executors' heterogeneous
-   *  `readdir` output is normalized via parseReaddirEntries. */
+  /** Typed directory listing for the file manager — read straight off the
+   *  CompositeVFS for every executor (accurate types + sizes), workspace paths
+   *  as-is and remote executors through their mount prefix. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
-    const dir = path || '/';
-    if (executorId === 'workspace') {
-      try {
-        const names = await this.rt.storage.vfs.readdir(dir);
-        const entries: DirEntry[] = [];
-        for (const name of names) {
-          const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
-          // Entries of the composite root are mounts — directories by
-          // construction, even when the environment behind one can't answer
-          // a stat right now.
-          let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
-          let size: number | undefined;
-          try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — keep the default */ }
-          entries.push({ name, type, size });
-        }
-        return { entries: sortDirEntries(entries) };
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    }
-    const provider = this.rt.executionRouter?.getProvider(executorId);
-    if (!provider) return { error: `Executor "${executorId}" not found` };
-    const readdirTool = provider.tools.readdir;
-    if (!readdirTool) return { error: `Executor "${executorId}" has no readdir tool` };
+    const dir = toCompositePath(executorId, path || '/');
+    if (dir === null) return { error: `Executor "${executorId}" not found` };
     try {
-      const result = await readdirTool.execute(dir);
-      return { entries: parseReaddirEntries(result) };
+      const names = await this.rt.storage.vfs.readdir(dir);
+      const entries: DirEntry[] = [];
+      for (const name of names) {
+        const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
+        // Entries of the composite root are mounts — directories by
+        // construction, even when the environment behind one can't answer
+        // a stat right now.
+        let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
+        let size: number | undefined;
+        try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — keep the default */ }
+        entries.push({ name, type, size });
+      }
+      return { entries: sortDirEntries(entries) };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  /** Read a single file's text content for the file-manager viewer. Workspace
-   *  reads off the VFS; other executors via their readFile tool. Caps size and
-   *  refuses binary (NUL byte). */
+  /** Read a single file's text content for the file-manager viewer — off the
+   *  CompositeVFS for every executor (structured bytes, not tool strings). Caps
+   *  size and refuses binary (NUL byte). */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
     if (!path) return { error: 'path required' };
+    const target = toCompositePath(executorId, path);
+    if (target === null) return { error: `Executor "${executorId}" not found` };
     const MAX = 512 * 1024;
     try {
-      let text: string;
-      if (executorId === 'workspace') {
-        const stat = await this.rt.storage.vfs.stat(path);
-        if (stat?.isDir) return { error: 'path is a directory' };
-        const raw = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-        text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      } else {
-        const provider = this.rt.executionRouter?.getProvider(executorId);
-        if (!provider) return { error: `Executor "${executorId}" not found` };
-        const readFileTool = provider.tools.readFile;
-        if (!readFileTool) return { error: `Executor "${executorId}" has no readFile tool` };
-        const raw = await readFileTool.execute(path);
-        text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-      }
+      const stat = await this.rt.storage.vfs.stat(target);
+      if (stat?.isDir) return { error: 'path is a directory' };
+      const raw = await this.rt.storage.vfs.readFile(target, { encoding: 'utf8' });
+      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
       if (text.length > MAX) return { content: text.slice(0, MAX), truncated: true };
       return { content: text };

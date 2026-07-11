@@ -1,22 +1,28 @@
 /**
  * File-manager plumbing shared by the orchestrator RPCs and the FilesPane UI.
  *
- * Listing: normalize the heterogeneous `readdir` outputs of the execution
- * providers into a single typed DirEntry[]. Each provider returns a
- * different shape:
- *   - sandbox:  string  "d name\n- name\n…"        (type-prefixed)
- *   - nimbus:   string  "d name (123b)\n- name (45b)" (type-prefixed + size)
- *   - laptop:   string[] plain names (ls -1a)        (no type info)
- *   - workspace is read directly off the VFS by the orchestrator, not here.
- *
- * Writing: writeExecutorFileOp is the one upload seam — every executor's
- * upload lands binary-safe through the CompositeVFS: workspace paths are
- * composite-addressed already; other executors' env-native paths map through
- * their mount prefix (EXECUTOR_MOUNT_PREFIX). Unavailable mounts surface the
- * composite's honest reservation error.
+ * One plane for BOTH read and write: every executor's files are reached
+ * through the CompositeVFS. Workspace paths are composite-addressed already;
+ * other executors' env-native paths map onto their mount prefix
+ * (EXECUTOR_MOUNT_PREFIX), landing on the same raw handle the executor's tools
+ * use — structured bytes and entries, never the executors' lossy LLM tool
+ * strings. Unavailable mounts surface the composite's honest reservation error.
  */
 import { EXECUTOR_MOUNT_PREFIX } from "@proteus/core";
 import type { DirEntry } from "./protocol";
+
+/**
+ * Map an (executorId, environment-native path) to its CompositeVFS address.
+ * The workspace executor IS the composite, so its paths pass through; every
+ * other executor maps through its mount prefix. Returns null for an executor
+ * with no file plane (unknown id).
+ */
+export function toCompositePath(executorId: string, path: string): string | null {
+  if (executorId === "workspace") return path;
+  const prefix = EXECUTOR_MOUNT_PREFIX[executorId];
+  if (!prefix) return null;
+  return `${prefix}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
 /** Per-file upload cap. Content crosses the agents RPC frame as base64, so the
  *  raw cap keeps the encoded payload within sane WS frame territory. */
@@ -72,14 +78,8 @@ export async function writeExecutorFileOp(
     return { error: `file too large (${bytes.length} bytes; max ${MAX_UPLOAD_BYTES})` };
   }
 
-  let target: string;
-  if (executorId === "workspace") {
-    target = path;
-  } else {
-    const prefix = EXECUTOR_MOUNT_PREFIX[executorId];
-    if (!prefix) return { error: `Executor "${executorId}" not found` };
-    target = `${prefix}${path.startsWith("/") ? path : `/${path}`}`;
-  }
+  const target = toCompositePath(executorId, path);
+  if (target === null) return { error: `Executor "${executorId}" not found` };
   try {
     await deps.vfs.writeFile(target, bytes);
     return { ok: true };
@@ -88,45 +88,10 @@ export async function writeExecutorFileOp(
   }
 }
 
-/** Strip a trailing slash (dir markers from some `ls` variants). */
-function stripSlash(name: string): string {
-  return name.endsWith("/") ? name.slice(0, -1) : name;
-}
-
-function parseLine(line: string): DirEntry | null {
-  const s = line.trim();
-  if (!s) return null;
-  // "d name" / "- name", optionally with a " (123b)" size suffix (nimbus).
-  const m = /^([d-])\s+(.+?)(?:\s+\((\d+)\s*b?\))?$/i.exec(s);
-  if (m) {
-    const name = stripSlash(m[2].trim());
-    if (!name || name === "." || name === "..") return null;
-    return { name, type: m[1] === "d" ? "dir" : "file", size: m[3] ? Number(m[3]) : undefined };
-  }
-  // Plain name (laptop) — a trailing slash is the only available dir hint.
-  const isDir = s.endsWith("/");
-  const name = stripSlash(s);
-  if (!name || name === "." || name === "..") return null;
-  return { name, type: isDir ? "dir" : "file" };
-}
-
 /** Directories first, then files; alphabetical within each group. */
 export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
   return [...entries].sort((a, b) => {
     if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
-}
-
-/** Normalize a provider `readdir` result (string blob or string[]) → DirEntry[]. */
-export function parseReaddirEntries(raw: unknown): DirEntry[] {
-  const lines = Array.isArray(raw)
-    ? (raw as unknown[]).map(String)
-    : String(raw ?? "").split("\n");
-  const entries: DirEntry[] = [];
-  for (const line of lines) {
-    const e = parseLine(line);
-    if (e) entries.push(e);
-  }
-  return sortDirEntries(entries);
 }

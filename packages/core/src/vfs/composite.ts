@@ -25,6 +25,7 @@
  */
 
 import type { VFS } from '../types/primitives.js';
+import { makeVfsError, isVfsError, type VfsError } from './errno.js';
 
 export type MountConsistency = 'durable' | 'ephemeral' | 'live-shared';
 
@@ -76,25 +77,6 @@ export interface MountInfo {
   cwd: string | null;
   /** Why the name is reserved but not mounted; null for real mounts. */
   reason: string | null;
-}
-
-export interface VfsError extends Error {
-  code: string;
-  errno: number;
-  path: string;
-}
-
-const ERRNO: Record<string, number> = {
-  EPERM: -1, ENOENT: -2, ENXIO: -6, EACCES: -13, EEXIST: -17, ENOTDIR: -20, EISDIR: -21, EROFS: -30,
-};
-
-/** Errno-style error shared by the composite and its mount adapters. */
-export function makeVfsError(code: string, message: string, path: string): VfsError {
-  const err = new Error(`${code}: ${message}`) as VfsError;
-  err.code = code;
-  err.errno = ERRNO[code] ?? -1;
-  err.path = path;
-  return err;
 }
 
 /**
@@ -253,11 +235,19 @@ export class CompositeVFS implements VFS {
     return r.vfs.readdir(r.sub);
   }
 
-  async stat(path: string): Promise<{ size: number; mtime: number; isDir: boolean } | null> {
+  async stat(path: string): Promise<{ size: number; mtimeMs: number; isDir: boolean } | null> {
     const r = this.demandResolved(path, 'stat');
-    if (r.kind === 'root') return { size: 0, mtime: 0, isDir: true };
+    if (r.kind === 'root') return { size: 0, mtimeMs: 0, isDir: true };
     if (r.kind === 'rootEntry') return null;
-    return r.vfs.stat(r.sub);
+    // Core-VFS contract: a missing path stats as null. Mount adapters honour it
+    // directly; SqliteFS (the /local leaf) throws ENOENT like Node — normalise
+    // that one code here so every mount reads the same at the composite seam.
+    try {
+      return await r.vfs.stat(r.sub);
+    } catch (err) {
+      if (isVfsError(err) && err.code === 'ENOENT') return null;
+      throw err;
+    }
   }
 
   async unlink(path: string): Promise<void> {
