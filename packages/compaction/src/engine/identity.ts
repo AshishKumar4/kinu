@@ -1,6 +1,6 @@
 // PROTEUS MODIFICATION (the vendored core's single edit — see PROVENANCE.md):
 // upstream hashes via node:crypto createHash (sha256/sha1), which Workers
-// cannot load synchronously. All three digests below swap to Proteus's pure-JS
+// cannot load synchronously. All four digests below swap to Proteus's pure-JS
 // fnv1a64 (same 16-hex-char width as the upstream `.slice(0, 16)` outputs).
 // These hashes guard accidental divergence (edited prefix, duplicate payloads
 // within one session), never adversarial input, so 64-bit collision resistance

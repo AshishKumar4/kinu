@@ -15,7 +15,7 @@ the single unavoidable modification:
 
 Upstream digests through `node:crypto` `createHash` (`sha256`/`sha1`), which is
 not loadable in Cloudflare Workers. The swap replaces the `node:crypto` import
-with `@proteus/core`'s pure-JS `fnv1a64` and rewrites exactly the three digest
+with `@proteus/core`'s pure-JS `fnv1a64` and rewrites exactly the four digest
 expressions (output widths preserved — `fnv1a64` yields the same 16 hex chars
 as upstream's `.slice(0, 16)`):
 

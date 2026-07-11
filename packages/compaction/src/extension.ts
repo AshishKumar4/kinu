@@ -177,8 +177,9 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       {
         ...buildInputs(ctx),
         force: true,
+        // The just-built plan is the floor; its snapshot already carries the
+        // assistant summaries and preserved tool ids forward.
         priorPlan: toPlanSnapshot(plan),
-        assistantSummaries: plan.assistantSummaries,
         prefixSummary: wrapCompactionSummary(body),
       },
       proteusSpec,
