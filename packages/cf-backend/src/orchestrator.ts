@@ -79,7 +79,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventsToUIStream, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldInferenceTransform, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
@@ -197,7 +197,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *  Deliberately text-only: file/image attachment parts are dropped here, but
  *  they still reach the model — the evolved-scaffold path hands this flattened
  *  text to the scaffold as `task` while `host.defaultInference()` streams the
- *  original opts.messages with all parts intact (see runStreamText). */
+ *  prepared turn with all parts intact (see _transformInferenceResult). */
 function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -800,16 +800,20 @@ export class OrchestratorAgent extends Think<Env> {
   // turn so background tool continuations keep tagging their originating turn.
   private _turnCheckpoint: { turnId: string; sessionId: string } | null = null;
 
-  // The fully-prepared streamText opts of the LAST live chat inference
-  // (stashed by runStreamText, the single production chat path). The shadow
-  // eval replays these for the pending scaffold's host.defaultInference so
-  // the A/B measures the scaffold delta, not a context handicap: the live
-  // answer saw the whole conversation while the shadow's reconstruction used
-  // to see only the task text — structurally tie-prone. In-memory only:
-  // turns are serialized on the TurnQueue and the shadow eval captures the
-  // reference synchronously in the same onChatResponse, so it cannot be
-  // overwritten by a later turn; after a DO restart the shadow falls back to
-  // the task-only reconstruction.
+  // The prepared streamText opts of the LAST live chat inference, stashed at
+  // the end of beforeTurn — Think 0.8's one turn-assembly hook on the live
+  // inference path (the effective TurnConfig: final system/messages/tools/
+  // model; Think then only wraps tool execute and re-applies the same values,
+  // so a replay of these opts is the same request modulo per-step cache
+  // markers, which are inert decoration). The shadow eval replays these for
+  // the pending scaffold's host.defaultInference so the A/B measures the
+  // scaffold delta, not a context handicap: the live answer saw the whole
+  // conversation while the shadow's reconstruction used to see only the task
+  // text — structurally tie-prone. Also the task source for the evolved-
+  // scaffold inference transform. In-memory only: turns are serialized on
+  // the TurnQueue and the shadow eval captures the reference synchronously
+  // in the same onChatResponse, so it cannot be overwritten by a later turn;
+  // after a DO restart the shadow falls back to the task-only reconstruction.
   private _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
 
   getCliCwdForDevice(): string | null {
@@ -1838,6 +1842,21 @@ export class OrchestratorAgent extends Think<Env> {
       : null;
     const cacheOptions = promptCacheOptions(cacheStrategy, agentAffinityKey(this.name));
     if (cacheOptions) cfg.providerOptions = cacheOptions;
+
+    // Shadow-eval context parity + the evolved-scaffold task source (see the
+    // _lastTurnOpts field doc): the effective opts the streamText Think runs
+    // next will see — final system/messages/merged tools/model. Think only
+    // adds its tool-decision wrapping and the per-step cache markers on top,
+    // both inert for a replay.
+    this._lastTurnOpts = {
+      model: ctx.model,
+      system: systemOverride,
+      messages: cfg.messages,
+      tools: { ...ctx.tools, ...(cfg.tools ?? {}) },
+      activeTools: cfg.activeTools,
+      stopWhen: stepCountIs(this.maxSteps),
+      ...(cacheOptions ? { providerOptions: cacheOptions } : {}),
+    };
     return cfg;
   }
 
@@ -4480,50 +4499,47 @@ export class OrchestratorAgent extends Think<Env> {
    * Called after each MCTS iteration so the UI updates in real-time.
    */
   /**
-   * Inference seam override — THE single production chat path.
+   * Inference seam override — THE single production chat path on Think 0.8.
    *
-   * Think calls this from `_runInferenceLoop` with the fully-prepared
-   * streamText options. We route through the agent's mutable scaffold IFF it
-   * has evolved one (current version > 0). An un-evolved agent (still on the
-   * bootstrap v0) uses the standard `streamText` directly — same behaviour as
-   * before, zero overhead — until the evolution loop proves + promotes a
-   * better scaffold via shadow eval. Once promoted, that scaffold becomes the
-   * agent's live inference loop. One method, one decision, no parallel paths.
+   * Think's `_runInferenceLoop` is private and calls the AI SDK `streamText`
+   * itself; this protected transform is the one seam a subclass gets that can
+   * replace the stream every turn entry path consumes (the old
+   * `runStreamText` override had zero callers on 0.8.2 — the scaffold was
+   * silently dead until this re-wire). We route through the agent's mutable
+   * scaffold IFF it has evolved one (current version > 0). An un-evolved
+   * agent (still on the bootstrap v0) returns Think's result untouched —
+   * same behaviour as before, zero overhead — until the evolution loop
+   * proves + promotes a better scaffold via shadow eval. Once promoted, that
+   * scaffold becomes the agent's live inference loop. One method, one
+   * decision, no parallel paths (core scaffold/inference-transform.ts owns
+   * the routing + orphan-stream semantics).
    *
    * The scaffold runs in the codemode sandbox and reaches the model/tools/
-   * memory only through the `host.*` bridge (the live opts/model object can't
-   * cross the boundary). `host.defaultInference()` runs exactly THIS streamText
-   * and streams its chunks back, so a delegating scaffold is faithful to the
+   * memory only through the `host.*` bridge (the live result object can't
+   * cross the boundary). `host.defaultInference()` streams exactly THIS
+   * prepared result back, so a delegating scaffold is byte-faithful to the
    * default; a custom scaffold can wrap or replace it.
    */
-  protected runStreamText(
-    opts: Parameters<typeof streamText>[0],
-  ): StreamableResult {
-    this._lastTurnOpts = opts; // shadow-eval context parity (see field doc)
+  protected _transformInferenceResult(result: StreamableResult): StreamableResult {
     let version = 0;
     try {
       version = this.sql<{ v: number }>`
         SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
     } catch { /* table not initialized yet → treat as un-evolved */ }
 
-    if (version <= 0) return streamText(opts);
-
-    // Evolved scaffold is live — run it as the inference loop.
-    const orchestrator = this;
-    const task = extractLastUserText((opts.messages ?? []) as ModelMessage[]);
-    return {
-      toUIMessageStream: () => scaffoldEventsToUIStream(
-        (emit) => runScaffold({
-          rt: orchestrator.rt,
-          task,
-          emit,
-          llmStream: orchestrator.makeScaffoldLLMStream(),
-          callTool: orchestrator.makeScaffoldCallTool(),
-          defaultInference: () => streamText(opts).toUIMessageStream(),
-          timeoutMs: 5 * 60 * 1000,
-        }),
-      ),
-    };
+    return scaffoldInferenceTransform({
+      currentVersion: version,
+      result,
+      run: {
+        rt: this.rt,
+        // beforeTurn stashed this turn's prepared opts just before streamText
+        // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
+        task: extractLastUserText((this._lastTurnOpts?.messages ?? []) as ModelMessage[]),
+        llmStream: this.makeScaffoldLLMStream(),
+        callTool: this.makeScaffoldCallTool(),
+        timeoutMs: 5 * 60 * 1000,
+      },
+    });
   }
 
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {

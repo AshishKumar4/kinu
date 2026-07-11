@@ -339,6 +339,7 @@ export {
   type ScaffoldEmitFn,
 } from './scaffold/executor.js';
 export { scaffoldEventsToUIStream } from './scaffold/ui-stream.js';
+export { scaffoldInferenceTransform, type InferenceStreamResult } from './scaffold/inference-transform.js';
 export {
   initShadowTables,
   getPendingScaffold,
