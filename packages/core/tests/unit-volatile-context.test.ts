@@ -1,20 +1,28 @@
-// The stable/volatile context seam (cache-prefix stability):
+// The stable/ephemeral/turn-local context split (cache-prefix stability):
 //  - buildSystemPromptSync is byte-stable across rebuilds with unchanged
 //    agent state — live executor labels and skill activation reasons must
 //    never leak into it.
-//  - All per-turn state renders in the ONE volatile context message appended
-//    at the end of the turn's messages.
-//  - hashSystemPrompt (the telemetry invariant) changes only on real events.
+//  - System state (facts, memory tail, executor status) rides the
+//    EphemeralContextLedger: a block appends only when the state fingerprint
+//    changes, and every block freezes at its birth position forever (the
+//    cache-stability contract).
+//  - Turn-local state (activation reasons, device notice) renders as one
+//    per-turn tail message, never captured by the ledger fingerprint.
+//  - fnv1a64 (the telemetry + fingerprint hash) changes only on real events.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import {
   buildSystemPromptSync,
-  renderVolatileContext,
-  appendVolatileContextMessage,
+  runChat,
+  EphemeralContextLedger,
+  renderSystemStateBlock,
+  renderTurnLocalContext,
+  turnLocalContextMessage,
   executorAvailabilityLabel,
-  hashSystemPrompt,
+  fnv1a64,
   renderActiveSkillsSection,
-  VOLATILE_CONTEXT_HEADER,
+  EPHEMERAL_CONTEXT_HEADER,
+  TURN_CONTEXT_HEADER,
   type PromptExecutorInfo,
 } from '../src/index.ts';
 import type { ActiveSkillSet, ParsedSkill } from '../src/skills/types.ts';
@@ -33,6 +41,13 @@ function skill(name: string): ParsedSkill {
   };
 }
 
+function messageText(m: ModelMessage): string {
+  return typeof m.content === 'string'
+    ? m.content
+    : (m.content as Array<{ type: string; text?: string }>)
+        .filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
+}
+
 describe('byte-stable system prefix', () => {
   test('two consecutive builds with unchanged state are byte-identical', () => {
     const { rt } = createTestRuntime();
@@ -40,7 +55,7 @@ describe('byte-stable system prefix', () => {
     expect(buildSystemPromptSync(rt, opts)).toBe(buildSystemPromptSync(rt, opts));
   });
 
-  test('live executor status flips do NOT change the prefix (labels live in the volatile tail)', () => {
+  test('live executor status flips do NOT change the prefix (labels live in the ephemeral block)', () => {
     const { rt } = createTestRuntime();
     const idle = buildSystemPromptSync(rt, { backend: 'cf', executors: [workspace, idleSandbox] });
     const active = buildSystemPromptSync(rt, { backend: 'cf', executors: [workspace, activeSandbox] });
@@ -66,16 +81,16 @@ describe('byte-stable system prefix', () => {
   test('hash changes only on real events: stable across rebuilds, changed on soul / skill-set changes', () => {
     const { rt } = createTestRuntime();
     const opts = { backend: 'cf' as const, executors: [workspace, idleSandbox] };
-    const h1 = hashSystemPrompt(buildSystemPromptSync(rt, opts));
-    const h2 = hashSystemPrompt(buildSystemPromptSync(rt, opts));
+    const h1 = fnv1a64(buildSystemPromptSync(rt, opts));
+    const h2 = fnv1a64(buildSystemPromptSync(rt, opts));
     expect(h2).toBe(h1);
     // Executor status flip: NOT a real event — hash must hold.
-    const h3 = hashSystemPrompt(buildSystemPromptSync(rt, { backend: 'cf', executors: [workspace, activeSandbox] }));
+    const h3 = fnv1a64(buildSystemPromptSync(rt, { backend: 'cf', executors: [workspace, activeSandbox] }));
     expect(h3).toBe(h1);
     // Real events: soul edit and skill activation-set change must bust.
-    const soul = hashSystemPrompt(buildSystemPromptSync(rt, { ...opts, soulOverride: 'NEW SOUL' }));
+    const soul = fnv1a64(buildSystemPromptSync(rt, { ...opts, soulOverride: 'NEW SOUL' }));
     expect(soul).not.toBe(h1);
-    const skills = hashSystemPrompt(buildSystemPromptSync(rt, {
+    const skills = fnv1a64(buildSystemPromptSync(rt, {
       ...opts,
       activeSkills: { active: [skill('alpha')], reasons: [] },
     }));
@@ -83,28 +98,26 @@ describe('byte-stable system prefix', () => {
   });
 });
 
-describe('renderVolatileContext', () => {
-  test('renders facts, live executor labels, activation reasons, and the device notice', () => {
-    const text = renderVolatileContext({
+describe('renderSystemStateBlock', () => {
+  test('renders facts, memory tail, and live executor labels under the ephemeral header', () => {
+    const text = renderSystemStateBlock({
       factsBlock: '- user.tz = Europe/Berlin',
+      memoryTail: '### Lesson: verify before claiming',
       executors: [connectedLaptop, idleSandbox, workspace],
-      activeSkills: { active: [skill('alpha')], reasons: [{ name: 'alpha', reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
-      deviceNotice: '## Context update\nYour user\'s PC just connected.',
     });
     expect(text).not.toBeNull();
-    expect(text!).toStartWith(VOLATILE_CONTEXT_HEADER);
+    expect(text!).toStartWith(EPHEMERAL_CONTEXT_HEADER);
     expect(text!).toContain('user.tz = Europe/Berlin');
+    expect(text!).toContain('verify before claiming');
     expect(text!).toContain('- laptop: connected');
     expect(text!).toContain('- sandbox: ready on demand');
-    expect(text!).toContain('alpha (keyword "deploy")');
-    expect(text!).toContain('PC just connected');
   });
 
-  test('unselectable executors are omitted; empty context renders nothing', () => {
+  test('unselectable executors are omitted; empty state renders nothing', () => {
     const offline: PromptExecutorInfo = { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' };
-    expect(renderVolatileContext({ executors: [offline] })).toBeNull();
-    expect(renderVolatileContext({})).toBeNull();
-    expect(renderVolatileContext({ factsBlock: '  ', deviceNotice: null })).toBeNull();
+    expect(renderSystemStateBlock({ executors: [offline] })).toBeNull();
+    expect(renderSystemStateBlock({})).toBeNull();
+    expect(renderSystemStateBlock({ factsBlock: '  ' })).toBeNull();
   });
 
   test('executorAvailabilityLabel mirrors the lifecycle states', () => {
@@ -115,30 +128,260 @@ describe('renderVolatileContext', () => {
   });
 });
 
-describe('appendVolatileContextMessage', () => {
-  test('appends ONE trailing user message and never mutates the input', () => {
-    const history: ModelMessage[] = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
-    const out = appendVolatileContextMessage(history, { factsBlock: '- k = v' });
-    expect(history).toHaveLength(2);
-    expect(out).toHaveLength(3);
-    expect(out[2]).toMatchObject({ role: 'user' });
-    expect(String(out[2]!.content)).toStartWith(VOLATILE_CONTEXT_HEADER);
-    expect(String(out[2]!.content)).toContain('- k = v');
+describe('renderTurnLocalContext', () => {
+  test('renders activation reasons and the device notice under the turn header', () => {
+    const text = renderTurnLocalContext({
+      activeSkills: { active: [skill('alpha')], reasons: [{ name: 'alpha', reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
+      deviceNotice: '## Context update\nYour user\'s PC just connected.',
+    });
+    expect(text).not.toBeNull();
+    expect(text!).toStartWith(TURN_CONTEXT_HEADER);
+    expect(text!).toContain('alpha (keyword "deploy")');
+    expect(text!).toContain('PC just connected');
   });
 
-  test('with nothing volatile, returns an equal copy with no extra message', () => {
-    const history: ModelMessage[] = [{ role: 'user', content: 'hi' }];
-    const out = appendVolatileContextMessage(history, {});
-    expect(out).toEqual(history);
-    expect(out).not.toBe(history);
+  test('empty turn-local context renders nothing (and no message)', () => {
+    expect(renderTurnLocalContext({})).toBeNull();
+    expect(renderTurnLocalContext({ deviceNotice: null })).toBeNull();
+    expect(turnLocalContextMessage({})).toBeNull();
+  });
+
+  test('turnLocalContextMessage wraps the render as one user message', () => {
+    const msg = turnLocalContextMessage({ deviceNotice: 'PC connected.' });
+    expect(msg).toMatchObject({ role: 'user' });
+    expect(String(msg!.content)).toStartWith(TURN_CONTEXT_HEADER);
   });
 });
 
-describe('hashSystemPrompt', () => {
+describe('EphemeralContextLedger (the cache-stability contract)', () => {
+  const state = { factsBlock: '- k = v', executors: [idleSandbox] };
+
+  test('(a) empty ledger + first turn → exactly one block at the tail', () => {
+    const ledger = new EphemeralContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'hi' }];
+    const out = ledger.weave(history, state);
+    expect(history).toHaveLength(1); // input never mutated
+    expect(out).toHaveLength(2);
+    expect(out[1]).toMatchObject({ role: 'user' });
+    expect(String(out[1]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(ledger.size).toBe(1);
+  });
+
+  test('(b) unchanged fingerprint across N turns → still one block, frozen bytes AND index as history grows', () => {
+    const ledger = new EphemeralContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
+    const first = ledger.weave(history, state);
+    const frozen = first[1]!;
+
+    history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'turn-2' });
+    const second = ledger.weave(history, state);
+    history.push({ role: 'assistant', content: 'answer-2' }, { role: 'user', content: 'turn-3' });
+    const third = ledger.weave(history, state);
+
+    expect(ledger.size).toBe(1);
+    // The block sits at its ORIGINAL index with its ORIGINAL bytes (the very
+    // same message object), while durable history grows around it.
+    expect(second[1]).toBe(frozen);
+    expect(third[1]).toBe(frozen);
+    expect(third.map(messageText)).toEqual([
+      'turn-1', String(frozen.content), 'answer-1', 'turn-2', 'answer-2', 'turn-3',
+    ]);
+  });
+
+  test('(c) fingerprint change → a SECOND block appends at the new tail; the first stays put', () => {
+    const ledger = new EphemeralContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
+    const first = ledger.weave(history, state);
+    const frozen = first[1]!;
+
+    history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'turn-2' });
+    const changed = { ...state, factsBlock: '- k = v\n- new.fact = learned' };
+    const out = ledger.weave(history, changed);
+
+    expect(ledger.size).toBe(2);
+    expect(out[1]).toBe(frozen); // old block frozen at its birth position
+    const tail = out[out.length - 1]!;
+    expect(String(tail.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(String(tail.content)).toContain('new.fact = learned');
+    expect(out.map(messageText)).toEqual([
+      'turn-1', String(frozen.content), 'answer-1', 'turn-2', String(tail.content),
+    ]);
+  });
+
+  test('(d) reset (cold start / compaction) → back to exactly one fresh block at the tail', () => {
+    const ledger = new EphemeralContextLedger();
+    ledger.weave([{ role: 'user', content: 'a' }], state);
+    ledger.weave(
+      [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' }],
+      { ...state, factsBlock: '- changed = yes' },
+    );
+    expect(ledger.size).toBe(2);
+
+    ledger.reset();
+    expect(ledger.size).toBe(0);
+    const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }, { role: 'user', content: 'next' }];
+    const out = ledger.weave(compacted, state);
+    expect(ledger.size).toBe(1);
+    expect(out).toHaveLength(3);
+    expect(String(out[2]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+  });
+
+  test('nothing to say → no block is born and none is removed', () => {
+    const ledger = new EphemeralContextLedger();
+    const out = ledger.weave([{ role: 'user', content: 'hi' }], {});
+    expect(out.map(messageText)).toEqual(['hi']);
+    expect(ledger.size).toBe(0);
+
+    // A block exists, then the state empties: the frozen block stays
+    // (removing a mid-array message would break the provider prefix cache).
+    ledger.weave([{ role: 'user', content: 'hi' }], state);
+    expect(ledger.size).toBe(1);
+    const after = ledger.weave([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }], {});
+    expect(ledger.size).toBe(1);
+    expect(after).toHaveLength(3);
+    expect(String(after[1]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+  });
+});
+
+/** A one-step text model that captures every prompt it was handed. */
+function promptCapturingModel() {
+  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+  const prompts: Array<Array<{ role: string; content: unknown }>> = [];
+  const model = {
+    specificationVersion: 'v2' as const,
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {},
+    doStream: async (options: { prompt: Array<{ role: string; content: unknown }> }) => {
+      prompts.push(options.prompt);
+      return {
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue({ type: 'stream-start', warnings: [] });
+            c.enqueue({ type: 'text-start', id: 't1' });
+            c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
+            c.enqueue({ type: 'text-end', id: 't1' });
+            c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            c.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  };
+  return { model, prompts };
+}
+
+function promptTexts(prompt: Array<{ role: string; content: unknown }>): string[] {
+  return prompt
+    .filter((m) => m.role !== 'system')
+    .map((m) => (m.content as Array<{ type: string; text?: string }>)
+      .filter((p) => p.type === 'text').map((p) => p.text ?? '').join(''));
+}
+
+describe('the ledger + turn-local split through real runChat turns', () => {
+  test('stable state across turns keeps ONE frozen block; turn-local tail re-renders per turn', async () => {
+    const { model, prompts } = promptCapturingModel();
+    const ledger = new EphemeralContextLedger();
+    const history: ModelMessage[] = [];
+    const state = { factsBlock: '- k = v' };
+
+    const turn = async (userText: string, deviceNotice?: string) => {
+      history.push({ role: 'user', content: userText });
+      const tail = turnLocalContextMessage({ deviceNotice });
+      for await (const ev of runChat({
+        model: model as never,
+        system: 'sys',
+        history,
+        systemState: { ledger, context: state },
+        turnLocal: tail ? [tail] : undefined,
+        tools: {},
+        maxSteps: 1,
+      })) {
+        if (ev.type === 'done') for (const m of ev.responseMessages) history.push(m);
+      }
+    };
+
+    await turn('turn-1', 'PC connected.');
+    await turn('turn-2');
+    await turn('turn-3', 'PC disconnected.');
+
+    const [p1, p2, p3] = prompts.map(promptTexts);
+    // Turn 1: user, ephemeral block, turn-local tail.
+    expect(p1![0]).toBe('turn-1');
+    expect(p1![1]).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(p1![2]).toStartWith(TURN_CONTEXT_HEADER);
+    expect(p1![2]).toContain('PC connected.');
+    // Turns 2 and 3: the block's bytes AND index are untouched (index 1 —
+    // right after turn-1's user message) while history grows after it. The
+    // varying turn-local state never spawned a second block.
+    expect(ledger.size).toBe(1);
+    expect(p2![1]).toBe(p1![1]!);
+    expect(p3![1]).toBe(p1![1]!);
+    // Turn 2 had nothing turn-local → no tail at all.
+    expect(p2!.some((t) => t.startsWith(TURN_CONTEXT_HEADER))).toBe(false);
+    // Turn 3's tail is fresh per-turn state at the very end.
+    expect(p3![p3!.length - 1]).toContain('PC disconnected.');
+  });
+
+  test('a state change mid-conversation appends a second block at the new tail', async () => {
+    const { model, prompts } = promptCapturingModel();
+    const ledger = new EphemeralContextLedger();
+    const history: ModelMessage[] = [];
+
+    const turn = async (userText: string, factsBlock: string) => {
+      history.push({ role: 'user', content: userText });
+      for await (const ev of runChat({
+        model: model as never,
+        system: 'sys',
+        history,
+        systemState: { ledger, context: { factsBlock } },
+        tools: {},
+        maxSteps: 1,
+      })) {
+        if (ev.type === 'done') for (const m of ev.responseMessages) history.push(m);
+      }
+    };
+
+    await turn('turn-1', '- k = v');
+    await turn('turn-2', '- k = v\n- learned = later');
+
+    const [p1, p2] = prompts.map(promptTexts);
+    expect(ledger.size).toBe(2);
+    // First block frozen where it was born; the new block rides the new tail.
+    expect(p2![1]).toBe(p1![1]!);
+    expect(p2![p2!.length - 1]).toContain('learned = later');
+    // The durable history never captured any block.
+    expect(history.some((m) => messageText(m).startsWith(EPHEMERAL_CONTEXT_HEADER))).toBe(false);
+  });
+
+  test('cold start (fresh ledger over the same durable history) attaches exactly one block', async () => {
+    const { model, prompts } = promptCapturingModel();
+    const history: ModelMessage[] = [
+      { role: 'user', content: 'old-1' },
+      { role: 'assistant', content: 'old-2' },
+      { role: 'user', content: 'wake up' },
+    ];
+    for await (const _ of runChat({
+      model: model as never,
+      system: 'sys',
+      history,
+      systemState: { ledger: new EphemeralContextLedger(), context: { factsBlock: '- k = v' } },
+      tools: {},
+      maxSteps: 1,
+    })) { /* drain */ }
+
+    const texts = promptTexts(prompts[0]!);
+    expect(texts.filter((t) => t.startsWith(EPHEMERAL_CONTEXT_HEADER))).toHaveLength(1);
+    expect(texts[texts.length - 1]).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+  });
+});
+
+describe('fnv1a64', () => {
   test('is deterministic and byte-sensitive', () => {
-    expect(hashSystemPrompt('abc')).toBe(hashSystemPrompt('abc'));
-    expect(hashSystemPrompt('abc')).not.toBe(hashSystemPrompt('abd'));
-    expect(hashSystemPrompt('')).toHaveLength(16);
+    expect(fnv1a64('abc')).toBe(fnv1a64('abc'));
+    expect(fnv1a64('abc')).not.toBe(fnv1a64('abd'));
+    expect(fnv1a64('')).toHaveLength(16);
   });
 });
 

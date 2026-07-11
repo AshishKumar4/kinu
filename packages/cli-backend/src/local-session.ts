@@ -40,7 +40,7 @@ import {
   parseModelSpec, agentAffinityKey,
   ExtensionHost,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
-  volatileContextMessage, hashSystemPrompt,
+  EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -207,6 +207,13 @@ export class LocalAgentSession implements BackendHost {
   private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
+
+  /** Ephemeral system-state blocks for this CLI session (core
+   *  volatile-context.ts). In-memory only — a new session starts empty, so
+   *  the first turn attaches exactly one fresh block. The CLI has no
+   *  compaction yet; when it grows one it must call `reset()` on a landed
+   *  compaction, exactly like the DO's summarizeForCompaction. */
+  private readonly ephemeralLedger = new EphemeralContextLedger();
 
   /** Skills invoked this turn (explicit/auto-activation + the skills tool's
    *  `invoke` action). Cleared at turn start; the skills tool's closures mutate
@@ -799,8 +806,8 @@ export class LocalAgentSession implements BackendHost {
 
     // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
     // It is per-turn-read live state (lessons/reflections/take-pick
-    // corrections append constantly), so it rides the VOLATILE context
-    // message: in the stable prefix every append would bust the cache and
+    // corrections append constantly), so it rides the ephemeral system-state
+    // ledger: in the stable prefix every append would bust the cache and
     // trip the prompt-hash telemetry with no real agent event.
     const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
@@ -817,9 +824,9 @@ export class LocalAgentSession implements BackendHost {
     // Nearest-file-wins AGENTS.md chain, re-read each turn so edits land
     // immediately (a handful of stat calls — negligible next to the LLM call).
     const agentsMd = discoverAgentsMd(this.cwd);
-    // The byte-stable cache prefix — per-turn state (facts, executor status,
-    // activation reasons) rides in the volatile context message appended to
-    // the turn's messages below, sharing the seam with the DO backend.
+    // The byte-stable cache prefix — system state (facts, executor status)
+    // rides the ephemeral ledger and activation reasons ride the turn-local
+    // tail below, sharing the seam with the DO backend.
     const systemPrompt = buildSystemPromptSync(this.rt, {
       executors,
       availableTools: availableBuiltins,
@@ -844,17 +851,21 @@ export class LocalAgentSession implements BackendHost {
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
 
-    // The volatile turn context (facts, executor status, activation reasons)
-    // rides as ONE trailing message for THIS turn only — it is never pushed
-    // into the durable history, so the stable prefix stays cacheable. It goes
-    // to runChat as `ephemeral` so the transformContext seam (compaction)
-    // only ever sees the durable history.
-    const volatileMsg = volatileContextMessage({
-      factsBlock: this.renderFactsForTurn(),
-      memoryTail: knowledge || undefined,
-      executors,
-      ...(activeSkills ? { activeSkills } : {}),
-    });
+    // System state (facts, memory tail, executor status) rides the ephemeral
+    // ledger — runChat weaves the frozen blocks into the durable history
+    // AFTER the transformContext seam, appending a fresh block only when the
+    // state fingerprint changed. Turn-local state (activation reasons) rides
+    // one trailing message for THIS turn only. Neither is ever pushed into
+    // the durable history, so the stable prefix stays cacheable.
+    const systemState = {
+      ledger: this.ephemeralLedger,
+      context: {
+        factsBlock: this.renderFactsForTurn(),
+        memoryTail: knowledge || undefined,
+        executors,
+      },
+    };
+    const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
 
     const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
     let fullText = '';
@@ -867,12 +878,14 @@ export class LocalAgentSession implements BackendHost {
     // so role alternation holds). streamText rebuilds each step's messages
     // from scratch, so every drained injection is re-applied at the position
     // (in base-message coordinates) where it first entered the conversation.
-    // Step-0 message count = durable history + the ephemeral tail runChat
-    // splices (no transformContext extensions are registered here, so the
-    // durable prefix length is exact).
-    const baseLength = this.history.length + (volatileMsg ? 1 : 0);
+    // Base coordinates = the step-0 message count (durable history + woven
+    // ledger blocks + the turn-local tail), captured from the first
+    // prepareStep call — before any injection is recorded — so the math
+    // holds whatever the ledger appended this turn.
+    let baseLength = 0;
     const injections: Array<{ index: number; message: ModelMessage; texts: string[] }> = [];
-    const prepareStepMessages = ({ messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
+    const prepareStepMessages = ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
+      if (stepNumber === 0) baseLength = messages.length;
       if (this.pendingSteers.length > 0) {
         const drained = this.pendingSteers.splice(0);
         injections.push({
@@ -901,7 +914,8 @@ export class LocalAgentSession implements BackendHost {
         modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
         system: systemPrompt,
         history: this.history,
-        ephemeral: volatileMsg ? [volatileMsg] : undefined,
+        systemState,
+        turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
         tools: turnTools,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
@@ -1124,7 +1138,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Re-run a task for the replay-eval harness: the current system prompt
    *  (knowledge tail + soul) and model, the facts world model as the same
-   *  volatile context message live turns get, isolated history, no tools
+   *  ephemeral system-state block live turns get, isolated history, no tools
    *  (see the engine-construction note). */
   private async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
@@ -1135,16 +1149,18 @@ export class LocalAgentSession implements BackendHost {
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       currentDate: currentDateForPrompt(),
     });
-    const volatileMsg = volatileContextMessage({
-      factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined,
-    });
     let text = '';
     for await (const ev of runChat({
       model,
       modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       system: systemPrompt,
       history: [{ role: 'user', content: task }],
-      ephemeral: volatileMsg ? [volatileMsg] : undefined,
+      // A fresh ledger per replay: the same seam live turns use, isolated
+      // from the session's own block positions.
+      systemState: {
+        ledger: new EphemeralContextLedger(),
+        context: { factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined },
+      },
       tools: {},
       maxSteps: 1,
     })) {
@@ -1166,7 +1182,7 @@ export class LocalAgentSession implements BackendHost {
    *  agent events (soul/skill/model). Emits only on change to stay quiet. */
   private lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
-    const hash = hashSystemPrompt(system);
+    const hash = fnv1a64(system);
     if (this.lastSystemPromptHash !== null && this.lastSystemPromptHash !== hash) {
       this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
     }

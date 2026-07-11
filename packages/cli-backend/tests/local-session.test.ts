@@ -169,8 +169,8 @@ describe('LocalAgentSession.send — a user turn', () => {
       }],
     });
 
-    // The trailing user message is the volatile turn context; the attachment
-    // rides on the user's own message (the one carrying a file part).
+    // The trailing user message is the ephemeral system-state block; the
+    // attachment rides on the user's own message (the one carrying a file part).
     const user = [...observed].reverse().find((m) =>
       m.role === 'user' && Array.isArray(m.content) &&
       (m.content as Array<{ type?: string }>).some((p) => p?.type === 'file'));
@@ -185,10 +185,10 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
   });
 
-  test('facts ride the trailing volatile context message, never the system prompt', async () => {
+  test('facts ride the ephemeral system-state block, never the system prompt', async () => {
     // Cache-prefix stability: the system prompt must stay byte-stable across
-    // turns, so per-turn state (the facts world model, executor status) is
-    // appended as ONE trailing user message instead.
+    // turns, so system state (the facts world model, executor status) rides
+    // the ephemeral ledger's frozen blocks in the messages array instead.
     let observed: ModelMessage[] = [];
     let system = '';
     const model = historyCapturingModel('ok', (messages) => { observed = messages; });
@@ -204,24 +204,30 @@ describe('LocalAgentSession.send — a user turn', () => {
     await session.send('hi');
     const factsBefore = observed.map(messageText).join('\n');
     expect(factsBefore).not.toContain('FACT-MARKER');
+    // Turn 1 froze one block (executor status renders even with no facts).
+    const turn1Block = observed.map(messageText).find((t) => t.startsWith('[Ephemeral context'));
+    expect(turn1Block).toBeDefined();
 
-    // Seed a fact, then run another turn — it must surface in the tail.
+    // Seed a fact, then run another turn — the state fingerprint changed, so
+    // a NEW block appends at the tail while turn 1's block stays frozen.
     db.exec(`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
              VALUES ('test.marker', '"FACT-MARKER"', 1.0, 'tool', ${Date.now()})`);
     await session.send('and now?');
 
     expect(system).not.toContain('FACT-MARKER');
-    const tail = messageText(observed.at(-1)!);
-    expect(tail).toStartWith('[Turn context');
+    const texts = observed.map(messageText);
+    const tail = texts.at(-1)!;
+    expect(tail).toStartWith('[Ephemeral context');
     expect(tail).toContain('World model');
     expect(tail).toContain('FACT-MARKER');
+    expect(texts).toContain(turn1Block!); // byte-identical, still in place
 
-    // The volatile message is turn-scoped — never persisted.
+    // Ephemeral blocks are turn-assembly state — never persisted.
     const rows = db.query(`SELECT content FROM messages`).all() as Array<{ content: string }>;
-    expect(rows.some((r) => r.content.includes('Turn context'))).toBe(false);
+    expect(rows.some((r) => r.content.includes('Ephemeral context'))).toBe(false);
   });
 
-  test('the MEMORY.md tail (newest lessons) rides the volatile message, never the system prefix', async () => {
+  test('the MEMORY.md tail (newest lessons) rides the ephemeral block, never the system prefix', async () => {
     // Two regressions guarded here: slice(0, 2000) once injected the OLDEST
     // bytes of the append-only MEMORY.md, and the tail once lived in the
     // byte-stable system prefix — where every lesson/reflection/take-pick
@@ -237,13 +243,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     const system = observed.find((m) => m.role === 'system');
     expect(system).toBeDefined();
     expect(String(system!.content)).not.toContain('NEW-LESSON-MARKER');
-    const volatile = observed.findLast((m) => m.role === 'user')!;
-    const text = typeof volatile.content === 'string'
-      ? volatile.content
-      : (volatile.content as Array<{ type: string; text?: string }>)
-          .filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
-    expect(text).toContain('NEW-LESSON-MARKER');
-    expect(text).not.toContain('OLD-STALE-MARKER');
+    const block = observed.map(messageText).find((t) => t.startsWith('[Ephemeral context'))!;
+    expect(block).toContain('NEW-LESSON-MARKER');
+    expect(block).not.toContain('OLD-STALE-MARKER');
   });
 
   test('the system prompt advertises the laptop as the direct CLI host machine', async () => {
@@ -296,9 +298,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     await resumed.send('what did I say?');
     await resumed.end();
 
-    // The volatile turn-context message (executor status etc.) trails the
-    // user's message and is never persisted — filter it for the order checks.
-    const text = observed.map(messageText).filter((t) => !t.startsWith('[Turn context'));
+    // The ephemeral system-state blocks (executor status etc.) are woven in
+    // at turn assembly and never persisted — filter them for the order checks.
+    const text = observed.map(messageText).filter((t) => !t.startsWith('[Ephemeral context'));
     expect(text).toContain('remember this');
     expect(text).toContain('remembered answer');
     expect(text.at(-1)).toBe('what did I say?');

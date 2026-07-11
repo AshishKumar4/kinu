@@ -53,9 +53,9 @@ Three more hooks go beyond observation:
   `messages`, `system`, `contextWindow`, optional `providerReportedTokens`, and
   `trigger: 'auto' | 'force'`. Chained like `prepareStep` but awaited, and
   **fail-open per extension**: a throwing transform is logged and skipped — a
-  plugin can never break a turn. Turn-local (volatile/ephemeral) context is
-  spliced AFTER the transform on both backends, so a transform never sees
-  never-persisted context.
+  plugin can never break a turn. Ephemeral context (the system-state ledger's
+  woven blocks, then the turn-local tail) is added AFTER the transform on both
+  backends, so a transform never sees never-persisted context.
 
 ## Wiring it up
 
@@ -107,7 +107,7 @@ contract above:
 
 | Think hook (0.8) | ExtensionHost |
 | --- | --- |
-| `beforeTurn` | `emitTurnStart` + awaited `runTransformContext` (volatile context spliced after); `tools()` folded into `TurnConfig.tools`/`activeTools` |
+| `beforeTurn` | `emitTurnStart` + awaited `runTransformContext` (ledger weave + turn-local tail after); `tools()` folded into `TurnConfig.tools`/`activeTools` |
 | `beforeStep` | `composePrepareStep` (extension chain, then the turn's cache-breakpoint plan) |
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult` |
 | `onChatResponse` (completed) | `emitTurnEnd` |

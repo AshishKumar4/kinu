@@ -16,6 +16,7 @@ import {
 import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
 import { composePrepareStep } from './prompting/prepare-step.js';
 import { contextWindowForModel } from './context-window.js';
+import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
 
 export type ChatEvent =
@@ -31,10 +32,15 @@ export interface ChatOptions {
   /** Durable conversation history — what extensions' transformContext sees
    *  (and may rewrite, e.g. compaction). */
   history: ModelMessage[];
-  /** Turn-local context (e.g. the volatile facts/executor-status message) —
-   *  spliced AFTER transformContext so it is never visible to a transform
+  /** Per-activation ephemeral system-state ledger + this turn's state
+   *  snapshot — woven into the (transformed) durable history at the blocks'
+   *  frozen positions, AFTER transformContext so a compaction plugin never
+   *  sees or persists a block. */
+  systemState?: { ledger: EphemeralContextLedger; context: SystemStateContext };
+  /** Turn-local context (skill activation reasons, device notice) — spliced
+   *  after the ledger weave for THIS turn only; never visible to a transform
    *  and never treated as durable history. */
-  ephemeral?: readonly ModelMessage[];
+  turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
   modelContext?: PromptModelContext;
   maxSteps?: number;
@@ -77,8 +83,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
 
   // Awaited context-transform seam (the compaction-plugin hook): fires once
-  // per turn assembly, on the DURABLE history only — the ephemeral turn-local
-  // context is spliced after, so a transform never sees or persists it.
+  // per turn assembly, on the DURABLE history only — the ephemeral ledger
+  // blocks and the turn-local tail are woven/spliced after, so a transform
+  // never sees or persists them.
   const transformed = await extensions?.runTransformContext({
     sessionKey: opts.cache?.sessionKey ?? '',
     messages: opts.history,
@@ -87,7 +94,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       ?? contextWindowForModel(opts.modelContext?.id ?? ''),
     trigger: 'auto',
   });
-  const turnMessages = [...(transformed ?? opts.history), ...(opts.ephemeral ?? [])];
+  const durable = transformed ?? opts.history;
+  const woven = opts.systemState
+    ? opts.systemState.ledger.weave(durable, opts.systemState.context)
+    : durable;
+  const turnMessages = [...woven, ...(opts.turnLocal ?? [])];
 
   // Provider prompt-cache plan: cache-eligible system + request-level cache
   // routing at turn assembly; marker strategies additionally re-roll the tail

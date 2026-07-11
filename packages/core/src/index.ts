@@ -230,13 +230,16 @@ export {
   type AgentsMdFile,
 } from './prompting/agents-md.js';
 export {
-  appendVolatileContextMessage,
-  volatileContextMessage,
+  EphemeralContextLedger,
   executorAvailabilityLabel,
-  hashSystemPrompt,
-  renderVolatileContext,
-  VOLATILE_CONTEXT_HEADER,
-  type VolatileTurnContext,
+  fnv1a64,
+  renderSystemStateBlock,
+  renderTurnLocalContext,
+  turnLocalContextMessage,
+  EPHEMERAL_CONTEXT_HEADER,
+  TURN_CONTEXT_HEADER,
+  type SystemStateContext,
+  type TurnLocalContext,
 } from './prompting/volatile-context.js';
 export {
   applyCacheBreakpoints,

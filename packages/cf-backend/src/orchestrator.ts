@@ -56,7 +56,7 @@ import {
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
-  appendVolatileContextMessage, hashSystemPrompt,
+  EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
@@ -794,6 +794,13 @@ export class OrchestratorAgent extends Think<Env> {
    *  compaction plugin and mid-turn event injection are the first
    *  registrants. */
   private readonly extensions = new ExtensionHost();
+
+  /** Ephemeral system-state blocks for this DO activation (core
+   *  volatile-context.ts). In-memory only — hibernation/reset empties it, so
+   *  a cold start attaches exactly one fresh block; a landed compaction
+   *  resets it explicitly (summarizeForCompaction) because the frozen block
+   *  positions are meaningless against the rewritten stream. */
+  private readonly ephemeralLedger = new EphemeralContextLedger();
   private _cliCwd: string | null = null;
   // Current turn identity for the device daemon's pre-mutation shadow-git
   // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
@@ -1524,7 +1531,7 @@ export class OrchestratorAgent extends Think<Env> {
 
   configureSession(session: Session): Session {
     // The agent's durable context is `getSystemPrompt()` (soul + tools) plus
-    // the persisted conversation and the per-turn volatile context message —
+    // the persisted conversation and the ephemeral/turn-local context split —
     // a single source of truth, not Think's freezable context blocks. The only Session
     // policy we attach is compaction: the chat window compacts at ~85% of the
     // active model's context window (≈15% headroom for the streaming response),
@@ -1600,10 +1607,18 @@ export class OrchestratorAgent extends Think<Env> {
    *  template, protecting head + a 40k-token recent tail and pruning old
    *  tool outputs before the summarizer call (lib/compaction.ts). */
   private summarizeForCompaction() {
-    return createProteusCompactFunction({
+    const compact = createProteusCompactFunction({
       summarize: (prompt) =>
         generateText({ model: this.getModel(), prompt }).then((r) => r.text),
     });
+    return async (messages: Parameters<typeof compact>[0]) => {
+      const result = await compact(messages);
+      // A landed compaction rewrites the durable stream — the ephemeral
+      // ledger's frozen block positions are meaningless against it, so the
+      // next turn starts over with one fresh system-state block.
+      if (result) this.ephemeralLedger.reset();
+      return result;
+    };
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -1775,10 +1790,11 @@ export class OrchestratorAgent extends Think<Env> {
     // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
     // this path can reflect the turn's active skills and MCP tools. It is the
     // byte-stable cache prefix: it changes only on real agent events (soul,
-    // model, skill set, tool surface, AGENTS.md). Per-turn state — facts,
-    // live executor status, the device notice, activation reasons — rides in
-    // ONE volatile context message appended at the END of the turn's messages
-    // (prompting/volatile-context.ts), so it never re-prefills the prefix.
+    // model, skill set, tool surface, AGENTS.md). System state — facts, the
+    // live executor status — rides the ephemeral ledger's frozen blocks, and
+    // turn-local state — the device notice, activation reasons — rides one
+    // trailing message (prompting/volatile-context.ts), so neither ever
+    // re-prefills the prefix.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
     const model = this.promptModelContext();
     const systemOverride = buildSystemPromptSync(this.rt, {
@@ -1798,9 +1814,9 @@ export class OrchestratorAgent extends Think<Env> {
 
     // ── Extension seam: turn start + the awaited context transform ─────
     // The same ExtensionHost contract runChat fires on the CLI. The
-    // transform sees ONLY the durable history — the volatile turn context is
-    // spliced after it, so a compaction plugin can never see (or persist)
-    // turn-local state.
+    // transform sees ONLY the durable history — the ephemeral ledger blocks
+    // and the turn-local tail are woven/spliced after it, so a compaction
+    // plugin can never see (or persist) either.
     await this.extensions.emitTurnStart({ system: systemOverride, history: baseMessages });
     const transformed = await this.extensions.runTransformContext({
       sessionKey: this.name,
@@ -1809,12 +1825,15 @@ export class OrchestratorAgent extends Think<Env> {
       contextWindow: this.sessionContextWindow(),
       trigger: 'auto',
     });
-    cfg.messages = appendVolatileContextMessage(transformed ?? baseMessages, {
+    const woven = this.ephemeralLedger.weave(transformed ?? baseMessages, {
       factsBlock: this.renderFactsForTurn(),
       executors: execs,
+    });
+    const turnLocal = turnLocalContextMessage({
       deviceNotice,
       ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
     });
+    cfg.messages = turnLocal ? [...woven, turnLocal] : woven;
 
     // Extension-contributed tools join the turn's ToolSet without ever
     // shadowing a built-in or MCP tool (runChat's merge order, mirrored:
@@ -1884,7 +1903,7 @@ export class OrchestratorAgent extends Think<Env> {
    *  cache-prefix regression. */
   private _lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
-    const hash = hashSystemPrompt(system);
+    const hash = fnv1a64(system);
     const prev = this._lastSystemPromptHash;
     this._lastSystemPromptHash = hash;
     this.logActivity('system_prompt_hash', `${hash}${prev === null ? '' : prev === hash ? ' (stable)' : ' (changed)'}`);

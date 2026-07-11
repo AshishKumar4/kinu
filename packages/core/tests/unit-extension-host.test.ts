@@ -173,7 +173,7 @@ describe('transformContext through runChat', () => {
         { role: 'assistant', content: 'old-2' },
         { role: 'user', content: 'old-3' },
       ],
-      ephemeral: [{ role: 'user', content: 'volatile-tail' }],
+      turnLocal: [{ role: 'user', content: 'volatile-tail' }],
       tools: {},
       maxSteps: 1,
       extensions: new ExtensionHost().register(compactor),
