@@ -9,10 +9,13 @@
  *   - laptop:   string[] plain names (ls -1a)        (no type info)
  *   - workspace is read directly off the VFS by the orchestrator, not here.
  *
- * Writing: writeExecutorFileOp is the one upload seam — workspace writes go
- * binary-safe to the agent VFS, other executors route through their provider
- * writeFile tool (text-only transports), read-only executors get a typed error.
+ * Writing: writeExecutorFileOp is the one upload seam — every executor's
+ * upload lands binary-safe through the CompositeVFS: workspace paths are
+ * composite-addressed already; other executors' env-native paths map through
+ * their mount prefix (EXECUTOR_MOUNT_PREFIX). Unavailable mounts surface the
+ * composite's honest reservation error.
  */
+import { EXECUTOR_MOUNT_PREFIX } from "@proteus/core";
 import type { DirEntry } from "./protocol";
 
 /** Per-file upload cap. Content crosses the agents RPC frame as base64, so the
@@ -37,24 +40,20 @@ export function encodeBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** What writeExecutorFileOp needs from the orchestrator — the workspace VFS
- *  (binary-safe, auto-creates parent dirs) and the provider lookup. */
+/** What writeExecutorFileOp needs from the orchestrator — the workspace
+ *  CompositeVFS (binary-safe on every mount). */
 export interface ExecutorWriteDeps {
   vfs: { writeFile(path: string, data: Uint8Array | string): Promise<void> };
-  getProvider(executorId: string):
-    | { tools: Record<string, { execute: (...args: unknown[]) => Promise<unknown> }> }
-    | undefined
-    | null;
 }
 
 export type ExecutorWriteResult = { ok: true } | { error: string };
 
 /**
- * Write one uploaded file into an executor, mirroring readExecutorFile's
- * provider dispatch. Workspace → vfs.writeFile (binary-safe). Other executors →
- * their provider `writeFile` tool when present; those transports are
- * string-typed, so binary content is refused with a clear error rather than
- * silently corrupted. Executors with no writeFile tool are read-only.
+ * Write one uploaded file into an executor — ONE binary-safe path: the
+ * CompositeVFS. Workspace paths are composite-addressed already; other
+ * executors' env-native paths map through their mount prefix, landing on the
+ * same raw handle the executor's tools use. A reserved/offline mount yields
+ * the composite's clear unavailability error.
  */
 export async function writeExecutorFileOp(
   deps: ExecutorWriteDeps,
@@ -73,25 +72,20 @@ export async function writeExecutorFileOp(
     return { error: `file too large (${bytes.length} bytes; max ${MAX_UPLOAD_BYTES})` };
   }
 
+  let target: string;
   if (executorId === "workspace") {
-    await deps.vfs.writeFile(path, bytes);
+    target = path;
+  } else {
+    const prefix = EXECUTOR_MOUNT_PREFIX[executorId];
+    if (!prefix) return { error: `Executor "${executorId}" not found` };
+    target = `${prefix}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+  try {
+    await deps.vfs.writeFile(target, bytes);
     return { ok: true };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
   }
-
-  const provider = deps.getProvider(executorId);
-  if (!provider) return { error: `Executor "${executorId}" not found` };
-  const writeTool = provider.tools.writeFile;
-  if (!writeTool) return { error: `Executor "${executorId}" is read-only — it has no writeFile tool` };
-  if (bytes.includes(0)) {
-    return { error: `binary upload is not supported on "${executorId}" — use the workspace executor` };
-  }
-  const result = await writeTool.execute(path, new TextDecoder().decode(bytes));
-  // Provider writeFile tools report failures as strings ("writeFile error: …" /
-  // "writeFile failed: …") instead of throwing — surface them as typed errors.
-  if (typeof result === "string" && /^writeFile (error|failed)/i.test(result)) {
-    return { error: result };
-  }
-  return { ok: true };
 }
 
 /** Strip a trailing slash (dir markers from some `ls` variants). */

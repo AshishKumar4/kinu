@@ -3,7 +3,7 @@
  */
 
 export {
-  CompositeVFS, cleanAbsolutePath, makeVfsError,
+  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath, makeVfsError,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
   type ResolvedPath, type VfsError,
 } from './composite.js';

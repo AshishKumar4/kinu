@@ -36,12 +36,34 @@ function basename(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }
 
-function decode(data: string | Uint8Array): string {
-  return typeof data === 'string' ? data : new TextDecoder().decode(data);
-}
-
 function encodeUnlessUtf8(content: string, opts?: { encoding?: string }): Uint8Array | string {
   return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride
+ *  a text transport; anything else must go base64 or it corrupts. */
+function asLosslessText(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 /** Map a shell failure to the errno its stderr describes. */
@@ -60,8 +82,9 @@ function classifyShellError(op: string, path: string, stderr: string): ReturnTyp
 /**
  * VFS over the raw SandboxHandle. The handle has no stat/mkdir: stat is
  * synthesized from listFiles on the parent (size + type; the SDK reports no
- * mtime, so mtime is 0), mkdir/exists via exec. The handle's file transfer is
- * string-typed, so contents round-trip as UTF-8 text.
+ * mtime, so mtime is 0), mkdir/exists via exec. Binary content rides the
+ * SDK's base64 encoding both ways (the SDK flags binary reads itself), so
+ * bytes round-trip exactly.
  */
 export function createSandboxMountVFS(handle: SandboxHandle): VFS {
   const entryIsDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
@@ -75,11 +98,19 @@ export function createSandboxMountVFS(handle: SandboxHandle): VFS {
       if (r.exitCode != null && r.exitCode !== 0) {
         throw makeVfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
       }
+      if (r.encoding === 'base64') {
+        const bytes = base64ToBytes(r.content ?? '');
+        return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
+      }
       return encodeUnlessUtf8(r.content ?? '', opts);
     },
 
     async writeFile(path, data) {
-      await handle.writeFile(path, decode(data));
+      if (typeof data === 'string') {
+        await handle.writeFile(path, data);
+      } else {
+        await handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' });
+      }
     },
 
     async readdir(path) {
@@ -122,12 +153,18 @@ export function createSandboxMountVFS(handle: SandboxHandle): VFS {
 
 /**
  * VFS over the raw NimbusSandboxHandle — the cleanest handle
- * (read/write/list/exists/mkdir/delete). stat is synthesized via `stat(1)`
- * (Linux environment), which yields real size + mtime.
+ * (read/readBytes/write/list/exists/mkdir/delete; write takes Uint8Array
+ * natively, so binary round-trips exactly). stat is synthesized via
+ * `stat(1)` (Linux environment), which yields real size + mtime.
  */
 export function createNimbusMountVFS(box: NimbusSandboxHandle): VFS {
   return {
     async readFile(path, opts) {
+      if (opts?.encoding !== 'utf8' && box.files.readBytes) {
+        const bytes = await box.files.readBytes(path);
+        if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+        return bytes;
+      }
       const content = await box.files.read(path);
       if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
       return encodeUnlessUtf8(content, opts);
@@ -228,13 +265,26 @@ export function createDeviceMountVFS(transport: DeviceTransport, consent: Device
   return {
     async readFile(path, opts) {
       await guard(path, 'open');
-      const content = String(await transport.rpc('readFile', [path]));
-      return encodeUnlessUtf8(content, opts);
+      // A daemon that speaks base64 answers { content, encoding: 'base64' };
+      // an older daemon ignores the option and answers plain utf-8 text —
+      // the response shape says which happened.
+      const raw = await transport.rpc('readFile', [path, { encoding: 'base64' }]);
+      if (typeof raw === 'object' && raw !== null && (raw as { encoding?: unknown }).encoding === 'base64') {
+        const bytes = base64ToBytes(String((raw as { content?: unknown }).content ?? ''));
+        return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
+      }
+      return encodeUnlessUtf8(String(raw), opts);
     },
 
     async writeFile(path, data) {
       await guard(path, 'open');
-      const result = await transport.rpc('writeFile', [path, decode(data)]);
+      // Text (or utf-8-lossless bytes) rides the plain string protocol every
+      // daemon speaks; genuinely binary bytes go base64 — never a lossy
+      // TextDecoder pass.
+      const text = typeof data === 'string' ? data : asLosslessText(data);
+      const result = text !== null
+        ? await transport.rpc('writeFile', [path, text])
+        : await transport.rpc('writeFile', [path, bytesToBase64(data as Uint8Array), { encoding: 'base64' }]);
       const ok = result === 'ok'
         || (typeof result === 'object' && result !== null && (result as { success?: unknown }).success === true);
       if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);

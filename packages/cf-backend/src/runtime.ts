@@ -354,6 +354,7 @@ function createAgentNimbusHandle(agent: AgentHost): NimbusSandboxHandle {
     runCode: (code, options) => current().runCode(code, options),
     files: {
       read: (path) => current().files.read(path),
+      readBytes: (path) => current().files.readBytes(path),
       write: (path, content) => current().files.write(path, content),
       list: (path) => current().files.list(path),
       exists: (path) => current().files.exists(path),
@@ -398,8 +399,8 @@ function createRestoringSandboxHandle(
   };
   return {
     exec: (command, opts) => before(() => handle.exec(command, opts)),
-    readFile: (path) => before(() => handle.readFile(path)),
-    writeFile: (path, content) => before(() => handle.writeFile(path, content)),
+    readFile: (path, opts) => before(() => handle.readFile(path, opts)),
+    writeFile: (path, content, opts) => before(() => handle.writeFile(path, content, opts)),
     listFiles: (path, opts) => before(() => handle.listFiles(path, opts)),
     deleteFile: (path) => before(() => handle.deleteFile(path)),
     exposePort: (port, opts) => before(() => handle.exposePort(port, opts)),

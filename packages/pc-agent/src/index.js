@@ -382,14 +382,24 @@ function handle(msg, ws, ctx) {
       child.on('close', (code) => rpc(ws, id, { stdout, stderr, exitCode: code ?? 0 }));
       child.on('error', (e) => rpc(ws, id, null, e.message));
     } else if (method === 'readFile') {
-      rpc(ws, id, fs.readFileSync(params[0], 'utf8'));
+      // { encoding: 'base64' } → binary-safe read, answered in a shape the
+      // caller can distinguish from the plain-text default.
+      if (params[1] && params[1].encoding === 'base64') {
+        rpc(ws, id, { content: fs.readFileSync(params[0]).toString('base64'), encoding: 'base64' });
+      } else {
+        rpc(ws, id, fs.readFileSync(params[0], 'utf8'));
+      }
     } else if (method === 'writeFile') {
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
         checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(params[0]));
       }
       fs.mkdirSync(path.dirname(params[0]), { recursive: true });
-      fs.writeFileSync(params[0], params[1]);
+      // { encoding: 'base64' } (3rd param) → binary-safe write.
+      const body = params[2] && params[2].encoding === 'base64'
+        ? Buffer.from(String(params[1]), 'base64')
+        : params[1];
+      fs.writeFileSync(params[0], body);
       rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
       const p = params[0] || os.homedir();

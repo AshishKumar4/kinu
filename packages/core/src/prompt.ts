@@ -22,6 +22,7 @@ import {
 } from './prompting/surface.js';
 import { DEFAULT_SOUL_MD, readSoul } from './identity/soul.js';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
+import { EXECUTOR_MOUNT_PREFIX } from './vfs/composite.js';
 
 export type {
   PromptBackend,
@@ -181,13 +182,6 @@ function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutor
     exec.name === 'laptop' && exec.configured === true && !executorIsSelectable(exec));
 }
 
-/** Executor name → its prefix in the workspace mount table (CompositeVFS). */
-const MOUNT_PREFIX: Record<string, string> = {
-  sandbox: '/sandbox',
-  nimbus: '/nimbus',
-  laptop: '/pc',
-};
-
 function renderExecutorSection(surface: PromptSurface): string {
   const tools = surface.builtinTools;
   if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
@@ -217,7 +211,7 @@ function renderExecutorSection(surface: PromptSurface): string {
   }
   // Mount-table doctrine — only on backends whose workspace VFS actually
   // mounts the remote environments (the CLI-local VFS is /local alone).
-  const mounts = devices.map((exec) => MOUNT_PREFIX[exec.name]).filter(Boolean);
+  const mounts = devices.map((exec) => EXECUTOR_MOUNT_PREFIX[exec.name]).filter(Boolean);
   if (surface.backend !== 'cli-local' && mounts.length > 0) {
     parts.push(
       '',

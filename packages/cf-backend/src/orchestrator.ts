@@ -4314,15 +4314,12 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Upload one file into an executor (file-manager drop/Upload). Mirrors
-   *  readExecutorFile's dispatch: workspace → VFS (binary-safe), others →
-   *  provider writeFile tool; read-only executors get a typed error. */
+  /** Upload one file into an executor (file-manager drop/Upload) — binary-
+   *  safe through the CompositeVFS for every executor (env-native paths map
+   *  through the executor's mount prefix). */
   @callable() async writeExecutorFile(executorId: string, path: string, contentBase64: string): Promise<ExecutorWriteResult> {
     try {
-      return await writeExecutorFileOp({
-        vfs: this.rt.storage.vfs,
-        getProvider: (id) => this.rt.executionRouter?.getProvider(id),
-      }, executorId, path, contentBase64);
+      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, contentBase64);
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }

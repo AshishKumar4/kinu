@@ -28,6 +28,15 @@ import type { VFS } from '../types/primitives.js';
 
 export type MountConsistency = 'durable' | 'ephemeral' | 'live-shared';
 
+/** Executor name → its composite mount prefix. The prompt's mount doctrine,
+ *  the file-manager upload seam, and the backend mount wiring share this one
+ *  map (the workspace executor's VFS IS the composite, so it has no row). */
+export const EXECUTOR_MOUNT_PREFIX: Readonly<Record<string, string>> = {
+  sandbox: '/sandbox',
+  nimbus: '/nimbus',
+  laptop: '/pc',
+};
+
 /** Declared, inspectable per-mount semantics (not tribal knowledge). */
 export interface MountPolicy {
   readOnly: boolean;

@@ -46,6 +46,8 @@ export interface NimbusSandboxHandle {
   runCode?(code: string, options?: NimbusRunCodeOptions): Promise<NimbusExecResult>;
   files: {
     read(path: string): Promise<string | null>;
+    /** Raw-byte read (SDK ≥0.1.4) — the binary-safe counterpart of `read`. */
+    readBytes?(path: string): Promise<Uint8Array | null>;
     write(path: string, content: string | Uint8Array): Promise<void>;
     list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
     exists(path: string): Promise<boolean>;

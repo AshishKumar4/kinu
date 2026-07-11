@@ -37,8 +37,12 @@ import { readExecSignal } from './signal.js';
 export interface SandboxHandle {
   exec(command: string, opts?: { cwd?: string; timeout?: number }):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
-  readFile(path: string): Promise<{ content?: string; exitCode?: number }>;
-  writeFile(path: string, content: string): Promise<unknown>;
+  /** The SDK auto-detects binary files and returns their content base64-
+   *  encoded with `encoding: 'base64'`; text comes back as plain utf-8. */
+  readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
+    Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
+  /** Pass `encoding: 'base64'` to write binary content byte-exactly. */
+  writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<unknown>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
   deleteFile(path: string): Promise<unknown>;
