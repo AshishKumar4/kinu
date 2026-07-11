@@ -110,6 +110,21 @@ export const registerDevice = (label?: string) =>
 export const revokeDevice   = (id: string) =>
   api<{ ok: boolean }>('DELETE', `/devices/${encodeURIComponent(id)}`);
 
+/** Per-(agent, device) remembered consent: base local-action grant, or the
+ *  stronger full-filesystem tier that lifts the /pc subtree scope. */
+export type DeviceConsentScope = 'all_local_actions' | 'full_filesystem';
+export interface DeviceConsent {
+  agentName: string;
+  deviceId: string;
+  policy: string;
+  scope: string;
+  lastMethod: string | null;
+  lastSummary: string | null;
+}
+export const listDeviceConsents = () => api<DeviceConsent[]>('GET', '/devices/consents');
+export const setDeviceConsentScope = (deviceId: string, agentName: string, scope: DeviceConsentScope) =>
+  api<{ ok: boolean }>('PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
+
 // ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api<CredentialSummary[]>('GET', '/credentials');
 export const setCredential    = (key: string, value: unknown) =>

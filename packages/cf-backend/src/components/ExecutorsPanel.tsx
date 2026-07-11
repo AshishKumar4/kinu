@@ -33,7 +33,10 @@ import { PreviewFrame } from "./PreviewFrame";
 import type { ExecutorOutput } from "../hooks/use-proteus";
 import type { DirEntry } from "@/lib/protocol";
 import { MAX_UPLOAD_BYTES, encodeBase64 } from "@/lib/files";
-import { listDevices, registerDevice, revokeDevice, getCliSetup, type UserDevice } from "@/lib/user-api";
+import {
+  listDevices, registerDevice, revokeDevice, getCliSetup, listDeviceConsents, setDeviceConsentScope,
+  type UserDevice, type DeviceConsentScope,
+} from "@/lib/user-api";
 import { EmptyState } from "./surfaces/shared";
 
 const EXECUTOR_LABELS: Record<string, string> = {
@@ -344,6 +347,10 @@ function PerExecutorView(props: PerExecutorViewProps) {
         </div>
       )}
 
+      {/* Per-(agent, device) file-access tier — the /pc mount is scoped to the
+          consented folder unless the full-filesystem tier is granted here. */}
+      {exec.name === "laptop" && <DeviceAccessTier agentName={agentName} />}
+
       {/* Body — full-size active-tab content */}
       <div className="flex-1 min-h-0 relative">
         {active.kind === 'preview' && (() => {
@@ -358,6 +365,73 @@ function PerExecutorView(props: PerExecutorViewProps) {
           <TerminalPane execName={exec.name} outputs={outputs} onExecute={onExecute} />
         )}
       </div>
+    </div>
+  );
+}
+
+/** The grant surface for the /pc full-filesystem consent tier. By default the
+ *  mount reaches only the consented folder (connect dir / home); this row
+ *  shows THIS agent's tier on the connected device and flips it via
+ *  setDeviceConsentScope — the same remembered policy the hub enforces. */
+function DeviceAccessTier({ agentName }: { agentName?: string }) {
+  const [device, setDevice] = useState<UserDevice | null>(null);
+  const [scope, setScope] = useState<DeviceConsentScope | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!agentName) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const devices = await listDevices();
+        const connected = devices.find((d) => d.connected) ?? null;
+        if (cancelled) return;
+        setDevice(connected);
+        if (!connected) return;
+        const consents = await listDeviceConsents();
+        if (cancelled) return;
+        const row = consents.find((c) => c.agentName === agentName && c.deviceId === connected.id);
+        setScope(row?.scope === "full_filesystem" ? "full_filesystem" : "all_local_actions");
+      } catch { /* device/consent listing unavailable — render nothing */ }
+    })();
+    return () => { cancelled = true; };
+  }, [agentName]);
+
+  if (!agentName || !device || scope === null) return null;
+  const full = scope === "full_filesystem";
+
+  const toggle = async () => {
+    const next: DeviceConsentScope = full ? "all_local_actions" : "full_filesystem";
+    setBusy(true);
+    setErr(null);
+    try {
+      await setDeviceConsentScope(device.id, agentName, next);
+      setScope(next);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1 border-b p-border text-[11px]">
+      <span className="p-text-3">File access on {device.label}:</span>
+      <span className={`font-medium ${full ? "text-amber-400" : "p-text-2"}`}>
+        {full ? "Full filesystem" : "Consented folder only"}
+      </span>
+      {err && <span className="text-red-400 truncate">{err}</span>}
+      <button
+        onClick={() => void toggle()}
+        disabled={busy}
+        className="ml-auto px-2 py-0.5 rounded p-card hover:p-card-hover p-text-2 disabled:opacity-50"
+        title={full
+          ? "Restrict this agent back to the consented folder on this device"
+          : "Let this agent reach paths outside the consented folder on this device"}
+      >
+        {busy ? "…" : full ? "Restrict to folder" : "Allow full filesystem"}
+      </button>
     </div>
   );
 }

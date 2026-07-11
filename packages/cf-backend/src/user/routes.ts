@@ -13,6 +13,8 @@
  *   GET    /api/user/credentials                   — masked listing
  *   POST   /api/user/credentials/:key              — set
  *   DELETE /api/user/credentials/:key              — delete
+ *   GET    /api/user/devices/consents              — per-(agent, device) consent tiers
+ *   PUT    /api/user/devices/:id/consent           — set an agent's consent tier on a device
  *   GET    /api/user/codex                         — Codex status
  *   POST   /api/user/codex/start                   — start device flow
  *   POST   /api/user/codex/poll                    — poll device flow
@@ -33,6 +35,7 @@
  */
 import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
+import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS } from './device-consent.js';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels, listProviderCatalog } from './available-models.js';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access.js';
@@ -108,6 +111,23 @@ export async function handleUserRequest(
   if (deviceMatch && method === 'DELETE') {
     try { await stub.revokeDevice(decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
+  }
+
+  // ── Device consents (per-(agent, device) tier: base vs full filesystem) ──
+  if (path === '/devices/consents' && method === 'GET') {
+    return json(await stub.listDeviceConsents());
+  }
+  const consentMatch = path.match(/^\/devices\/([^/]+)\/consent$/);
+  if (consentMatch && method === 'PUT') {
+    const body = await safeJson<{ agentName?: string; scope?: string }>(request);
+    const agentName = body?.agentName;
+    const scope = body?.scope;
+    if (!agentName || (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS)) {
+      return err(400, `Body must be { agentName, scope: '${DEVICE_CONSENT_SCOPE}' | '${DEVICE_CONSENT_SCOPE_FULL_FS}' }`);
+    }
+    const result = await stub.setDeviceConsentScope(agentName, decodeURIComponent(consentMatch[1]), scope);
+    if (!result.ok) return err(400, 'consent scope not updated');
+    return json({ ok: true });
   }
 
   // ── Credentials ────────────────────────────────────────────────────
