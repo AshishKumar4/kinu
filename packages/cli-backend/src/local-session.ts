@@ -37,6 +37,7 @@ import {
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
+  ExtensionHost,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   appendVolatileContextMessage, hashSystemPrompt,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -894,6 +895,10 @@ export class LocalAgentSession implements BackendHost {
       return next;
     };
 
+    // The steer-drain rides the public extension seam — the same host external
+    // plugins register on. One hook path, not a private callback + a plugin API.
+    const extensions = new ExtensionHost().register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
+
     try {
       for await (const ev of runChat({
         model,
@@ -903,7 +908,7 @@ export class LocalAgentSession implements BackendHost {
         tools: turnTools,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
-        prepareStepMessages,
+        extensions,
       })) {
         switch (ev.type) {
           case 'text-delta':

@@ -13,6 +13,7 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile.js';
+import type { ExtensionHost } from './extension.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -29,11 +30,11 @@ export interface ChatOptions {
   modelContext?: PromptModelContext;
   maxSteps?: number;
   signal?: AbortSignal;
-  /** Step-boundary seam: called before each model step with the messages the
-   *  SDK is about to send; returning an array replaces them for that step.
-   *  Backends use it to drain mid-turn steering input into the running turn
-   *  at a role-alternation-safe point. */
-  prepareStepMessages?: (args: { stepNumber: number; messages: ModelMessage[] }) => ModelMessage[] | undefined;
+  /** Extension seam (public API): registered extensions observe the turn
+   *  (onTurnStart/onToolCall/onToolResult/onTurnEnd), rewrite the step messages
+   *  (prepareStep — the mid-turn steering drain rides this), and contribute
+   *  tools (registerTools). One host drives internal consumers and plugins. */
+  extensions?: ExtensionHost;
 }
 
 /**
@@ -46,24 +47,30 @@ export interface ChatOptions {
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const maxSteps = opts.maxSteps ?? resolveMaxSteps();
-  assertToolsSupportedByModel(opts.modelContext, Object.keys(opts.tools));
+  const extensions = opts.extensions;
+
+  // One ToolSet: the caller's tools plus every extension's contributed tools.
+  // Extension tools never shadow a caller (built-in) tool of the same name.
+  const tools: ToolSet = extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools;
+  assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
   const pendingStepEvents: Array<{ stepIndex: number }> = [];
   let stepCount = 0;
 
-  const prepareStepMessages = opts.prepareStepMessages;
+  await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
+
   const result = streamText({
     model: opts.model,
     system: opts.system,
     messages: opts.history,
-    tools: opts.tools,
+    tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
-    ...(prepareStepMessages ? {
+    ...(extensions ? {
       prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) => {
-        const next = prepareStepMessages({ stepNumber, messages });
+        const next = extensions.runPrepareStep({ stepNumber, messages });
         return next ? { messages: next } : undefined;
       },
     } : {}),
@@ -88,21 +95,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         break;
       }
       case 'tool-call': {
-        const args = (chunk as any).input ?? (chunk as any).args ?? {};
-        yield {
-          type: 'tool-call',
-          toolName: chunk.toolName,
-          args: args as Record<string, unknown>,
-        };
+        const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
+        await extensions?.emitToolCall({ toolName: chunk.toolName, args });
+        yield { type: 'tool-call', toolName: chunk.toolName, args };
         break;
       }
       case 'tool-result': {
         const raw = (chunk as any).output ?? (chunk as any).result ?? '';
-        yield {
-          type: 'tool-result',
-          toolName: chunk.toolName,
-          result: String(raw).slice(0, 1000),
-        };
+        const result = String(raw).slice(0, 1000);
+        await extensions?.emitToolResult({ toolName: chunk.toolName, result });
+        yield { type: 'tool-result', toolName: chunk.toolName, result };
         break;
       }
     }
@@ -138,5 +140,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     if (summaries.length > 0) allText = summaries.join('\n');
   }
 
+  await extensions?.emitTurnEnd({ text: allText, responseMessages });
   yield { type: 'done', text: allText, responseMessages };
 }

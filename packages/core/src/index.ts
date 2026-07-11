@@ -117,6 +117,17 @@ export {
 // Chat engine (shared between server and CLI)
 export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 
+// Extension seam (public plugin API — observe + extend a turn)
+export {
+  ExtensionHost,
+  type ProteusExtension,
+  type TurnStartContext,
+  type ToolCallContext,
+  type ToolResultContext,
+  type TurnEndContext,
+  type PrepareStepContext,
+} from './extension.js';
+
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
