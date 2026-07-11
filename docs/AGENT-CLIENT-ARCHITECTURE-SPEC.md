@@ -219,7 +219,7 @@ Ticket properties:
 - Stored hashed in `UserDO`.
 - Short lived, single use.
 - Scoped to user id, agent name, agent class, and capabilities.
-- Minting verifies the CLI token and `UserDO.hasAgent(name)`.
+- Minting verifies the CLI token and `UserDO.hasWorkspace(name)`.
 - Consumption verifies expiry, use status, user, agent, and ownership.
 - Reuse fails.
 - Wrong-agent and wrong-user use fails.

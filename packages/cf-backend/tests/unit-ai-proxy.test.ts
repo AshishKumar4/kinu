@@ -34,7 +34,7 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
       };
     },
     async verifyAccessToken(bearer: string) {
-      const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['agent.read'] : null;
+      const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
       if (!scopes) return { ok: false, error: 'invalid token' };
       return {
         ok: true,

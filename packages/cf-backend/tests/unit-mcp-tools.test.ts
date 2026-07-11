@@ -29,7 +29,7 @@ function mcpEnv() {
     },
     async verifyAccessToken(token: string) {
       return token === ACCESS_TOKEN
-        ? { ok: true, tokenHash: 'ahash', scopes: ['agent.exec'], user: { id: USER_ID, email: 'a@example.com', displayName: null } }
+        ? { ok: true, tokenHash: 'ahash', scopes: ['workspace.exec'], user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
     async hasWorkspace(name: string) { return name === 'jarvis'; },
