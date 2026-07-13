@@ -118,7 +118,7 @@ function TakesComparison({ set, onPick, onClose }: {
         <div className="flex items-center gap-2 text-xs p-text-2">
           <span className="font-medium p-text">Take {index + 1} of {count}</span>
           {isCurrent && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
+            <span className="inline-flex items-center gap-1 text-[10px] p-success">
               <CheckCircleIcon size={11} weight="fill" />current answer
             </span>
           )}
@@ -145,12 +145,12 @@ function TakesComparison({ set, onPick, onClose }: {
       )}
 
       {notice && (
-        <div className="text-xs text-emerald-300 border border-emerald-400/30 rounded-md px-3 py-2" style={{ background: "rgba(52,211,153,0.06)" }}>
+        <div className="text-xs rounded-md px-3 py-2 p-notice-success">
           {notice}
         </div>
       )}
       {err && (
-        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
+        <div className="text-xs rounded-md px-3 py-2 p-notice-danger">
           {err}
         </div>
       )}
@@ -181,14 +181,14 @@ export function BranchRunChip({ run, takes, onPick, onDismiss }: {
         )}
         {run.status === "settled" && (
           <>
-            <GitBranchIcon size={12} className="text-emerald-400 shrink-0" weight="fill" />
+            <GitBranchIcon size={12} className="p-success shrink-0" weight="fill" />
             <span className="truncate">Branch settled —</span>
             {takes ? <TakesChip set={takes} onPick={onPick} /> : <span className="p-text-3">loading the comparison…</span>}
           </>
         )}
         {run.status === "error" && (
           <>
-            <WarningCircleIcon size={12} className="text-amber-400 shrink-0" weight="fill" />
+            <WarningCircleIcon size={12} className="p-warning shrink-0" weight="fill" />
             <span className="truncate">Branch discarded — {run.message ?? "no comparison available"}</span>
           </>
         )}

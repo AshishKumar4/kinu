@@ -45,7 +45,7 @@ export function OutputSurface({ pinnedPorts, executors, lastActiveExecutor, rpc 
           <button key={v} onClick={() => setView(v)}
             className={`px-2.5 py-1 text-[11px] rounded-md capitalize transition-colors flex items-center gap-1.5 ${view === v ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
             {v === "preview" ? <MonitorIcon size={12} /> : <GitDiffIcon size={12} />}{v}
-            {v === "preview" && pinnedPorts.length > 0 && <span className="size-1.5 rounded-full bg-emerald-500" />}
+            {v === "preview" && pinnedPorts.length > 0 && <span className="size-1.5 rounded-full p-dot-success" />}
           </button>
         ))}
       </div>
@@ -87,9 +87,9 @@ function PreviewView({ pinnedPorts }: { pinnedPorts: PinnedPort[] }) {
 /* ── Cumulative workspace diff ─────────────────────────────────── */
 
 const STATUS_TONE: Record<string, string> = {
-  added: "text-emerald-400",
-  removed: "text-red-400",
-  changed: "text-amber-400",
+  added: "p-success",
+  removed: "p-danger",
+  changed: "p-warning",
 };
 
 interface DiffResult {
@@ -192,7 +192,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
       {result === null ? (
         <div className="flex justify-center py-8"><Loader size="sm" /></div>
       ) : result.error ? (
-        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2">{result.error}</div>
+        <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
           hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Workspace state.`} />
@@ -211,8 +211,8 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
                   {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
                   <span className={`text-[10px] uppercase font-mono shrink-0 ${STATUS_TONE[f.status]}`}>{f.status[0]}</span>
                   <span className="text-xs font-mono p-text truncate flex-1">{f.path}</span>
-                  {f.added > 0 && <span className="text-[10px] text-emerald-400 shrink-0">+{f.added}</span>}
-                  {f.removed > 0 && <span className="text-[10px] text-red-400 shrink-0">−{f.removed}</span>}
+                  {f.added > 0 && <span className="text-[10px] p-success shrink-0">+{f.added}</span>}
+                  {f.removed > 0 && <span className="text-[10px] p-danger shrink-0">−{f.removed}</span>}
                 </button>
                 {open && <div className="border-t p-border"><DiffLines lines={f.lines} /></div>}
               </div>

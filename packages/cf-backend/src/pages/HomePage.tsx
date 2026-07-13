@@ -17,10 +17,11 @@ import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 export default function HomePage() {
   const [mission, setMission] = useState("");
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [listFailed, setListFailed] = useState(false);
   const { hasModels, busy, err, create } = useCreateWorkspace();
 
   useEffect(() => {
-    listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+    listWorkspaces().then((w) => { setWorkspaces(w); setListFailed(false); }).catch(() => setListFailed(true));
   }, []);
 
   const submit = (event?: FormEvent) => {
@@ -62,8 +63,7 @@ export default function HomePage() {
               <button
                 type="submit"
                 disabled={busy || !mission.trim() || hasModels === false}
-                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
-                style={{ background: "var(--c-accent)" }}
+                className="p-btn inline-flex h-9 shrink-0 items-center justify-center gap-2 px-3 text-sm font-medium"
               >
                 {busy ? <Loader size="sm" /> : <PlusIcon size={15} />}
                 Create workspace
@@ -81,13 +81,16 @@ export default function HomePage() {
           )}
 
           {err && (
-            <div className="mt-3 rounded-md border border-red-400/40 px-3 py-2 text-xs text-red-400" style={{ background: "rgba(248,113,113,0.08)" }}>
+            <div className="p-notice-danger mt-3 rounded-md px-3 py-2 text-xs">
               {err}
             </div>
           )}
         </section>
 
         <aside className="space-y-5 lg:pt-[5.25rem]">
+          {listFailed && (
+            <p className="text-xs p-warning px-1">Couldn't load your recent workspaces.</p>
+          )}
           <div className="rounded-lg border p-border p-card p-4">
             <div className="flex items-center gap-2">
               <GearSixIcon size={16} className="p-accent" />

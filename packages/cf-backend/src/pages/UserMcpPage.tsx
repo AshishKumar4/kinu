@@ -36,14 +36,14 @@ function statusBadge(status: McpServerSummary['status']): {
   switch (status) {
     case 'ready':
     case 'connected':
-      return { label: status, classes: 'bg-green-500/15 text-green-400', Icon: CheckIcon };
+      return { label: status, classes: 'p-badge-success', Icon: CheckIcon };
     case 'authenticating':
-      return { label: 'auth needed', classes: 'bg-amber-500/15 text-amber-400', Icon: ClockClockwiseIcon };
+      return { label: 'auth needed', classes: 'p-badge-warning', Icon: ClockClockwiseIcon };
     case 'connecting':
     case 'discovering':
-      return { label: status, classes: 'bg-blue-500/15 text-blue-400', Icon: ClockClockwiseIcon };
+      return { label: status, classes: 'p-badge-info', Icon: ClockClockwiseIcon };
     case 'failed':
-      return { label: 'failed', classes: 'bg-red-500/15 text-red-400', Icon: WarningIcon };
+      return { label: 'failed', classes: 'p-badge-danger', Icon: WarningIcon };
     default:
       return { label: status, classes: 'p-card p-text-3', Icon: ClockClockwiseIcon };
   }
@@ -118,16 +118,16 @@ export default function UserMcpPage() {
         </header>
 
         {authResult === 'ok' && (
-          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 text-green-400">
+          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 p-success">
             <CheckIcon size={14} /> Authorization complete. Discovering tools…
           </div>
         )}
         {authResult === 'failed' && (
-          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 text-red-400">
+          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 p-danger">
             <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
           </div>
         )}
-        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
+        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
 
         {showAdd && (
           <AddServerCard
@@ -175,7 +175,7 @@ export default function UserMcpPage() {
                           <badge.Icon size={10} /> {badge.label}
                         </span>
                         {s.error && (
-                          <div className="text-[11px] text-red-400 mt-1 max-w-[260px] truncate" title={s.error}>
+                          <div className="text-[11px] p-danger mt-1 max-w-[260px] truncate" title={s.error}>
                             {s.error}
                           </div>
                         )}
@@ -292,7 +292,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
         <input value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} className={inputCls}
           placeholder="create_issue, list_pulls" />
       </div>
-      {err && <p className="text-xs text-red-400">{err}</p>}
+      {err && <p className="text-xs p-danger">{err}</p>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
           onClick={save}

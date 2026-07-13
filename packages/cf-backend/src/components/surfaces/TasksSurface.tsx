@@ -26,9 +26,9 @@ function timeAgo(ts: number): string {
 
 function statusMeta(status: BackgroundJob["status"]) {
   switch (status) {
-    case "running": return { icon: SpinnerGapIcon, tone: "text-amber-400", spin: true, label: "Running" };
-    case "completed": return { icon: CheckCircleIcon, tone: "text-emerald-400", spin: false, label: "Completed" };
-    case "failed": return { icon: WarningCircleIcon, tone: "text-red-400", spin: false, label: "Failed" };
+    case "running": return { icon: SpinnerGapIcon, tone: "p-warning", spin: true, label: "Running" };
+    case "completed": return { icon: CheckCircleIcon, tone: "p-success", spin: false, label: "Completed" };
+    case "failed": return { icon: WarningCircleIcon, tone: "p-danger", spin: false, label: "Failed" };
     case "cancelled": return { icon: ProhibitIcon, tone: "p-text-3", spin: false, label: "Cancelled" };
   }
 }
@@ -79,7 +79,7 @@ export function TasksSurface({ jobs, onRefresh, rpc }: TasksSurfaceProps) {
         )}
       </div>
 
-      {err && <div className="text-xs text-red-400 p-card rounded-lg px-3 py-2">{err}</div>}
+      {err && <div className="text-xs p-danger p-card rounded-lg px-3 py-2">{err}</div>}
 
       <div className="space-y-2">
         {jobs.map((j) => {

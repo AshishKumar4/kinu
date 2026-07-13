@@ -90,7 +90,7 @@ export default function TriggersTab() {
           </button>
         </header>
 
-        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
+        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
 
         {/* Newly-created webhook — show URL + secret once */}
         {created && <NewWebhookCard result={created} agentName={agentId ?? ''} onDismiss={() => setCreated(null)} />}
@@ -171,9 +171,9 @@ function TriggerRow({ trigger, agentName, onCancel }: {
 
 function badgeFor(state: TriggerSummary['state']): string {
   switch (state) {
-    case 'active':  return 'bg-green-500/15 text-green-300';
-    case 'paused':  return 'bg-yellow-500/15 text-yellow-300';
-    case 'revoked': return 'bg-red-500/15 text-red-300';
+    case 'active':  return 'p-badge-success';
+    case 'paused':  return 'p-badge-warning';
+    case 'revoked': return 'p-badge-danger';
   }
 }
 
@@ -201,9 +201,9 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
   -H "content-type: application/json" -d '{"hello":"world"}'`;
 
   return (
-    <div className="p-card rounded-xl p-5 space-y-3 border border-green-500/30">
+    <div className="p-card rounded-xl p-5 space-y-3 border p-border">
       <div className="flex items-center gap-2">
-        <CheckIcon size={16} className="text-green-400" />
+        <CheckIcon size={16} className="p-success" />
         <span className="text-sm font-semibold">Webhook created</span>
         <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
       </div>
@@ -222,7 +222,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
         </div>
         {result.secret && (
           <div>
-            <div className="text-[10px] p-text-3 mb-1">Secret <span className="text-red-300">(shown once)</span></div>
+            <div className="text-[10px] p-text-3 mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
               <code className="text-xs p-elevated px-2 py-1.5 rounded font-mono flex-1 break-all">{result.secret}</code>
               <button className="p-2 rounded p-card hover:p-card-hover" onClick={() => navigator.clipboard.writeText(result.secret ?? '')}>
@@ -318,7 +318,7 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
           <input value={contentType} onChange={(e) => setContentType(e.target.value)} className={inputCls} placeholder="application/json" />
         </label>
       </div>
-      {err && <div className="text-xs text-red-400">{err}</div>}
+      {err && <div className="text-xs p-danger">{err}</div>}
       <p className="text-[10px] p-text-3 flex items-start gap-1.5">
         <WarningIcon size={11} className="mt-0.5 shrink-0" />
         <span>Webhook creation requires a recent login (within 5 minutes). If it fails, you'll be prompted to sign in again.</span>

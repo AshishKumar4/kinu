@@ -260,7 +260,7 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 			<svg ref={svgRef} width={width} height={height} className="w-full h-full" />
 			{tooltip && (() => {
 				const n = tooltip.node;
-				const scoreColor = n.value >= 0.7 ? "text-green-400" : n.value >= 0.4 ? "text-amber-400" : "text-red-400";
+				const scoreColor = n.value >= 0.7 ? "p-success" : n.value >= 0.4 ? "p-warning" : "p-danger";
 				return (
 				<div
 				className="absolute z-50 pointer-events-none p-surface border rounded-lg px-4 py-3 shadow-2xl text-xs animate-scale-in max-w-xs"
@@ -276,9 +276,9 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 					<span className="p-text font-mono">{n.visits}</span>
 					<span>Status</span>
 					<span className={
-						n.status === "terminal" ? "text-green-400" :
-						n.status === "pruned" ? "text-gray-500" :
-						n.status === "failed" ? "text-red-400" :
+						n.status === "terminal" ? "p-success" :
+						n.status === "pruned" ? "p-text-3" :
+						n.status === "failed" ? "p-danger" :
 						"p-text"
 					}>{n.status}</span>
 					<span>Depth</span>

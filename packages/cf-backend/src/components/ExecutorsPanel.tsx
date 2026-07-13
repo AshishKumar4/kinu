@@ -5,7 +5,7 @@
  * Layout:
  *
  *   ┌─────────────────────────────────────────────────────────────────────┐
- *   │ ● Your PC  ○ Nimbus                            Workspace state      │ <- device sub-tabs
+ *   │ ● Your PC  ○ Nimbus                            Agent state          │ <- device sub-tabs
  *   ├─────────────────────────────────────────────────────────────────────┤
  *   │ :8080 hello-world  :3000 api               │  Files    Terminal     │ <- preview tabs LEFT, utility RIGHT
  *   ├─────────────────────────────────────────────────────────────────────┤
@@ -42,7 +42,7 @@ import { EmptyState } from "./surfaces/shared";
 const EXECUTOR_LABELS: Record<string, string> = {
   sandbox:   "Sandbox",
   laptop:    "Your PC",
-  workspace: "Workspace state",
+  workspace: "Agent state",
   nimbus:    "Nimbus",
 };
 
@@ -62,10 +62,10 @@ interface ExecutorPanelInfo {
 }
 
 function executorDotClass(exec: ExecutorPanelInfo): string {
-  if (exec.status === "error") return "bg-red-500";
-  if (exec.status === "active" || exec.active) return "bg-green-500";
-  if (exec.status === "idle" || exec.configured) return "bg-sky-500";
-  return "bg-stone-500";
+  if (exec.status === "error") return "p-dot-danger";
+  if (exec.status === "active" || exec.active) return "p-dot-success";
+  if (exec.status === "idle" || exec.configured) return "p-dot-info";
+  return "p-dot-neutral";
 }
 
 function executorStatusLabel(exec: ExecutorPanelInfo): string {
@@ -158,7 +158,7 @@ export default function ExecutorsPanel(props: ExecutorsPanelProps) {
             }`}
             title="Internal Proteus workspace and state VFS"
           >
-            <span className="size-1.5 rounded-full bg-stone-500" />
+            <span className="size-1.5 rounded-full p-dot-neutral" />
             Agent state
           </button>
         )}
@@ -418,10 +418,10 @@ function DeviceAccessTier({ agentName }: { agentName?: string }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1 border-b p-border text-[11px]">
       <span className="p-text-3">File access on {device.label}:</span>
-      <span className={`font-medium ${full ? "text-amber-400" : "p-text-2"}`}>
+      <span className={`font-medium ${full ? "p-warning" : "p-text-2"}`}>
         {full ? "Full filesystem" : "Consented folder only"}
       </span>
-      {err && <span className="text-red-400 truncate">{err}</span>}
+      {err && <span className="p-danger truncate">{err}</span>}
       <button
         onClick={() => void toggle()}
         disabled={busy}
@@ -449,7 +449,7 @@ function PreviewTabButton({ port, label, active, onClick }: {
       }`}
       title={label ? `:${port} (${label})` : `:${port}`}
     >
-      <span className="size-1.5 rounded-full bg-green-500" />
+      <span className="size-1.5 rounded-full p-dot-success" />
       <span className="font-mono">:{port}</span>
       {label && <span className="p-text-3 truncate max-w-[100px]">{label}</span>}
     </button>
@@ -627,12 +627,12 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
           className={`flex-1 overflow-y-auto px-3 py-2 text-xs space-y-0.5 ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
           onDragOver={onListDragOver} onDragLeave={onListDragLeave} onDrop={onListDrop}
         >
-          {err && <div className="text-red-400">{err}</div>}
+          {err && <div className="p-danger">{err}</div>}
           {uploads.map((u) => (
             <div key={u.name} className="flex items-center gap-1.5 font-mono">
               {u.status === "uploading"
                 ? <><Loader size="sm" /><span className="p-text-2 truncate">{u.name}</span><span className="p-text-3">uploading…</span></>
-                : <><WarningIcon size={12} className="text-red-400 shrink-0" /><span className="p-text-2 truncate">{u.name}</span><span className="text-red-400 truncate">{u.error}</span></>}
+                : <><WarningIcon size={12} className="p-danger shrink-0" /><span className="p-text-2 truncate">{u.name}</span><span className="p-danger truncate">{u.error}</span></>}
             </div>
           ))}
           {loading && <div className="p-text-3">Loading…</div>}
@@ -649,7 +649,7 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
               className="flex items-center gap-1.5 w-full text-left font-mono p-text-2 hover:p-text"
             >
               {e.type === "dir"
-                ? <FolderIcon size={12} className="text-sky-400 shrink-0" weight="fill" />
+                ? <FolderIcon size={12} className="p-info shrink-0" weight="fill" />
                 : <FileIcon size={12} className="p-text-3 shrink-0" />}
               <span className="truncate flex-1">{e.name}</span>
               {e.type === "file" && e.size != null && <span className="p-text-3 shrink-0 tabular-nums">{fmtSize(e.size)}</span>}
@@ -678,7 +678,7 @@ function FileViewer({ name, state, loading, onBack }: {
       </div>
       <div className="flex-1 overflow-auto">
         {loading ? <div className="p-text-3 text-xs px-3 py-3">Loading…</div>
-          : state?.error ? <div className="text-red-400 text-xs px-3 py-3">{state.error}</div>
+          : state?.error ? <div className="p-danger text-xs px-3 py-3">{state.error}</div>
           : <pre className="text-[11px] font-mono p-text-2 whitespace-pre px-3 py-2 leading-relaxed">{state?.content ?? ""}</pre>}
       </div>
     </div>
@@ -700,15 +700,11 @@ function ConnectionHelp({ exec, rpc, agentName }: {
       <div className="h-full flex items-center justify-center p-6">
         <div className="max-w-md text-center space-y-3">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
-          <div className="text-sm font-medium p-text">Nimbus not configured</div>
+          <div className="text-sm font-medium p-text">Nimbus isn't available here</div>
           <p className="text-xs p-text-2 leading-relaxed">
-            Nimbus is a lightweight DO-backed Linux env. To enable it, add the{" "}
-            <code className="font-mono p-elevated px-1 rounded">NIMBUS_SESSION</code>
-            {" "}Durable Object binding in{" "}
-            <code className="font-mono p-elevated px-1 rounded">wrangler.jsonc</code>.
-            It does not need endpoint or token secrets. The agent can still use{" "}
-            <code className="font-mono p-elevated px-1 rounded">sandbox</code> or{" "}
-            <code className="font-mono p-elevated px-1 rounded">workspace</code> in the meantime.
+            Nimbus is a lightweight Linux environment that runs inside Proteus. It isn't enabled on
+            this deployment. Your agent can still use the Sandbox or its built-in workspace shell.{" "}
+            <a href="https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
           </p>
         </div>
       </div>
@@ -719,12 +715,11 @@ function ConnectionHelp({ exec, rpc, agentName }: {
       <div className="h-full flex items-center justify-center p-6">
         <div className="max-w-md text-center space-y-3">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
-          <div className="text-sm font-medium p-text">Sandbox not configured</div>
+          <div className="text-sm font-medium p-text">Sandbox isn't available here</div>
           <p className="text-xs p-text-2 leading-relaxed">
-            The full Cloudflare Sandbox needs a{" "}
-            <code className="font-mono p-elevated px-1 rounded">Sandbox</code> Durable Object binding.
-            Proteus exposes previews through its own authenticated path, so no per-agent subdomain is required.
-            Without it the agent can still use Nimbus (if configured) or the in-VFS workspace shell.
+            The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on
+            this deployment. Your agent can still use Nimbus (if available) or its built-in workspace shell.{" "}
+            <a href="https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
           </p>
         </div>
       </div>
@@ -734,10 +729,10 @@ function ConnectionHelp({ exec, rpc, agentName }: {
     <div className="h-full flex items-center justify-center p-6">
       <div className="max-w-md text-center space-y-3">
         <PlugIcon size={28} className="p-text-3 mx-auto" />
-        <div className="text-sm font-medium p-text">{EXECUTOR_LABELS[exec.name] ?? exec.name} not connected</div>
+        <div className="text-sm font-medium p-text">{EXECUTOR_LABELS[exec.name] ?? exec.name} isn't available here</div>
         <p className="text-xs p-text-2 leading-relaxed">
-          This executor needs a binding in <code className="font-mono p-elevated px-1 rounded">wrangler.jsonc</code>.
-          See <code className="font-mono p-elevated px-1 rounded">docs/EXECUTION.md</code>.
+          This execution device isn't enabled on this deployment.{" "}
+          <a href="https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more about execution devices</a>.
         </p>
       </div>
     </div>
@@ -790,17 +785,17 @@ function YourPcConnect() {
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {devices.map((d) => (
               <div key={d.id} className="flex items-center gap-2 px-3 py-2 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "bg-emerald-500" : "bg-stone-500"}`} />
+                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "p-dot-success" : "p-dot-neutral"}`} />
                 <span className="font-medium p-text">{d.label}</span>
                 {d.hostname && <span className="p-text-3 font-mono">{d.hostname}{d.os ? ` · ${d.os}` : ""}</span>}
                 <span className="p-text-3 ml-auto">{d.connected ? "connected" : "offline"}</span>
-                <button onClick={() => revoke(d.id)} title="Revoke device" className="p-text-3 hover:text-red-400"><TrashIcon size={13} /></button>
+                <button onClick={() => revoke(d.id)} title="Revoke device" className="p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
               </div>
             ))}
           </div>
         )}
 
-        {err && <div className="text-xs text-red-400">{err}</div>}
+        {err && <div className="text-xs p-danger">{err}</div>}
 
         {!install ? (
           <button

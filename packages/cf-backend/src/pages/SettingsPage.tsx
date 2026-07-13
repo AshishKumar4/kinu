@@ -174,7 +174,7 @@ export default function SettingsPage() {
           </button>
         </header>
 
-        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
+        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
 
         {/* Identity */}
         <Card title="Identity" icon={BrainIcon}>
@@ -297,7 +297,7 @@ function GepaOptimizationCard({
   }, [rpc, refresh]);
 
   return (
-    <Card title="Scaffold optimisation (GEPA)" icon={SparkleIcon}>
+    <Card title="Scaffold self-tuning" icon={SparkleIcon}>
       <p className="text-[11px] p-text-3">
         Offline genetic-Pareto optimisation: runs candidate inference loops against your
         agent's recent tasks, judges each, and proposes an improved scaffold for shadow eval.
@@ -314,7 +314,7 @@ function GepaOptimizationCard({
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
             <div key={r.runId} className="text-[11px] p-text-3 flex items-center gap-2">
-              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'bg-green-500' : r.status === 'running' ? 'bg-amber-500' : 'bg-stone-500'}`} />
+              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'p-dot-success' : r.status === 'running' ? 'p-dot-warning' : 'p-dot-neutral'}`} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
               <span className="ml-auto">{r.stopReason ?? r.status}</span>
@@ -403,7 +403,7 @@ function AlwaysActiveSkillsCard({
           className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
         >Pin</button>
       </div>
-      {err && <div className="text-[11px] text-red-400 mt-1">{err}</div>}
+      {err && <div className="text-[11px] p-danger mt-1">{err}</div>}
     </Card>
   );
 }

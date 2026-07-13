@@ -18,23 +18,23 @@ import { EmptyState } from "./shared";
 
 const STATUS_META: Record<ProductChangeStatus, { label: string; tone: string }> = {
   draft: { label: "Draft", tone: "p-card p-text-2" },
-  planning: { label: "Planning", tone: "bg-sky-500/15 text-sky-300" },
-  patching: { label: "Patching", tone: "bg-rose-500/15 text-rose-300" },
-  validating: { label: "Validating", tone: "bg-amber-500/15 text-amber-300" },
-  preview_ready: { label: "Preview ready", tone: "bg-emerald-500/15 text-emerald-300" },
+  planning: { label: "Planning", tone: "p-badge-info" },
+  patching: { label: "Patching", tone: "p-badge-danger" },
+  validating: { label: "Validating", tone: "p-badge-warning" },
+  preview_ready: { label: "Preview ready", tone: "p-badge-success" },
   awaiting_approval: { label: "Awaiting approval", tone: "p-accent-subtle p-accent" },
-  applying: { label: "Applying", tone: "bg-cyan-500/15 text-cyan-300" },
-  deployed: { label: "Deployed", tone: "bg-green-500/15 text-green-300" },
-  rejected: { label: "Rejected", tone: "bg-red-500/15 text-red-300" },
-  rolled_back: { label: "Rolled back", tone: "bg-orange-500/15 text-orange-300" },
-  failed: { label: "Failed", tone: "bg-red-500/15 text-red-300" },
+  applying: { label: "Applying", tone: "p-badge-info" },
+  deployed: { label: "Deployed", tone: "p-badge-success" },
+  rejected: { label: "Rejected", tone: "p-badge-danger" },
+  rolled_back: { label: "Rolled back", tone: "p-badge-warning" },
+  failed: { label: "Failed", tone: "p-badge-danger" },
 };
 
 const CHECK_TONE: Record<ProductChangeCheck["status"], string> = {
   pending: "p-card p-text-3",
-  running: "bg-amber-500/15 text-amber-300",
-  passed: "bg-green-500/15 text-green-300",
-  failed: "bg-red-500/15 text-red-300",
+  running: "p-badge-warning",
+  passed: "p-badge-success",
+  failed: "p-badge-danger",
   skipped: "p-card p-text-3",
 };
 
@@ -143,7 +143,7 @@ function SourceBindingForm({ rpc, onSaved }: { rpc: Rpc; onSaved: () => void }) 
         )}
         <Field label="Deploy target"><TextInput value={deployTarget} onChange={(e) => setDeployTarget(e.target.value)} placeholder="production / staging / custom" /></Field>
       </div>
-      {err && <div className="text-[11px] text-red-400">{err}</div>}
+      {err && <div className="text-[11px] p-danger">{err}</div>}
       <Button size="sm" variant="secondary" disabled={busy || !ready} onClick={save} icon={busy ? <Loader size="sm" /> : <PlusIcon size={12} />}>
         Save source
       </Button>
@@ -190,7 +190,7 @@ function CreateChangeForm({
         <Field label="Request"><TextArea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} /></Field>
         <Field label="Plan"><TextArea value={plan} onChange={(e) => setPlan(e.target.value)} rows={2} /></Field>
       </div>
-      {err && <div className="text-[11px] text-red-400">{err}</div>}
+      {err && <div className="text-[11px] p-danger">{err}</div>}
       <Button size="sm" variant="primary" disabled={busy || !bindingId || !prompt.trim()} onClick={create}
         icon={busy ? <Loader size="sm" /> : <PlusIcon size={12} />}>
         Create change
@@ -244,7 +244,7 @@ function ApprovalRow({ approval, rpc, onRefresh }: { approval: ProductChangeAppr
       <div className="min-w-0 flex-1">
         <div className="text-xs p-text">{approval.approvalType.replace(/_/g, " ")}</div>
         <div className="text-[10px] p-text-3">{approval.decision} · {timeShort(approval.decidedAt ?? approval.createdAt)}</div>
-        {err && <div className="text-[11px] text-red-400 mt-0.5">{err}</div>}
+        {err && <div className="text-[11px] p-danger mt-0.5">{err}</div>}
       </div>
       {approval.decision === "pending" && (
         <div className="flex items-center gap-1">
@@ -335,7 +335,7 @@ function ChangeDetail({
             </Button>
           )}
         </div>
-        {approvalErr && <div className="text-[11px] text-red-400 mt-2">Approval request failed: {approvalErr}</div>}
+        {approvalErr && <div className="text-[11px] p-danger mt-2">Approval request failed: {approvalErr}</div>}
       </section>
 
       {change.previewUrl && (
@@ -429,7 +429,7 @@ export function ProductChangesSurface({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="ghost" onClick={load} icon={<ArrowClockwiseIcon size={12} />}>Refresh</Button>
       </div>
 
-      {err && <div className="text-xs text-red-400 p-card rounded-lg p-3">{err}</div>}
+      {err && <div className="text-xs p-danger p-card rounded-lg p-3">{err}</div>}
 
       <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
         <div className="space-y-5">

@@ -19,9 +19,9 @@ interface ShadowTrial { id: string; task: string; currentScore: number | null; p
 interface ShadowVerdict { version: number | null; trials: ShadowTrial[]; summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number } }
 
 const STATUS_TONE: Record<string, string> = {
-  current: "bg-emerald-500/20 text-emerald-300",
-  pending: "bg-amber-500/20 text-amber-300",
-  rolled_back: "bg-red-500/15 text-red-300",
+  current: "p-badge-success",
+  pending: "p-badge-warning",
+  rolled_back: "p-badge-danger",
   historical: "p-elevated p-text-3",
 };
 
@@ -30,8 +30,8 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
     <div className="rounded-md border p-border overflow-hidden">
       <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border text-[11px] p-text-3">
         <span>v{diff.previousVersion ?? "∅"} → v{diff.version}</span>
-        <span className="text-emerald-400">+{diff.added}</span>
-        <span className="text-red-400">−{diff.removed}</span>
+        <span className="p-success">+{diff.added}</span>
+        <span className="p-danger">−{diff.removed}</span>
       </div>
       <DiffLines lines={diff.lines} />
     </div>
@@ -46,18 +46,18 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
       <div className="flex items-center gap-2 text-xs">
         <ScalesIcon size={13} className="p-text-2" />
         <span className="p-text-2">Shadow eval</span>
-        <span className="text-emerald-400">{s.pendingWins} pending</span>
-        <span className="text-red-400">{s.currentWins} regressions</span>
+        <span className="p-success">{s.pendingWins} pending</span>
+        <span className="p-danger">{s.currentWins} regressions</span>
         <span className="p-text-3">{s.ties} ties · win-rate {(s.winRate * 100).toFixed(0)}%</span>
       </div>
       <div className="rounded-md border p-border overflow-hidden text-[11px]">
         {verdict.trials.map((t) => (
           <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === "pending" ? "bg-emerald-500" : t.winner === "current" ? "bg-red-500" : "bg-stone-500"}`} />
+            <span className={`shrink-0 size-1.5 rounded-full ${t.winner === "pending" ? "p-dot-success" : t.winner === "current" ? "p-dot-danger" : "p-dot-neutral"}`} />
             <span className="p-text-2 truncate flex-1" title={t.task}>{t.task}</span>
             <span className="font-mono p-text-3 tabular-nums">{t.currentScore?.toFixed(2) ?? "—"}</span>
             <span className="p-text-3">vs</span>
-            <span className={`font-mono tabular-nums ${t.winner === "pending" ? "text-emerald-300" : "p-text-3"}`}>{t.pendingScore?.toFixed(2) ?? "—"}</span>
+            <span className={`font-mono tabular-nums ${t.winner === "pending" ? "p-success" : "p-text-3"}`}>{t.pendingScore?.toFixed(2) ?? "—"}</span>
           </div>
         ))}
       </div>
@@ -175,7 +175,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
               )}
-              {decideErr && <div className="text-[11px] text-red-400">{decideErr}</div>}
+              {decideErr && <div className="text-[11px] p-danger">{decideErr}</div>}
             </div>
           )}
         </div>

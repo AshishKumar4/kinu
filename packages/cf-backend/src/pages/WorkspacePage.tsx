@@ -94,7 +94,7 @@ function InlineWorkspaceTitle({ title, onRename }: {
           className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
           aria-label="Cancel rename"
         ><XIcon size={13} /></button>
-        {error && <span role="alert" className="text-[10px] text-red-400" title={error}>Rename failed</span>}
+        {error && <span role="alert" className="text-[10px] p-danger" title={error}>Rename failed</span>}
       </form>
     );
   }
@@ -171,10 +171,10 @@ function ReasoningBlock({ text }: { text: string }) {
 
 /** Color-coded badge for the runtime a `run` tool call dispatched on. */
 const RUNTIME_COLORS: Record<string, string> = {
-  workspace: 'bg-stone-700/60 text-stone-200',
-  nimbus:    'bg-sky-700/60 text-sky-100',
-  sandbox:   'bg-emerald-700/60 text-emerald-100',
-  laptop:    'bg-amber-700/60 text-amber-100',
+  workspace: 'p-badge-neutral',
+  nimbus:    'p-badge-info',
+  sandbox:   'p-badge-success',
+  laptop:    'p-badge-warning',
 };
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
@@ -228,24 +228,24 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   return (
     <div className="my-1.5">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs p-text-2 hover:p-text transition-colors">
-        {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="text-red-400" /> : <CheckCircleIcon size={12} className="text-green-400" />}
+        {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="p-danger" /> : <CheckCircleIcon size={12} className="p-success" />}
         <span className="font-mono">{toolName}</span>
         {runtime && (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'bg-stone-700/60 text-stone-200'}`}
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'p-badge-neutral'}`}
                 title={`Runtime: ${runtime}`}>
             {runtime}
           </span>
         )}
-        {isRunning && <span className="text-amber-400/80 text-[11px]">running...</span>}
+        {isRunning && <span className="p-warning text-[11px]">running...</span>}
         {durationLabel && !isRunning && <span className="p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
         {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
       </button>
       {provisionErr && (
-        <div className="mt-1.5 ml-5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs p-text-2 flex items-start gap-2">
-          <WrenchIcon size={12} className="text-amber-400 mt-0.5 shrink-0" />
+        <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
+          <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono bg-amber-500/10 px-1 rounded">{provisionErr.runtime}</code> runtime
+              The agent asked for the <code className="font-mono p-elevated px-1 rounded">{provisionErr.runtime}</code> runtime
               but it isn't provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
@@ -277,9 +277,9 @@ function DeviceConsentCard({ consent, onResolve }: {
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
   return (
-    <div className="rounded-xl border border-amber-500/40 p-3 animate-fade-in" style={{ background: "rgba(245,158,11,0.06)" }}>
+    <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
       <div className="flex items-start gap-2">
-        <DesktopTowerIcon size={16} className="text-amber-400 shrink-0 mt-0.5" weight="fill" />
+        <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">
             This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
@@ -335,9 +335,9 @@ function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
 /** A background task returning into the conversation — rendered as a centered
  *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status }: { kind: string; status: string }) {
-  const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "text-emerald-400", verb: "completed" }
+  const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
     : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
-    : { Icon: WarningCircleIcon, tone: "text-red-400", verb: "failed" };
+    : { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
   return (
     <div className="flex justify-center animate-fade-in py-1">
       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
@@ -558,7 +558,7 @@ function MessageFeedback({
         }`}
         title="Mark this response as poor (feeds evolution scoring)"
       >👎</button>
-      {failed && <span className="text-[10px] text-red-400">couldn't save — try again</span>}
+      {failed && <span className="text-[10px] p-danger">couldn't save — try again</span>}
     </div>
   );
 }
@@ -626,7 +626,7 @@ function ForkModal({
       </div>
 
       {err && (
-        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
+        <div className="p-notice-danger text-xs rounded-md px-3 py-2">
           {err}
         </div>
       )}
@@ -671,7 +671,7 @@ function ModelSelector({ current, onChange }: { current: string; onChange: (id: 
     return (
       <a
         href={cloudflareReconnectPath(window.location.pathname)}
-        className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10"
+        className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] hover:opacity-80"
         title="Reconnect Cloudflare with Workers AI permissions"
       >
         <WarningCircleIcon size={12} />
@@ -718,6 +718,7 @@ export default function WorkspacePage() {
   // not an always-on firehose. (feedback: the live timeline was distracting.)
   const timelineRef = usePanelRef();
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const toggleTimeline = useCallback(() => {
     const t = timelineRef.current;
     if (!t) return;
@@ -780,6 +781,17 @@ export default function WorkspacePage() {
   }, [chatInput]);
 
   useEffect(() => { if (agentId) touchWorkspace(agentId).catch(() => {}); }, [agentId]);
+
+  // Bridge the open workspace's live status to the sidebar roster (running dot +
+  // unseen-evolution dot). Only the mounted workspace has a live socket, so the
+  // roster reflects status for workspaces visited this session.
+  useEffect(() => {
+    if (!agentId) return;
+    const running = state.isStreaming || state.runningTaskCount > 0;
+    window.dispatchEvent(new CustomEvent("proteus:workspace-activity", {
+      detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
+    }));
+  }, [agentId, state.isStreaming, state.runningTaskCount, state.changelogUnseen]);
 
   // Auto-switch the work surface to the live Preview the moment a new sandbox
   // port is exposed — the running app becomes the centre of attention.
@@ -937,7 +949,7 @@ export default function WorkspacePage() {
           mounted so the in-flight assistant turn is preserved through
           partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
       {state.connectionStatus === "disconnected" && (
-        <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs text-amber-300 border-b p-border" style={{ background: "var(--c-accent-subtle)" }}>
+        <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
         </div>
       )}
@@ -1005,7 +1017,7 @@ export default function WorkspacePage() {
                 </button>
                 {state.messages.length > 0 && (
                   <Button variant="ghost" shape="square" size="sm"
-                    onClick={() => { if (confirm("Clear this agent's entire conversation history? This cannot be undone.")) state.clearHistory(); }}
+                    onClick={() => setShowClearConfirm(true)}
                     icon={<TrashIcon size={12} />} aria-label="Clear history" />
                 )}
                 <Link to={`/settings/${agentId}`} className="p-text-2 hover:p-text transition-colors" title="Settings">
@@ -1075,10 +1087,10 @@ export default function WorkspacePage() {
                 regardless of which composer child holds focus. */}
             <div className="px-5 py-3 border-t p-border lg:px-7"
               onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
-              {state.error && <div className="mb-2 text-xs text-red-400 p-card rounded-lg px-3 py-1.5">{state.error}</div>}
-              {attachError && <div className="mb-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">{attachError}</div>}
+              {state.error && <div className="mb-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+              {attachError && <div className="mb-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">{attachError}</div>}
               {branchNotice && (
-                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">
                   <span className="truncate">Branch unavailable: {branchNotice}</span>
                   <button onClick={() => setBranchNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
                 </div>
@@ -1193,6 +1205,23 @@ export default function WorkspacePage() {
             }
           }}
         />
+      )}
+
+      {showClearConfirm && (
+        <Modal
+          title="Clear conversation history"
+          icon={<TrashIcon size={18} className="p-danger" />}
+          onClose={() => setShowClearConfirm(false)}
+          footer={<>
+            <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
+            <Button size="sm" variant="primary" onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</Button>
+          </>}
+        >
+          <p className="text-xs p-text-2 leading-relaxed">
+            This permanently clears this agent's entire conversation history. It cannot be undone.
+            The agent's memory, SOUL.md, crafted tools, and evolution state are kept.
+          </p>
+        </Modal>
       )}
     </div>
   );

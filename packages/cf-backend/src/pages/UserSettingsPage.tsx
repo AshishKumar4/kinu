@@ -110,7 +110,7 @@ export default function UserSettingsPage() {
           </p>
         </header>
 
-        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
+        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
 
         {/* Profile */}
         <Card title="Profile" icon={UserCircleIcon}>
@@ -138,7 +138,7 @@ export default function UserSettingsPage() {
         <Card title="Cloudflare AI" icon={PlugIcon}>
           {workersAIConnected ? (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs text-emerald-300">
+              <div className="flex items-center gap-2 text-xs p-success">
                 <CheckIcon size={13} /> Connected
               </div>
               <CloudflareGatewaySection status={gateways} onChanged={refresh} />
@@ -280,7 +280,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
         Third-party models (spec <code className="p-card px-1">my-gateway/&lt;provider&gt;/&lt;model&gt;</code>) route
         through this gateway using its stored provider keys or your Unified Billing credits.
       </p>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs p-danger">{error}</p>}
     </div>
   );
 }
@@ -374,7 +374,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
           ><ArrowSquareOutIcon size={14} /></a>
         </div>
         <p className="text-[11px] p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for you to authorize…</p>
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs p-danger">{error}</p>}
       </div>
     );
   }
@@ -389,7 +389,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
         onClick={start}
         className="px-3 py-1.5 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 transition-opacity"
       >Connect ChatGPT</button>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs p-danger">{error}</p>}
     </div>
   );
 }

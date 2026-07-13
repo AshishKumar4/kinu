@@ -16,11 +16,19 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
+import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
+import { Button } from "@cloudflare/kumo";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-proteus";
+import { useTheme, toggleTheme } from "../hooks/use-theme";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle } from "./mode-toggle";
+import { Modal } from "./ui/Modal";
+
+/** Live per-workspace activity, bridged from the mounted WorkspacePage socket
+ *  via a window event (only the open workspace has a live socket, so the roster
+ *  reflects status for workspaces visited this session). */
+interface WorkspaceActivity { running: boolean; unseenChangelog: number; }
 
 // Route families in App.tsx that mount a live useProteus/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
@@ -92,7 +100,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
         ><XIcon size={12} /></button>
       </div>
       {(error || connectionStatus !== "connected") && (
-        <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 text-[10px] truncate ${error || connectionStatus === "error" ? "text-red-400" : "p-text-3"}`} title={error ?? undefined}>
+        <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 text-[10px] truncate ${error || connectionStatus === "error" ? "p-danger" : "p-text-3"}`} title={error ?? undefined}>
           {error ?? (connectionStatus === "connecting" ? "Connecting…" : connectionStatus === "disconnected" ? "Reconnecting…" : "Could not connect")}
         </div>
       )}
@@ -108,22 +116,39 @@ export default function Sidebar() {
     ? sectionMatch.params.agentId
     : undefined;
   const navigate = useNavigate();
+  const mode = useTheme();
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [listError, setListError] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileFailed, setProfileFailed] = useState(false);
+  const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshWorkspaces = useCallback(async () => {
-    try { setWorkspaces(await listWorkspaces()); }
-    catch (err) { console.warn('[sidebar] listWorkspaces:', (err as Error).message); }
+    try { setWorkspaces(await listWorkspaces()); setListError(false); }
+    catch (err) { console.warn('[sidebar] listWorkspaces:', (err as Error).message); setListError(true); }
   }, []);
 
   useEffect(() => {
     refreshWorkspaces();
-    getProfile().then(setProfile).catch(() => {});
+    getProfile().then((p) => { setProfile(p); setProfileFailed(false); }).catch(() => setProfileFailed(true));
   }, [refreshWorkspaces]);
+
+  // Reflect the open workspace's live status on its roster row.
+  useEffect(() => {
+    const h = (e: Event) => {
+      const { name, running, unseenChangelog } = (e as CustomEvent<{ name: string } & WorkspaceActivity>).detail;
+      setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog } }));
+    };
+    window.addEventListener("proteus:workspace-activity", h);
+    return () => window.removeEventListener("proteus:workspace-activity", h);
+  }, []);
 
   // Re-sync when route changes (so a freshly-created workspace appears).
   useEffect(() => { refreshWorkspaces(); }, [agentId, refreshWorkspaces]);
@@ -143,15 +168,25 @@ export default function Sidebar() {
     return () => document.removeEventListener('click', onClick);
   }, []);
 
-  const handleDelete = useCallback(async (name: string, displayName: string) => {
-    if (!confirm(`Delete workspace "${displayName}" and clear its server-side state?`)) return;
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    const name = deleteTarget.name;
+    setDeleteBusy(true);
+    setDeleteError(null);
     // Leave the agent's workspace BEFORE destroying it: the still-mounted
     // useAgent socket would auto-reconnect to the destroyed DO name and
     // resurrect an empty ghost agent (idFromName instantiates on connect).
     if (name === agentId) navigate("/");
-    try { await removeWorkspace(name); await refreshWorkspaces(); }
-    catch (err) { alert(`Could not remove: ${(err as Error).message}`); }
-  }, [agentId, navigate, refreshWorkspaces]);
+    try {
+      await removeWorkspace(name);
+      await refreshWorkspaces();
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError((err as Error).message);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteTarget, agentId, navigate, refreshWorkspaces]);
 
   // The responsive wrappers (desktop rail / mobile drawer) live in layout.tsx;
   // this renders just the column content so both reuse one roster + user menu.
@@ -175,12 +210,19 @@ export default function Sidebar() {
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto px-2 pt-2 pb-3">
         <div className="text-[10px] font-medium p-text-3 uppercase tracking-wider px-2 pb-1">Workspaces</div>
-        {workspaces.length === 0 && (
+        {workspaces.length === 0 && !listError && (
           <div className="px-2 py-3 text-xs p-text-3">No workspaces yet. Click "New workspace" to start.</div>
+        )}
+        {listError && (
+          <button
+            onClick={() => refreshWorkspaces()}
+            className="w-full text-left px-2 py-2 text-xs p-warning rounded-md hover:p-card-hover transition-colors"
+          >Couldn't load workspaces — tap to retry</button>
         )}
         <ul className="space-y-0.5">
           {workspaces.map((a) => {
-            const activity = relativeActivity(a.lastVisited);
+            const lastActive = relativeActivity(a.lastVisited);
+            const live = activity[a.name];
             const editing = editingWorkspace === a.name;
             return (
               <li key={a.name} className="group relative">
@@ -204,8 +246,14 @@ export default function Sidebar() {
                       }
                     >
                       <span className="truncate text-sm font-medium">{a.displayName}</span>
-                      {activity && <span className="truncate text-[10px] p-text-3 font-normal">{activity}</span>}
+                      {lastActive && <span className="truncate text-[10px] p-text-3 font-normal">{lastActive}</span>}
                     </NavLink>
+                    {live && (live.running || live.unseenChangelog > 0) && (
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity group-hover:opacity-0">
+                        {live.running && <span className="size-1.5 rounded-full p-dot-success animate-pulse" title="Working now" />}
+                        {live.unseenChangelog > 0 && <span className="size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />}
+                      </span>
+                    )}
                     <button
                       onClick={() => setEditingWorkspace(a.name)}
                       className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all p-1"
@@ -213,7 +261,7 @@ export default function Sidebar() {
                       aria-label={`Rename workspace ${a.displayName}`}
                     ><PencilSimpleIcon size={12} /></button>
                     <button
-                      onClick={() => handleDelete(a.name, a.displayName)}
+                      onClick={() => { setDeleteError(null); setDeleteTarget(a); }}
                       className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
                       title="Remove"
                       aria-label={`Remove workspace ${a.displayName}`}
@@ -226,20 +274,31 @@ export default function Sidebar() {
         </ul>
       </div>
 
-      {/* User dropdown — pinned to bottom */}
+      {/* User dropdown — pinned to bottom, with a visible theme toggle */}
       <div className="px-2 py-2 border-t p-border relative" ref={userMenuRef}>
-        <button
-          onClick={() => setShowUserMenu((v) => !v)}
-          className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:p-card transition-colors text-left"
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 rounded-full p-accent-bg flex items-center justify-center text-xs font-medium p-accent shrink-0">
-              {profile?.email?.[0]?.toUpperCase() ?? '?'}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowUserMenu((v) => !v)}
+            className="min-w-0 flex-1 flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:p-card transition-colors text-left"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-full p-accent-bg flex items-center justify-center text-xs font-medium p-accent shrink-0">
+                {profile?.email?.[0]?.toUpperCase() ?? '?'}
+              </div>
+              <span className="text-xs p-text truncate">{profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading...')}</span>
             </div>
-            <span className="text-xs p-text truncate">{profile?.email ?? 'loading...'}</span>
-          </div>
-          <CaretRightIcon size={12} className={`transition-transform p-text-3 ${showUserMenu ? 'rotate-90' : ''}`} />
-        </button>
+            <CaretRightIcon size={12} className={`transition-transform p-text-3 ${showUserMenu ? 'rotate-90' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="shrink-0 flex size-9 items-center justify-center rounded-lg p-text-3 hover:p-card hover:p-text transition-colors"
+            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {mode === 'light' ? <MoonIcon size={15} /> : <SunIcon size={15} />}
+          </button>
+        </div>
         {showUserMenu && (
           <div className="absolute bottom-full left-2 right-2 mb-1 p-card rounded-lg p-1.5 shadow-lg border p-border">
             <Link to="/user/settings" onClick={() => setShowUserMenu(false)}
@@ -260,6 +319,28 @@ export default function Sidebar() {
       </div>
 
       {showCreate && <CreateWorkspaceModal onClose={() => setShowCreate(false)} />}
+
+      {deleteTarget && (
+        <Modal
+          title="Remove workspace"
+          icon={<TrashIcon size={18} className="p-danger" />}
+          onClose={() => { if (!deleteBusy) setDeleteTarget(null); }}
+          footer={<>
+            <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Cancel</Button>
+            <Button size="sm" variant="primary" onClick={confirmDelete} disabled={deleteBusy}>
+              {deleteBusy ? "Removing…" : "Remove"}
+            </Button>
+          </>}
+        >
+          <p className="text-xs p-text-2 leading-relaxed">
+            Remove <span className="font-medium p-text">{deleteTarget.displayName}</span> and clear its
+            server-side state? This cannot be undone.
+          </p>
+          {deleteError && (
+            <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: {deleteError}</div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

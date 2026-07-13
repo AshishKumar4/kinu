@@ -60,7 +60,7 @@ export function WorkspaceSurface({ rpc }: WorkspaceSurfaceProps) {
   return (
     <div className="flex flex-col h-full -m-5">
       <div className="px-4 pt-4 pb-3 space-y-4 shrink-0 border-b p-border">
-        {err && <div className="text-xs text-red-400 p-card rounded-lg px-3 py-2">{err}</div>}
+        {err && <div className="text-xs p-danger p-card rounded-lg px-3 py-2">{err}</div>}
 
         {/* Agents — the actors inside this workspace */}
         <section>
@@ -113,7 +113,7 @@ export function WorkspaceSurface({ rpc }: WorkspaceSurfaceProps) {
                       : browseAt === m.prefix ? "p-accent-subtle p-accent"
                       : "p-card hover:p-card-hover p-text-2 cursor-pointer"
                   }`}>
-                  <CircleIcon size={7} weight="fill" className={m.live ? "text-emerald-400" : "p-text-3"} />
+                  <CircleIcon size={7} weight="fill" className={m.live ? "p-success" : "p-text-3"} />
                   {m.prefix}
                   {m.policy.readOnly && <LockSimpleIcon size={11} className="p-text-3" />}
                   <span className="text-[10px] p-text-3 font-sans">{m.live ? m.policy.consistency : "unavailable"}</span>

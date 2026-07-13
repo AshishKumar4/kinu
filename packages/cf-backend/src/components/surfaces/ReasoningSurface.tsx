@@ -24,7 +24,7 @@ export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
   const tabs: Array<{ id: SubView; label: string; icon: React.ComponentType<{ size?: number }> }> = [
     { id: "mcts", label: "MCTS", icon: TreeStructureIcon },
     { id: "branches", label: "Branches", icon: GitForkIcon },
-    { id: "gepa", label: "GEPA", icon: DatabaseIcon },
+    { id: "gepa", label: "Self-tuning", icon: DatabaseIcon },
     { id: "quality", label: "Quality", icon: GaugeIcon },
   ];
   return (
@@ -168,9 +168,9 @@ function toMctsSummary(node: MCTSNode): MCTSNodeSummary {
 }
 
 function scoreColor(value: number): string {
-  if (value >= 0.7) return "text-emerald-400";
-  if (value >= 0.4) return "text-amber-400";
-  return "text-red-400";
+  if (value >= 0.7) return "p-success";
+  if (value >= 0.4) return "p-warning";
+  return "p-danger";
 }
 
 function formatScore(value: number): string {
@@ -243,7 +243,7 @@ function MctsBranchInspector({
     <aside className="min-h-0 rounded-lg border p-border p-surface overflow-hidden flex flex-col">
       <div className="px-4 py-3 border-b p-border shrink-0">
         <div className="flex items-center gap-2">
-          <span className={`size-1.5 rounded-full shrink-0 ${branch.status === "terminal" ? "bg-emerald-500" : branch.status === "failed" ? "bg-red-500" : branch.status === "pruned" ? "bg-stone-500" : "bg-amber-500"}`} />
+          <span className={`size-1.5 rounded-full shrink-0 ${branch.status === "terminal" ? "p-dot-success" : branch.status === "failed" ? "p-dot-danger" : branch.status === "pruned" ? "p-dot-neutral" : "p-dot-warning"}`} />
           <span className="text-[10px] uppercase p-text-3 tracking-normal">{label}</span>
           <span className="text-[10px] p-text-3">depth {branch.depth}</span>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={onClose}>Close</Button>
@@ -258,7 +258,7 @@ function MctsBranchInspector({
 
       <div className="p-4 overflow-y-auto min-h-0 space-y-4">
         {loading && <div className="flex items-center gap-2 text-[11px] p-text-3"><Loader size="sm" /> Refreshing branch details...</div>}
-        {error && <div className="text-[11px] text-red-400">Could not refresh branch details: {error}</div>}
+        {error && <div className="text-[11px] p-danger">Could not refresh branch details: {error}</div>}
 
         <div className="rounded-lg border p-border p-elevated p-3">
           <div className="flex items-start gap-3">
@@ -326,7 +326,7 @@ function MctsBranchInspector({
                   onClick={() => onOpenNode(c.id)}
                   className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-elevated text-left hover:p-card transition-colors"
                 >
-                  <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "bg-emerald-500" : c.status === "failed" ? "bg-red-500" : c.status === "pruned" ? "bg-stone-500" : "bg-amber-500"}`} />
+                  <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "p-dot-success" : c.status === "failed" ? "p-dot-danger" : c.status === "pruned" ? "p-dot-neutral" : "p-dot-warning"}`} />
                   <div className="min-w-0 flex-1">
                     <div className="text-[10px] p-text-2 truncate" title={cleanBranchTitle(c.action, c.id)}>{cleanBranchTitle(c.action, "(branch)")}</div>
                     <div className="text-[9px] p-text-3 font-mono">{c.id.slice(0, 12)} · {formatScore(c.value)} · {c.visits} visits</div>
@@ -387,10 +387,10 @@ interface HeadRun {
 }
 
 function statusDot(status: string): string {
-  if (status === "completed") return "bg-emerald-500";
-  if (status === "errored" || status === "failed") return "bg-red-500";
-  if (status === "budget_exceeded") return "bg-orange-500";
-  return "bg-amber-500";
+  if (status === "completed") return "p-dot-success";
+  if (status === "errored" || status === "failed") return "p-dot-danger";
+  if (status === "budget_exceeded") return "p-dot-warning";
+  return "p-dot-warning";
 }
 
 /** Compact one-line digest of a tool call's input/output value. */
@@ -514,7 +514,7 @@ function HeadBranchInspector({ selection }: { selection: HeadSelection | null })
 
         {head.errorMessage && (
           <DetailSection title="Error">
-            <div className="text-[11px] text-red-400 break-words">{head.errorMessage}</div>
+            <div className="text-[11px] p-danger break-words">{head.errorMessage}</div>
           </DetailSection>
         )}
 
@@ -529,7 +529,7 @@ function HeadBranchInspector({ selection }: { selection: HeadSelection | null })
                 <div key={i} className="flex items-center gap-1.5 text-[10px]">
                   <WrenchIcon size={10} className="p-text-3 shrink-0" />
                   <code className="p-text-2">{t.name}</code>
-                  {t.status && <span className={/error|exit=[1-9]/.test(t.status) ? "text-red-400" : "p-text-3"}>{t.status}</span>}
+                  {t.status && <span className={/error|exit=[1-9]/.test(t.status) ? "p-danger" : "p-text-3"}>{t.status}</span>}
                 </div>
               ))}
             </div>
@@ -616,7 +616,7 @@ function GepaView({ rpc }: { rpc: Rpc }) {
   }, [rpc]);
 
   if (runs === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No GEPA runs yet" hint="Trigger a Genetic-Pareto scaffold optimisation from Settings; its candidates + Pareto front appear here." />;
+  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" hint="Trigger a scaffold self-tuning pass (GEPA) from Settings; its candidates + Pareto front appear here." />;
 
   const paretoIds = new Set((detail?.pareto ?? []).map((p) => p.candidateId));
   const maxAgg = Math.max(0.0001, ...(detail?.candidates ?? []).map((c) => c.aggregateScore));
@@ -626,7 +626,7 @@ function GepaView({ rpc }: { rpc: Rpc }) {
         {runs.map((r) => (
           <button key={r.runId} onClick={() => open(r.runId)}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-elevated" : "hover:p-card"}`}>
-            <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "bg-emerald-500" : r.status === "running" ? "bg-amber-500" : "bg-stone-500"}`} />
+            <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "running" ? "p-dot-warning" : "p-dot-neutral"}`} />
             <span className="text-[11px] p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
             <span className="text-[10px] p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
           </button>
@@ -645,9 +645,9 @@ function GepaView({ rpc }: { rpc: Rpc }) {
               const isWinner = detail.run?.winnerId === c.id;
               return (
                 <div key={c.id} className="flex items-center gap-2 text-[10px]">
-                  <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "text-emerald-300" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
+                  <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
                   <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden">
-                    <div className={`h-full ${isWinner ? "bg-emerald-500" : onPareto ? "bg-sky-500" : "bg-stone-600"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
+                    <div className={`h-full ${isWinner ? "p-dot-success" : onPareto ? "p-dot-info" : "p-dot-neutral"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
                   </div>
                   <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
                 </div>
@@ -710,7 +710,7 @@ function QualityView({ rpc }: { rpc: Rpc }) {
                   <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
                 )}
                 <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden">
-                  <div className={`h-full ${r.meanScore >= 0.7 ? "bg-emerald-500" : r.meanScore >= 0.4 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
+                  <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
                 </div>
                 <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
               </div>
@@ -732,7 +732,7 @@ function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; thre
   const y = (score: number) => pad + (1 - Math.max(0, Math.min(1, score))) * (H - 2 * pad);
   const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.meanScore).toFixed(2)}`).join(" ");
   const floorY = y(threshold).toFixed(2);
-  const dotColor = (s: number) => s >= 0.7 ? "#34d399" : s >= 0.4 ? "#fbbf24" : "#f87171";
+  const dotColor = (s: number) => s >= 0.7 ? "var(--c-success, #34d399)" : s >= 0.4 ? "var(--c-warning, #fbbf24)" : "var(--c-danger, #f87171)";
   return (
     <div className="rounded-lg border p-border p-surface p-2">
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-24">

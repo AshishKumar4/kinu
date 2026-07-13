@@ -53,10 +53,10 @@ export default function MCTSExplorer() {
       </div>
       <div className="flex items-center gap-4 px-5 py-2 border-b p-border text-xs p-text-2">
         <span className="font-medium p-text">Legend:</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-green-500" />High</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-amber-400" />Medium</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-red-400" />Low</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-gray-500 opacity-40" />Pruned</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-success" />High</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-warning" />Medium</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-danger" />Low</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-neutral opacity-40" />Pruned</span>
         <span className="ml-auto p-text-3">Node size = visit count</span>
       </div>
       <div ref={containerRef} className="flex-1 relative overflow-hidden">
@@ -78,8 +78,8 @@ export default function MCTSExplorer() {
           <span className="p-text-2">Depth: <span className="p-text font-medium">{depth}</span></span>
           {winner && (
             <>
-              <span className="p-text-2">Winner: <span className="text-green-400 font-medium">{winner.value.toFixed(3)}</span></span>
-              <span className={`flex items-center gap-1 ${winner.status === "terminal" ? "text-green-400" : "text-amber-400"}`}>
+              <span className="p-text-2">Winner: <span className="p-success font-medium">{winner.value.toFixed(3)}</span></span>
+              <span className={`flex items-center gap-1 ${winner.status === "terminal" ? "p-success" : "p-warning"}`}>
                 <span className="size-1.5 rounded-full bg-current animate-pulse" />
                 {winner.status === "terminal" ? "Converged" : "Searching..."}
               </span>

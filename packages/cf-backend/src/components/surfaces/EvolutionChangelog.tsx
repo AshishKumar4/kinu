@@ -115,7 +115,7 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
   };
 
   const entryNotice = (entry: ChangelogEntry) => notice?.id === entry.id ? (
-    <div className={`mt-1.5 text-[11px] ${notice.ok ? "text-emerald-400" : "text-red-400"}`}>
+    <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>
       {notice.text}
     </div>
   ) : null;
@@ -221,8 +221,8 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
                     <div className="mt-2 rounded-md border p-border overflow-hidden">
                       <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border text-[11px] p-text-3">
                         <span>v{diffFor.diff.previousVersion ?? "∅"} → v{diffFor.diff.version}</span>
-                        <span className="text-emerald-400">+{diffFor.diff.added}</span>
-                        <span className="text-red-400">−{diffFor.diff.removed}</span>
+                        <span className="p-success">+{diffFor.diff.added}</span>
+                        <span className="p-danger">−{diffFor.diff.removed}</span>
                       </div>
                       <DiffLines lines={diffFor.diff.lines} />
                     </div>

@@ -65,7 +65,7 @@ export function CreateWorkspaceModal({ onClose, initialMission = "" }: CreateWor
       </div>
 
       {err && (
-        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
+        <div className="text-xs rounded-md px-3 py-2 p-notice-danger">
           {err}
         </div>
       )}
