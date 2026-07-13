@@ -65,12 +65,11 @@ export interface DirEntry {
 }
 
 /** One agent in the workspace roster (getWorkspaceAgents). The orchestrator
- *  is the workspace's default agent — always present; peers are agents of the
- *  owner's other workspaces, reachable (and spawnable) via the team tool. */
+ *  is the workspace's default agent; durable subordinate facets follow it. */
 export interface WorkspaceAgent {
 	name: string;
 	displayName: string;
-	role: "orchestrator" | "peer";
+	role: "orchestrator" | "subordinate";
 }
 
 /** Typed agent RPC. The single boundary cast (unknown → T) lives in the hook's

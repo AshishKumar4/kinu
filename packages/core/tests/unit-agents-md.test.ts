@@ -107,6 +107,23 @@ function fakeSandbox(opts: { active: boolean }): ExecutorProvider {
 }
 
 describe('collectWorkspaceAgentsMd — cloud discovery', () => {
+  test('reads the subordinate parent workspace between local defaults and sandbox rules', async () => {
+    const files = await collectWorkspaceAgentsMd(
+      fakeVfs({
+        'AGENTS.md': 'subordinate defaults',
+        '/workspace/AGENTS.md': 'parent workspace rules',
+        '/sandbox/workspace/AGENTS.md': 'sandbox project rules',
+      }),
+      fakeSandbox({ active: true }),
+    );
+    expect(files.map((f) => f.content)).toEqual([
+      'subordinate defaults',
+      'parent workspace rules',
+      'sandbox project rules',
+    ]);
+    expect(files[1]!.path).toContain('parent workspace');
+  });
+
   test('reads the VFS root file and the active sandbox workspace, nearest last', async () => {
     const files = await collectWorkspaceAgentsMd(
       fakeVfs({

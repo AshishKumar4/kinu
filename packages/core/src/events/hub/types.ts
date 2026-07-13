@@ -64,6 +64,7 @@ export type IngressKind =
   | 'peer_async'      // receiver-side write from a peer agent
   | 'mcp_streamable'  // MCP tool call from external client
   | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
+  | 'subordinate'     // same-workspace facet spine: parent↔subordinate task/report
   | 'self_emit'       // emitted by a tool during the agent's own turn
   | 'reply_request';  // operator confirmation reply
 
@@ -75,6 +76,8 @@ export type EventVariant =
   | 'process_done'     // sandbox process completion
   | 'timer'            // alarm fired
   | 'peer_agent'       // cross-agent message
+  | 'subordinate_task'    // parent → subordinate assignment / conversational injection
+  | 'subordinate_report'  // subordinate → parent progress/completion report
   | 'file_changed'     // sandbox FS event
   | 'email'            // inbound email (Mission Inbox)
   | 'internal'         // tool-emitted within the agent's own turn
@@ -174,6 +177,28 @@ export interface FileChangedPayload {
   size?: number;
 }
 
+/** Parent workspace → subordinate facet. `task` starts/replaces an
+ *  assignment; `message` is a conversational injection into its next turn. */
+export interface SubordinateTaskPayload {
+  from_workspace: string;
+  kind: 'task' | 'message';
+  body: string;
+  deliverable?: string;
+  deadline_hint?: string;
+}
+
+export type SubordinateReportStatus = 'progress' | 'completed' | 'blocked';
+
+/** Subordinate facet → parent workspace. Reports drain into the
+ *  orchestrator's next turn on the standard reactor rail. */
+export interface SubordinateReportPayload {
+  from_subordinate: string;
+  status: SubordinateReportStatus;
+  content: string;
+  /** The assignment this report answers, when one is active. */
+  task?: string;
+}
+
 export interface EmailAttachmentMeta {
   filename: string;
   content_type: string;
@@ -248,6 +273,8 @@ export type ProteusEvent =
   | (BaseEvent & { variant: 'process_done'; payload: ProcessDonePayload })
   | (BaseEvent & { variant: 'timer'; payload: TimerPayload })
   | (BaseEvent & { variant: 'peer_agent'; payload: PeerAgentPayload })
+  | (BaseEvent & { variant: 'subordinate_task'; payload: SubordinateTaskPayload })
+  | (BaseEvent & { variant: 'subordinate_report'; payload: SubordinateReportPayload })
   | (BaseEvent & { variant: 'file_changed'; payload: FileChangedPayload })
   | (BaseEvent & { variant: 'email'; payload: EmailPayload })
   | (BaseEvent & { variant: 'internal'; payload: InternalPayload })
@@ -305,6 +332,14 @@ export type IngressDescriptor =
       payload: PeerAgentPayload;
       same_owner: boolean;
       receiver_grant_present: boolean;   // for cross-owner peers
+    }
+  | {
+      // Same-workspace facet spine — the parent DO and its subordinate facets
+      // are one trust domain (one owner, one storage shard), so no grant
+      // machinery: possession of the worker-side stub IS the authorization.
+      ingress: 'subordinate';
+      variant: 'subordinate_task' | 'subordinate_report';
+      payload: SubordinateTaskPayload | SubordinateReportPayload;
     }
   | {
       ingress: 'mcp_streamable';

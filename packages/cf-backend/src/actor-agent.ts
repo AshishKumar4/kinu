@@ -88,8 +88,11 @@ import {
   unionAllowedTools, toolAllowedBySkills, BUILTIN_SKILLS,
   type ActiveSkillSet, type SkillsVfs, recordHeadsTakeSet,
   type ProductChangeToolDeps,
-  // Peer-agent teams (the `team` tool contract)
-  type TeamToolDeps,
+  isVfsError,
+  type ParentRpcResult,
+  type ParentRpcWrite,
+  // Subordinate teams + cross-workspace peers + the report spine
+  type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
   readSoul,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
@@ -116,6 +119,21 @@ const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+interface ClientRpcFrame {
+  id: string;
+  method: string;
+}
+
+function parseClientRpcFrame(message: unknown): ClientRpcFrame | null {
+  if (typeof message !== 'string') return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(message); } catch { return null; }
+  if (!isRecord(parsed) || parsed.type !== 'rpc'
+    || typeof parsed.id !== 'string' || typeof parsed.method !== 'string'
+    || !Array.isArray(parsed.args)) return null;
+  return { id: parsed.id, method: parsed.method };
 }
 
 /** Extract plain text from the last user message in a ModelMessage[]. Used
@@ -192,10 +210,35 @@ export function uiMessageText(content: string): string {
 }
 
 /** The per-actor-class tool deps `getRawTools` wires into the shared
- *  builtin factory. */
+ *  builtin factory. Structural absence IS the gate: a tool whose deps an
+ *  actor class does not wire neither exists in the ToolSet nor is advertised
+ *  in the prompt (actorActiveTools). */
 export interface ActorToolDeps {
+  /** In-workspace subordinate management — orchestrator-only. */
   team?: TeamToolDeps;
+  /** Cross-workspace peer messaging — orchestrator-only. */
+  peers?: PeersToolDeps;
+  /** Subordinate → parent progress spine — subordinate-only. */
+  report?: ReportToolDeps;
   productChanges?: ProductChangeToolDeps | undefined;
+}
+
+/** The deps-gated builtins: names dropped from the advertised tool surface
+ *  when the actor profile wires no deps for them. */
+const DEPS_GATED_TOOLS = ['team', 'peers', 'report', 'product_change'] as const;
+
+/** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
+ *  and the activeTools whitelist must not advertise structurally absent
+ *  tools. */
+export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
+  const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
+    team: !!deps.team,
+    peers: !!deps.peers,
+    report: !!deps.report,
+    product_change: !!deps.productChanges,
+  };
+  return ACTIVE_TOOLS.filter((name) =>
+    !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
 }
 
 export abstract class ActorAgent extends Think<Env> {
@@ -230,6 +273,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  orchestrator). Fired when a background job settles. */
   protected abstract notifyOwner(subject: string, body: string): void;
 
+  /** Browser/socket-only RPC policy. Durable Object stub calls do not pass
+   * through onMessage, so subclasses can keep bootstrap methods available to
+   * trusted worker callers while denying the same method to client sockets. */
+  protected isClientRpcMethodDenied(_method: string): boolean { return false; }
+
   override maxSteps = resolveMaxSteps();
 
   constructor(ctx: AgentContext, env: Env) {
@@ -245,6 +293,16 @@ export abstract class ActorAgent extends Think<Env> {
       const rejection = rejectOutOfScopeRpc(connection.tags, message);
       if (rejection) {
         connection.send(rejection);
+        return;
+      }
+      const rpc = parseClientRpcFrame(message);
+      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
+        connection.send(JSON.stringify({
+          type: 'rpc',
+          id: rpc.id,
+          success: false,
+          error: `${rpc.method} is not available from client connections.`,
+        }));
         return;
       }
       const event = typeof message === 'string' ? parseProtocolMessage(message) : null;
@@ -835,13 +893,20 @@ export abstract class ActorAgent extends Think<Env> {
       // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
       // `this` (a subclass) DOES have access to its protected env/ctx; cast to
       // the AgentHost view createCFRuntime needs.
-      this._rt = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0], {
+      const runtime = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0], {
         ownerUserId: () => this.getOwnerUserId(),
         workspaceName: this.workspaceName(),
       });
+      this.configureRuntime(runtime);
+      this._rt = runtime;
     }
     return this._rt;
   }
+
+  /** Synchronous post-construction hook for actor-specific mounts. The runtime
+   * is not cached until this returns, so implementations must use the argument
+   * and must not re-enter `this.rt`. */
+  protected configureRuntime(_runtime: CFRuntime): void {}
 
   /**
    * Build (or return cached) the execute_tools AI tool for this DO.
@@ -956,6 +1021,65 @@ export abstract class ActorAgent extends Think<Env> {
     return stub;
   }
 
+  // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
+
+  /** Subordinate facets mount these methods at `/workspace`. They deliberately
+   * carry no `@callable`: only a worker-held parent stub can reach them. */
+  private workspaceFileFailure<T>(path: string, error: unknown): ParentRpcResult<T> {
+    return {
+      ok: false,
+      error: {
+        code: isVfsError(error) ? error.code : 'EIO',
+        message: error instanceof Error ? error.message : String(error),
+        path,
+      },
+    };
+  }
+
+  async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
+    try {
+      const content = await this.rt.sqliteFS.readFile(path);
+      return { ok: true, value: typeof content === 'string' ? new TextEncoder().encode(content) : content };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
+    try {
+      if (input.kind === 'file') await this.rt.sqliteFS.writeFile(input.path, input.data);
+      else await this.rt.sqliteFS.mkdir(input.path, { recursive: input.recursive });
+      return { ok: true, value: null };
+    } catch (error) {
+      return this.workspaceFileFailure(input.path, error);
+    }
+  }
+
+  async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
+    try {
+      return { ok: true, value: await this.rt.sqliteFS.readdir(path) };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
+    try {
+      return { ok: true, value: await this.rt.sqliteFS.stat(path) };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
+    try {
+      await this.rt.sqliteFS.unlink(path);
+      return { ok: true, value: null };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
   private _webSearchProvider: WebSearchProvider | null = null;
   /** The web search + fetch provider — built once per DO lifetime. Key-less by
    *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
@@ -1016,7 +1140,8 @@ export abstract class ActorAgent extends Think<Env> {
       `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
     ).join(",");
     const model = this.promptModelContext();
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}`;
+    const availableTools = actorActiveTools(this.actorToolDeps());
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -1030,7 +1155,7 @@ export abstract class ActorAgent extends Think<Env> {
       // turn state in here would poison the cache across turns.
       base = buildSystemPromptSync(this.rt, {
         executors: execs,
-        availableTools: ACTIVE_TOOLS,
+        availableTools,
         backend: 'cf',
         model,
       });
@@ -1190,11 +1315,16 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._cfHeadRuntime) return this._cfHeadRuntime;
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) return undefined;
-    this._cfHeadRuntime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId, {
-      executor: this.rt.executor,
-      explorer: this.rt.llm,
-      ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
-    });
+    this._cfHeadRuntime = createCFHeadRuntime(
+      this as unknown as Parameters<typeof createCFHeadRuntime>[0],
+      ownerUserId,
+      this.workspaceName(),
+      {
+        executor: this.rt.executor,
+        explorer: this.rt.llm,
+        ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
+      },
+    );
     return this._cfHeadRuntime;
   }
 
@@ -1301,7 +1431,9 @@ export abstract class ActorAgent extends Think<Env> {
     }
 
     const tools: ToolSet = {};
-    const callerAgentName = this.name;
+    // UserDO's hasWorkspace gate knows only top-level workspaces. Facet actors
+    // therefore present the parent workspace identity, never their facet name.
+    const callerAgentName = this.workspaceName();
     for (const d of descriptors) {
       const serverId = d.serverId;
       const mcpName = d.name;
@@ -1467,7 +1599,9 @@ export abstract class ActorAgent extends Think<Env> {
     // skills tool hold a stable reference).
     this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
-    const activeTools: BuiltinToolName[] = [...ACTIVE_TOOLS];
+    // The actor's REAL tool surface: deps-gated builtins (team/peers/report/
+    // product_change) are advertised only when this actor class wires them.
+    const activeTools: BuiltinToolName[] = actorActiveTools(this.actorToolDeps());
     let activeSetForPrompt: ActiveSkillSet | undefined;
     try {
       const lastUserText = extractLastUserText(ctx.messages);

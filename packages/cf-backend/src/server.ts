@@ -21,7 +21,11 @@
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
-import { extractOrchestratorAgentName, isForeignAgentNamespacePath } from "./agent-routing.js";
+import {
+  extractOrchestratorAgentName,
+  extractTicketOrchestratorAgentName,
+  isForeignAgentNamespacePath,
+} from "./agent-routing.js";
 import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
@@ -56,6 +60,7 @@ export { OrchestratorAgent } from "./orchestrator.js";
 // MCTS mode: explore() / evaluate() / generateReflection() — short rollouts.
 // Head mode: initHead() / runAsHead() / abortHead() — multi-step branching heads.
 export { ExplorationAgent } from "./exploration.js";
+export { SubordinateAgent } from "./subordinate-agent.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
 export { UserDO } from "./user/user-do.js";
 export {
@@ -103,8 +108,8 @@ function extractAgentName(pathname: string): string | null {
   let m = pathname.match(/^\/api\/workspaces\/([^/]+)/);
   if (m) return decodeURIComponent(m[1]);
   // /agents/orchestrator-agent/<name>/...  (Think framework convention)
-  m = pathname.match(/^\/agents\/[^/]+\/([^/]+)/);
-  if (m) return decodeURIComponent(m[1]);
+  const orchestratorName = extractOrchestratorAgentName(pathname);
+  if (orchestratorName) return orchestratorName;
   return null;
 }
 
@@ -113,7 +118,7 @@ async function authenticateCliAgentTicketRequest(
   env: Env,
 ): Promise<{ identity: AuthIdentity; request: Request } | Response | null> {
   const url = new URL(request.url);
-  const agentName = extractOrchestratorAgentName(url.pathname);
+  const agentName = extractTicketOrchestratorAgentName(url.pathname);
   const ticket = url.searchParams.get('ticket');
   if (!agentName || !ticket) return null;
   if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
@@ -241,17 +246,20 @@ export default {
     const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
     if (userResp) return withD1Bookmark(userResp, identity);
 
-    // 10. Per-agent routes — verify ownership.
+    // 10. Per-agent routes — reject every namespace/facet path outside the
+    // closed public actor grammar before ownership lookup or SDK routing.
+    if (isForeignAgentNamespacePath(url.pathname)) {
+      return withD1Bookmark(err(404, 'Not found'), identity);
+    }
+
+    // Verify ownership of the root workspace. A direct subordinate facet is
+    // owned through its parent workspace; extractAgentName returns that parent.
     const agentName = extractAgentName(url.pathname);
     if (agentName) {
       // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
-      // binding by slug. Only the orchestrator namespace is client-reachable;
-      // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* are worker-side-only
-      // (env.<NS>.get(id).method() stubs — no HTTP route, no @callable surface).
-      // Reject any other /agents/<slug>/… before it can route to a foreign DO.
-      if (isForeignAgentNamespacePath(url.pathname)) {
-        return withD1Bookmark(err(404, 'Not found'), identity);
-      }
+      // binding by slug, and its facet router recursively resolves literal
+      // /sub/{class}/{name} segments. The closed-path rejection above keeps
+      // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* worker-side-only.
       const denial = await ensureAgentOwnership(env, identity, agentName);
       if (denial) return withD1Bookmark(denial, identity);
       // Inject the userId so downstream handlers can resolve UserDO without

@@ -78,12 +78,12 @@ export function renderAgentsMdSection(
 
 /**
  * AGENTS.md discovery for cloud workspaces: the agent VFS root provides
- * defaults; the sandbox workspace — read only when a container is already
- * active, never provisioned for this — is the "nearest" file and wins on
- * conflict. Both files are read through the CompositeVFS as structured bytes
- * (the `/sandbox` mount, not the executor's lossy readFile tool), so a
- * sandbox error string can never masquerade as file content. Best-effort: a
- * failed read yields an absent file, never an error.
+ * defaults; a subordinate's `/workspace` parent mount adds the enclosing
+ * workspace instructions; the sandbox workspace — read only when a container
+ * is already active, never provisioned for this — is nearest and wins on
+ * conflict. Files are read through the CompositeVFS as structured bytes, so
+ * an executor error string can never masquerade as file content. Best-effort:
+ * a failed read yields an absent file, never an error.
  */
 export async function collectWorkspaceAgentsMd(
   vfs: VFS,
@@ -98,6 +98,7 @@ export async function collectWorkspaceAgentsMd(
     } catch { /* absent, or an unavailable mount */ }
   };
   await read('AGENTS.md', 'AGENTS.md (agent workspace)');
+  await read('/workspace/AGENTS.md', '/workspace/AGENTS.md (parent workspace)');
   // Gate on the live container: the mount is always addressable, but reading it
   // must not spin a container up just for discovery.
   if (sandbox?.getStatus?.().active) {

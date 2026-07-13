@@ -10,6 +10,8 @@ import { Database } from 'bun:sqlite';
 import {
   CompositeVFS,
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
+  createParentRpcMountVFS,
+  type ParentRpcFileHandle, type ParentRpcResult, type ParentRpcWrite,
 } from '../src/vfs/index.js';
 import type { SandboxHandle } from '../src/execution/sandbox.js';
 import type { NimbusSandboxHandle, NimbusExecResult } from '../src/execution/nimbus.js';
@@ -372,7 +374,99 @@ describe('device mount adapter (raw DeviceTransport + consent scope)', () => {
 
 // ── end-to-end through the CompositeVFS ────────────────────────────────────
 
+const rpcOk = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
+
+class MemoryParentRpcHandle implements ParentRpcFileHandle {
+  readonly calls: Array<{ method: keyof ParentRpcFileHandle; path: string }> = [];
+  readonly files = new Map<string, Uint8Array>();
+  readonly directories = new Set(['']);
+
+  async read(path: string): Promise<ParentRpcResult<Uint8Array>> {
+    this.calls.push({ method: 'read', path });
+    const data = this.files.get(path);
+    return data === undefined
+      ? { ok: false, error: { code: 'ENOENT', message: `ENOENT: no such file '${path}'`, path } }
+      : rpcOk(data);
+  }
+
+  async write(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
+    this.calls.push({ method: 'write', path: input.path });
+    if (input.kind === 'directory') {
+      this.directories.add(input.path);
+    } else {
+      this.files.set(input.path, typeof input.data === 'string'
+        ? new TextEncoder().encode(input.data)
+        : input.data);
+    }
+    return rpcOk(null);
+  }
+
+  async list(path: string): Promise<ParentRpcResult<string[]>> {
+    this.calls.push({ method: 'list', path });
+    const prefix = path === '' ? '' : `${path}/`;
+    const entries = new Set<string>();
+    for (const entry of [...this.files.keys(), ...this.directories]) {
+      if (!entry.startsWith(prefix) || entry === path) continue;
+      const relative = entry.slice(prefix.length);
+      if (relative && !relative.includes('/')) entries.add(relative);
+    }
+    return rpcOk([...entries]);
+  }
+
+  async stat(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
+    this.calls.push({ method: 'stat', path });
+    const data = this.files.get(path);
+    if (data !== undefined) return rpcOk({ size: data.byteLength, mtimeMs: 1, isDir: false });
+    return rpcOk(this.directories.has(path) ? { size: 0, mtimeMs: 1, isDir: true } : null);
+  }
+
+  async delete(path: string): Promise<ParentRpcResult<null>> {
+    this.calls.push({ method: 'delete', path });
+    this.files.delete(path);
+    return rpcOk(null);
+  }
+}
+
 describe('composite routing over the mount adapters', () => {
+  test("the /workspace RPC mount round-trips the parent file plane", async () => {
+    const handle = new MemoryParentRpcHandle();
+    const composite = new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) });
+    composite.mount('workspace', {
+      vfs: createParentRpcMountVFS(handle),
+      policy: { readOnly: false, rootPath: '', consistency: 'durable', credentialsStayInHost: true },
+    });
+
+    expect(await composite.readdir('/workspace')).toEqual([]);
+    expect(handle.calls.at(-1)).toEqual({ method: 'list', path: '' });
+    await composite.mkdir('/workspace/src', { recursive: true });
+    await composite.writeFile('/workspace/src/index.ts', 'export const shared = true;');
+    expect(await composite.readFile('/workspace/src/index.ts', { encoding: 'utf8' })).toBe('export const shared = true;');
+    expect(await composite.readdir('/workspace/src')).toEqual(['index.ts']);
+    expect(await composite.stat('/workspace/src/index.ts')).toEqual({ size: 27, mtimeMs: 1, isDir: false });
+    await composite.unlink('/workspace/src/index.ts');
+    expect(await composite.exists('/workspace/src/index.ts')).toBe(false);
+
+    expect(handle.calls).toContainEqual({ method: 'write', path: 'src' });
+    expect(handle.calls).toContainEqual({ method: 'write', path: 'src/index.ts' });
+    expect(handle.calls.every(({ path }) => !path.startsWith('/workspace'))).toBe(true);
+  });
+
+  test('the parent RPC mount preserves binary bytes and typed errors', async () => {
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0, 255, 17, 128]);
+    const handle = new MemoryParentRpcHandle();
+    const vfs = createParentRpcMountVFS(handle);
+
+    await vfs.writeFile('blob.bin', bytes);
+    expect(handle.files.get('blob.bin')).toEqual(bytes);
+    expect(await vfs.readFile('blob.bin')).toEqual(bytes);
+    expect(await vfs.exists('missing')).toBe(false);
+    await expect(vfs.readFile('secret')).rejects.toMatchObject({
+      code: 'ENOENT',
+      path: 'secret',
+      message: "ENOENT: no such file 'secret'",
+    });
+  });
+
   test("readFile('/sandbox/etc/hosts') reads the container's real /etc/hosts", async () => {
     const composite = new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) });
     const sandbox = fakeSandboxHandle();

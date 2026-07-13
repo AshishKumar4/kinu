@@ -294,11 +294,18 @@ function renderAgentStateSection(surface: PromptSurface): string {
     ].join('\n'));
   }
 
-  if (hasTool(tools, 'team')) {
-    parts.push([
-      '## Team',
-      "You are one of the owner's agents, not a lone worker: `team` lists your peers, delegates a subtask (ask waits for the answer, send does not), spawns a specialist teammate, and answers a peer message event via reply with its event_id.",
-    ].join('\n'));
+  if (hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
+    const lines = ['## Team'];
+    if (hasTool(tools, 'team')) {
+      lines.push("You can staff this workspace: `team` spawns durable subordinate agents (role + mission), assigns tasks, messages them, checks status, and dismisses them. Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.");
+    }
+    if (hasTool(tools, 'peers')) {
+      lines.push("Beyond this workspace, `peers` reaches the owner's other agents: delegate a subtask (ask waits for the answer, send does not), spawn a specialist workspace, or answer a peer message event via reply with its event_id.");
+    }
+    if (hasTool(tools, 'report')) {
+      lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` sends it progress/completed/blocked updates at meaningful milestones. Your turn-end answer to an assigned task is relayed automatically.');
+    }
+    parts.push(lines.join('\n'));
   }
 
   if (hasTool(tools, 'product_change')) {

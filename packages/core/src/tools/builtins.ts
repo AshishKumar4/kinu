@@ -20,10 +20,19 @@
  *                       + Vectorize when a VectorStore is wired).
  *   6. fact           — typed keyed world model: remember / recall / forget.
  *                       Gated on deps.facts.
- *   7. team           — peer agent messaging over the EventsHub transport:
- *                       list / ask / send / reply / spawn. Gated on deps.team
- *                       (CF-only; local sessions have no cross-process peers).
- *   8. product_change — governed product/UI self-customization lane.
+ *   7. team           — in-workspace subordinate management: list / spawn /
+ *                       assign / status / message / dismiss. Gated on
+ *                       deps.team (orchestrator-only — subordinates and the
+ *                       CLI wire no deps, so the tool is structurally absent).
+ *   8. peers          — cross-workspace peer messaging over the EventsHub
+ *                       transport: list / ask / send / reply /
+ *                       spawn_workspace. Gated on deps.peers
+ *                       (orchestrator-only; local sessions have no
+ *                       cross-process peers).
+ *   9. report         — the subordinate's progress spine back to its parent
+ *                       workspace orchestrator. Gated on deps.report
+ *                       (subordinate-only).
+ *  10. product_change — governed product/UI self-customization lane.
  *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -144,11 +153,19 @@ export interface BuiltinToolDeps {
   /** Product self-customization lane. Backend-supplied because persistence,
    *  source bindings, approval identity, and deployments are platform-owned. */
   productChanges?: ProductChangeToolDeps;
-  /** Peer agent messaging (the `team` tool). Backend-supplied because the
-   *  transport (peer outbox + DO RPC + reply channels) and the owner's agent
-   *  registry are platform-owned. Absent on backends without a peer transport
-   *  (the local CLI runs one agent per process — no cross-process peering). */
+  /** In-workspace subordinate management (the `team` tool). Backend-supplied
+   *  because the facet substrate + roster live on the workspace DO. Absent on
+   *  every actor that is not a workspace orchestrator (subordinates, CLI). */
   team?: TeamToolDeps;
+  /** Cross-workspace peer messaging (the `peers` tool). Backend-supplied
+   *  because the transport (peer outbox + DO RPC + reply channels) and the
+   *  owner's workspace registry are platform-owned. Absent on backends
+   *  without a peer transport (the local CLI runs one agent per process) and
+   *  on subordinates (confinement is structural). */
+  peers?: PeersToolDeps;
+  /** Subordinate → parent progress reporting (the `report` tool). Wired only
+   *  on subordinate actors. */
+  report?: ReportToolDeps;
   /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
    *  Tavily-key auth seam differ per backend). Exposes the `web_search` and
    *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
@@ -156,7 +173,50 @@ export interface BuiltinToolDeps {
   webSearch?: WebSearchProvider;
 }
 
-// ── Team (peer agents) tool contract ────────────────────────────────────────
+// ── Team (subordinate agents) tool contract ─────────────────────────────────
+// The deps implementation rides the workspace DO's facet substrate: spawn =
+// subAgent(SubordinateAgent, name) + seeded identity + roster row; assign /
+// message publish `subordinate_task` events into the subordinate's EventLog
+// (drained as its programmatic turn); reports come back as
+// `subordinate_report` events on the parent.
+
+export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
+
+/** One row of the workspace_subordinates roster (parent-DO source of truth). */
+export interface SubordinateRosterEntry {
+  name: string;
+  displayName: string;
+  role: string;
+  createdBy: 'orchestrator' | 'user';
+  status: SubordinateStatus;
+  currentTask: string | null;
+  createdAt: number;
+  dismissedAt: number | null;
+}
+
+export interface TeamToolDeps {
+  /** The workspace's subordinate roster (dismissed entries excluded). */
+  list(): Promise<SubordinateRosterEntry[]>;
+  /** Create a durable subordinate; its first turn is the mission. */
+  spawn(input: { name?: string; role: string; mission: string; model?: string }): Promise<{
+    name: string; displayName: string;
+  }>;
+  /** Enqueue a task on the subordinate (drained as its next turn). */
+  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<{
+    ok: true; name: string;
+  }>;
+  /** Roster row + live snapshot for one subordinate, or the whole roster. */
+  status(input: { name?: string }): Promise<unknown>;
+  /** Conversational injection into the subordinate's next turn. */
+  message(input: { name: string; content: string }): Promise<{ ok: true; name: string }>;
+  /** Retire a subordinate: roster status 'dismissed'; storage wiped unless
+   *  keepHistory (archived — facet kept, no longer addressed). */
+  dismiss(input: { name: string; keepHistory?: boolean }): Promise<{
+    ok: true; name: string; historyKept: boolean;
+  }>;
+}
+
+// ── Peers (cross-workspace agents) tool contract ────────────────────────────
 // The deps implementation rides the existing EventsHub peer transport:
 // enqueueOutboundPeer → receiver's receivePeerMessage → EventLog → turn, with
 // replies routed back through the receiver's peer-back reply channel.
@@ -174,8 +234,8 @@ export type PeerReplyOutcome = { ok: true } | { ok: false; error: string };
 
 export type PeerSpawnOutcome = { agent: string; created: boolean } & PeerAskOutcome;
 
-export interface TeamToolDeps {
-  /** The owner's other agents this one may address (self excluded). */
+export interface PeersToolDeps {
+  /** The owner's other workspaces' agents this one may address (self excluded). */
   listPeers(): Promise<Array<{ name: string; displayName?: string }>>;
   /** Send-and-await: deliver a message and wait for the peer's reply. */
   ask(input: { agent: string; topic: string; message: string; timeoutMs: number }): Promise<PeerAskOutcome>;
@@ -183,8 +243,19 @@ export interface TeamToolDeps {
   send(input: { agent: string; topic: string; message: string }): Promise<PeerSendOutcome>;
   /** Answer a peer message event received this (or an earlier) turn. */
   reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome>;
-  /** Create (or reuse by name) a specialist peer, message it, await the result. */
-  spawn(input: { name?: string; purpose: string; message: string; timeoutMs: number }): Promise<PeerSpawnOutcome>;
+  /** Create (or reuse by name) a specialist workspace, message its agent, await the result. */
+  spawnWorkspace(input: { name?: string; purpose: string; message: string; timeoutMs: number }): Promise<PeerSpawnOutcome>;
+}
+
+// ── Report (subordinate → parent) tool contract ─────────────────────────────
+
+export interface ReportToolDeps {
+  /** Publish a `subordinate_report` event into the PARENT workspace's
+   *  EventLog (via the parent stub). */
+  report(input: {
+    status: import('../events/hub/types.js').SubordinateReportStatus;
+    content: string;
+  }): Promise<unknown>;
 }
 
 /** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
@@ -713,13 +784,105 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 7. team — peer agent messaging over the EventsHub transport ───────────
+  // ── 7. team — in-workspace subordinate management ──────────────────────────
   if (deps.team) {
     const team = deps.team;
     tools.team = tool({
       description: BUILTIN_TOOL_DESCRIPTIONS.team,
       inputSchema: jsonSchema<{
-        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn';
+        action: 'list' | 'spawn' | 'assign' | 'status' | 'message' | 'dismiss';
+        name?: string;
+        role?: string;
+        mission?: string;
+        model?: string;
+        task?: string;
+        deliverable?: string;
+        deadline_hint?: string;
+        content?: string;
+        keep_history?: boolean;
+      }>({
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'spawn', 'assign', 'status', 'message', 'dismiss'],
+            description:
+              'list = the workspace subordinate roster. spawn = create a durable subordinate (its first turn is the mission). ' +
+              'assign = hand a subordinate a task. status = roster + live progress snapshot. ' +
+              'message = inject a conversational note into its next turn. dismiss = retire it.',
+          },
+          name: { type: 'string', description: 'Subordinate name (assign/status/message/dismiss; optional for spawn — auto-generated from the role when omitted).' },
+          role: { type: 'string', maxLength: 200, description: 'For action=spawn: one freeform role/purpose line (e.g. "researcher — competitive landscape").' },
+          mission: { type: 'string', maxLength: 20000, description: "For action=spawn: the subordinate's mission — it seeds its identity and runs as its first turn." },
+          model: { type: 'string', description: 'For action=spawn: optional model spec override for the subordinate (defaults to the workspace model).' },
+          task: { type: 'string', maxLength: 20000, description: 'For action=assign: the task to run.' },
+          deliverable: { type: 'string', maxLength: 2000, description: 'For action=assign: what the finished result should be (optional).' },
+          deadline_hint: { type: 'string', maxLength: 200, description: 'For action=assign: optional urgency/deadline hint.' },
+          content: { type: 'string', maxLength: 20000, description: 'For action=message: the conversational note.' },
+          keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate\'s chat history archived instead of wiping its storage (default false).' },
+        },
+        required: ['action'],
+      }),
+      execute: async (args: {
+        action: 'list' | 'spawn' | 'assign' | 'status' | 'message' | 'dismiss';
+        name?: string;
+        role?: string;
+        mission?: string;
+        model?: string;
+        task?: string;
+        deliverable?: string;
+        deadline_hint?: string;
+        content?: string;
+        keep_history?: boolean;
+      }) => {
+        try {
+          switch (args.action) {
+            case 'list': {
+              const subordinates = await team.list();
+              return subordinates.length > 0
+                ? { subordinates }
+                : { subordinates, note: 'No subordinates yet — create one with action:"spawn".' };
+            }
+            case 'spawn':
+              if (!args.role || !args.mission) return { error: 'spawn requires role and mission' };
+              return await team.spawn({
+                ...(args.name ? { name: args.name } : {}),
+                role: args.role, mission: args.mission,
+                ...(args.model ? { model: args.model } : {}),
+              });
+            case 'assign':
+              if (!args.name || !args.task) return { error: 'assign requires name and task' };
+              return await team.assign({
+                name: args.name, task: args.task,
+                ...(args.deliverable ? { deliverable: args.deliverable } : {}),
+                ...(args.deadline_hint ? { deadlineHint: args.deadline_hint } : {}),
+              });
+            case 'status':
+              return await team.status(args.name ? { name: args.name } : {});
+            case 'message':
+              if (!args.name || !args.content) return { error: 'message requires name and content' };
+              return await team.message({ name: args.name, content: args.content });
+            case 'dismiss':
+              if (!args.name) return { error: 'dismiss requires name' };
+              return await team.dismiss({
+                name: args.name,
+                ...(args.keep_history !== undefined ? { keepHistory: args.keep_history } : {}),
+              });
+          }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    });
+  }
+
+  // ── 8. peers — cross-workspace peer messaging over the EventsHub transport ──
+  if (deps.peers) {
+    const peers = deps.peers;
+    tools.peers = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.peers,
+      inputSchema: jsonSchema<{
+        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn_workspace';
         agent?: string;
         message?: string;
         topic?: string;
@@ -731,23 +894,23 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         properties: {
           action: {
             type: 'string',
-            enum: ['list', 'ask', 'send', 'reply', 'spawn'],
+            enum: ['list', 'ask', 'send', 'reply', 'spawn_workspace'],
             description:
               'list = peers you may address. ask = message a peer and await its reply. ' +
               'send = message a peer without waiting. reply = answer a peer message event. ' +
-              'spawn = create (or reuse by name) a specialist peer, message it, and await the result.',
+              'spawn_workspace = create (or reuse by name) a specialist workspace, message its agent, and await the result.',
           },
-          agent: { type: 'string', description: 'Peer agent name (ask/send; optional reuse name for spawn).' },
-          message: { type: 'string', maxLength: 20000, description: 'The message/task for ask, send, spawn, or the answer for reply.' },
+          agent: { type: 'string', description: 'Peer agent name (ask/send; optional reuse name for spawn_workspace).' },
+          message: { type: 'string', maxLength: 20000, description: 'The message/task for ask, send, spawn_workspace, or the answer for reply.' },
           topic: { type: 'string', maxLength: 80, description: 'Optional short label for ask/send (default "message").' },
           event_id: { type: 'string', description: 'For action=reply: the peer message event id you were given.' },
-          purpose: { type: 'string', maxLength: 2000, description: "For action=spawn: the specialist's mission — it seeds the new agent's identity." },
-          timeout_seconds: { type: 'number', description: 'For ask/spawn: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
+          purpose: { type: 'string', maxLength: 2000, description: "For action=spawn_workspace: the specialist's mission — it seeds the new workspace agent's identity." },
+          timeout_seconds: { type: 'number', description: 'For ask/spawn_workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
         },
         required: ['action'],
       }),
       execute: async (args: {
-        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn';
+        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn_workspace';
         agent?: string;
         message?: string;
         topic?: string;
@@ -762,26 +925,26 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         try {
           switch (args.action) {
             case 'list': {
-              const peers = await team.listPeers();
-              return peers.length > 0
-                ? { peers }
-                : { peers, note: 'No other agents yet — create one with action:"spawn".' };
+              const roster = await peers.listPeers();
+              return roster.length > 0
+                ? { peers: roster }
+                : { peers: roster, note: 'No other workspaces yet — create one with action:"spawn_workspace".' };
             }
             case 'ask':
               if (!args.agent || !args.message) return { error: 'ask requires agent and message' };
-              return await team.ask({
+              return await peers.ask({
                 agent: args.agent, topic, message: args.message,
                 timeoutMs: askTimeoutMs(args.timeout_seconds),
               });
             case 'send':
               if (!args.agent || !args.message) return { error: 'send requires agent and message' };
-              return await team.send({ agent: args.agent, topic, message: args.message });
+              return await peers.send({ agent: args.agent, topic, message: args.message });
             case 'reply':
               if (!args.event_id || !args.message) return { error: 'reply requires event_id and message' };
-              return await team.reply({ eventId: args.event_id, message: args.message });
-            case 'spawn':
-              if (!args.purpose || !args.message) return { error: 'spawn requires purpose and message' };
-              return await team.spawn({
+              return await peers.reply({ eventId: args.event_id, message: args.message });
+            case 'spawn_workspace':
+              if (!args.purpose || !args.message) return { error: 'spawn_workspace requires purpose and message' };
+              return await peers.spawnWorkspace({
                 ...(args.agent ? { name: args.agent } : {}),
                 purpose: args.purpose, message: args.message,
                 timeoutMs: askTimeoutMs(args.timeout_seconds),
@@ -794,7 +957,35 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 8. product_change — governed product/UI self-customization lane ───────
+  // ── 9. report — subordinate → parent progress spine ────────────────────────
+  if (deps.report) {
+    const report = deps.report;
+    tools.report = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.report,
+      inputSchema: jsonSchema<{ status: 'progress' | 'completed' | 'blocked'; content: string }>({
+        type: 'object',
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['progress', 'completed', 'blocked'],
+            description: 'completed = the assignment is done. blocked = you need input to continue. progress = significant mid-task update.',
+          },
+          content: { type: 'string', maxLength: 20000, description: 'What to tell the orchestrator — findings, the result, or what you are blocked on.' },
+        },
+        required: ['status', 'content'],
+      }),
+      execute: async (args: { status: 'progress' | 'completed' | 'blocked'; content: string }) => {
+        if (!args.content?.trim()) return { error: 'report requires non-empty content' };
+        try {
+          return await report.report({ status: args.status, content: args.content });
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    });
+  }
+
+  // ── 10. product_change — governed product/UI self-customization lane ──────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({

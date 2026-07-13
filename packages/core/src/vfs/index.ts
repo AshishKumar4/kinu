@@ -13,5 +13,7 @@ export {
 } from './errno.js';
 export {
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
-  type DeviceMountConsent,
+  createParentRpcMountVFS,
+  type DeviceMountConsent, type ParentRpcFileHandle, type ParentRpcWrite,
+  type ParentRpcResult, type ParentRpcError,
 } from './mount-adapters.js';

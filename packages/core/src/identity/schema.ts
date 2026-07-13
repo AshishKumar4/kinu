@@ -10,7 +10,7 @@
 import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
 import type { RawSqlExec } from '../types/primitives.js';
 
-const DDL = [
+const WORKSPACE_IDENTITY_DDL =
   // ── Workspace identity — the ownership root ────────────────────
   // Renamed from agent_identity with no back-compat migration by design —
   // the project is pre-production and the DB is recreated on deploy
@@ -20,8 +20,10 @@ const DDL = [
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
+  )`;
 
+/** Durable state owned by every full-loop actor, including facet actors. */
+const ACTOR_DDL = [
   // ── MCTS search tree ───────────────────────────────────────────
   // BUG-1 FIX: value defaults to 0, NOT 0.5
   `CREATE TABLE IF NOT EXISTS search_nodes (
@@ -163,18 +165,27 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
 
-  // ── Fork lineage — single-row table populated when this workspace is a
-  // fork. Empty otherwise. Written once by forkWorkspaceStorage and read by
-  // the getForkLineage RPC for the UI lineage chip.
-  `CREATE TABLE IF NOT EXISTS fork_lineage (
+];
+
+// ── Fork lineage — single-row table populated when this workspace is a
+// fork. Empty otherwise. Written once by forkWorkspaceStorage and read by
+// the getForkLineage RPC for the UI lineage chip.
+const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     id                            INTEGER PRIMARY KEY,
     source_workspace_id           TEXT    NOT NULL,
     source_workspace_name         TEXT    NOT NULL,
     source_message_id             TEXT    NOT NULL,
     source_message_created_at     INTEGER NOT NULL,
     forked_at                     INTEGER NOT NULL
-  )`,
-];
+  )`;
+
+const DDL = [WORKSPACE_IDENTITY_DDL, ...ACTOR_DDL, FORK_LINEAGE_DDL];
+
+/** Initialize state local to one full-loop actor without materializing a
+ * workspace ownership root or independent fork lineage. */
+export function initActorTables(execRaw: RawSqlExec): void {
+  for (const ddl of ACTOR_DDL) execRaw(ddl);
+}
 
 /** Initialize all workspace tables. Idempotent — safe to call on every startup. */
 export function initAllTables(execRaw: RawSqlExec): void {

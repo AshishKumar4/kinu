@@ -49,7 +49,11 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
     case 'internal':
     case 'file_changed':
     case 'reply_request':
-      // No natural idempotency. The runtime trusts the originating layer.
+    case 'subordinate_task':
+    case 'subordinate_report':
+      // No natural idempotency. The runtime trusts the originating layer —
+      // subordinate traffic is a one-shot same-machine facet RPC (no
+      // redelivery loop to dedupe against).
       return null;
   }
 }

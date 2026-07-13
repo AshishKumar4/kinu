@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   extractOrchestratorAgentName,
+  extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
 } from '../src/agent-routing.js';
 import { deriveUserId } from '../src/auth/session.js';
@@ -47,12 +48,30 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agentX/x')).toBe(true);
   });
 
-  test('the legitimate orchestrator path is admitted', () => {
+  test('only the orchestrator root and direct subordinate paths are admitted', () => {
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace')).toBe(false);
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub')).toBe(false);
-    // extractOrchestratorAgentName only ever names the orchestrator namespace.
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe(false);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe(false);
+
+    // A literal `sub` segment at any deeper level would make the agents SDK
+    // recursively route another facet. Exploration heads remain worker-only.
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/exploration-agent/head-1')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/user-d-o/victim')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/arbitrary')).toBe(true);
+  });
+
+  test('ownership extraction includes direct subordinates but CLI tickets stay root-only', () => {
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe('my-workspace');
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBeNull();
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/exploration-agent/head-1')).toBeNull();
     expect(extractOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
+
+    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
+    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBeNull();
   });
 
   test('server.ts rejects foreign namespaces with a 404 before ownership + routing', () => {

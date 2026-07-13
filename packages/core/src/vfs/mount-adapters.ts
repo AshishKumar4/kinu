@@ -19,7 +19,7 @@ import type { VFS } from '../types/primitives.js';
 import type { SandboxHandle } from '../execution/sandbox.js';
 import type { NimbusSandboxHandle } from '../execution/nimbus.js';
 import type { DeviceTransport } from '../execution/device-tunnel-executor.js';
-import { makeVfsError } from './errno.js';
+import { makeVfsError, type VfsErrorCode } from './errno.js';
 import { shellQuote } from '../utils/shell.js';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
@@ -63,6 +63,78 @@ function asLosslessText(bytes: Uint8Array): string | null {
   } catch {
     return null;
   }
+}
+
+// ── /workspace — subordinate → parent workspace RPC ──────────────────────
+
+/** Worker-side file handle implemented by the parent workspace agent. The
+ * subordinate receives it through `parentAgent()`; the adapter keeps Durable
+ * Object RPC details out of CompositeVFS and the rest of core. */
+export interface ParentRpcError {
+  code: VfsErrorCode;
+  /** Original Error.message. It may already carry the conventional
+   * `<code>: ` prefix; the adapter canonicalizes it when rehydrating. */
+  message: string;
+  path: string;
+}
+
+export type ParentRpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: ParentRpcError };
+
+/** `write` is a closed command union so the worker RPC surface can implement
+ * VFS.mkdir without a second mutation method. */
+export type ParentRpcWrite =
+  | { kind: 'file'; path: string; data: string | Uint8Array }
+  | { kind: 'directory'; path: string; recursive: boolean };
+
+export interface ParentRpcFileHandle {
+  read(path: string): Promise<ParentRpcResult<Uint8Array>>;
+  write(input: ParentRpcWrite): Promise<ParentRpcResult<null>>;
+  list(path: string): Promise<ParentRpcResult<string[]>>;
+  stat(path: string): Promise<ParentRpcResult<Stat>>;
+  delete(path: string): Promise<ParentRpcResult<null>>;
+}
+
+function parentRpcErrorDetail(error: ParentRpcError): string {
+  const prefix = `${error.code}:`;
+  return error.message.startsWith(prefix)
+    ? error.message.slice(prefix.length).trimStart()
+    : error.message;
+}
+
+/** Durable VFS view over the parent workspace's `/local` SqliteFS. Paths are
+ * already mount-relative when they reach this adapter. Mount it with
+ * `rootPath: ''` so the mount root maps to SqliteFS's empty-string root. */
+export function createParentRpcMountVFS(handle: ParentRpcFileHandle): VFS {
+  const value = <T>(result: ParentRpcResult<T>): T => {
+    if (result.ok) return result.value;
+    throw makeVfsError(result.error.code, parentRpcErrorDetail(result.error), result.error.path);
+  };
+  return {
+    async readFile(path, opts) {
+      const content = value(await handle.read(path));
+      return opts?.encoding === 'utf8' ? new TextDecoder().decode(content) : content;
+    },
+    async writeFile(path, data) {
+      value(await handle.write({ kind: 'file', path, data }));
+    },
+    async readdir(path) {
+      return value(await handle.list(path));
+    },
+    async stat(path) {
+      return value(await handle.stat(path));
+    },
+    async unlink(path) {
+      value(await handle.delete(path));
+    },
+    async mkdir(path, opts) {
+      value(await handle.write({ kind: 'directory', path, recursive: opts?.recursive ?? false }));
+    },
+    async exists(path) {
+      return value(await handle.stat(path)) !== null;
+    },
+  };
 }
 
 /** Map a shell failure to the errno its stderr describes. */

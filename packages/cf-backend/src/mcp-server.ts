@@ -38,7 +38,7 @@
  * v1 write/act tools — thin wrappers over existing @callable orchestrator RPCs
  * (no new execution path; the same seams the built-in tools and reactor use):
  *   • run_task           — enqueue a turn into the agent's serialized loop
- *   • send_peer          — message one of the owner's other agents (`team` send)
+ *   • send_peer          — message one of the owner's other agents (`peers` send)
  *   • list_peers         — the owner's other agents (send_peer roster helper)
  *   • product_change     — list / create / advance a product-change request
  *
@@ -284,7 +284,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     "send_peer",
     {
       description:
-        "Send a fire-and-forget message to one of the owner's other agents over the `team` transport. " +
+        "Send a fire-and-forget message to one of the owner's other agents over the `peers` transport. " +
         "The target must be a peer on the owner's roster (see list_peers) — cross-owner messaging is refused.",
       inputSchema: {
         agent: z.string().describe("Peer agent name (from list_peers)."),

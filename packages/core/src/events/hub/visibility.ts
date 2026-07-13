@@ -165,6 +165,10 @@ function friendlySource(event: ProteusEvent): string {
     case 'process_watch':   return `sandbox (${(event.payload as { command?: string }).command?.slice(0, 40) ?? 'process'})`;
     case 'file_watch':      return `file (${(event.payload as { path?: string }).path ?? '?'})`;
     case 'peer_async':      return `peer agent (${(event.payload as { from_agent_name?: string }).from_agent_name ?? '?'})`;
+    case 'subordinate':
+      return event.variant === 'subordinate_report'
+        ? `subordinate (${(event.payload as { from_subordinate?: string }).from_subordinate ?? '?'})`
+        : `workspace orchestrator (${(event.payload as { from_workspace?: string }).from_workspace ?? '?'})`;
     case 'email_inbound':   return `email (${(event.payload as { from?: string }).from ?? '?'})`;
     case 'mcp_streamable':
       if (event.variant === 'mcp_chat') return `MCP (operator)`;
@@ -211,6 +215,18 @@ function briefForVariant(event: ProteusEvent): string {
       // the 150-char telemetry brief, so the receiving turn sees the request.
       const p = event.payload as { topic: string; body: unknown };
       return `${p.topic}: ${JSON.stringify(p.body).slice(0, 600)}`;
+    }
+    case 'subordinate_task': {
+      // Assignments are the subordinate's whole turn input — chat-scale
+      // budget, same as peer messages.
+      const p = event.payload as { kind: string; body: string; deliverable?: string };
+      const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
+      return `${p.kind}: ${p.body.slice(0, 600)}${deliverable}`;
+    }
+    case 'subordinate_report': {
+      const p = event.payload as { status: string; content: string; task?: string };
+      const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
+      return `${p.status}${task}: ${p.content.slice(0, 600)}`;
     }
     case 'file_changed':
       return `${(event.payload as { change: string; path: string }).change} ${

@@ -71,11 +71,11 @@ describe('buildDrainBatch — peer messages', () => {
     },
   } as Partial<ProteusEvent>);
 
-  test('an ask renders the mechanical reply route (team reply + event id)', () => {
+  test('an ask renders the mechanical reply route (peers reply + event id)', () => {
     const batch = buildDrainBatch([peer('pe1', { reply_expected: true })])!;
     expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
     expect(batch.text).toContain('What changed upstream?');
-    expect(batch.text).toContain("team({action:'reply', event_id:'pe1'");
+    expect(batch.text).toContain("peers({action:'reply', event_id:'pe1'");
   });
 
   test('a fire-and-forget message carries no reply instruction', () => {

@@ -56,5 +56,14 @@ describe('actor substrate — facet feasibility contract', () => {
     // is not exported (or re-exported under another name) cannot spawn.
     expect(server).toMatch(/export \{ OrchestratorAgent \}/);
     expect(server).toMatch(/export \{ ExplorationAgent \}/);
+    expect(server).toMatch(/export \{ SubordinateAgent \}/);
+  });
+
+  test('the parent facet gate admits only active, registered subordinate facets', () => {
+    const orchestrator = src('orchestrator.ts');
+    expect(orchestrator).toContain('override async onBeforeSubAgent(');
+    expect(orchestrator).toContain('child.className !== SubordinateAgent.name');
+    expect(orchestrator).toContain("rosterEntry.status === 'dismissed'");
+    expect(orchestrator).toContain('!this.hasSubAgent(child.className, child.name)');
   });
 });

@@ -84,6 +84,11 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
       throw new IngressRejectedError('peer_async',
         'cross-owner peer message requires explicit receiver-side grant');
 
+    case 'subordinate':
+      // Parent workspace and its subordinate facets are always same-owner —
+      // the same trust class as a same-owner peer message.
+      return 'authenticated';
+
     case 'mcp_streamable':
       // mcp_chat = owner-auth; mcp_third_party = third-party auth.
       // Even when the operator minted the token for a third party, the
@@ -136,6 +141,10 @@ export function derivePriority(trust: TrustLevel, variant: EventVariant): Priori
       webhook: 'normal',
       timer: 'normal',
       peer_agent: 'normal',
+      // Assignments wake the subordinate promptly (peer-ask class); reports
+      // roll into the orchestrator's next turn (mission-inbox class).
+      subordinate_task: 'normal',
+      subordinate_report: 'background',
       mcp_third_party: 'normal',
       reply_request: 'normal',
       internal: 'normal',

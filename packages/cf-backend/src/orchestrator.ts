@@ -89,15 +89,23 @@ import {
   type ProductChangeToolDeps, type ProductSourceBindingInput,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
+  type TeamToolDeps, type SubordinateReportStatus,
   // Peer-agent teams (the `team` tool contract)
-  type TeamToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
+  type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
+  slugifyName,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
 } from "@proteus/core";
 import { ActorAgent, extractLastUserText, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { SubordinateAgent } from "./subordinate-agent.js";
+import {
+  SubordinateRosterStore,
+  admitSubordinateReport,
+  createTeamToolDeps,
+} from "./subordinate-support.js";
 import type { CodemodeProvider } from "./rlm.js";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
@@ -230,6 +238,21 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
 }
 
 export class OrchestratorAgent extends ActorAgent {
+  override async onBeforeSubAgent(
+    request: Request,
+    child: { className: string; name: string },
+  ): Promise<Request | Response | void> {
+    if (child.className !== SubordinateAgent.name) {
+      return new Response('Not found', { status: 404 });
+    }
+    const rosterEntry = this.subordinateRoster.get(child.name);
+    if (!rosterEntry || rosterEntry.status === 'dismissed'
+      || !this.hasSubAgent(child.className, child.name)) {
+      return new Response('Not found', { status: 404 });
+    }
+    return request;
+  }
+
   private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
     try {
       const replies = await dispatchEmailRepliesForTurn(
@@ -249,6 +272,24 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   private _engine: EvolutionEngine | null = null;
+  private _subordinateRoster: SubordinateRosterStore | null = null;
+
+  private get subordinateRoster(): SubordinateRosterStore {
+    if (!this._subordinateRoster) {
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
+      this._subordinateRoster.ensureSchema();
+    }
+    return this._subordinateRoster;
+  }
+
+  private broadcastSubordinatesChanged(): void {
+    try {
+      this.broadcast(JSON.stringify({
+        type: 'subordinates_changed',
+        subordinates: this.subordinateRoster.list(),
+      }));
+    } catch { /* no connected clients */ }
+  }
   /** /workspace backups are debounced via the persisted last-backup time +
    *  this optimistic gate. Restore happens lazily in the sandbox handle on
    *  first actual sandbox use, not at turn startup. */
@@ -422,10 +463,11 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
-  /** The `team` tool over the peer transport. Owner resolution is lazy inside
-   *  each action (the toolset is cached across turns — including a pre-claim
-   *  build — so deps must not capture owner state at construction). */
-  private getTeamToolDeps(): TeamToolDeps {
+  /** The `peers` tool over the cross-workspace peer transport. Owner
+   *  resolution is lazy inside each action (the toolset is cached across
+   *  turns — including a pre-claim build — so deps must not capture owner
+   *  state at construction). */
+  private getPeersToolDeps(): PeersToolDeps {
     const orchestrator = this;
     const requireOwner = () => {
       const userId = orchestrator.getOwnerUserId();
@@ -454,7 +496,7 @@ export class OrchestratorAgent extends ActorAgent {
         return orchestrator.peerHub.send({ agent, userId: requireOwner(), topic, message });
       },
       reply: async ({ eventId, message }) => orchestrator.peerHub.reply({ eventId, message }),
-      spawn: async ({ name, purpose, message, timeoutMs }): Promise<PeerSpawnOutcome> => {
+      spawnWorkspace: async ({ name, purpose, message, timeoutMs }): Promise<PeerSpawnOutcome> => {
         const userId = requireOwner();
         const userDO = orchestrator.requireOwnerUserDO();
         let agentName = name;
@@ -473,6 +515,57 @@ export class OrchestratorAgent extends ActorAgent {
         return { agent: agentName, created, ...outcome };
       },
     };
+  }
+
+  private getTeamToolDeps(): TeamToolDeps {
+    const orchestrator = this;
+    return createTeamToolDeps({
+      roster: this.subordinateRoster,
+      now: () => Date.now(),
+      createName: (role) => {
+        const base = slugifyName(role).slice(0, 48) || 'subordinate';
+        return `${base}-${nanoid(6)}`;
+      },
+      broadcast: () => orchestrator.broadcastSubordinatesChanged(),
+      runtime: {
+        async spawn(input) {
+          const ownerUserId = orchestrator.getOwnerUserId();
+          if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
+          const stub = await orchestrator.subAgent(SubordinateAgent, input.name);
+          try {
+            await stub.setSubordinateIdentity({
+              name: input.name,
+              displayName: input.displayName,
+              role: input.role,
+              mission: input.mission,
+              ...(input.model ? { model: input.model } : {}),
+            });
+          } catch (error) {
+            await orchestrator.deleteSubAgent(SubordinateAgent, input.name).catch(() => {});
+            throw error;
+          }
+        },
+        async assign(name, input) {
+          const stub = await orchestrator.subAgent(SubordinateAgent, name);
+          await stub.enqueueSubordinateTask({
+            kind: 'task',
+            body: input.body,
+            ...(input.deliverable ? { deliverable: input.deliverable } : {}),
+            ...(input.deadlineHint ? { deadlineHint: input.deadlineHint } : {}),
+          });
+        },
+        async status(name) {
+          return (await orchestrator.subAgent(SubordinateAgent, name)).getSubordinateStatus();
+        },
+        async message(name, content) {
+          await (await orchestrator.subAgent(SubordinateAgent, name))
+            .enqueueSubordinateTask({ kind: 'message', body: content });
+        },
+        async dismiss(name, keepHistory) {
+          if (!keepHistory) await orchestrator.deleteSubAgent(SubordinateAgent, name);
+        },
+      },
+    });
   }
 
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
@@ -523,11 +616,13 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The actor profile (ActorAgent): the orchestrator wires the full
-   *  user-facing tool surface — peer teams + the product-change lane. */
+   *  user-facing tool surface — cross-workspace peers + the product-change
+   *  lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
-      productChanges: this.getProductChangeToolDeps(),
       team: this.getTeamToolDeps(),
+      productChanges: this.getProductChangeToolDeps(),
+      peers: this.getPeersToolDeps(),
     };
   }
 
@@ -1167,6 +1262,8 @@ export class OrchestratorAgent extends ActorAgent {
     // Compaction: the replayable plan snapshot + the measured prompt-token
     // trigger signal, one row per session (@proteus/compaction stores).
     initCompactionStateTable(execRaw);
+
+    this.subordinateRoster.ensureSchema();
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -2576,11 +2673,11 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
-   *  agents over the exact `team` tool transport (owner + same-owner roster
-   *  gate enforced inside getTeamToolDeps). */
+   *  agents over the exact `peers` tool transport (owner + same-owner roster
+   *  gate enforced inside getPeersToolDeps). */
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
     if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
-    return this.getTeamToolDeps().send({
+    return this.getPeersToolDeps().send({
       agent: input.agent,
       topic: (input.topic ?? '').trim() || 'message',
       message: input.message,
@@ -2589,7 +2686,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** MCP `send_peer` roster helper — the owner's other agents (self excluded). */
   async listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>> {
-    return this.getTeamToolDeps().listPeers();
+    return this.getPeersToolDeps().listPeers();
   }
 
   // ── Hybrid memory search — FTS5 + Vectorize via RRF ──
@@ -2734,15 +2831,11 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The agent roster as seen from this workspace: this DO's orchestrator is
-   *  the default agent (always present); the rest are the default agents of
-   *  the owner's OTHER workspaces, listed as team peers (reachable/spawnable
-   *  via the `team` tool) — not co-residents of this workspace. Unowned
-   *  workspaces roster only their default agent. */
+   *  the default agent (always present); durable subordinate facets follow. */
   @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
     const self = { name: this.name, displayName: this.getDisplayName() };
-    if (!this.getOwnerUserId()) return buildWorkspaceAgents(self, []);
     try {
-      return buildWorkspaceAgents(self, await this.requireOwnerUserDO().listWorkspaces());
+      return buildWorkspaceAgents(self, this.subordinateRoster.list());
     } catch {
       return buildWorkspaceAgents(self, []);
     }
@@ -3566,6 +3659,57 @@ export class OrchestratorAgent extends ActorAgent {
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
     this.ensureSchema();
     return this.peerHub.receive(msg);
+  }
+
+  /** Facet bootstrap authority. Worker-side DO RPC only. The child verifies
+   *  its supplied owner/workspace against this source before persisting its
+   *  immutable identity row. */
+  async getSubordinateBootstrapIdentity(): Promise<{
+    parentWorkspace: string;
+    ownerUserId: string;
+    model: string | null;
+  }> {
+    this.ensureSchema();
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
+    return {
+      parentWorkspace: this.name,
+      ownerUserId,
+      model: this.config.getModel(),
+    };
+  }
+
+  /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
+   * `@callable`, and the public route exposes only the subordinate's own chat
+   * surface. Reports use the same EventLog → drain rail as mission inbox. */
+  async receiveSubordinateEvent(input: {
+    fromSubordinate: string;
+    status: SubordinateReportStatus;
+    content: string;
+  }): Promise<{ id: string; admitted: boolean }> {
+    this.ensureSchema();
+    const subordinate = this.subordinateRoster.get(input.fromSubordinate);
+    if (!subordinate || subordinate.status === 'dismissed') {
+      throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
+    }
+    const result = this.ctx.storage.transactionSync(() => {
+      const published = admitSubordinateReport(this.eventLog, {
+        fromSubordinate: input.fromSubordinate,
+        status: input.status,
+        content: input.content,
+        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+        now: Date.now(),
+      });
+      if (published.admitted) {
+        this.subordinateRoster.applyReport(input.fromSubordinate, input.status);
+      }
+      return published;
+    });
+    if (result.admitted) {
+      this.broadcastSubordinatesChanged();
+      this.orch.scheduleDrain();
+    }
+    return result;
   }
 
   // ── Mission Inbox: email ingress + owner notifications ─────────

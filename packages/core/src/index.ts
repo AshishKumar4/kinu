@@ -1,7 +1,7 @@
 // @proteus/core — barrel export
 
 // Identity system
-export { initAllTables } from './identity/schema.js';
+export { initActorTables, initAllTables } from './identity/schema.js';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -188,7 +188,9 @@ export {
 } from './tools/registry.js';
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
-  type BuiltinToolDeps, type ProductChangeToolDeps, type TeamToolDeps,
+  type BuiltinToolDeps, type ProductChangeToolDeps,
+  type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
+  type PeersToolDeps, type ReportToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './tools/builtins.js';
 // Web search + fetch — provider seam + key-less default + codemode provider.
@@ -432,8 +434,10 @@ export {
   CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
   makeVfsError, isVfsError, ERRNO,
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
+  createParentRpcMountVFS,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
   type ResolvedPath, type VfsError, type VfsErrorCode, type DeviceMountConsent,
+  type ParentRpcFileHandle, type ParentRpcWrite, type ParentRpcResult, type ParentRpcError,
 } from './vfs/index.js';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)

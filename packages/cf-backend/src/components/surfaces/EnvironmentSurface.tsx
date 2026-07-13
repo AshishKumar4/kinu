@@ -140,7 +140,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   }, [pinnedPorts, pane, selected]);
 
   const orchestrator = agents.find((a) => a.role === "orchestrator");
-  const peers = agents.filter((a) => a.role === "peer");
+  const peers = agents.filter((a) => a.role !== "orchestrator");
   const mountPorts = selectedMount?.name === "sandbox" ? pinnedPorts : [];
 
   return (
@@ -167,12 +167,12 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
               </span>
             )}
             {peers.map((p) => (
-              <Link key={p.name} to={`/workspace/${p.name}`} title={`Open workspace ${p.name}`}
-                className="inline-flex items-center gap-1.5 rounded-md p-card hover:p-card-hover px-2.5 py-1.5 text-xs transition-colors">
+              <span key={p.name} title={p.name}
+                className="inline-flex items-center gap-1.5 rounded-md p-card px-2.5 py-1.5 text-xs">
                 <RobotIcon size={13} className="p-text-3" />
                 <span className="p-text-2 truncate max-w-48">{p.displayName || p.name}</span>
-                <span className="text-[10px] p-text-3 rounded px-1 py-px border p-border">peer</span>
-              </Link>
+                <span className="text-[10px] p-text-3 rounded px-1 py-px border p-border">subordinate</span>
+              </span>
             ))}
             {agents.length === 0 && <span className="text-xs p-text-3">loading…</span>}
           </div>

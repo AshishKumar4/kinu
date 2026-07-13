@@ -1,8 +1,7 @@
 import type { WorkspaceAgent } from './protocol.js';
 import type { WorkspaceEntry } from '../user/user-do.js';
 
-/** The owner's other workspaces as team peers — self excluded, registry
- *  order kept. Shared by the roster below and the team tool's peer list. */
+/** The owner's other workspaces as cross-workspace peers — self excluded. */
 export function teamPeers(
   selfName: string,
   ownerWorkspaces: readonly Pick<WorkspaceEntry, 'name' | 'displayName'>[],
@@ -14,15 +13,14 @@ export function teamPeers(
 
 /**
  * The workspace agent roster contract behind getWorkspaceAgents: the default
- * orchestrator agent first (always present), then the owner's other
- * workspaces' agents as team peers.
+ * orchestrator first, followed by this workspace's durable subordinates.
  */
 export function buildWorkspaceAgents(
   self: { name: string; displayName: string },
-  ownerWorkspaces: readonly Pick<WorkspaceEntry, 'name' | 'displayName'>[],
+  subordinates: readonly { name: string; displayName: string }[],
 ): WorkspaceAgent[] {
   return [
     { name: self.name, displayName: self.displayName, role: 'orchestrator' },
-    ...teamPeers(self.name, ownerWorkspaces).map((p): WorkspaceAgent => ({ ...p, role: 'peer' })),
+    ...subordinates.map((subordinate): WorkspaceAgent => ({ ...subordinate, role: 'subordinate' })),
   ];
 }

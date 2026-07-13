@@ -1,0 +1,594 @@
+import {
+  type EventLog,
+  type PublishResult,
+  type SubordinateReportStatus,
+  type SubordinateRosterEntry,
+  type SubordinateStatus,
+  type TeamToolDeps,
+} from '@proteus/core';
+
+interface SqlExec {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
+}
+
+export interface SubordinateIdentity {
+  name: string;
+  displayName: string;
+  role: string;
+  mission: string;
+  parentWorkspace: string;
+  ownerUserId: string;
+}
+
+interface IdentityRow {
+  name: string;
+  display_name: string;
+  role: string;
+  mission: string;
+  parent_workspace: string;
+  owner_user_id: string;
+}
+
+function readString(row: Record<string, unknown>, key: string): string | null {
+  const value = row[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function parseIdentityRow(row: Record<string, unknown>): IdentityRow | null {
+  const name = readString(row, 'name');
+  const displayName = readString(row, 'display_name');
+  const role = readString(row, 'role');
+  const mission = readString(row, 'mission');
+  const parentWorkspace = readString(row, 'parent_workspace');
+  const ownerUserId = readString(row, 'owner_user_id');
+  return name !== null && displayName !== null && role !== null && mission !== null
+    && parentWorkspace !== null && ownerUserId !== null
+    ? {
+        name,
+        display_name: displayName,
+        role,
+        mission,
+        parent_workspace: parentWorkspace,
+        owner_user_id: ownerUserId,
+      }
+    : null;
+}
+
+function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
+  return {
+    name: row.name,
+    displayName: row.display_name,
+    role: row.role,
+    mission: row.mission,
+    parentWorkspace: row.parent_workspace,
+    ownerUserId: row.owner_user_id,
+  };
+}
+
+function identitiesEqual(a: SubordinateIdentity, b: SubordinateIdentity): boolean {
+  return a.name === b.name
+    && a.displayName === b.displayName
+    && a.role === b.role
+    && a.mission === b.mission
+    && a.parentWorkspace === b.parentWorkspace
+    && a.ownerUserId === b.ownerUserId;
+}
+
+/** Immutable facet identity. The parent may retry the exact seed after an RPC
+ * interruption, but no caller can retarget an initialized facet to another
+ * workspace or owner. */
+export class SubordinateIdentityStore {
+  constructor(private readonly sql: SqlExec) {}
+
+  ensureSchema(): void {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS subordinate_identity (
+      id               INTEGER PRIMARY KEY CHECK (id = 1),
+      name             TEXT NOT NULL,
+      display_name     TEXT NOT NULL,
+      role             TEXT NOT NULL,
+      mission          TEXT NOT NULL,
+      parent_workspace TEXT NOT NULL,
+      owner_user_id    TEXT NOT NULL
+    )`);
+  }
+
+  seed(identity: SubordinateIdentity): void {
+    const existing = this.read();
+    if (existing) {
+      if (identitiesEqual(existing, identity)) return;
+      throw new Error('Subordinate identity is already initialized and cannot be changed.');
+    }
+    this.sql.exec(
+      `INSERT INTO subordinate_identity
+         (id, name, display_name, role, mission, parent_workspace, owner_user_id)
+       VALUES (1, ?, ?, ?, ?, ?, ?)`,
+      identity.name,
+      identity.displayName,
+      identity.role,
+      identity.mission,
+      identity.parentWorkspace,
+      identity.ownerUserId,
+    );
+  }
+
+  read(): SubordinateIdentity | null {
+    const rows = this.sql.exec(
+      `SELECT name, display_name, role, mission, parent_workspace, owner_user_id
+       FROM subordinate_identity WHERE id = 1`,
+    ).toArray();
+    if (rows.length === 0) return null;
+    const row = parseIdentityRow(rows[0]);
+    if (!row) throw new Error('Stored subordinate identity is malformed.');
+    return mapIdentityRow(row);
+  }
+
+  ownerUserId(): string | null {
+    return this.read()?.ownerUserId ?? null;
+  }
+
+  workspaceName(): string | null {
+    return this.read()?.parentWorkspace ?? null;
+  }
+}
+
+interface RosterRow {
+  name: string;
+  display_name: string;
+  role: string;
+  created_by: 'orchestrator' | 'user';
+  status: SubordinateStatus;
+  current_task: string | null;
+  created_at: number;
+  dismissed_at: number | null;
+}
+
+const ROSTER_COLUMNS =
+  'name, display_name, role, created_by, status, current_task, created_at, dismissed_at';
+
+function isSubordinateStatus(value: unknown): value is SubordinateStatus {
+  return value === 'idle' || value === 'working'
+    || value === 'awaiting_input' || value === 'dismissed';
+}
+
+function parseRosterRow(row: Record<string, unknown>): RosterRow | null {
+  const name = readString(row, 'name');
+  const displayName = readString(row, 'display_name');
+  const role = readString(row, 'role');
+  const createdBy = row.created_by;
+  const status = row.status;
+  const currentTask = row.current_task;
+  const createdAt = row.created_at;
+  const dismissedAt = row.dismissed_at;
+  if (name === null || displayName === null || role === null) return null;
+  if (createdBy !== 'orchestrator' && createdBy !== 'user') return null;
+  if (!isSubordinateStatus(status)) return null;
+  if (currentTask !== null && typeof currentTask !== 'string') return null;
+  if (typeof createdAt !== 'number') return null;
+  if (dismissedAt !== null && typeof dismissedAt !== 'number') return null;
+  return {
+    name,
+    display_name: displayName,
+    role,
+    created_by: createdBy,
+    status,
+    current_task: currentTask,
+    created_at: createdAt,
+    dismissed_at: dismissedAt,
+  };
+}
+
+function mapRosterRow(row: RosterRow): SubordinateRosterEntry {
+  return {
+    name: row.name,
+    displayName: row.display_name,
+    role: row.role,
+    createdBy: row.created_by,
+    status: row.status,
+    currentTask: row.current_task,
+    createdAt: row.created_at,
+    dismissedAt: row.dismissed_at,
+  };
+}
+
+function parseStoredRosterRow(row: Record<string, unknown>): SubordinateRosterEntry {
+  const parsed = parseRosterRow(row);
+  if (!parsed) throw new Error('Stored subordinate roster row is malformed.');
+  return mapRosterRow(parsed);
+}
+
+/** Parent-DO product roster. All status policy lives here so tools, report
+ * ingress, snapshots, and the future UI cannot drift. */
+export class SubordinateRosterStore {
+  constructor(private readonly sql: SqlExec) {}
+
+  ensureSchema(): void {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_subordinates (
+      name          TEXT PRIMARY KEY,
+      display_name  TEXT NOT NULL,
+      role          TEXT NOT NULL,
+      created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
+      status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
+      current_task  TEXT,
+      created_at    INTEGER NOT NULL,
+      dismissed_at INTEGER
+    )`);
+  }
+
+  create(entry: SubordinateRosterEntry): void {
+    this.sql.exec(
+      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      entry.name,
+      entry.displayName,
+      entry.role,
+      entry.createdBy,
+      entry.status,
+      entry.currentTask,
+      entry.createdAt,
+      entry.dismissedAt,
+    );
+  }
+
+  /** Exact upsert used only for compensating a failed facet operation. */
+  restore(entry: SubordinateRosterEntry): void {
+    this.sql.exec(
+      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         display_name = excluded.display_name,
+         role = excluded.role,
+         created_by = excluded.created_by,
+         status = excluded.status,
+         current_task = excluded.current_task,
+         created_at = excluded.created_at,
+         dismissed_at = excluded.dismissed_at`,
+      entry.name,
+      entry.displayName,
+      entry.role,
+      entry.createdBy,
+      entry.status,
+      entry.currentTask,
+      entry.createdAt,
+      entry.dismissedAt,
+    );
+  }
+
+  remove(name: string): void {
+    this.sql.exec(`DELETE FROM workspace_subordinates WHERE name = ?`, name);
+  }
+
+  get(name: string): SubordinateRosterEntry | null {
+    const rows = this.sql.exec(
+      `SELECT ${ROSTER_COLUMNS} FROM workspace_subordinates WHERE name = ?`,
+      name,
+    ).toArray();
+    return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
+  }
+
+  requireExisting(name: string): SubordinateRosterEntry {
+    const entry = this.get(name);
+    if (!entry) throw new Error(`unknown subordinate "${name}"`);
+    return entry;
+  }
+
+  requireActive(name: string): SubordinateRosterEntry {
+    const entry = this.requireExisting(name);
+    if (entry.status === 'dismissed') throw new Error(`subordinate "${name}" is dismissed`);
+    return entry;
+  }
+
+  list(): SubordinateRosterEntry[] {
+    return this.sql.exec(
+      `SELECT ${ROSTER_COLUMNS} FROM workspace_subordinates
+       WHERE status != 'dismissed' ORDER BY created_at, name`,
+    ).toArray().map(parseStoredRosterRow);
+  }
+
+  listAll(): SubordinateRosterEntry[] {
+    return this.sql.exec(
+      `SELECT ${ROSTER_COLUMNS} FROM workspace_subordinates ORDER BY created_at, name`,
+    ).toArray().map(parseStoredRosterRow);
+  }
+
+  assign(name: string, task: string): void {
+    this.requireActive(name);
+    this.sql.exec(
+      `UPDATE workspace_subordinates
+       SET status = 'working', current_task = ?, dismissed_at = NULL
+       WHERE name = ?`,
+      task,
+      name,
+    );
+  }
+
+  resumeAfterMessage(name: string): void {
+    const entry = this.requireActive(name);
+    if (entry.status !== 'awaiting_input') return;
+    this.sql.exec(
+      `UPDATE workspace_subordinates SET status = 'working' WHERE name = ?`,
+      name,
+    );
+  }
+
+  applyReport(name: string, status: SubordinateReportStatus): void {
+    const entry = this.requireActive(name);
+    const rosterStatus: SubordinateStatus = status === 'completed'
+      ? 'idle'
+      : status === 'blocked'
+        ? 'awaiting_input'
+        : entry.currentTask
+          ? 'working'
+          : 'idle';
+    this.sql.exec(
+      `UPDATE workspace_subordinates
+       SET status = ?, current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END
+       WHERE name = ?`,
+      rosterStatus,
+      status,
+      name,
+    );
+  }
+
+  dismiss(name: string, now: number): void {
+    this.requireExisting(name);
+    this.sql.exec(
+      `UPDATE workspace_subordinates
+       SET status = 'dismissed', current_task = NULL, dismissed_at = COALESCE(dismissed_at, ?)
+       WHERE name = ?`,
+      now,
+      name,
+    );
+  }
+}
+
+function requiredText(value: string, field: string): string {
+  const text = value.trim();
+  if (!text) throw new Error(`${field} must be non-empty`);
+  return text;
+}
+
+function optionalText(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  return text ? text : undefined;
+}
+
+export function admitSubordinateTask(log: EventLog, input: {
+  fromWorkspace: string;
+  kind: 'task' | 'message';
+  body: string;
+  deliverable?: string;
+  deadlineHint?: string;
+  now: number;
+}): PublishResult {
+  const fromWorkspace = requiredText(input.fromWorkspace, 'fromWorkspace');
+  const body = requiredText(input.body, 'body');
+  const deliverable = optionalText(input.deliverable);
+  const deadlineHint = optionalText(input.deadlineHint);
+  return log.publish({
+    descriptor: {
+      ingress: 'subordinate',
+      variant: 'subordinate_task',
+      payload: {
+        from_workspace: fromWorkspace,
+        kind: input.kind,
+        body,
+        ...(deliverable ? { deliverable } : {}),
+        ...(deadlineHint ? { deadline_hint: deadlineHint } : {}),
+      },
+    },
+    now: input.now,
+  });
+}
+
+export function admitSubordinateReport(log: EventLog, input: {
+  fromSubordinate: string;
+  status: SubordinateReportStatus;
+  content: string;
+  task?: string;
+  now: number;
+}): PublishResult {
+  const fromSubordinate = requiredText(input.fromSubordinate, 'fromSubordinate');
+  const content = requiredText(input.content, 'content');
+  const task = optionalText(input.task);
+  return log.publish({
+    descriptor: {
+      ingress: 'subordinate',
+      variant: 'subordinate_report',
+      payload: {
+        from_subordinate: fromSubordinate,
+        status: input.status,
+        content,
+        ...(task ? { task } : {}),
+      },
+    },
+    now: input.now,
+  });
+}
+
+export interface SubordinateRuntime {
+  spawn(input: {
+    name: string;
+    displayName: string;
+    role: string;
+    mission: string;
+    model?: string;
+  }): Promise<void>;
+  assign(name: string, input: { body: string; deliverable?: string; deadlineHint?: string }): Promise<void>;
+  status(name: string): Promise<unknown>;
+  message(name: string, content: string): Promise<void>;
+  dismiss(name: string, keepHistory: boolean): Promise<void>;
+}
+
+export interface SubordinatesChangedEvent {
+  type: 'subordinates_changed';
+  subordinates: SubordinateRosterEntry[];
+}
+
+function displayNameForRole(role: string): string {
+  return role.trim().split(/\s+/).slice(0, 4)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function rollback(error: unknown, action: () => void, operation: string): never {
+  try {
+    action();
+  } catch (rollbackError) {
+    throw new AggregateError(
+      [error, rollbackError],
+      `${operation} failed and its roster rollback also failed`,
+    );
+  }
+  throw error;
+}
+
+async function rollbackSpawn(
+  error: unknown,
+  runtime: SubordinateRuntime,
+  roster: SubordinateRosterStore,
+  name: string,
+  rosterCreated: boolean,
+): Promise<never> {
+  try {
+    await runtime.dismiss(name, false);
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [error, cleanupError],
+      'subordinate spawn failed and its facet cleanup also failed',
+    );
+  }
+
+  if (rosterCreated) {
+    try {
+      roster.remove(name);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'subordinate spawn failed and its roster cleanup also failed',
+      );
+    }
+  }
+  throw error;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function statusView(
+  runtime: SubordinateRuntime,
+  roster: SubordinateRosterEntry,
+): Promise<{ roster: SubordinateRosterEntry; live: unknown; liveError?: string }> {
+  if (roster.status === 'dismissed') return { roster, live: null };
+  try {
+    return { roster, live: await runtime.status(roster.name) };
+  } catch (error) {
+    return { roster, live: null, liveError: errorMessage(error) };
+  }
+}
+
+/** The one orchestration policy behind both the LLM team tool and the future
+ * user RPCs. Roster transitions happen before facet admission and are restored
+ * exactly if admission fails. Broadcasts happen only after both sides settle. */
+export function createTeamToolDeps(deps: {
+  roster: SubordinateRosterStore;
+  runtime: SubordinateRuntime;
+  createName(role: string): string;
+  now(): number;
+  broadcast(event: SubordinatesChangedEvent): void;
+}): TeamToolDeps {
+  const changed = () => deps.broadcast({
+    type: 'subordinates_changed',
+    subordinates: deps.roster.list(),
+  });
+
+  return {
+    list: async () => deps.roster.list(),
+
+    spawn: async (input) => {
+      const role = requiredText(input.role, 'role');
+      const mission = requiredText(input.mission, 'mission');
+      const name = input.name?.trim() || deps.createName(role);
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
+        throw new Error('subordinate name must be a lowercase URL-safe slug (letters, digits, hyphens)');
+      }
+      if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
+
+      const displayName = displayNameForRole(role);
+      await deps.runtime.spawn({
+        name,
+        displayName,
+        role,
+        mission,
+        ...(input.model ? { model: input.model } : {}),
+      });
+      let rosterCreated = false;
+      try {
+        deps.roster.create({
+          name,
+          displayName,
+          role,
+          createdBy: 'orchestrator',
+          status: 'working',
+          currentTask: mission,
+          createdAt: deps.now(),
+          dismissedAt: null,
+        });
+        rosterCreated = true;
+        await deps.runtime.assign(name, { body: mission });
+      } catch (error) {
+        await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
+      }
+      changed();
+      return { name, displayName };
+    },
+
+    assign: async (input) => {
+      const task = requiredText(input.task, 'task');
+      const before = deps.roster.requireActive(input.name);
+      deps.roster.assign(input.name, task);
+      try {
+        const deliverable = optionalText(input.deliverable);
+        const deadlineHint = optionalText(input.deadlineHint);
+        await deps.runtime.assign(input.name, {
+          body: task,
+          ...(deliverable ? { deliverable } : {}),
+          ...(deadlineHint ? { deadlineHint } : {}),
+        });
+      } catch (error) {
+        rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
+      }
+      changed();
+      return { ok: true, name: input.name };
+    },
+
+    status: async (input) => {
+      if (input.name) return statusView(deps.runtime, deps.roster.requireExisting(input.name));
+      return Promise.all(deps.roster.list().map((entry) => statusView(deps.runtime, entry)));
+    },
+
+    message: async (input) => {
+      const content = requiredText(input.content, 'content');
+      const before = deps.roster.requireActive(input.name);
+      deps.roster.resumeAfterMessage(input.name);
+      try {
+        await deps.runtime.message(input.name, content);
+      } catch (error) {
+        rollback(error, () => deps.roster.restore(before), 'subordinate message');
+      }
+      changed();
+      return { ok: true, name: input.name };
+    },
+
+    dismiss: async (input) => {
+      const before = deps.roster.requireExisting(input.name);
+      const keepHistory = input.keepHistory ?? false;
+      deps.roster.dismiss(input.name, deps.now());
+      try {
+        await deps.runtime.dismiss(input.name, keepHistory);
+      } catch (error) {
+        rollback(error, () => deps.roster.restore(before), 'subordinate dismissal');
+      }
+      changed();
+      return { ok: true, name: input.name, historyKept: keepHistory };
+    },
+  };
+}

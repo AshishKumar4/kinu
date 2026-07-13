@@ -32,7 +32,7 @@ export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
     // Peer asks carry a mechanical reply route: the sender opened a peer-back
     // channel keyed on this event id and is awaiting the answer.
     const replyHint = e.variant === 'peer_agent' && (e.payload as PeerAgentPayload).reply_expected
-      ? ` [the sender awaits your answer — reply with team({action:'reply', event_id:'${e.id}', message:...})]`
+      ? ` [the sender awaits your answer — reply with peers({action:'reply', event_id:'${e.id}', message:...})]`
       : '';
     return `- [${r.variant}] from ${r.triggered_by}: ${r.brief}${replyHint}`;
   });

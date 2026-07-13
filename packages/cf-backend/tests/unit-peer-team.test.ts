@@ -1,6 +1,6 @@
 // Peer transport behavior — TWO real hubs (EventLog + ReplyChannelStore +
 // peer_outbox over in-memory SQLite) wired back-to-back through PeerHub, the
-// same seams the orchestrator wires to DO RPC. Covers the team-tool paths:
+// same seams the orchestrator wires to DO RPC. Covers the peers-tool paths:
 // fire-and-forget, send-and-await round-trip, trust-grant enforcement,
 // timeout + late reply, crash redelivery dedupe, per-receiver ordering, and
 // the spawn-a-specialist round-trip (fresh peer joins the network mid-flight).
@@ -127,7 +127,7 @@ describe('fire-and-forget (send)', () => {
 });
 
 describe('send-and-await (ask) round-trip', () => {
-  test("the peer's team-reply resolves the sender's awaiting ask", async () => {
+  test("the peer's reply through peers resolves the sender's awaiting ask", async () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
     const bob = addAgent('bob', alice.userId);
@@ -143,7 +143,7 @@ describe('send-and-await (ask) round-trip', () => {
     expect(events).toHaveLength(1);
     expect((events[0].payload as PeerAgentPayload).reply_expected).toBe(true);
     const batch = buildDrainBatch(events)!;
-    expect(batch.text).toContain(`team({action:'reply', event_id:'${events[0].id}'`);
+    expect(batch.text).toContain(`peers({action:'reply', event_id:'${events[0].id}'`);
 
     // Bob answers through the peer-back reply channel.
     const replied = await bob.hub.reply({ eventId: events[0].id, message: 'v2 API landed' });

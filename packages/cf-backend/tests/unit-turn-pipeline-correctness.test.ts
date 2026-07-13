@@ -7,8 +7,30 @@ import { join } from 'node:path';
 // the orchestrator (onChatResponse sequencing, schema, callables).
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
+  test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
+    const constructor = actor.slice(
+      actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
+      actor.indexOf('/** Drain batches bound to the LIVE turn'),
+    );
+    const policy = constructor.indexOf('this.isClientRpcMethodDenied(rpc.method)');
+    const dispatch = constructor.indexOf('await dispatchMessage.call');
+    expect(actor).toContain('protected isClientRpcMethodDenied(_method: string): boolean { return false; }');
+    expect(policy).toBeGreaterThan(-1);
+    expect(dispatch).toBeGreaterThan(policy);
+    expect(constructor).toContain("type: 'rpc'");
+    expect(constructor).toContain('success: false');
+  });
+
+  test('facet-spawned heads inherit the registered parent workspace identity', () => {
+    expect(actor).toMatch(/createCFHeadRuntime\([\s\S]*?ownerUserId,[\s\S]*?this\.workspaceName\(\),/);
+    expect(headRuntime).toContain('parentWorkspaceName: string');
+    expect(headRuntime).toContain('await stub.setSharedParent(parentWorkspaceName)');
+    expect(headRuntime).not.toContain('await stub.setSharedParent(orchestrator.name)');
+  });
+
   test('beforeTurn weaves the bounded MEMORY.md tail into the ephemeral system-state block', () => {
     // Parity with the CLI weave: the reflection loop assumes the model sees its
     // newest lessons in-turn. cf previously passed only {factsBlock,executors},

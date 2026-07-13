@@ -407,8 +407,10 @@ describe('buildSystemPromptSync', () => {
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
       'Operating guidance': 560,
-      // +1 summary line for the `team` peer-messaging tool (2026-07).
-      'Tools available this turn': 1420,
+      // +2 summary lines for the team/peers split + the subordinate report
+      // tool (2026-07, Subordinates A2). Real actors advertise a
+      // deps-filtered subset; this representative surface carries all three.
+      'Tools available this turn': 1800,
       // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
       // /pc file plane; exec stays target-native) — deliberate (2026-07).
       'Execution environments': 2450,
@@ -420,8 +422,11 @@ describe('buildSystemPromptSync', () => {
       // load-bearing growth over the old heads-only blurb.
       'Research and experimentation': 840,
       'Background work': 260,
-      // One-line peer-delegation doctrine, gated on the team tool (2026-07).
-      'Team': 340,
+      // Team doctrine now covers all three roles — subordinates (team),
+      // cross-workspace peers, and the subordinate's report spine — each line
+      // gated on its tool; the representative surface renders all three
+      // (2026-07, Subordinates A2).
+      'Team': 820,
       'Proteus product changes': 290,
       'Output format': 180,
     };

@@ -22,7 +22,12 @@ import type { UserDO } from "../user/user-do.js";
  *  but the orchestrator (a subclass) passes `this` cast to this view. */
 type HeadHost = Think<Env> & { readonly env: Env };
 
-export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string, grounding?: HeadGrounding): HeadRuntime {
+export function createCFHeadRuntime(
+  orchestrator: HeadHost,
+  ownerUserId: string,
+  parentWorkspaceName: string,
+  grounding?: HeadGrounding,
+): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
   // is read once from workspace_identity by the orchestrator and threaded down.
   const userDOStub = orchestrator.env.UserDO.get(
@@ -54,8 +59,10 @@ export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string,
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
       await stub.setOwner(ownerUserId);
-      // The root orchestrator is the shared point for head findings.
-      await stub.setSharedParent(orchestrator.name);
+      // Facet actors share their parent workspace's identity for UserDO/MCP
+      // ownership. The spawning actor's facet name is not a registered
+      // workspace and must never escape as caller identity.
+      await stub.setSharedParent(parentWorkspaceName);
       await stub.initHead(input);
       return {
         id: input.id,
