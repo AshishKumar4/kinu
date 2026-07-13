@@ -123,6 +123,29 @@ describe('web provider — search', () => {
     expect(calls[0].url).toContain('html.duckduckgo.com');
   });
 
+  test('workerd this-binding regression: search and fetch invoke the injected fetch unbound', async () => {
+    const thisSensitiveFetch = async function (
+      this: unknown,
+      input: RequestInfo | URL,
+    ): Promise<Response> {
+      if (this !== undefined) {
+        throw new TypeError('Illegal invocation: function called with incorrect `this` reference');
+      }
+      const url = typeof input === 'string' ? input : input.toString();
+      const isSearch = url.includes('html.duckduckgo.com');
+      return new Response(isSearch ? DDG_HTML : '# Plain page\n\nFetched safely.', {
+        headers: { 'content-type': isSearch ? 'text/html' : 'text/markdown' },
+      });
+    } as typeof fetch;
+    const provider = createDefaultWebSearchProvider({ fetch: thisSensitiveFetch });
+
+    const searchResult = await provider.search('the topic');
+    const fetchResult = await provider.fetch('https://example.com/page');
+
+    expect(searchResult.results[0]?.url).toBe('https://example.com/a');
+    expect(fetchResult.markdown).toBe('# Plain page\n\nFetched safely.');
+  });
+
   test('Tavily path used when a credential resolves, with ranked results + answer', async () => {
     const tavilyBody = JSON.stringify({
       answer: 'A synthesized answer.',

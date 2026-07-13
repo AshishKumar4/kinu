@@ -57,9 +57,9 @@ import {
   buildHeadAccumulatorTools,
   buildHeadSandboxTools,
   buildHeadWebTools,
-  createDefaultWebSearchProvider,
   type WebSearchProvider,
 } from "@proteus/core";
+import { buildCfWebSearchProvider } from "./lib/web-provider.js";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
@@ -182,21 +182,7 @@ export class ExplorationAgent extends Agent<Env> {
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
-    const ai = (this.env as { AI?: { toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>> } }).AI;
-    this._webSearchProvider = createDefaultWebSearchProvider({
-      fetch: globalThis.fetch,
-      ...(getAuth ? { getAuth } : {}),
-      ...(ai?.toMarkdown
-        ? {
-            htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
-              const name = (opts?.url ?? 'page') + '.html';
-              const blob = new Blob([html], { type: 'text/html' });
-              const out = await ai.toMarkdown!([{ name, blob }]);
-              return out[0]?.data ?? '';
-            },
-          }
-        : {}),
-    });
+    this._webSearchProvider = buildCfWebSearchProvider(this.env, getAuth);
     return this._webSearchProvider;
   }
 

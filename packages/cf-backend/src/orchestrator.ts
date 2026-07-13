@@ -39,6 +39,7 @@ import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
+import { buildCfWebSearchProvider } from "./lib/web-provider.js";
 import { contextWindowForModel, catalogContextWindow } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
@@ -57,7 +58,7 @@ import {
   resolveMaxSteps,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
+  createWebCodemodeProvider, type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
@@ -1127,21 +1128,7 @@ export class OrchestratorAgent extends Think<Env> {
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
-    const ai = (this.env as { AI?: { toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>> } }).AI;
-    this._webSearchProvider = createDefaultWebSearchProvider({
-      fetch: globalThis.fetch,
-      ...(getAuth ? { getAuth } : {}),
-      ...(ai?.toMarkdown
-        ? {
-            htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
-              const name = (opts?.url ?? 'page') + '.html';
-              const blob = new Blob([html], { type: 'text/html' });
-              const out = await ai.toMarkdown!([{ name, blob }]);
-              return out[0]?.data ?? '';
-            },
-          }
-        : {}),
-    });
+    this._webSearchProvider = buildCfWebSearchProvider(this.env, getAuth);
     return this._webSearchProvider;
   }
 

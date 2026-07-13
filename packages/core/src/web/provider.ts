@@ -91,6 +91,11 @@ export class WebFetchError extends Error {
  *  their own `fetch` + auth seam; no per-backend search/fetch logic exists. */
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // workerd's fetch enforces its `this` binding: invoking the dependency as
+  // a member of `deps` sets `this = deps` and throws "Illegal invocation".
+  // Detach once so every call goes out with `this = undefined`, exactly like
+  // a bare `fetch()` call (undici on the CLI is `this`-insensitive either way).
+  const fetchImpl = deps.fetch;
 
   const withTimeout = async (run: (signal: AbortSignal) => Promise<Response>): Promise<Response> => {
     const ctrl = new AbortController();
@@ -128,7 +133,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     headers: Record<string, string>,
   ): Promise<WebSearchResponse> {
     const res = await withTimeout((signal) =>
-      deps.fetch('https://api.tavily.com/search', {
+      fetchImpl('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify({
@@ -165,7 +170,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   async function duckDuckGoSearch(query: string, limit: number): Promise<WebSearchResponse> {
     const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const res = await withTimeout((signal) =>
-      deps.fetch(endpoint, {
+      fetchImpl(endpoint, {
         headers: {
           'user-agent': 'Mozilla/5.0 (compatible; ProteusAgent/1.0; +https://proteus.dev)',
           accept: 'text/html',
@@ -201,7 +206,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         throw err;
       }
       const res = await withTimeout((signal) =>
-        deps.fetch(parsed.toString(), {
+        fetchImpl(parsed.toString(), {
           headers: {
             // Markdown-for-Agents: Cloudflare-proxied zones return clean
             // markdown directly. Non-CF origins ignore it and serve HTML,
