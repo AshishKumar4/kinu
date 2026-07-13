@@ -70,8 +70,9 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const entries = buildChangelog(rt.storage.sql);
     const scaffold = entries.find((e) => e.kind === 'scaffold');
     expect(scaffold).toBeDefined();
-    expect(scaffold!.summary).toContain(`Proposed scaffold v${version}`);
-    expect(scaffold!.summary).toContain('shadow trial in progress');
+    expect(scaffold!.summary).toBe('I am testing an improvement to how I work');
+    expect(scaffold!.evidence).toContain(`Proposed scaffold v${version}`);
+    expect(scaffold!.evidence).toContain('shadow trial in progress');
     expect(scaffold!.evidence).toContain('1W-1L-0T');
     expect(scaffold!.evidence).toContain('win-rate 50%');
     expect(scaffold!.revert).toEqual({ type: 'scaffold_rollback', target: String(version) });
@@ -90,21 +91,72 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
                    VALUES ('fetch_and_summarize', 0.82, 5, ${Date.now()})`;
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
-    expect(entry.summary).toContain('Crafted tool fetch_and_summarize');
-    expect(entry.summary).toContain('Fetch a URL and summarize it');
-    expect(entry.evidence).toBe('EMA 0.82 over 5 uses');
+    expect(entry.summary).toBe('Created a tool: fetch and summarize');
+    expect(entry.evidence).toContain('Crafted tool fetch_and_summarize');
+    expect(entry.evidence).toContain('Fetch a URL and summarize it');
+    expect(entry.evidence).toContain('EMA 0.82 over 5 uses');
     expect(entry.revert).toEqual({ type: 'craft_retire', target: 'fetch_and_summarize' });
   });
 
-  test('fact entry shows confidence + source and is revertable', () => {
+  test('fact aggregate humanizes rows while retaining raw evidence and reverts', () => {
     const { rt, facts } = setup();
-    facts.upsert('deploy_target', 'foo.workers.dev', { confidence: 0.9, source: 'sleep_time_compute' });
+    facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'fact');
-    expect(entry.summary).toBe('Learned fact deploy_target = foo.workers.dev');
-    expect(entry.evidence).toContain('confidence 90%');
-    expect(entry.evidence).toContain('via sleep_time_compute');
-    expect(entry.revert).toEqual({ type: 'fact_forget', target: 'deploy_target' });
+    expect(entry.summary).toBe('Learned 1 thing about your environment');
+    expect(entry.items).toHaveLength(1);
+    expect(entry.items![0].id).toBe('fact:sandbox.npm_version');
+    expect(entry.items![0].summary).toBe('Your sandbox runs npm v10');
+    expect(entry.items![0].evidence).toContain('sandbox.npm_version = npm v10');
+    expect(entry.items![0].evidence).toContain('confidence 90%');
+    expect(entry.items![0].evidence).toContain('via sleep-time-compute');
+    expect(entry.items![0].revert).toEqual({ type: 'fact_forget', target: 'sandbox.npm_version' });
+    expect(entry.revert).toEqual({ type: 'fact_forget_many', targets: ['sandbox.npm_version'] });
+  });
+
+  test('groups all facts in the digest window into one aggregate card', () => {
+    const { rt, facts } = setup();
+    const now = Date.now();
+    facts.upsert('old.fact', 'outside');
+    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'old.fact'`;
+    facts.upsert('sandbox.npm_version', 'npm v10');
+    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 2000} WHERE key = 'sandbox.npm_version'`;
+    facts.upsert('project.deploy_target', 'example.workers.dev');
+    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 1000} WHERE key = 'project.deploy_target'`;
+
+    const [entry] = buildChangelog(rt.storage.sql, { since: now - 30_000 })
+      .filter((e) => e.kind === 'fact');
+    expect(entry.summary).toBe('Learned 2 things about your environment');
+    expect(entry.at).toBe(now - 1000);
+    expect(entry.items?.map((item) => item.id)).toEqual([
+      'fact:project.deploy_target',
+      'fact:sandbox.npm_version',
+    ]);
+  });
+
+  test('same-value re-observation keeps a stable id and does not refresh the digest', () => {
+    const { rt, facts } = setup();
+    facts.upsert('sandbox.npm_version', 'npm v10');
+    rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
+    const original = buildChangelog(rt.storage.sql)[0].items![0];
+
+    facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
+
+    expect(buildChangelog(rt.storage.sql)[0].items![0].id).toBe(original.id);
+    expect(buildChangelog(rt.storage.sql)[0].items![0].at).toBe(1000);
+    expect(buildChangelog(rt.storage.sql, { since: 1000 })).toEqual([]);
+  });
+
+  test('value change refreshes the stable fact entry', () => {
+    const { rt, facts } = setup();
+    facts.upsert('sandbox.npm_version', 'npm v9');
+    rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
+
+    facts.upsert('sandbox.npm_version', 'npm v10');
+
+    const [entry] = buildChangelog(rt.storage.sql, { since: 1000 });
+    expect(entry.items![0].id).toBe('fact:sandbox.npm_version');
+    expect(entry.items![0].summary).toBe('Your sandbox runs npm v10');
   });
 
   test('GEPA, replay, and outcome entries are informational (no revert)', () => {
@@ -135,13 +187,15 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const entries = buildChangelog(sql);
     const gepa = entries.filter((e) => e.kind === 'gepa');
     expect(gepa).toHaveLength(1);
-    expect(gepa[0].summary).toContain('found a better candidate');
+    expect(gepa[0].summary).toBe('Tuned my own instructions');
+    expect(gepa[0].evidence).toContain('found a better candidate');
     expect(gepa[0].evidence).toContain('3 iterations');
     expect(gepa[0].evidence).toContain('12 metric calls');
     expect(gepa[0].revert).toBeUndefined();
 
     const replay = entries.find((e) => e.kind === 'replay');
-    expect(replay!.summary).toContain('loss 0.25');
+    expect(replay!.summary).toContain('Self-test score');
+    expect(replay!.evidence).toContain('loss 0.25');
     expect(replay!.evidence).toContain('6 labeled turns');
     expect(replay!.revert).toBeUndefined();
 
@@ -166,9 +220,44 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'newer'`;
 
     const entries = buildChangelog(rt.storage.sql);
-    expect(entries[0].summary).toContain('newer');
-    expect(entries[1].summary).toContain('older');
+    expect(entries).toHaveLength(1);
+    expect(entries[0].items?.map((item) => item.summary)).toEqual([
+      'Your newer is b',
+      'Your older is a',
+    ]);
     expect(buildChangelog(rt.storage.sql, { limit: 1 })).toHaveLength(1);
+  });
+
+  test('humanizes scaffold promotion and replay score direction without losing raw detail', async () => {
+    const { rt } = setup();
+    const version = await seedScaffoldPending(rt);
+    for (const [index, winner] of (['pending', 'pending', 'pending', 'current'] as const).entries()) {
+      recordShadowEvaluation(rt.storage.sql, {
+        currentVersion: 0, pendingVersion: version, task: `trial-${index}`,
+        currentOutput: 'current', pendingOutput: 'pending',
+        judgeResult: { winner, rationale: 'evidence', currentScore: 0.5, pendingScore: 0.8 },
+      });
+    }
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
+    const now = Date.now();
+    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES ('rpl-old', ${now - 1000}, 4, 2, 2, 0.50, 0.50, 0, '[]')`;
+    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES ('rpl-new', ${now}, 4, 3, 1, 0.75, 0.25, ${version}, '[]')`;
+    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES ('rpl-decline', ${now + 1}, 4, 2, 2, 0.60, 0.40, ${version}, '[]')`;
+
+    const entries = buildChangelog(rt.storage.sql);
+    const scaffold = entries.find((entry) => entry.kind === 'scaffold')!;
+    expect(scaffold.summary).toBe('I improved how I work (won 3 of 4 trial runs)');
+    expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
+    expect(scaffold.evidence).toContain(RATIONALE);
+    const replay = entries.find((entry) => entry.id === 'replay:rpl-new')!;
+    expect(replay.summary).toBe('Self-test score improved to 75%');
+    expect(replay.evidence).toContain('loss 0.25');
+    expect(replay.evidence).toContain(`scaffold v${version}`);
+    expect(entries.find((entry) => entry.id === 'replay:rpl-decline')!.summary)
+      .toBe('Self-test score declined to 60%');
   });
 });
 
@@ -181,7 +270,7 @@ describe('unseen-count logic (the badge)', () => {
     facts.upsert('fresh_fact', 'y');
     rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'fresh_fact'`;
 
-    expect(countUnseenChangelog(rt.storage.sql, 0)).toBe(2);
+    expect(countUnseenChangelog(rt.storage.sql, 0)).toBe(1);
     expect(countUnseenChangelog(rt.storage.sql, now - 30_000)).toBe(1);
     expect(countUnseenChangelog(rt.storage.sql, now)).toBe(0);
   });
@@ -218,8 +307,12 @@ describe('renderChangelogText — the one text form', () => {
     expect(text).toContain('2 unseen');
     expect(text).toContain('  1. ');
     expect(text).toContain('  2. ');
-    expect(text).toContain('Learned fact k = v');
+    expect(text).toContain('Learned 1 thing about your environment');
+    expect(text).toContain('Your k is v');
     expect(text).toContain('revertable');
+    const factDetailLine = text.split('\n').find((line) => line.includes('confidence 70%'));
+    expect(factDetailLine).toBeDefined();
+    expect(factDetailLine).not.toContain('revertable');
     // The replay measurement line is NOT marked revertable.
     const replayLine = text.split('\n').find((l) => l.includes('confidence') === false && l.includes('labeled turns'));
     expect(replayLine).toBeDefined();
@@ -258,6 +351,44 @@ describe('reverts — real paths only', () => {
     expect(again.ok).toBe(false);
   });
 
+  test('stable child fact id resolves against a fresh aggregate digest', async () => {
+    const { rt, facts } = setup();
+    facts.upsert('sandbox.npm_version', 'npm v10');
+    const id = buildChangelog(rt.storage.sql).find((e) => e.kind === 'fact')!.items![0].id;
+    facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.95 });
+
+    const result = await revertChangelogEntryById({ rt, facts }, id);
+
+    expect(result.ok).toBe(true);
+    expect(facts.recall('sandbox.npm_version')).toBeNull();
+  });
+
+  test('aggregate fact id forgets every constituent fact', async () => {
+    const { rt, facts } = setup();
+    facts.upsert('editor', 'helix');
+    facts.upsert('shell', 'fish');
+    const aggregate = buildChangelog(rt.storage.sql).find((e) => e.kind === 'fact')!;
+
+    const result = await revertChangelogEntryById({ rt, facts }, aggregate.id);
+
+    expect(result).toEqual({ ok: true, detail: 'forgot 2 facts' });
+    expect(facts.all()).toEqual([]);
+  });
+
+  test('batch fact revert continues and reports partial failures', async () => {
+    const { rt, facts } = setup();
+    facts.upsert('present', true);
+
+    const result = await executeChangelogRevert({ rt, facts }, {
+      type: 'fact_forget_many', targets: ['missing', 'present'],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe('forgot 1 of 2 facts');
+    expect(result.error).toContain('missing: fact missing is already forgotten');
+    expect(facts.recall('present')).toBeNull();
+  });
+
   test('pending scaffold revert discards the trial through the decision machinery', async () => {
     const { rt, facts } = setup();
     const version = await seedScaffoldPending(rt);
@@ -283,7 +414,8 @@ describe('reverts — real paths only', () => {
 
     // The digest now shows the promotion as a revertable entry…
     const entry = buildChangelog(rt.storage.sql).find((e) => e.kind === 'scaffold')!;
-    expect(entry.summary).toContain(`Promoted scaffold v${version}`);
+    expect(entry.summary).toContain('I improved how I work');
+    expect(entry.evidence).toContain(`Promoted scaffold v${version}`);
     expect(entry.revert).toBeDefined();
 
     // …and reverting it by id restores the predecessor end-to-end.

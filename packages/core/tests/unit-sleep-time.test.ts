@@ -17,6 +17,23 @@ describe('Sleep-time compute', () => {
     expect(update!.decay).toEqual(['stale.fact']);
   });
 
+  test('prompt explicitly lists existing keys for exact reuse', async () => {
+    const judge = createScriptedLLM(['{"upserts":[],"decay":[]}']);
+    const currentFacts = Array.from({ length: 31 }, (_, index) => ({
+      key: `existing.key_${index}`,
+      value: index,
+      confidence: 1,
+    }));
+    await runSleepTimeCompute(judge, {
+      task: 'inspect runtime', output: 'done', toolCalls: [],
+      currentFacts,
+    });
+
+    expect(judge.prompts[0]).toContain('Existing fact keys (reuse these exact keys');
+    expect(judge.prompts[0]).toContain('existing.key_0');
+    expect(judge.prompts[0]).toContain('existing.key_30');
+  });
+
   test('returns null on unparseable response', async () => {
     const judge = createScriptedLLM(['No JSON here']);
     const update = await runSleepTimeCompute(judge, {
@@ -59,5 +76,51 @@ describe('Sleep-time compute', () => {
     expect(facts.recall('ok.1')?.value).toBe('fine');
     expect(facts.recall('ok.2')?.value).toBe(42);
     expect(facts.recall('bad')).toBeNull();
+  });
+
+  test('canonicalizes upsert keys before writing', () => {
+    const { facts } = createTestFactsStore();
+    const summary = applySleepTimeUpdate(facts, {
+      upserts: [{
+        key: '  Sandbox.NPM   Version  ', value: 'npm v10', confidence: 0.9, rationale: '',
+      }],
+      decay: [],
+    });
+
+    expect(summary.upserted).toBe(1);
+    expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
+    expect(facts.recall('  Sandbox.NPM   Version  ')).toBeNull();
+  });
+
+  test('same-value re-observation is not counted as an upsert or refreshed', () => {
+    const { facts, testSql } = createTestFactsStore();
+    facts.upsert('sandbox.npm_version', 'npm v10');
+    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+                WHERE key = 'sandbox.npm_version'`;
+
+    const summary = applySleepTimeUpdate(facts, {
+      upserts: [{ key: 'Sandbox.NPM_Version', value: 'npm v10', confidence: 0.95, rationale: '' }],
+      decay: [],
+    });
+
+    expect(summary.upserted).toBe(0);
+    expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBe(1000);
+    expect(facts.recall('sandbox.npm_version')?.confidence).toBe(0.95);
+  });
+
+  test('changed value is counted and refreshes the fact', () => {
+    const { facts, testSql } = createTestFactsStore();
+    facts.upsert('sandbox.npm_version', 'npm v9');
+    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+                WHERE key = 'sandbox.npm_version'`;
+
+    const summary = applySleepTimeUpdate(facts, {
+      upserts: [{ key: 'sandbox.npm_version', value: 'npm v10', confidence: 0.9, rationale: '' }],
+      decay: [],
+    });
+
+    expect(summary.upserted).toBe(1);
+    expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
+    expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
   });
 });

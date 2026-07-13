@@ -17,6 +17,8 @@ export interface Fact {
   lastObservedAt: number;
 }
 
+export type FactUpsertResult = 'created' | 'changed' | 'unchanged';
+
 export function initFactsTable(execRaw: (ddl: string) => void): void {
   execRaw(`
     CREATE TABLE IF NOT EXISTS agent_facts (
@@ -32,7 +34,7 @@ export function initFactsTable(execRaw: (ddl: string) => void): void {
 }
 
 export interface FactsStore {
-  upsert(key: string, value: unknown, opts?: { confidence?: number; source?: string }): void;
+  upsert(key: string, value: unknown, opts?: { confidence?: number; source?: string }): FactUpsertResult;
   recall(key: string): Fact | null;
   forget(key: string): void;
   recentTopK(k: number): Fact[];
@@ -66,15 +68,29 @@ export function createFactsStore(sql: SqlExecutor): FactsStore {
     upsert(key, value, opts = {}) {
       const conf = opts.confidence ?? 1;
       const src = opts.source ?? null;
-      const now = Date.now();
+      const valueJson = JSON.stringify(value);
+      if (valueJson === undefined) {
+        throw new TypeError('fact value must be JSON-serializable');
+      }
+      const existing = sql<{ value_json: string; last_observed_at: number }>`
+        SELECT value_json, last_observed_at FROM agent_facts WHERE key = ${key} LIMIT 1`[0];
+      if (existing?.value_json === valueJson) {
+        sql`UPDATE agent_facts SET
+              confidence = ${conf},
+              source = COALESCE(${src}, source)
+            WHERE key = ${key}`;
+        return 'unchanged';
+      }
+      const now = Math.max(Date.now(), (existing?.last_observed_at ?? -1) + 1);
       sql`
         INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
-        VALUES (${key}, ${JSON.stringify(value)}, ${conf}, ${src}, ${now})
+        VALUES (${key}, ${valueJson}, ${conf}, ${src}, ${now})
         ON CONFLICT(key) DO UPDATE SET
           value_json       = excluded.value_json,
           confidence       = excluded.confidence,
           source           = COALESCE(excluded.source, agent_facts.source),
           last_observed_at = excluded.last_observed_at`;
+      return existing ? 'changed' : 'created';
     },
     recall(key) {
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at

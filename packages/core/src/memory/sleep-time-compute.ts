@@ -49,6 +49,9 @@ Recent turn:
 Current facts in agent's world model:
 ${i.currentFacts.slice(0, 30).map(f => `  ${f.key} = ${typeof f.value === 'string' ? f.value : JSON.stringify(f.value)} (conf ${f.confidence.toFixed(2)})`).join('\n') || '  (none)'}
 
+Existing fact keys (reuse these exact keys when updating the same subject; do not mint variants):
+${i.currentFacts.map(f => `  ${f.key}`).join('\n') || '  (none)'}
+
 Decide:
 1. What new facts should be remembered from this turn? (user preferences,
    project state, dates, URLs, current configuration). Upsert with high
@@ -62,6 +65,10 @@ JSON shape:
   "decay": ["fact-key-1", "fact-key-2"]
 }
 ${jsonObjectOnlyInstruction()}`;
+
+function normalizeFactKey(key: string): string {
+  return key.trim().toLowerCase().replace(/\s+/g, '_');
+}
 
 export async function runSleepTimeCompute(
   judge: LLM,
@@ -91,16 +98,25 @@ export function applySleepTimeUpdate(
   // Pre-flight: drop any upserts whose value can't be serialized. Without
   // this, the first bad value crashes the loop and leaves the store in a
   // partial state (some upserted, the rest unprocessed).
-  const safeUpserts = update.upserts.filter((u) => {
-    if (typeof u.key !== 'string' || u.key.length === 0) return false;
-    try { JSON.stringify(u.value); return true; }
-    catch { return false; }
+  const safeUpserts = update.upserts.flatMap((u) => {
+    if (typeof u.key !== 'string') return [];
+    const key = normalizeFactKey(u.key);
+    if (key.length === 0) return [];
+    try {
+      if (JSON.stringify(u.value) === undefined) return [];
+      return [{ ...u, key }];
+    } catch {
+      return [];
+    }
   });
   const skipped = update.upserts.length - safeUpserts.length;
   let upserted = 0;
   for (const u of safeUpserts) {
-    facts.upsert(u.key, u.value, { confidence: u.confidence, source: 'sleep-time-compute' });
-    upserted++;
+    const result = facts.upsert(u.key, u.value, {
+      confidence: u.confidence,
+      source: 'sleep-time-compute',
+    });
+    if (result !== 'unchanged') upserted++;
   }
   // Decay = re-upsert with lower confidence (preserves value, weakens belief).
   let decayed = 0;
