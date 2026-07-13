@@ -21,7 +21,7 @@ import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
 import {
   createCompactionExtension, createVfsTranscriptStore,
-  createCompactionStateStore, initCompactionStateTable,
+  createCompactionStateStore, initCompactionStateTable, createModelSummarizer,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
@@ -41,7 +41,7 @@ import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { buildCfWebSearchProvider } from "./lib/web-provider.js";
-import { contextWindowForModel, catalogContextWindow } from "./lib/context-window.js";
+import { contextWindowForModel } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
@@ -152,7 +152,9 @@ import {
   type TeamToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
-  parseModelSpec,
+  parseModelSpec, catalogModelInfo,
+  // Model-capability attachment sanitization (the PDF-400 fix)
+  acceptedMediaForModel, sanitizeAttachmentsForModel, type MediaModality, type ModelInfo,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
@@ -489,7 +491,7 @@ export class OrchestratorAgent extends Think<Env> {
         plans: this.compactionState.plans,
         logger,
       },
-      summarize: (prompt) => generateText({ model: this.getModel(), prompt }).then((r) => r.text),
+      summarize: createModelSummarizer(() => this.getModel()),
       onOutcome: ({ outcome }) => {
         // The model-visible stream changed shape — a NEW plan rewrote it
         // ('planned') or a cached plan was discarded after a history rewrite
@@ -1737,30 +1739,51 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Catalog-reported context window for the resolved spec, cached per spec.
-   *  Arms an async catalog lookup on first sight of a spec; until (and unless)
-   *  it lands, the static fallback table answers. */
-  private _catalogWindow: { spec: string; window: number | null } | null = null;
+  /** Catalog ModelInfo for the resolved spec, cached per spec. Arms an async
+   *  catalog lookup on first sight of a spec; until (and unless) it lands,
+   *  static fallbacks answer (window table / conservative media policy). */
+  private _catalogModel: { spec: string; info: ModelInfo | null } | null = null;
+  private catalogInfoForSession(): ModelInfo | null {
+    const spec = this.effectiveModelSpec();
+    if (this._catalogModel?.spec !== spec) {
+      this._catalogModel = { spec, info: null };
+      void this.lookupCatalogModel(spec);
+    }
+    return this._catalogModel.info;
+  }
+
   /** The resolved model's context window: catalog-reported when the async
    *  lookup has landed, else the static fallback table. Feeds the compaction
    *  extension through the transformContext seam. */
   private sessionContextWindow(): number {
-    const spec = this.effectiveModelSpec();
-    if (this._catalogWindow?.spec !== spec) {
-      this._catalogWindow = { spec, window: null };
-      void this.lookupCatalogWindow(spec);
-    }
-    return this._catalogWindow.window ?? contextWindowForModel(spec);
+    return this.catalogInfoForSession()?.contextWindow ?? contextWindowForModel(this.effectiveModelSpec());
   }
 
-  private async lookupCatalogWindow(spec: string): Promise<void> {
+  /** Media kinds the next turn's model request can carry — the attachment
+   *  sanitizer's policy input. Provider class caps the wire format (the
+   *  openai-compatible chat schema is text+image ONLY — the proven Workers AI
+   *  PDF 400); the catalog's input modalities narrow it per model once the
+   *  async lookup lands. Until then the conservative default answers, which
+   *  only errs toward sanitizing (never toward a rejected request). */
+  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
+    const info = this.catalogInfoForSession();
+    const spec = this.effectiveModelSpec();
+    let provider: string | undefined;
+    try { provider = parseModelSpec(spec).provider; } catch { /* pre-claim empty spec */ }
+    return acceptedMediaForModel({
+      ...(provider !== undefined ? { provider } : {}),
+      ...(info?.inputModalities ? { catalogInputModalities: info.inputModalities } : {}),
+    });
+  }
+
+  private async lookupCatalogModel(spec: string): Promise<void> {
     if (!spec) return;
     try {
       const { provider, modelId } = parseModelSpec(spec);
       const reg = this.providerRegistry();
-      const window = await catalogContextWindow(reg.registry.get(provider), reg.deps, modelId);
-      if (window && this._catalogWindow?.spec === spec) this._catalogWindow.window = window;
-    } catch { /* catalog unavailable — the static fallback table stays authoritative */ }
+      const info = await catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
+      if (info && this._catalogModel?.spec === spec) this._catalogModel.info = info;
+    } catch { /* catalog unavailable — static fallbacks stay authoritative */ }
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -1953,7 +1976,21 @@ export class OrchestratorAgent extends Think<Env> {
     this.recordSystemPromptHash(systemOverride);
 
     const cfg: TurnConfig = { system: systemOverride };
-    const baseMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+
+    // Model-capability attachment sanitization — the WHOLE model-visible
+    // history, every turn: file/media parts the resolved model cannot accept
+    // become content-addressed VFS references (core attachment-sanitizer).
+    // Deterministic and byte-stable, it heals already-poisoned transcripts
+    // without ever touching the persisted messages. It runs BEFORE the
+    // extension transform so compaction sees sanitized history, and BEFORE
+    // the ledger weave so the frozen blocks freeze over sanitized messages —
+    // the ordering keeps ledger indices stable because sanitization is
+    // per-part in-place replacement: the message COUNT never changes.
+    const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+    const baseMessages = await sanitizeAttachmentsForModel(rawMessages, {
+      accepts: this.sessionAcceptedMedia(),
+      vfs: this.rt.storage.vfs,
+    });
 
     // ── Extension seam: turn start + the awaited context transform ─────
     // The same ExtensionHost contract runChat fires on the CLI. The
@@ -2102,7 +2139,11 @@ export class OrchestratorAgent extends Think<Env> {
     const programmaticUserMessage = this._activeProgrammaticUserMessage;
     this._activeDrainTurnId = null;
     this._activeProgrammaticUserMessage = null;
-    this.logActivity("response_complete", result.status);
+    // Persist the provider error TEXT, not just the status — Think keeps only
+    // the LAST terminal error, which the next failure overwrites, so this row
+    // (and the run_end event below) is the durable evidence trail.
+    const errorText = result.error?.slice(0, 500);
+    this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status);
     // Clear the in-flight flag once the turn is durably completed — forkAgent
     // is allowed again from here forward. Evolution (engine.reviewTurnDetached)
     // runs fire-and-forget and does NOT extend the busy window.
@@ -2140,6 +2181,7 @@ export class OrchestratorAgent extends Think<Env> {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'run_end',
           reason: result.status,
+          ...(errorText ? { error: errorText } : {}),
         });
       }
     } catch (err) {

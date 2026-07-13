@@ -228,9 +228,16 @@ export {
   type AgentsMdFile,
 } from './prompting/agents-md.js';
 export {
+  acceptedMediaForModel,
+  sanitizeAttachmentsForModel,
+  type AttachmentPolicy,
+  type MediaModality,
+} from './prompting/attachment-sanitizer.js';
+export {
   EphemeralContextLedger,
   executorAvailabilityLabel,
   fnv1a64,
+  fnv1a64Bytes,
   renderSystemStateBlock,
   renderTurnLocalContext,
   turnLocalContextMessage,

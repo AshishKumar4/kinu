@@ -136,6 +136,13 @@ export function useProteus(agentId?: string) {
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
+  // Chat-turn error — the turn failed (provider error, stream break) and the
+  // error card in the thread shows the honest body. Fed by BOTH channels a
+  // terminal error can arrive on: useChat's live stream error, and the
+  // on-connect `cf_agent_use_chat_response` replay frame (whose request id is
+  // no longer active, so the ws transport drops it — the reason a reload used
+  // to show nothing). Cleared on the next send.
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -162,6 +169,12 @@ export function useProteus(agentId?: string) {
             setAgentStatus((prev) => prev ? { ...prev, displayName: data.displayName } : prev);
           }
           window.dispatchEvent(new CustomEvent("proteus:workspace-renamed"));
+        } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
+          // Terminal-error frame. During a live stream the transport also
+          // surfaces it as useChat's `error`; on connect the server REPLAYS
+          // the last terminal error with a stale request id the transport
+          // drops — this handler is the only place that frame is seen.
+          setChatError(typeof data.body === "string" && data.body.trim() ? data.body : "The turn failed with an unknown error.");
         }
       } catch { /* not our JSON */ }
     }, []),
@@ -173,12 +186,20 @@ export function useProteus(agentId?: string) {
     clearHistory,
     stop,
     isStreaming,
+    error: streamError,
   } = useAgentChat({
     agent,
     // Throttle UI updates during high-frequency token deltas (50ms ≈ 20fps).
     // The chat library forwards this option to @ai-sdk's useChat.
     experimental_throttle: 50,
   } as Parameters<typeof useAgentChat>[0] & { experimental_throttle: number });
+
+  // The live-stream error channel: the ws transport turns an in-band
+  // `error:true` frame into useChat's `error` state — fold it into the same
+  // exposed chat-error surface as the on-connect replay.
+  useEffect(() => {
+    if (streamError) setChatError(streamError.message || String(streamError));
+  }, [streamError]);
 
   // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
   // The framework's resume effect fires once; partysocket reconnects don't
@@ -414,6 +435,7 @@ export function useProteus(agentId?: string) {
     setRunTimeline([]);
     setPinnedPorts([]);
     setError(null);
+    setChatError(null);
   }, [agentId]);
 
   useEffect(() => {
@@ -432,8 +454,18 @@ export function useProteus(agentId?: string) {
       ...(content ? [{ type: "text" as const, text: content }] : []),
     ];
     if (parts.length === 0) return;
+    setChatError(null);
     sendMessage({ role: "user", parts });
   }, [sendMessage]);
+
+  // Retry affordance for the error card: re-send the last user message's
+  // parts as a fresh turn (the failed turn persisted nothing to answer it).
+  const retryLastMessage = useCallback(() => {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    setChatError(null);
+    sendMessage({ role: "user", parts: lastUser.parts });
+  }, [messages, sendMessage]);
 
   const searchMemory = useCallback((q: string) => {
     if (!q.trim()) {
@@ -517,6 +549,11 @@ export function useProteus(agentId?: string) {
     isStreaming,
     connectionStatus,
     error,
+    /** The last chat turn's terminal error (live stream error or the
+     *  on-connect replay) — rendered as an error card in the thread. */
+    chatError,
+    clearChatError: () => setChatError(null),
+    retryLastMessage,
     agentStatus,
     tools,
     memory,

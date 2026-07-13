@@ -228,3 +228,33 @@ export function fnv1a64(text: string): string {
     v0.toString(16).padStart(4, '0')
   );
 }
+
+/** FNV-1a 64-bit over raw bytes — the attachment sanitizer's content address.
+ *  Same limb math as {@link fnv1a64}, XORing the byte instead of the UTF-16
+ *  code unit, so identical payload bytes hash identically no matter which
+ *  carrier (data URL, base64 string, Uint8Array) delivered them. Kept as its
+ *  own loop rather than a shared per-element callback: both hashes are
+ *  hot paths over megabyte inputs. */
+export function fnv1a64Bytes(data: Uint8Array): string {
+  let v0 = 0x2325, v1 = 0x8422, v2 = 0x9ce4, v3 = 0xcbf2;
+  for (let i = 0; i < data.length; i++) {
+    v0 ^= data[i]!;
+    const t0 = v0 * 0x1b3;
+    let t1 = v1 * 0x1b3;
+    let t2 = v2 * 0x1b3 + ((v0 << 8) & 0xffffff);
+    let t3 = v3 * 0x1b3 + ((v1 << 8) & 0xffffff);
+    t1 += t0 >>> 16;
+    t2 += t1 >>> 16;
+    t3 += t2 >>> 16;
+    v0 = t0 & 0xffff;
+    v1 = t1 & 0xffff;
+    v2 = t2 & 0xffff;
+    v3 = t3 & 0xffff;
+  }
+  return (
+    v3.toString(16).padStart(4, '0') +
+    v2.toString(16).padStart(4, '0') +
+    v1.toString(16).padStart(4, '0') +
+    v0.toString(16).padStart(4, '0')
+  );
+}

@@ -84,6 +84,18 @@ describe('RunEventRecorder.read', () => {
     expect(recorder.read('run-1', { limit: 5 }).length).toBe(5);
   });
 
+  test('run_end round-trips the terminal error text (the durable evidence trail)', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
+    recorder.emit('run-1', { type: 'run_end', reason: 'error', error: 'Bad Request: content parts must be text or image_url' });
+
+    const events = recorder.read('run-1', { types: ['run_end'] });
+    expect(events.length).toBe(1);
+    const runEnd = events[0] as Extract<RunEvent, { type: 'run_end' }>;
+    expect(runEnd.reason).toBe('error');
+    expect(runEnd.error).toBe('Bad Request: content parts must be text or image_url');
+  });
+
   test('honors types filter', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a' });

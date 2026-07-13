@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@proteus/core": "workspace:*"
+    "@proteus/core": "workspace:*",
+    "ai": "^6.0.182"
   },
   "scripts": {
     "check": "tsc --noEmit"

@@ -24,3 +24,4 @@ export {
   createCompactionStateStore,
   type CompactionStateStore,
 } from './stores.js';
+export { createModelSummarizer, SUMMARIZER_TIMEOUT_MS } from './summarizer.js';

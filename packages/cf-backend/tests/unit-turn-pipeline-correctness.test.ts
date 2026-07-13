@@ -85,6 +85,38 @@ describe('turn-pipeline correctness wiring', () => {
     expect(onStart).toContain('this.orch.scheduleDrain()');
   });
 
+  test('attachment sanitization runs on the whole history BEFORE the extension transform and the ledger weave', () => {
+    const beforeTurn = source.slice(
+      source.indexOf('async beforeTurn(ctx: TurnContext)'),
+      source.indexOf('beforeStep(ctx: PrepareStepContext)'),
+    );
+    const sanitize = beforeTurn.indexOf('await sanitizeAttachmentsForModel(rawMessages');
+    const turnStart = beforeTurn.indexOf('await this.extensions.emitTurnStart');
+    const transform = beforeTurn.indexOf('await this.extensions.runTransformContext');
+    const weave = beforeTurn.indexOf('this.ephemeralLedger.weave');
+    expect(sanitize).toBeGreaterThan(-1);
+    expect(turnStart).toBeGreaterThan(sanitize);
+    expect(transform).toBeGreaterThan(turnStart);
+    expect(weave).toBeGreaterThan(transform);
+    // The transform and the weave both read the SANITIZED baseMessages.
+    expect(beforeTurn).toContain('messages: baseMessages');
+    expect(beforeTurn).toContain('weave(transformed ?? baseMessages');
+    expect(beforeTurn).toContain('accepts: this.sessionAcceptedMedia()');
+  });
+
+  test('onChatResponse persists the provider error text into the activity log and the run_end event', () => {
+    const hook = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
+    const errorCapture = hook.indexOf('const errorText = result.error?.slice(0, 500)');
+    const logRow = hook.indexOf('this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status)');
+    const runEnd = hook.indexOf("...(errorText ? { error: errorText } : {})");
+    expect(errorCapture).toBeGreaterThan(-1);
+    expect(logRow).toBeGreaterThan(errorCapture);
+    expect(runEnd).toBeGreaterThan(logRow);
+    // The run_end emit itself carries the error.
+    const runEndEmit = hook.slice(hook.indexOf("type: 'run_end'"), hook.indexOf("console.warn('[proteus] event emit failed at onChatResponse"));
+    expect(runEndEmit).toContain('error: errorText');
+  });
+
   test('pickAlternateTake returns false unless the awaited enqueue actually queues', () => {
     const pick = source.slice(
       source.indexOf('async pickAlternateTake('),

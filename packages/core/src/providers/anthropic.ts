@@ -18,9 +18,9 @@ export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000 },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000 },
-  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'], contextWindow: 200_000 },
+  { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'] },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'] },
+  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'], contextWindow: 200_000, inputModalities: ['text', 'image', 'pdf'] },
 ];
 
 const PREFERRED_MODEL_IDS = [

@@ -61,6 +61,7 @@ describe('provider model catalogs', () => {
       label: 'GPT-5.5',
       capabilities: ['streaming', 'tools', 'reasoning', 'vision'],
       contextWindow: 1_050_000,
+      inputModalities: ['text', 'image'],
     }]);
   });
 
@@ -93,6 +94,7 @@ describe('provider model catalogs', () => {
       label: 'GPT-5.5',
       capabilities: ['tools', 'streaming', 'reasoning', 'vision'],
       contextWindow: 272_000,
+      inputModalities: ['text', 'image'],
     }]);
   });
 });

@@ -15,6 +15,7 @@ import {
 } from './prompting/model-profile.js';
 import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
 import { composePrepareStep } from './prompting/prepare-step.js';
+import { sanitizeAttachmentsForModel, type AttachmentPolicy } from './prompting/attachment-sanitizer.js';
 import { contextWindowForModel } from './context-window.js';
 import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
@@ -45,6 +46,12 @@ export interface ChatOptions {
    *  and never treated as durable history. */
   turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
+  /** Model-capability attachment policy: history file/media parts the
+   *  resolved model cannot accept are replaced (VFS reference / inline text)
+   *  BEFORE the transform seam, so compaction sees sanitized history and the
+   *  weave freezes over it. Per-part in-place replacement — message count
+   *  never changes, so downstream indices hold. */
+  attachments?: AttachmentPolicy;
   modelContext?: PromptModelContext;
   /** Provider-reported prompt tokens of the previous turn's final request —
    *  the measured trigger signal handed to transformContext (chars/4
@@ -88,7 +95,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number; outputTokens?: number }> = [];
   let stepCount = 0;
 
-  await extensions?.emitTurnStart({ system: opts.system, history: opts.history });
+  // Model-capability attachment sanitization runs FIRST, on the whole
+  // model-visible history — the same ordering the cf backend's beforeTurn
+  // applies — so the transform seam (compaction) and the ledger weave both
+  // operate over sanitized messages. Never mutates the caller's history.
+  const history = opts.attachments
+    ? await sanitizeAttachmentsForModel(opts.history, opts.attachments)
+    : opts.history;
+
+  await extensions?.emitTurnStart({ system: opts.system, history });
 
   // Awaited context-transform seam (the compaction-plugin hook): fires once
   // per turn assembly, on the DURABLE history only — the ephemeral ledger
@@ -96,7 +111,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // never sees or persists them.
   const transformed = await extensions?.runTransformContext({
     sessionKey: opts.cache?.sessionKey ?? '',
-    messages: opts.history,
+    messages: history,
     system: opts.system,
     contextWindow: opts.modelContext?.contextWindow
       ?? contextWindowForModel(opts.modelContext?.id ?? ''),
@@ -105,7 +120,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       : {}),
     trigger: 'auto',
   });
-  const durable = transformed ?? opts.history;
+  const durable = transformed ?? history;
   const woven = opts.systemState
     ? opts.systemState.ledger.weave(durable, opts.systemState.context)
     : durable;

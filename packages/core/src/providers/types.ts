@@ -18,7 +18,17 @@ export interface ModelInfo {
   label?: string;
   capabilities?: ModelCapability[];
   contextWindow?: number;
+  /** Input modalities the model itself accepts (models.dev vocabulary).
+   *  Absent when the catalog doesn't know — consumers fall back to a
+   *  conservative provider-class default (attachment-sanitizer.ts). */
+  inputModalities?: ModelInputModality[];
 }
+
+/** The input-modality vocabulary (models.dev `modalities.input`). Feeds the
+ *  attachment sanitizer's capability policy; a runtime const so catalog
+ *  responses can be narrowed without casts. */
+export const MODEL_INPUT_MODALITIES = ['text', 'image', 'pdf', 'audio', 'video'] as const;
+export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
 /** The one capability vocabulary — provider catalogs populate it, prompt
  *  shaping (prompting/model-profile.ts) consumes it. A runtime const so

@@ -1,7 +1,7 @@
 // Shared provider internals: the auth-injecting fetch wrapper used by the
 // simple providers (codex keeps its richer 401-refresh/WAF variant) and the
 // small parse helpers the catalog adapters share.
-import type { AuthResolution, ModelInfo, ProviderDeps } from './types.js';
+import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
 
 export interface AuthedFetchOptions {
@@ -68,7 +68,27 @@ export function cloneModelInfos(models: readonly ModelInfo[] | undefined): Model
   return (models ?? []).map((model) => ({
     ...model,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
+    ...(model.inputModalities ? { inputModalities: [...model.inputModalities] } : {}),
   }));
+}
+
+/** One model's catalog entry from a provider's listModels, or null when the
+ *  provider/model is unknown or the catalog is unreachable. The catalog is
+ *  the source of truth for per-model metadata — context window AND input
+ *  modalities — so callers prefer it over static fallbacks when it resolves.
+ *  Shared by the cf orchestrator's per-spec lookup and the CLI resolver. */
+export async function catalogModelInfo(
+  provider: Pick<ModelProvider, 'listModels'> | undefined,
+  deps: ProviderDeps,
+  modelId: string,
+): Promise<ModelInfo | null> {
+  if (!provider) return null;
+  try {
+    const models = await provider.listModels(deps);
+    return models.find((m) => m.id === modelId) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function nonEmptyString(value: unknown): string | undefined {

@@ -43,6 +43,38 @@ describe('createLocalModelResolver', () => {
       .toBe(262_144);
   });
 
+  test('modelInfo resolves one spec to its catalog entry with input modalities', async () => {
+    const resolver = createLocalModelResolver({
+      llm: {
+        name: 'workers-ai',
+        baseURL: 'https://gateway.example/v1',
+        headers: { Authorization: 'Bearer cf-test' },
+        model: '@cf/zai-org/glm-5.2',
+      },
+      credentials: {},
+      fetch: async () => Response.json({
+        'cloudflare-workers-ai': {
+          models: {
+            '@cf/zai-org/glm-5.2': {
+              id: '@cf/zai-org/glm-5.2',
+              name: 'GLM 5.2',
+              tool_call: true,
+              modalities: { input: ['text'] },
+              limit: { context: 200_000 },
+            },
+          },
+        },
+      }),
+    });
+
+    // The attachment sanitizer's capability source: a text-only model reports
+    // no media modalities, so PDFs (and images) get the VFS treatment.
+    const info = await resolver.modelInfo('workers-ai/@cf/zai-org/glm-5.2');
+    expect(info?.inputModalities).toEqual(['text']);
+    expect(info?.contextWindow).toBe(200_000);
+    expect(await resolver.modelInfo('workers-ai/@cf/unknown/model')).toBeNull();
+  });
+
   test('exposes local direct-provider credentials through the shared provider registry', async () => {
     const resolver = createLocalModelResolver({
       llm: {

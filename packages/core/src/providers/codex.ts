@@ -14,7 +14,8 @@
 // Workers egress is CF data-center IPs — runtime probe needed.
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from './types.js';
+import type { ModelProvider, ModelInfo, ModelInputModality } from './types.js';
+import { MODEL_INPUT_MODALITIES } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
 import { authCacheKey, cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
 
@@ -173,11 +174,14 @@ function parseCodexModels(body: unknown): ModelInfo[] {
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
     if ((row.supported_reasoning_levels?.length ?? 0) > 0) capabilities.push('reasoning');
     if (row.input_modalities?.includes('image')) capabilities.push('vision');
+    const inputModalities = (row.input_modalities ?? [])
+      .filter((m): m is ModelInputModality => (MODEL_INPUT_MODALITIES as readonly string[]).includes(m));
     models.push({
       id,
       label: nonEmptyString(row.display_name) ?? id,
       capabilities,
       contextWindow: positiveInteger(row.context_window) ?? positiveInteger(row.max_context_window),
+      ...(inputModalities.length > 0 ? { inputModalities } : {}),
       priority: typeof row.priority === 'number' ? row.priority : 0,
     });
   }

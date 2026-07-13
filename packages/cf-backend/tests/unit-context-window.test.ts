@@ -1,9 +1,9 @@
 // Per-model context windows — the static fallback table + the catalog lookup
 // that feed the compaction extension's transformContext trigger.
 import { describe, test, expect } from "bun:test";
-import { contextWindowForModel, catalogContextWindow } from "../src/lib/context-window";
+import { contextWindowForModel } from "../src/lib/context-window";
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import type { ProviderDeps } from "@proteus/core";
+import { catalogModelInfo, type ProviderDeps } from "@proteus/core";
 
 describe("contextWindowForModel", () => {
   test("matches known model families on their spec", () => {
@@ -39,26 +39,26 @@ describe("contextWindowForModel", () => {
   });
 });
 
-describe("catalogContextWindow", () => {
+describe("catalogModelInfo", () => {
   const deps = {} as ProviderDeps;
 
-  test("returns the catalog window for a known model id", async () => {
+  test("returns the catalog entry (window + input modalities) for a known model id", async () => {
     const provider = {
       listModels: async () => [
-        { id: "@cf/moonshotai/kimi-k2.6", contextWindow: 262_144 },
+        { id: "@cf/moonshotai/kimi-k2.6", contextWindow: 262_144, inputModalities: ["text", "image"] as const },
         { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000 },
       ],
     };
-    expect(await catalogContextWindow(provider, deps, "@cf/moonshotai/kimi-k2.6")).toBe(262_144);
+    const info = await catalogModelInfo(provider, deps, "@cf/moonshotai/kimi-k2.6");
+    expect(info?.contextWindow).toBe(262_144);
+    expect(info?.inputModalities).toEqual(["text", "image"]);
   });
 
-  test("returns null for unknown providers, unknown models, missing windows, and catalog failures", async () => {
-    expect(await catalogContextWindow(undefined, deps, "x")).toBeNull();
+  test("returns null for unknown providers, unknown models, and catalog failures", async () => {
+    expect(await catalogModelInfo(undefined, deps, "x")).toBeNull();
     const noMatch = { listModels: async () => [{ id: "other" }] };
-    expect(await catalogContextWindow(noMatch, deps, "x")).toBeNull();
-    const noWindow = { listModels: async () => [{ id: "x" }] };
-    expect(await catalogContextWindow(noWindow, deps, "x")).toBeNull();
+    expect(await catalogModelInfo(noMatch, deps, "x")).toBeNull();
     const throws = { listModels: async () => { throw new Error("offline"); } };
-    expect(await catalogContextWindow(throws, deps, "x")).toBeNull();
+    expect(await catalogModelInfo(throws, deps, "x")).toBeNull();
   });
 });

@@ -8,11 +8,13 @@ import {
   createCodexOAuthClient,
   createAnthropicProvider,
   createCodexProvider,
+  catalogModelInfo,
   createOpenAICompatProvider,
   createOpenAIProvider,
   createOpenRouterProvider,
   createProviderRegistry,
   listModelsDevProviderModels,
+  parseModelSpec,
   type AuthResolution,
   type AuthResolver,
   type ModelCapability,
@@ -66,6 +68,10 @@ export interface LocalModelResolver {
   resolveModel(specOrNull?: string | null): LanguageModel;
   listProviders(): Promise<ProviderInfo[]>;
   listModels(): Promise<Array<ModelInfo & { provider: string }>>;
+  /** One spec's catalog entry (provider listModels lookup) — per-model
+   *  metadata like input modalities for the attachment sanitizer. Null when
+   *  the provider/model is unknown or the catalog is unreachable. */
+  modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -237,6 +243,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     listModels() {
       return registry.listAllModels(deps);
+    },
+    async modelInfo(specOrNull) {
+      const spec = normalizeSpecSync(specOrNull);
+      const { provider, modelId } = parseModelSpec(spec);
+      return catalogModelInfo(registry.get(provider), deps, modelId);
     },
     getAuth: deps.getAuth,
   };

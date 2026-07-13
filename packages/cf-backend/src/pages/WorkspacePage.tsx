@@ -302,6 +302,36 @@ function DeviceConsentCard({ consent, onResolve }: {
   );
 }
 
+/** Terminal chat error — the turn failed (provider error, stream break) and
+ *  produced no visible answer. Shows the honest error body with a retry
+ *  affordance; the hook clears it on the next send. */
+function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
+  message: string;
+  streaming: boolean;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rounded-xl border p-3 animate-fade-in p-elevated" style={{ borderColor: "var(--c-danger)" }}>
+      <div className="flex items-start gap-2">
+        <WarningCircleIcon size={16} className="p-danger shrink-0 mt-0.5" weight="fill" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs p-text font-medium">The last turn failed</div>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-2.5 justify-end">
+        <button onClick={onDismiss}
+          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
+        <button onClick={onRetry} disabled={streaming}
+          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
+          <ArrowsClockwiseIcon size={11} />Retry last message
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** A background task returning into the conversation — rendered as a centered
  *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status }: { kind: string; status: string }) {
@@ -1021,6 +1051,14 @@ export default function WorkspacePage() {
                   onDismiss={() => state.dismissBranchRun(run.branchId)}
                 />
               ))}
+              {state.chatError && (
+                <ChatErrorCard
+                  message={state.chatError}
+                  streaming={state.isStreaming}
+                  onRetry={state.retryLastMessage}
+                  onDismiss={state.clearChatError}
+                />
+              )}
             </div>
             </ErrorBoundary>
 

@@ -12,10 +12,10 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import { generateText, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
 import {
   createCompactionExtension, createVfsTranscriptStore,
-  createCompactionStateStore, initCompactionStateTable,
+  createCompactionStateStore, initCompactionStateTable, createModelSummarizer,
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
@@ -46,6 +46,7 @@ import {
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
+  acceptedMediaForModel, type MediaModality, type ModelInputModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -305,8 +306,7 @@ export class LocalAgentSession implements BackendHost {
           error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
         },
       },
-      summarize: (prompt) =>
-        generateText({ model: this.ensureModelState(), prompt }).then((r) => r.text),
+      summarize: createModelSummarizer(() => this.ensureModelState()),
       onOutcome: ({ outcome }) => {
         // Fires inside runTransformContext, BEFORE runChat's ledger weave —
         // a fresh plan ('planned') or a discarded one ('invalidated')
@@ -979,6 +979,11 @@ export class LocalAgentSession implements BackendHost {
         modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
         system: systemPrompt,
         history: this.history,
+        // Model-capability attachment sanitization — runChat applies it to
+        // the whole history BEFORE the transform seam and the ledger weave
+        // (same ordering as the DO's beforeTurn); this.history itself is
+        // never mutated.
+        attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
         systemState,
         turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
         tools: turnTools,
@@ -1411,6 +1416,37 @@ export class LocalAgentSession implements BackendHost {
     const s = (spec ?? '').trim();
     if (!s || s === this.fallbackModelSpec) return this.fallbackModelSpec;
     throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
+  }
+
+  /** Media the active model request can carry — the attachment sanitizer's
+   *  policy input, mirroring the DO's cached non-blocking catalog lookup:
+   *  the provider-class ceiling answers immediately (conservative — errs
+   *  toward sanitizing, never toward a rejected request) and the catalog's
+   *  per-model input modalities narrow it once the async lookup lands. */
+  private _mediaAcceptance: { spec: string; catalogModalities: ModelInputModality[] | null } | null = null;
+  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
+    const spec = this.cachedModelSpec ?? this.fallbackModelSpec;
+    if (this._mediaAcceptance?.spec !== spec) {
+      this._mediaAcceptance = { spec, catalogModalities: null };
+      void this.lookupInputModalities(spec);
+    }
+    let provider: string | undefined;
+    try { provider = parseModelSpec(spec).provider; } catch { /* bare fallback spec */ }
+    const catalog = this._mediaAcceptance.catalogModalities;
+    return acceptedMediaForModel({
+      ...(provider !== undefined ? { provider } : {}),
+      ...(catalog ? { catalogInputModalities: catalog } : {}),
+    });
+  }
+
+  private async lookupInputModalities(spec: string): Promise<void> {
+    if (!this.modelResolver) return;
+    try {
+      const info = await this.modelResolver.modelInfo(spec);
+      if (info?.inputModalities && this._mediaAcceptance?.spec === spec) {
+        this._mediaAcceptance.catalogModalities = info.inputModalities;
+      }
+    } catch { /* catalog unavailable — the conservative default stays */ }
   }
 
   private ensureModelState(): LanguageModel {

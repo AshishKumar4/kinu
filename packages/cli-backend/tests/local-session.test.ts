@@ -216,6 +216,53 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
   });
 
+  test('a PDF the model cannot accept is sanitized to a VFS reference before the model sees it', async () => {
+    // The production P0: Workers AI's chat schema rejects type:"file" parts,
+    // so an attached PDF 400s every turn forever. The sanitizer replaces the
+    // part with a content-addressed VFS path the agent reads back with its
+    // file tools — and it must run on EVERY turn's assembly, healing the
+    // already-poisoned durable history.
+    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 9, 8, 7]);
+    const captures: ModelMessage[][] = [];
+    const { rt, session } = setup('reading it', historyCapturingModel('reading it', (messages) => { captures.push(messages); }));
+
+    await session.send({
+      text: 'here is my resume',
+      files: [{
+        filename: 'resume.pdf',
+        mediaType: 'application/pdf',
+        url: `data:application/pdf;base64,${btoa(String.fromCharCode(...pdfBytes))}`,
+      }],
+    });
+
+    // No file part survives to the model request.
+    const observed = captures[0]!;
+    const fileParts = observed.flatMap((m) =>
+      Array.isArray(m.content) ? (m.content as Array<{ type?: string }>).filter((p) => p?.type === 'file') : []);
+    expect(fileParts).toHaveLength(0);
+
+    // The replacement text carries the content-addressed path…
+    const referenced = observed.find((m) =>
+      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+    expect(referenced).toBeDefined();
+    const referencedJson = JSON.stringify(referenced!.content);
+    expect(referencedJson).toContain('resume.pdf');
+    const path = /saved to (\S+) — read/.exec(referencedJson)?.[1];
+    expect(path).toStartWith('/local/attachments/');
+
+    // …and the exact payload bytes are readable back through the agent's VFS.
+    const stored = await rt.storage.vfs.readFile(path!);
+    expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(pdfBytes));
+
+    // Second turn: the (unchanged) in-memory history re-sanitizes to the SAME
+    // reference — byte-stable, so the prompt-cache prefix holds.
+    await session.send('continue');
+    const again = captures[1]!.find((m) =>
+      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+    expect(again).toBeDefined();
+    expect(JSON.stringify(again!.content)).toBe(referencedJson);
+  });
+
   test('facts ride the ephemeral system-state block, never the system prompt', async () => {
     // Cache-prefix stability: the system prompt must stay byte-stable across
     // turns, so system state (the facts world model, executor status) rides
@@ -436,6 +483,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
       listProviders: async () => [],
       listModels: async () => [],
+      modelInfo: async () => null,
     };
     const { session, events } = setupWithResolver(resolver);
 
