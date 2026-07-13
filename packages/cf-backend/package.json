@@ -6,6 +6,7 @@
   "scripts": {
     "start": "vite dev --host 0.0.0.0",
     "deploy": "vite build && bash ../../scripts/build-cli-source-archive.sh && wrangler deploy",
+    "deploy:staging": "CLOUDFLARE_ENV=staging vite build && bash ../../scripts/build-cli-source-archive.sh && wrangler deploy && vite build",
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },
