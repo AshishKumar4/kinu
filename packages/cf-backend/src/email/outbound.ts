@@ -89,16 +89,26 @@ export function createEmailThreadDispatcher(
  * Reply every open email_thread channel bound to the events a drained turn
  * consumed. Called from onChatResponse with the drainTurnId the core stamped
  * on the injected user message. Each attempt lands a `reply_attempt` audit
- * row. Returns the number of delivered replies.
+ * row. `pending` remains true while a retryable email channel is still open.
  */
+export interface EmailReplyDispatchResult {
+  delivered: number;
+  pending: boolean;
+}
+
 export async function dispatchEmailRepliesForTurn(
   deps: { log: EventLog; replies: ReplyChannelStore },
   drainTurnId: string,
   replyText: string,
   now: number,
-): Promise<number> {
-  if (!replyText.trim()) return 0;
+): Promise<EmailReplyDispatchResult> {
   const events = deps.log.query({ turn_id: drainTurnId, variant: 'email' });
+  if (!replyText.trim()) {
+    return {
+      delivered: 0,
+      pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
+    };
+  }
   let delivered = 0;
   for (const ev of events) {
     const channel = deps.replies.findOpenByEvent(ev.id);
@@ -115,7 +125,10 @@ export async function dispatchEmailRepliesForTurn(
     });
     if (outcome.outcome === 'delivered') delivered++;
   }
-  return delivered;
+  return {
+    delivered,
+    pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
+  };
 }
 
 // ── Owner notifications ──────────────────────────────────────────

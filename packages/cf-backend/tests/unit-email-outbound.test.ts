@@ -105,10 +105,10 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     // The drain binds the event to a synthetic turn (as AgentOrchestrator does).
     log.markConsumed(eventId, 'evt-turn-1', 0);
 
-    const delivered = await dispatchEmailRepliesForTurn(
+    const result = await dispatchEmailRepliesForTurn(
       { log, replies }, 'evt-turn-1', 'Yes — staging is green. All 1,470 tests pass.', 2_000,
     );
-    expect(delivered).toBe(1);
+    expect(result).toEqual({ delivered: 1, pending: false });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual({
@@ -134,7 +134,8 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     });
 
     // Re-dispatch is a no-op (channel already replied).
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-1', 'again', 3_000)).toBe(0);
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-1', 'again', 3_000))
+      .toEqual({ delivered: 0, pending: false });
     expect(sent).toHaveLength(1);
   });
 
@@ -166,7 +167,8 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { absorbed, leftover } = buffer.settle();
     expect(leftover).toEqual([]);
     expect(absorbed).toHaveLength(1);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.turnId, 'Green.', 2_000)).toBe(1);
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.turnId, 'Green.', 2_000))
+      .toEqual({ delivered: 1, pending: false });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
     expect(replies.findOpenByEvent(eventId)).toBeNull();
@@ -193,8 +195,8 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const eventId = admitOwnerEmail(log, replies);
     log.markConsumed(eventId, 'evt-turn-3', 0);
 
-    const delivered = await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-3', 'answer', 2_000);
-    expect(delivered).toBe(0);
+    const result = await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-3', 'answer', 2_000);
+    expect(result).toEqual({ delivered: 0, pending: true });
     expect(sent).toHaveLength(0);
     expect(replies.findOpenByEvent(eventId)?.attempt_count).toBe(1);
     const attempts = sql.exec(`SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`).toArray();
@@ -204,7 +206,8 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
   test('a turn with no drain-bound email events sends nothing', async () => {
     const { log, replies, sent } = setup();
     admitOwnerEmail(log, replies);          // pending, never bound to this turn
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-other', 'answer', 2_000)).toBe(0);
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-other', 'answer', 2_000))
+      .toEqual({ delivered: 0, pending: false });
     expect(sent).toHaveLength(0);
   });
 
@@ -212,7 +215,8 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { log, replies, sent } = setup();
     const eventId = admitOwnerEmail(log, replies);
     log.markConsumed(eventId, 'evt-turn-4', 0);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-4', '   ', 2_000)).toBe(0);
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-4', '   ', 2_000))
+      .toEqual({ delivered: 0, pending: true });
     expect(sent).toHaveLength(0);
     expect(replies.findOpenByEvent(eventId)).not.toBeNull();  // still open
   });
