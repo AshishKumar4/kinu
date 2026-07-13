@@ -14,10 +14,11 @@
  *   │   ⎋ Sign out    │
  *   └─────────────────┘
  */
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
+import { useWorkspaceRpc } from "../hooks/use-proteus";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle } from "./mode-toggle";
 
@@ -25,6 +26,79 @@ import { ModeToggle } from "./mode-toggle";
 // :agentId. Deleting that agent must first navigate away from ALL of them —
 // a still-mounted socket auto-reconnects and resurrects the destroyed DO.
 const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
+
+function relativeActivity(lastVisited: number): string | null {
+  if (!lastVisited) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - lastVisited) / 1000));
+  if (seconds < 60) return "Active just now";
+  if (seconds < 3600) return `Active ${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `Active ${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 2_592_000) return `Active ${Math.floor(seconds / 86400)}d ago`;
+  if (seconds < 31_536_000) return `Active ${Math.floor(seconds / 2_592_000)}mo ago`;
+  return `Active ${Math.floor(seconds / 31_536_000)}y ago`;
+}
+
+function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
+  workspace: WorkspaceEntry;
+  onSaved: (displayName: string) => void;
+  onCancel: () => void;
+}) {
+  const { rpc, connectionStatus } = useWorkspaceRpc(workspace.name);
+  const [value, setValue] = useState(workspace.displayName);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    const displayName = value.trim();
+    if (!displayName || saving || connectionStatus !== "connected") return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
+      onSaved(result.displayName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={save} className="p-card rounded-md px-1.5 py-1">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          value={value}
+          maxLength={60}
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Escape" && !saving) onCancel(); }}
+          className="min-w-0 flex-1 rounded px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+          aria-label={`Rename ${workspace.displayName}`}
+        />
+        <button
+          type="submit"
+          disabled={!value.trim() || saving || connectionStatus !== "connected"}
+          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover disabled:opacity-40"
+          aria-label="Save workspace name"
+        ><CheckIcon size={12} /></button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
+          aria-label="Cancel rename"
+        ><XIcon size={12} /></button>
+      </div>
+      {(error || connectionStatus !== "connected") && (
+        <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 text-[10px] truncate ${error || connectionStatus === "error" ? "text-red-400" : "p-text-3"}`} title={error ?? undefined}>
+          {error ?? (connectionStatus === "connecting" ? "Connecting…" : connectionStatus === "disconnected" ? "Reconnecting…" : "Could not connect")}
+        </div>
+      )}
+    </form>
+  );
+}
 
 export default function Sidebar() {
   // useParams can't see :agentId from here (the Sidebar renders outside the
@@ -38,6 +112,7 @@ export default function Sidebar() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshWorkspaces = useCallback(async () => {
@@ -68,8 +143,8 @@ export default function Sidebar() {
     return () => document.removeEventListener('click', onClick);
   }, []);
 
-  const handleDelete = useCallback(async (name: string) => {
-    if (!confirm(`Delete workspace "${name}" and clear its server-side state?`)) return;
+  const handleDelete = useCallback(async (name: string, displayName: string) => {
+    if (!confirm(`Delete workspace "${displayName}" and clear its server-side state?`)) return;
     // Leave the agent's workspace BEFORE destroying it: the still-mounted
     // useAgent socket would auto-reconnect to the destroyed DO name and
     // resurrect an empty ghost agent (idFromName instantiates on connect).
@@ -104,29 +179,50 @@ export default function Sidebar() {
           <div className="px-2 py-3 text-xs p-text-3">No workspaces yet. Click "New workspace" to start.</div>
         )}
         <ul className="space-y-0.5">
-          {workspaces.map((a) => (
-            // Link and delete button are siblings (a button inside an anchor is
-            // invalid HTML and breaks keyboard/AT semantics); the button overlays
-            // the row's right edge and is reachable by keyboard via focus-visible.
-            <li key={a.name} className="group relative">
-              <NavLink
-                to={`/workspace/${a.name}`}
-                className={({ isActive }) =>
-                  `flex items-center gap-2 pl-2 pr-7 py-1.5 rounded-md text-sm ${
-                    isActive ? 'p-card font-medium' : 'hover:p-card-hover p-text'
-                  }`
-                }
-              >
-                <span className="truncate">{a.displayName || a.name}</span>
-              </NavLink>
-              <button
-                onClick={() => handleDelete(a.name)}
-                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
-                title="Remove"
-                aria-label={`Remove workspace ${a.displayName || a.name}`}
-              ><TrashIcon size={12} /></button>
-            </li>
-          ))}
+          {workspaces.map((a) => {
+            const activity = relativeActivity(a.lastVisited);
+            const editing = editingWorkspace === a.name;
+            return (
+              <li key={a.name} className="group relative">
+                {editing ? (
+                  <SidebarRenameEditor
+                    workspace={a}
+                    onCancel={() => setEditingWorkspace(null)}
+                    onSaved={(displayName) => {
+                      setWorkspaces((current) => current.map((entry) => entry.name === a.name ? { ...entry, displayName } : entry));
+                      setEditingWorkspace(null);
+                    }}
+                  />
+                ) : (
+                  <>
+                    <NavLink
+                      to={`/workspace/${a.name}`}
+                      className={({ isActive }) =>
+                        `flex min-w-0 flex-col pl-2 pr-12 py-1.5 rounded-md ${
+                          isActive ? 'p-card' : 'hover:p-card-hover p-text'
+                        }`
+                      }
+                    >
+                      <span className="truncate text-sm font-medium">{a.displayName}</span>
+                      {activity && <span className="truncate text-[10px] p-text-3 font-normal">{activity}</span>}
+                    </NavLink>
+                    <button
+                      onClick={() => setEditingWorkspace(a.name)}
+                      className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all p-1"
+                      title="Rename"
+                      aria-label={`Rename workspace ${a.displayName}`}
+                    ><PencilSimpleIcon size={12} /></button>
+                    <button
+                      onClick={() => handleDelete(a.name, a.displayName)}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-danger transition-all p-1"
+                      title="Remove"
+                      aria-label={`Remove workspace ${a.displayName}`}
+                    ><TrashIcon size={12} /></button>
+                  </>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </div>
 

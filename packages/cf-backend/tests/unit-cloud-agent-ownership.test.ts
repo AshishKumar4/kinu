@@ -48,6 +48,9 @@ describe('cloud agent ownership safety', () => {
       async setSoul() {
         calls.push('soul');
       },
+      async setProvisionalDisplayName(displayName: string) {
+        calls.push(`provisional-title:${displayName}`);
+      },
       async setModel(model: string) {
         calls.push(`model:${model}`);
       },
@@ -75,13 +78,26 @@ describe('cloud agent ownership safety', () => {
         suggestDisplayName: async () => 'React Hello World',
       });
 
-      expect(entry.name.startsWith('workspace-')).toBe(true);
+      expect(entry.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
+      expect(calls).toContain('provisional-title:Build a hello world app in react');
       expect(calls).toContain('soul');
       expect(background).toHaveLength(1);
       await Promise.all(background);
       expect(calls).toContain('auto-title:React Hello World');
+
+      const purposeless = await createCloudWorkspaceForUser(
+        env,
+        USER_ID,
+        userDO as unknown as DurableObjectStub<UserDO>,
+        {},
+        { waitUntil: (promise) => background.push(promise) },
+      );
+      expect(purposeless.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
+      expect(purposeless.displayName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+      expect(purposeless.displayName).not.toBe(purposeless.name);
+      expect(background).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
     }

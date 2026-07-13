@@ -5,6 +5,7 @@ import {
   workspaceIdentityPrompt,
   createWorkspaceNameFromMission,
   deriveWorkspaceTitle,
+  fallbackWorkspaceIdentity,
   parseWorkspaceIdentityOutput,
   renderSoulMarkdown,
 } from '@proteus/core';
@@ -75,10 +76,11 @@ function createInitialCloudAgentIdentity(
     };
   }
   const id = crypto.randomUUID();
-  const name = createWorkspaceNameFromMission(purpose ?? 'workspace', id);
+  const name = createWorkspaceNameFromMission(purpose ?? '', id);
   return {
     name,
-    displayName: input.displayName?.trim() || deriveWorkspaceTitle(purpose ?? '') || name,
+    displayName: input.displayName?.trim()
+      || (purpose ? deriveWorkspaceTitle(purpose) : fallbackWorkspaceIdentity('', id).displayName),
     nameOrigin: 'auto',
   };
 }
@@ -146,6 +148,7 @@ async function initializeOrchestrator(
     env.OrchestratorAgent.idFromName(agentName),
   ) as DurableObjectStub<OrchestratorAgent>;
   await orchestrator.claimOwner(userId);
+  await orchestrator.setProvisionalDisplayName(displayName);
   await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
   if (model) await orchestrator.setModel(model);
 }

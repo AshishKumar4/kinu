@@ -156,6 +156,37 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1]!.content).toBe('hello there');
   });
 
+  test('a post-stream persistence failure ends the turn and does not stall the queue', async () => {
+    const { db, session, events } = setup('streamed answer');
+    db.exec(`CREATE TRIGGER fail_first_turn_persist
+      BEFORE INSERT ON messages
+      WHEN NEW.role = 'assistant'
+        AND EXISTS (SELECT 1 FROM messages WHERE id = NEW.parent_id AND content = 'first')
+      BEGIN
+        SELECT RAISE(FAIL, 'forced persist failure');
+      END`);
+
+    const first = session.send('first');
+    const second = session.send('second');
+
+    await waitFor(() => turnStarts(events).length === 2);
+    await Promise.all([first, second]);
+
+    const errors = events.filter((event): event is Extract<SessionEvent, { type: 'error' }> => event.type === 'error');
+    const turns = events.filter((event): event is Extract<SessionEvent, { type: 'turn-end' }> => event.type === 'turn-end');
+    expect(errors.some((event) => event.message.includes('forced persist failure'))).toBe(true);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.turn).toMatchObject({
+      userMessage: 'first',
+      assistantResponse: 'streamed answer',
+      hadError: true,
+    });
+    expect(turns[1]!.turn.userMessage).toBe('second');
+    expect(turns[1]!.turn.hadError).toBe(false);
+    const assistants = db.query(`SELECT content FROM messages WHERE role = 'assistant'`).all() as Array<{ content: string }>;
+    expect(assistants).toEqual([{ content: 'streamed answer' }]);
+  });
+
   test('attachments reach the model as [file…, text] user content parts', async () => {
     let observed: ModelMessage[] = [];
     const { db, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
@@ -975,9 +1006,11 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
                    VALUES ('editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
 
     const view = session.getEvolutionChangelog();
-    const summaries = view.entries.map((e) => e.summary);
-    expect(summaries.some((s) => s.includes('Crafted tool local_helper'))).toBe(true);
-    expect(summaries.some((s) => s.includes('Learned fact editor = helix'))).toBe(true);
+    const tool = view.entries.find((entry) => entry.kind === 'tool')!;
+    const facts = view.entries.find((entry) => entry.kind === 'fact')!;
+    expect(tool.summary).toBe('Created a tool: local helper');
+    expect(facts.summary).toBe('Learned 1 thing about your environment');
+    expect(facts.items?.map((entry) => entry.summary)).toEqual(['Your editor is helix']);
     expect(view.unseenCount).toBe(2);
 
     session.markChangelogSeen();
@@ -995,11 +1028,11 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
 
     const view = session.getEvolutionChangelog();
     const tool = view.entries.find((e) => e.kind === 'tool')!;
-    const fact = view.entries.find((e) => e.kind === 'fact')!;
+    const facts = view.entries.find((e) => e.kind === 'fact')!;
 
     expect((await session.revertChangelogEntry(tool.id)).ok).toBe(true);
     expect(rt.craftStore.get('doomed_tool')).toBeFalsy();
-    expect((await session.revertChangelogEntry(fact.id)).ok).toBe(true);
+    expect((await session.revertChangelogEntry(facts.id)).ok).toBe(true);
     expect(rt.storage.sql`SELECT * FROM agent_facts WHERE key = 'stale'`).toHaveLength(0);
 
     // Both rows are gone from the next digest, and re-reverting refuses.

@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, type DragEvent as ReactDragEvent } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, type DragEvent as ReactDragEvent, type FormEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
@@ -7,7 +7,7 @@ import {
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
-  ClockCounterClockwiseIcon,
+  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -39,6 +39,77 @@ function getMessageText(msg: UIMessage): string {
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function InlineWorkspaceTitle({ title, onRename }: {
+  title: string;
+  onRename: (displayName: string) => Promise<string>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { if (!editing) setValue(title); }, [editing, title]);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    const displayName = value.trim();
+    if (!displayName || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setValue(await onRename(displayName));
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <form onSubmit={save} className="flex min-w-0 items-center gap-1">
+        <input
+          autoFocus
+          value={value}
+          maxLength={60}
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Escape" && !saving) { setEditing(false); setError(null); } }}
+          className="w-44 rounded-md border p-border p-elevated px-2 py-1 text-sm p-text focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+          aria-label="Workspace display name"
+        />
+        <button
+          type="submit"
+          disabled={!value.trim() || saving}
+          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover disabled:opacity-40"
+          aria-label="Save workspace name"
+        ><CheckIcon size={13} /></button>
+        <button
+          type="button"
+          onClick={() => { setEditing(false); setError(null); }}
+          disabled={saving}
+          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
+          aria-label="Cancel rename"
+        ><XIcon size={13} /></button>
+        {error && <span role="alert" className="text-[10px] text-red-400" title={error}>Rename failed</span>}
+      </form>
+    );
+  }
+
+  return (
+    <div className="group/title flex min-w-0 items-center gap-1">
+      <span className="font-medium text-sm p-text truncate max-w-[180px]">{title}</span>
+      <button
+        onClick={() => setEditing(true)}
+        className="shrink-0 rounded p-1 opacity-0 group-hover/title:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all"
+        title="Rename"
+        aria-label={`Rename workspace ${title}`}
+      ><PencilSimpleIcon size={12} /></button>
+    </div>
+  );
 }
 
 /* ── Chat attachments ─────────────────────────────────────────── */
@@ -829,6 +900,7 @@ export default function WorkspacePage() {
   );
 
   const as = state.agentStatus;
+  const workspaceTitle = as?.displayName || "Workspace";
   return (
     <div className="h-full flex flex-col">
       {/* Non-destructive disconnect banner. The chat panel below stays
@@ -843,7 +915,7 @@ export default function WorkspacePage() {
       {/* Altitude toggle: RUN (this run, mission-control) ⇄ SUPERVISE (the
           agent over time — curriculum, runs, automations). */}
       <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
-        <span className="text-xs p-text-2 font-medium truncate">{as?.displayName || agentId}</span>
+        <span className="text-xs p-text-2 font-medium truncate">{workspaceTitle}</span>
         <div className="ml-auto flex items-center gap-0.5 p-elevated rounded-md p-0.5">
           {(["run", "supervise"] as const).map((a) => (
             <button key={a} onClick={() => setAltitude(a)}
@@ -876,18 +948,18 @@ export default function WorkspacePage() {
             )}
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-3">
                 <ConnectionIndicator status={state.connectionStatus} />
-                <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || agentId}</span>
+                <InlineWorkspaceTitle title={workspaceTitle} onRename={state.setDisplayName} />
                 {state.isStreaming && <Badge variant="primary">streaming</Badge>}
                 {as?.forkLineage && (
                   <Link
                     to={`/workspace/${as.forkLineage.sourceWorkspaceName}`}
                     className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
-                    title={`Forked from ${as.forkLineage.sourceWorkspaceName} at message ${as.forkLineage.sourceMessageId} on ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
+                    title={`Open parent workspace from ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
                   >
                     <GitBranchIcon size={10} />
-                    <span className="font-mono">{as.forkLineage.sourceWorkspaceName}</span>
+                    <span>Parent workspace</span>
                   </Link>
                 )}
               </div>
@@ -1068,7 +1140,7 @@ export default function WorkspacePage() {
 
       {forkFor && (
         <ForkModal
-          sourceName={as?.displayName || agentId || ""}
+          sourceName={workspaceTitle}
           messagesUpToHere={state.messages.findIndex(m => m.id === forkFor) + 1}
           craftedToolsCount={as?.craftedToolCount ?? 0}
           onCancel={() => setForkFor(null)}

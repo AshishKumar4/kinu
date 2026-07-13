@@ -17,14 +17,25 @@ describe('shared workspace identity naming', () => {
     });
   });
 
-  test('fallback identity does not derive names from prompt words', () => {
-    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', 'abcdef123456'))
-      .toBe('workspace-abcdef');
-    expect(fallbackWorkspaceIdentity('Build a durable benchmark runner', 'abcdef123456')).toEqual({
-      name: 'workspace-abcdef',
-      displayName: 'Workspace',
+  test('fallback identity is a deterministic memorable name from the workspace id', () => {
+    const id = '7f159a00-1234-4567-89ab-cdef01234567';
+
+    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', id))
+      .toBe('brisk-heron-7f15');
+    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', id))
+      .toBe('brisk-heron-7f15');
+    expect(fallbackWorkspaceIdentity('Build a durable benchmark runner', id)).toEqual({
+      name: 'brisk-heron-7f15',
+      displayName: 'Brisk Heron',
       nameOrigin: 'auto',
     });
+  });
+
+  test('blank missions never fall back to a generic workspace slug', () => {
+    const identity = fallbackWorkspaceIdentity('', '7f159a00-1234-4567-89ab-cdef01234567');
+
+    expect(identity.name).toBe('brisk-heron-7f15');
+    expect(identity.name.startsWith('workspace-')).toBe(false);
   });
 
   test('parses the model JSON title and slug through one shared parser', () => {

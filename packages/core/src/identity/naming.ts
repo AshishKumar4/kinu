@@ -14,6 +14,92 @@ export interface SuggestedWorkspaceIdentity {
   nameOrigin: 'auto' | 'user';
 }
 
+const FALLBACK_ADJECTIVES = [
+  'amber',
+  'ashen',
+  'balanced',
+  'burnished',
+  'calm',
+  'cedar',
+  'clear',
+  'brisk',
+  'copper',
+  'crafted',
+  'earthen',
+  'evergreen',
+  'fieldstone',
+  'grounded',
+  'handwrought',
+  'hardy',
+  'hearthlit',
+  'honest',
+  'ironwood',
+  'luminous',
+  'maple',
+  'measured',
+  'mellow',
+  'mossy',
+  'oak',
+  'patient',
+  'pine',
+  'quiet',
+  'river',
+  'rugged',
+  'sage',
+  'seasoned',
+  'steady',
+  'stone',
+  'sunlit',
+  'timber',
+  'verdant',
+  'walnut',
+  'warm',
+  'weathered',
+] as const;
+
+const FALLBACK_NOUNS = [
+  'anvil',
+  'arbor',
+  'ash',
+  'basin',
+  'bench',
+  'birch',
+  'brook',
+  'cairn',
+  'cedar',
+  'chisel',
+  'copper',
+  'cove',
+  'elm',
+  'field',
+  'forge',
+  'grove',
+  'harbor',
+  'hawk',
+  'hearth',
+  'hemlock',
+  'hill',
+  'heron',
+  'kiln',
+  'lantern',
+  'maple',
+  'mill',
+  'oak',
+  'pine',
+  'plane',
+  'quarry',
+  'ridge',
+  'river',
+  'stone',
+  'timber',
+  'trail',
+  'valley',
+  'walnut',
+  'willow',
+  'workshop',
+  'yard',
+] as const;
+
 /** Deterministic provisional display title: first non-empty line, collapsed. */
 export function deriveWorkspaceTitle(text: string): string {
   const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
@@ -33,16 +119,21 @@ export function resolveWorkspaceTitle(opts: {
 }
 
 export function createWorkspaceNameFromMission(mission: string, id: string): string {
-  const slug = cleanSlug(extractPersonaName(mission) ?? 'workspace') || 'workspace';
-  return `${slug}-${id.slice(0, 6)}`;
+  const persona = extractPersonaName(mission);
+  if (persona) return `${cleanSlug(persona)}-${id.slice(0, 6)}`;
+  return memorableFallbackIdentity(id).name;
 }
 
 export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
   const persona = extractPersonaName(mission);
-  const title = cleanTitle(persona ?? 'Workspace') || 'Workspace';
+  if (!persona) {
+    const fallback = memorableFallbackIdentity(id);
+    return { ...fallback, nameOrigin: 'auto' };
+  }
+  const title = cleanTitle(persona);
   return {
-    name: `${cleanSlug(persona ?? 'workspace') || 'workspace'}-${id.slice(0, 6)}`,
-    displayName: title || 'Workspace',
+    name: `${cleanSlug(persona)}-${id.slice(0, 6)}`,
+    displayName: title,
     nameOrigin: 'auto',
   };
 }
@@ -88,6 +179,21 @@ export function parseWorkspaceIdentityOutput(raw: string, id: string): Suggested
 function extractPersonaName(mission: string): string | null {
   const match = mission.match(/\b(?:you are|call you|named)\s+([A-Za-z][A-Za-z0-9_-]{1,30})\b/i);
   return match?.[1] ?? null;
+}
+
+function memorableFallbackIdentity(id: string): { name: string; displayName: string } {
+  const hex = id.replace(/-/g, '').toLowerCase();
+  const adjective = FALLBACK_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % FALLBACK_ADJECTIVES.length];
+  const noun = FALLBACK_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % FALLBACK_NOUNS.length];
+  const suffix = hex.slice(0, 4);
+  return {
+    name: `${adjective}-${noun}-${suffix}`,
+    displayName: `${capitalize(adjective)} ${capitalize(noun)}`,
+  };
+}
+
+function capitalize(word: string): string {
+  return word[0].toUpperCase() + word.slice(1);
 }
 
 function cleanTitle(value: string): string {

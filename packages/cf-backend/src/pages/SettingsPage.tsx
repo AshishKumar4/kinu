@@ -9,7 +9,7 @@ import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
+  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon, CopyIcon,
 } from "@phosphor-icons/react";
 import { useProteus } from "@/hooks/use-proteus";
 import { listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
@@ -48,9 +48,11 @@ export default function SettingsPage() {
   const { rpc, connectionStatus, agentStatus, setModel } = state;
 
   const [displayName, setDisplayName] = useState("");
+  const [displayNameDirty, setDisplayNameDirty] = useState(false);
   const [soul, setSoul] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [slugCopied, setSlugCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const [models, setModels] = useState<ModelMenuEntry[]>([]);
@@ -64,9 +66,12 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!agentStatus || identityHydrated.current) return;
     identityHydrated.current = true;
-    setDisplayName(agentStatus.displayName || agentStatus.name || "");
     setSoul(agentStatus.soul || "");
   }, [agentStatus]);
+
+  useEffect(() => {
+    if (agentStatus && !displayNameDirty) setDisplayName(agentStatus.displayName || "");
+  }, [agentStatus, displayNameDirty]);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -99,12 +104,13 @@ export default function SettingsPage() {
     setErr(null);
     try {
       await Promise.all([
-        rpc("setDisplayName", [displayName]),
+        displayNameDirty ? rpc("setDisplayName", [displayName]) : Promise.resolve(),
         rpc("setSoul", [soul]),
         currentSpec ? setModel(currentSpec) : Promise.resolve(),
         rpc("setShellApprovalMode", [approvalMode]),
         rpc("setMctsConfig", [mcts]),
       ]);
+      setDisplayNameDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -112,7 +118,18 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [rpc, setModel, displayName, soul, currentSpec, approvalMode, mcts]);
+  }, [rpc, setModel, displayName, displayNameDirty, soul, currentSpec, approvalMode, mcts]);
+
+  const copySlug = useCallback(async () => {
+    if (!agentId) return;
+    try {
+      await navigator.clipboard.writeText(agentId);
+      setSlugCopied(true);
+      setTimeout(() => setSlugCopied(false), 2000);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Could not copy workspace slug");
+    }
+  }, [agentId]);
 
   if (connectionStatus !== "connected") {
     return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
@@ -129,6 +146,14 @@ export default function SettingsPage() {
             <h1 className="text-2xl font-semibold">Workspace settings</h1>
             <p className="text-xs p-text-3 mt-1 flex items-center gap-1.5">
               <span className="font-mono">{agentId}</span>
+              <button
+                type="button"
+                onClick={copySlug}
+                className="rounded p-0.5 hover:p-card-hover hover:p-text transition-colors"
+                title="Copy workspace slug"
+                aria-label={slugCopied ? "Workspace slug copied" : "Copy workspace slug"}
+              >{slugCopied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}</button>
+              <span className="sr-only" aria-live="polite">{slugCopied ? "Workspace slug copied" : ""}</span>
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
                 <KeyIcon size={11} /> User settings & credentials
@@ -155,7 +180,7 @@ export default function SettingsPage() {
         <Card title="Identity" icon={BrainIcon}>
           <div className="space-y-1.5">
             <label className="text-xs p-text-2 font-medium">Display name</label>
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
+            <input value={displayName} onChange={(e) => { setDisplayName(e.target.value); setDisplayNameDirty(true); }} className={inputCls} />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs p-text-2 font-medium">SOUL.md</label>

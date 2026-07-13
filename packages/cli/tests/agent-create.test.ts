@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { createWorkspaceNameFromMission, suggestAgentIdentityFromMission } from '../src/agent-create';
 
 describe('CLI mission workspace names', () => {
-  test('uses the shared generic fallback and a stable id suffix', () => {
+  test('uses the shared memorable fallback and a stable id suffix', () => {
     expect(createWorkspaceNameFromMission('Research Rust web frameworks', 'abcdef123456'))
-      .toBe('workspace-abcdef');
+      .toBe('evergreen-birch-abcd');
     expect(createWorkspaceNameFromMission('!!!', '123456abcdef'))
-      .toBe('workspace-123456');
+      .toBe('ironwood-elm-1234');
   });
 
   test('uses model-proposed title and slug for mission-created agents', async () => {
@@ -35,8 +35,8 @@ describe('CLI mission workspace names', () => {
     );
 
     expect(identity).toEqual({
-      name: 'workspace-123456',
-      displayName: 'Workspace',
+      name: 'ironwood-elm-1234',
+      displayName: 'Ironwood Elm',
       nameOrigin: 'auto',
     });
   });

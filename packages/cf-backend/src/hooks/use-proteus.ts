@@ -76,6 +76,28 @@ export interface WorkspaceSnapshot {
   lastActiveExecutor: string | null;
 }
 
+interface CallableAgent {
+  call(method: string, args: unknown[]): Promise<unknown>;
+}
+
+function bindRpc(agent: CallableAgent): Rpc {
+  return <T = unknown>(method: string, args: unknown[] = []) => agent.call(method, args) as Promise<T>;
+}
+
+/** A lightweight agent connection for surfaces that only need callable RPCs. */
+export function useWorkspaceRpc(agentId: string) {
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const agent = useAgent({
+    agent: ORCHESTRATOR_AGENT_SLUG,
+    name: agentId,
+    onOpen: useCallback(() => setConnectionStatus("connected"), []),
+    onClose: useCallback(() => setConnectionStatus("disconnected"), []),
+    onError: useCallback(() => setConnectionStatus("error"), []),
+  });
+  const rpc = useMemo(() => bindRpc(agent), [agent]);
+  return { rpc, connectionStatus };
+}
+
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
  * Fetches all surface data via @callable RPCs on connect. The unified Run
@@ -136,6 +158,9 @@ export function useProteus(agentId?: string) {
       try {
         const data = JSON.parse(typeof ev.data === "string" ? ev.data : "");
         if (data?.type === "workspace_renamed") {
+          if (typeof data.displayName === "string" && data.displayName.trim()) {
+            setAgentStatus((prev) => prev ? { ...prev, displayName: data.displayName } : prev);
+          }
           window.dispatchEvent(new CustomEvent("proteus:workspace-renamed"));
         }
       } catch { /* not our JSON */ }
@@ -220,9 +245,7 @@ export function useProteus(agentId?: string) {
   // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
   // read rpc<T>("getFoo", []) cast-free. Memoized on `agent` so it's a stable
   // identity (surface effects keyed on [rpc] don't refetch each render).
-  const rpc = useMemo<Rpc>(() =>
-    <T = unknown>(method: string, args: unknown[] = []) => agent.call(method, args) as Promise<T>,
-  [agent]);
+  const rpc = useMemo(() => bindRpc(agent), [agent]);
 
   // Fetch all tab data on connect
   const fetched = useRef(false);
@@ -446,6 +469,13 @@ export function useProteus(agentId?: string) {
     });
   }, [rpc]);
 
+  const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
+    const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
+    const saved = result.displayName;
+    setAgentStatus((prev) => prev ? { ...prev, displayName: saved } : prev);
+    return saved;
+  }, [rpc]);
+
   // Single source of truth: the server-side broadcast. executeInExecutor ONLY
   // fires the RPC; the broadcast handler below renders the row. This prevents
   // the double-output bug where the optimistic append AND the broadcast both
@@ -499,6 +529,7 @@ export function useProteus(agentId?: string) {
     refreshTools: () => loadAllData(),
     clearHistory,
     setModel,
+    setDisplayName,
     executors,
     executorOutputs,
     lastActiveExecutor,

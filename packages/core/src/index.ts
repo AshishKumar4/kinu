@@ -471,7 +471,7 @@ export {
 // Top-K recent facts are auto-rendered into the system prompt every turn.
 export {
   initFactsTable, createFactsStore, renderFactsBlock,
-  type Fact, type FactsStore,
+  type Fact, type FactsStore, type FactUpsertResult,
 } from './memory/facts.js';
 
 // Sleep-time compute — between-turn background memory compression
