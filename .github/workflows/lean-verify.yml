@@ -4,20 +4,16 @@ on:
   push:
     paths:
       - 'lean/**'
-      - 'packages/core/src/types/**'
-      - 'packages/core/src/execution/types.ts'
-      - 'packages/core/src/evolution/types.ts'
-      - 'packages/core/src/config.ts'
+      - 'packages/**/src/**/*.ts'
       - 'scripts/verify-lean.sh'
+      - '.github/workflows/ci.yml'
       - '.github/workflows/lean-verify.yml'
   pull_request:
     paths:
       - 'lean/**'
-      - 'packages/core/src/types/**'
-      - 'packages/core/src/execution/types.ts'
-      - 'packages/core/src/evolution/types.ts'
-      - 'packages/core/src/config.ts'
+      - 'packages/**/src/**/*.ts'
       - 'scripts/verify-lean.sh'
+      - '.github/workflows/ci.yml'
       - '.github/workflows/lean-verify.yml'
 
 jobs:
@@ -28,7 +24,7 @@ jobs:
 
       - name: Install elan
         run: |
-          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> $GITHUB_PATH
 
       - name: Cache Lean toolchain
@@ -37,6 +33,6 @@ jobs:
           path: ~/.elan
           key: lean-${{ hashFiles('lean/lean-toolchain') }}
 
-      - name: Verify Lean proofs and TS drift
+      - name: Verify Lean proofs, consistency, and traceability
         shell: bash
         run: bash scripts/verify-lean.sh

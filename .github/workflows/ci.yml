@@ -43,7 +43,7 @@ jobs:
   verify-lean:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Lean install is slow; gate on label or main pushes only
+    # Main-push gate; pull requests use the path-filtered lean-verify workflow.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -53,5 +53,11 @@ jobs:
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> $GITHUB_PATH
 
-      - name: Verify Lean proofs
+      - name: Cache Lean toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.elan
+          key: lean-${{ hashFiles('lean/lean-toolchain') }}
+
+      - name: Verify Lean proofs, consistency, and traceability
         run: bash scripts/verify-lean.sh

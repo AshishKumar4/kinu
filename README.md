@@ -1,6 +1,6 @@
 # Proteus
 
-Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state and formally verified safety properties in Lean 4.
+Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, plus a CI-gated Lean 4 corpus over hand-maintained abstract models of selected core algorithms.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
@@ -36,13 +36,13 @@ graph TB
 
 ## Key Features
 
-- **MCTS parallel exploration** — UCT selection, backpropagation, pruning, convergence. Each branch is an isolated Durable Object via Facets.
+- **MCTS parallel exploration** — score-based selection, backpropagation, pruning, and winner selection. Each branch is an isolated Durable Object via Facets.
 - **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (full MCTS exploration)
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
 - **POSIX shell emulator** — 16 commands (ls, grep, find, sed, cat, etc.) over virtual filesystem. No real OS needed on Workers.
 - **Web search & fetch** — `web_search` and `web_fetch` are built in and work with zero keys (DuckDuckGo search + Cloudflare's markdown service); add a Tavily key for ranked, answer-augmented search.
-- **Formally verified** — 75 Lean 4 theorems across 6 categories (Safety, MCTS, Evolution, Agent, Storage, Execution) covering capability safety, storage isolation, budget termination, and backprop correctness
+- **Lean-checked abstract models** — 84 theorems cover selected agent, evolution, execution, MCTS, safety, and storage properties. Their axiom reports use only Lean's kernel axioms; one separate SQLite FTS5 assumption is documented and enrolled. CI gates compilation, negative consistency, axiom closure, and requirement-to-proof-to-source traceability. The models are hand-maintained, and model-to-TypeScript differential fixtures are planned.
 - **Portable** — same core runs on Cloudflare Workers (Think + DOs) or local CLI (bun:sqlite)
 
 ## Quick Start
@@ -111,7 +111,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | [Tools](docs/TOOLS.md) | The builtin agent tools, shell emulator, code execution, crafted tools |
 | [Storage](docs/STORAGE.md) | Data model, SqliteFS, MemoryStore FTS5, table schemas |
 | [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
-| [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 proofs, TSLean type bridge, verified properties |
+| [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
 
 ## Packages
 

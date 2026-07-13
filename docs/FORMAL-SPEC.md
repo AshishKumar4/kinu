@@ -1,233 +1,104 @@
 # Formal Specification
 
-Proteus ships a single Lean 4 formal specification project at `lean/`:
-16 modules, 75 theorems/lemmas across 6 categories (Safety, MCTS, Evolution,
-Agent, Storage, Execution). Uses `lakefile.lean` and
-`leanprover/lean4:v4.16.0`. 8 theorems currently use `sorry` placeholders
-(informational: tracked for closure, not blocking build).
+Proteus has one Lean 4 project in `lean/`. It currently compiles 84 named
+theorems over hand-maintained abstract models of selected agent, evolution,
+execution, MCTS, safety, and storage behavior. These are machine-checked
+statements about the Lean models; they are not a proof that the deployed
+TypeScript or SQLite implementation refines those models.
 
-## Module Structure
+The canonical claim inventory is [`lean/traceability.yaml`](../lean/traceability.yaml).
+It records each requirement's theorem names, modeled TypeScript locations,
+classification, and the evidence still missing between the model and the
+running system.
 
-```
-lean/
-  Proteus.lean                        Root (imports all 16 modules)
-  Proteus/
-    Types.lean                        Domain types (NodeData, Op, CraftedTool, etc.)
-    Safety/
-      FloatAxioms.lean                IEEE 754 axioms (no theorems, axioms only)
-      CapabilitySafety.lean           Sandbox capability bounds (6 theorems)
-    MCTS/
-      StorageIsolation.lean           Storage isolation invariant + budget (3 theorems)
-      Backpropagation.lean            Running mean correctness (3 theorems)
-    Evolution/
-      Timescales.lean                 3-timescale monotonicity (6 theorems)
-      CraftStore.lean                 EMA + consolidation (2 theorems)
-      Scaffold.lean                   Version rollback + append (2 theorems)
-      FullCraftLifecycle.lean         End-to-end craft lifecycle (12 theorems)
-    Agent/
-      Lifecycle.lean                  Turn/step/tool counters (7 theorems)
-      FiberDurability.lean            Fiber budget conservation (5 theorems)
-      TurnQueue.lean                  Queue serialization (6 theorems)
-    Storage/
-      FTS5Search.lean                 FTS5 indexing + bounded search (3 theorems + 2 axioms)
-      SqliteFSCorrectness.lean        Write/read round-trip (2 theorems + 2 axioms)
-    Execution/
-      Capabilities.lean               Executor subsumption + routing (10 theorems)
-      ToolSystem.lean                 5-tool architecture model (8 theorems)
-  lakefile.lean                       Lean build config
-  lean-toolchain                      leanprover/lean4:v4.16.0
-```
+## Corpus
 
-## Proven Properties
+| Area | Theorems | What is modeled | Important boundary |
+|------|---------:|-----------------|--------------------|
+| Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
+| Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and several transition postconditions are asserted by the model |
+| Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and ten-tool implementation |
+| MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 REAL values, and transition postconditions are hand-maintained |
+| Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
+| Storage | 9 | index/list properties, byte-chunk reassembly, and a list-backed filesystem | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
 
-### Safety — `Safety/CapabilitySafety.lean` (6 theorems)
+Of the 84 theorems, the traceability map classifies 27 as
+`proved-in-abstract-model` and 57 as `by-construction-witness`. In particular,
+near-definitional statements such as nonnegativity of a `Nat` EMA score and the
+inability of a constructor to produce `SQLWrite` are witnesses, not deep safety
+proofs.
 
-Proves that the code execution sandbox can ONLY invoke `ToolCall` operations:
+## Claim taxonomy
 
-| Theorem | What it proves |
-|---------|----------------|
-| `grantableOps_only_toolcalls` | All grantable operations are ToolCall variants |
-| `not_toolcall_not_grantable` | Non-ToolCall ops are never grantable (private helper) |
-| `sqlwrite_not_grantable` | SQLWrite cannot be granted to sandbox |
-| `sqlread_not_grantable` | SQLRead cannot be granted to sandbox |
-| `scaffoldwrite_not_grantable` | ScaffoldWrite cannot be granted |
-| `spawnsubagent_not_grantable` | SpawnSubAgent cannot be granted |
-| `networkfetch_not_grantable` | NetworkFetch cannot be granted |
+Every requirement has exactly one status:
 
-### MCTS Storage Isolation — `MCTS/StorageIsolation.lean` (3 theorems)
+- `proved-in-abstract-model` — Lean proves a substantive invariant of the
+  stated abstract model. Implementation correspondence remains separate.
+- `by-construction-witness` — the statement follows mainly from the model's
+  constructors, result type, or declared transition postconditions. It is kept
+  as a checked design witness, not advertised as a deep proof.
+- `trusted-model-assumption` — the claim concerns an external system Lean does
+  not model and is admitted explicitly, with missing evidence recorded.
+- `specified-not-modeled` — the desired property is tracked, but no Lean model
+  or theorem exists.
 
-The `StorageIsolated` invariant is preserved through all MCTS transitions:
+The two theorem-free backlog requirements are monotonicity of the implemented
+UCT-style score and convergence of the production search algorithm. They stay
+`specified-not-modeled` until the production selection algorithm is settled;
+proving a different textbook algorithm would not add evidence about Proteus.
 
-```
-StorageIsolated(s) ≡ ∀ b ∈ s.branches, b.storageId ≠ s.orch.storageId
-```
+## Axiom boundary
 
-| Theorem | What it proves |
-|---------|----------------|
-| `init_isolated` | Initial MCTS state satisfies StorageIsolated |
-| `transition_preserves_isolation` | All 7 transition cases (Select, Expand, BranchExplore, BranchEvaluate, Backpropagate, Prune, Converge) preserve the invariant |
-| `budget_well_founded` | Budget is a well-founded measure (MCTS terminates) |
+[`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean) runs `#print axioms`
+for all 84 published theorems. Their reports contain only Lean's kernel axioms
+`propext`, `Classical.choice`, and `Quot.sound`.
 
-### Backpropagation — `MCTS/Backpropagation.lean` (3 theorems)
+The corpus declares one separate domain axiom:
+`Proteus.Storage.FTS5Search.fts5_indexed_findable`. It is an explicit trusted
+assumption about SQLite FTS5 completeness, and none of the 84 published
+theorems currently depends on it. There is no covering `MemoryStore.indexFile`
+plus `search` integration test, so that gap is recorded rather than implied
+away.
 
-| Theorem | What it proves |
-|---------|----------------|
-| `initial_valid` | Initial state `{visits:0, rewardSum:0, value:0}` is Valid |
-| `init_values_equal_at_first_step` | Initial values are consistent |
-| `backprop_preserves_ids` | Backprop does not change node IDs |
+## CI gate
 
-### Evolution Timescales — `Evolution/Timescales.lean` (6 theorems)
+Run the same entry point used by CI:
 
-| Theorem | What it proves |
-|---------|----------------|
-| `turnCount_increases` | Turn count strictly increases with each assessTurn |
-| `scaffoldVersion_nondecreasing` | Scaffold version never decreases |
-| `memorySize_nondecreasing` | Memory only grows |
-| `sessionCount_nondecreasing` | Session count never decreases |
-| `nested_budget_bounded` | Total nested MCTS budget is positive |
-| `deeper_costs_more` | Deeper nesting requires more total budget |
-
-### CraftStore — `Evolution/CraftStore.lean` (2 theorems)
-
-| Theorem | What it proves |
-|---------|----------------|
-| `consolidate_keeps_above` | After consolidation, remaining tools score ≥ threshold |
-| `search_length_bound` | Search results length ≤ limit |
-
-### Full Craft Lifecycle — `Evolution/FullCraftLifecycle.lean` (12 theorems)
-
-End-to-end proofs for the complete tool lifecycle (extract → score → consolidate → retire):
-
-| Theorem | What it proves |
-|---------|----------------|
-| `extract_increases` | Extraction adds to the store |
-| `extract_contains` | Extracted tool is in the store |
-| `update_preserves` | EMA update preserves store membership |
-| `ema_bounded` | EMA score stays in [0, 1000] (integer model) |
-| `consolidation_never_empties` | Consolidation never removes all tools (BUG-2 guard) |
-| `consolidation_nonincreasing` | Consolidation never increases store size |
-| `full_lifecycle_nonempty` | Full lifecycle preserves non-empty store |
-| `ema_stays_bounded` | Bounded observation keeps score bounded |
-| `pipeline_preserves_nonempty` | Full extract→update→consolidate pipeline preserves non-emptiness |
-
-### Scaffold — `Evolution/Scaffold.lean` (2 theorems)
-
-| Theorem | What it proves |
-|---------|----------------|
-| `rollback_nonexistent_is_none` | Rollback to missing version returns none |
-| `append_increases_length` | Appending increases version count |
-
-### Agent Lifecycle — `Agent/Lifecycle.lean` (7 theorems)
-
-| Theorem | What it proves |
-|---------|----------------|
-| `reset_clears_counters` | Reset zeros step count and tool calls |
-| `reset_preserves_turnCount` | Reset does not affect turn count |
-| `step_increments` | Step count increases monotonically |
-| `tool_increments` | Tool call count increases monotonically |
-| `turn_increments` | Turn count increases on completion |
-| `steps_bounded_by_calls` | Step count ≤ total operations |
-| `maxSteps_invariant` | Step count never exceeds maxSteps |
-
-### Fiber Durability — `Agent/FiberDurability.lean` (5 theorems)
-
-| Theorem | What it proves |
-|---------|----------------|
-| `start_conserved` | Budget conservation holds at start |
-| `step_preserves_conservation` | Each step maintains conservation |
-| `step_decreases_remaining` | Each step decreases remaining budget |
-| `checkpoint_restore_roundtrip` | Checkpoint + restore is identity |
-
-### Turn Queue — `Agent/TurnQueue.lean` (6 theorems)
-
-| Theorem | What it proves |
-|---------|----------------|
-| `enqueue_preserves_busy` | Enqueue does not change busy state |
-| `start_requires_idle` | Processing can only start when idle |
-| `start_makes_busy` | Starting processing sets busy flag |
-| `complete_clears_busy` | Completing processing clears busy flag |
-| `complete_increments` | Completed count increases |
-| `enqueue_increases_total` | Total enqueued count increases |
-
-### Storage — `Storage/FTS5Search.lean` (3 theorems + 2 axioms)
-
-| Theorem/Axiom | What it proves |
-|---------|----------------|
-| `index_includes_new` | New chunks appear in the index |
-| `index_preserves_other` | Indexing doesn't remove existing chunks |
-| `search_bounded` | Search results ≤ limit parameter |
-| `fts5_indexed_findable` (axiom) | FTS5 finds indexed content |
-| `fts5_scores_nonneg` (axiom) | FTS5 scores are non-negative |
-
-### Storage — `Storage/SqliteFSCorrectness.lean` (2 theorems + 2 axioms)
-
-| Theorem/Axiom | What it proves |
-|---------|----------------|
-| `write_read_roundtrip` | Write then read returns the same data |
-| `mkdir_idempotent` | Creating the same directory twice is idempotent |
-| `chunk_reassembly` (axiom) | Chunked data reassembles correctly |
-| `writes_commute` (axiom) | Non-overlapping writes commute |
-
-### Execution — `Execution/Capabilities.lean` (10 theorems)
-
-| Theorem | What it proves |
-|---------|----------------|
-| `container_subsumes_nimbus` | Container capabilities ⊇ Nimbus capabilities |
-| `ssh_subsumes_container` | SSH capabilities ⊇ Container capabilities |
-| `ssh_subsumes_nimbus` | SSH capabilities ⊇ Nimbus capabilities (transitivity) |
-| `workspace_incomparable_nimbus` | Workspace is NOT subsumable by Nimbus (they have different capability profiles) |
-| `chain` | Subsumption forms a chain: ssh ⊇ container ⊇ nimbus |
-| `route_satisfies_all` | Router selects executor that satisfies all required capabilities |
-| `route_available` | Router selects an available executor |
-| `route_has_all_caps` | Selected executor has all required capabilities |
-| `subsumes_refl` | Subsumption is reflexive |
-
-### Execution — `Execution/ToolSystem.lean` (8 theorems)
-
-Models the 5-tool architecture:
-
-| Theorem | What it proves |
-|---------|----------------|
-| `action_routes_to_valid_tool` | Every agent action maps to one of the 5 tools |
-| `only_mcts_uses_explore` | Only MCTS exploration uses the explore tool |
-| `shell_uses_run` | Shell execution uses the run tool |
-| `memory_search_uses_search` | Memory search uses the search_memory tool |
-| `memory_save_uses_note` | Memory save uses the save_note tool |
-| `file_ops_use_codemode` | File operations route through execute_tools |
-| `empty_is_isolated` | Empty sandbox call list is isolated |
-
-## Float Axioms
-
-Lean 4 core lacks `LinearOrder Float`. We provide 16 IEEE 754 axioms in `Safety/FloatAxioms.lean` for the operating range of finite, non-NaN, non-Inf floats:
-
-- Zero/identity (6): `float_mul_zero`, `float_zero_mul`, `float_add_zero`, `float_zero_add`, `float_div_one`, `float_zero_div`
-- Cancellation (1): `float_div_mul_cancel` (exact for integer divisors)
-- Ordering (4): `float_mul_nonneg`, `float_add_nonneg`, `float_mul_le_mul_of_nonneg_left`, `float_add_le_add`, `float_lt_iff_not_le`
-- Square root (1): `float_sqrt_zero`
-- Conversion (3): `float_ofNat_zero`, `float_ofNat_one`, `float_ofNat_ne_zero`
-
-## TSLean Type Bridge
-
-[TSLean](https://github.com/AshishKumar4/TSLean) compiles TypeScript interfaces to Lean 4 structures. Generated types live in `lean/generated/Proteus/`:
-
-| TypeScript File | Generated Lean | Contents |
-|-----------------|---------------|----------|
-| `types/primitives.ts` | `Proteus/Types/Primitives.lean` | VFS, Memory, Executor, LLM, Schedule, Identity |
-| `types/agent-runtime.ts` | `Proteus/Types/AgentRuntime.lean` | AgentRuntime, CraftStore, BranchHandle |
-| `types/craft.ts` | `Proteus/Types/Craft.lean` | CraftedTool, CraftScoreEntry |
-| `evolution/types.ts` | `Proteus/Evolution/Types.lean` | CompletedTurn, EvolutionConfig |
-| `config.ts` | `Proteus/Config.lean` | AgentConfig, MCTSDefaults |
-
-Regenerate with:
 ```bash
-cd /workspace/TSLean
-for f in primitives agent-runtime craft; do
-  bun run src/cli.ts compile "../proteus/packages/core/src/types/${f}.ts" --namespace Proteus.Types
-done
-bun run src/cli.ts compile ../proteus/packages/core/src/evolution/types.ts --namespace Proteus.Evolution
-bun run src/cli.ts compile ../proteus/packages/core/src/config.ts --namespace Proteus
+bash scripts/verify-lean.sh
 ```
 
-## Legacy Specification (`formal-spec/`)
+It performs three checks:
 
-The `formal-spec/` directory contains the original Lean 4 specification (12 modules). It uses `lakefile.toml` and `leanprover/lean4:v4.29.0`. This version has `sorry` placeholders in several modules and is superseded by the `lean/` project. It is retained for reference.
+1. `lake build` compiles the complete Lean project.
+2. `check-no-false.sh` confirms the historical contradiction witness remains
+   invalid, currently because its deleted assumption-module import cannot resolve.
+   This is a narrow deletion regression check; the axiom audit below is the
+   gate that detects newly introduced or newly used non-kernel assumptions.
+3. `check-traceability.mjs` builds `Proteus.Axioms`, parses every axiom report,
+   and checks the traceability map in both directions.
+
+The traceability checker has no package dependencies. It fails when:
+
+- a Lean source contains a `sorry` placeholder;
+- a published theorem is absent from the axiom audit or the traceability map;
+- a YAML theorem name lacks an exact `theorem <name>` source declaration;
+- a theorem depends on any axiom outside the three kernel axioms unless its
+  requirement explicitly has `trusted-model-assumption` status and enrolls
+  that exact axiom;
+- any standalone source axiom is not enrolled exactly once as a trusted model
+  assumption;
+- a requirement has an invalid status, missing evidence, duplicate claims, or
+  a TypeScript reference whose file or line does not exist.
+
+## Implementation correspondence
+
+The old checksum gate only detected that selected TypeScript files changed; it
+could not show whether Lean and TypeScript still computed the same thing. It
+has been removed. The current gate makes proof claims and assumptions
+auditable, but the models are still maintained independently from the code.
+
+WP-F4 is the remaining bridge: executable differential fixtures and
+property-based tests will run the Lean-modeled behavior and production
+TypeScript on shared inputs. Until those fixtures exist, the traceability file
+states the gap explicitly for every requirement.

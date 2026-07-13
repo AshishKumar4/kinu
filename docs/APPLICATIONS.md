@@ -8,7 +8,7 @@ Proteus is a general-purpose AI agent that improves itself over time. Unlike sta
 - **Explores multiple strategies** in parallel via Monte Carlo Tree Search
 - **Rewrites its own execution logic** (scaffold) based on observed performance patterns
 - **Remembers everything** in a persistent, FTS5-searchable memory
-- **Has formally verified safety bounds** — Lean 4 proofs guarantee the sandbox can't escalate privileges and MCTS branches can't corrupt shared state
+- **Includes CI-gated Lean 4 models** — 84 theorems check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
 
 ```mermaid
 graph LR
@@ -21,7 +21,7 @@ graph LR
         B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
         B2 --> B3[MCTS Exploration<br/>Parallel strategies]
         B3 --> B4[Self-Modifying Scaffold<br/>4-gate validated]
-        B4 --> B5[Formal Safety<br/>Lean 4 proofs]
+        B4 --> B5[Lean 4 Models<br/>CI-gated traceability]
     end
 
     style A3 fill:#533483
@@ -167,7 +167,7 @@ graph TB
     end
 
     subgraph "Proteus (this work)"
-        P[Combines all three<br/>+ formal verification<br/>+ persistent state<br/>+ scaffold mutation]
+        P[Combines all three<br/>+ CI-gated Lean models<br/>+ persistent state<br/>+ scaffold mutation]
     end
 
     TF -.->|"tool discovery"| P
@@ -189,19 +189,19 @@ graph TB
 | **Self-Refine** (Madaan 2023) | No | No | Iterative refinement | No | No |
 | **OMNI** (Zhang 2024) | Tool creation | No | Yes | No | No |
 | **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
-| **Proteus** | CraftStore + EMA | MCTS + Facets | Scaffold mutation | 75 Lean 4 theorems (8 sorry) | DO SQLite |
+| **Proteus** | CraftStore + EMA | MCTS + Facets | Scaffold mutation | 84 theorems over abstract models; 1 documented SQLite assumption | DO SQLite |
 
 ### What's Genuinely Novel
 
-1. **Three-timescale evolution with formal guarantees.** No other system combines turn/session/lifetime evolution with Lean 4 proofs. The formal verification isn't cosmetic — it proves that sandbox capabilities are bounded, MCTS branches are isolated, and budget terminates.
+1. **Three-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
 
 2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is genuine self-modifying code, but guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
 
 3. **CraftStore with automatic lifecycle management.** Tools aren't just learned — they're scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful. No other tool-learning system has this lifecycle.
 
-4. **MCTS branches as isolated Durable Objects.** Each exploration branch is a separate DO with its own SQLite, proven isolated from the orchestrator via Lean 4's `StorageIsolated` invariant. This is stronger isolation than any other MCTS-for-LLM system, and it runs on commodity infrastructure (Cloudflare Workers).
+4. **MCTS branches as isolated Durable Objects.** Each exploration branch has its own Durable Object and SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
 
-5. **TypeScript ↔ Lean 4 correspondence via TSLean.** The formal spec's types are auto-generated from the TypeScript interfaces, ensuring the proofs operate on the same structures as the code. This level of formal-implementation correspondence is rare in AI agent research.
+5. **Traceable Lean and TypeScript models.** Each formal requirement records theorem names, modeled TypeScript source locations, classification, and remaining evidence. CI rejects missing theorems, undocumented axioms, and traceability mismatches. The models are hand-maintained rather than generated from TypeScript.
 
 ## 5. Current Limitations
 
@@ -278,10 +278,10 @@ Build a systematic evaluation framework:
 - **SWE-bench** — software engineering tasks with automated verification
 - **Custom evolution benchmarks** — measure tool extraction rate, scaffold improvement, memory utilization
 
-### TSLean Continuous Verification
+### Lean-to-TypeScript Evidence
 
 Extend the Lean pipeline:
-- Add Mathlib dependency to replace Float axioms with proper real analysis proofs
-- Generate Lean types from more TypeScript files (MCTS engine, evolution engine)
-- Create a `TypeBridge.lean` that proves equivalence between generated and hand-written types
-- CI rejects commits that break any formal property
+- Add shared differential fixtures that execute Lean models and TypeScript on the same inputs
+- Mirror proved properties as property-based tests over production functions and SQL paths
+- Keep every theorem, trusted assumption, source reference, and missing evidence item enrolled in the CI traceability gate
+- Add the missing FTS5 index-to-search and multi-chunk VFS integration coverage
