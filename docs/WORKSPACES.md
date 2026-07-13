@@ -50,8 +50,9 @@ agents are the actors that work inside it.
   bare and deeper-absolute paths compat-route to `/local`. `listMounts()` (an
   orchestrator RPC) exposes the mount table — live state plus each mount's
   declared policy (`readOnly`, `durable | ephemeral | live-shared`,
-  credentials-stay-in-host). The web UI renders this on the **Workspace**
-  surface as a unified file browser.
+  credentials-stay-in-host). The web UI renders this on the **Environment**
+  work surface (`EnvironmentSurface.tsx`) as the mount-table spine plus a
+  unified file browser; device (`/pc`) registration lives in Account settings.
 - **One default agent, more on demand.** Heads (`think(strategy:'heads')`)
   are in-workspace actors with a bare per-head ephemeral VFS and virtual
   shell — they do NOT see the workspace mounts; findings come back through

@@ -8,30 +8,36 @@ Self-evolving agent workspaces: you create a workspace — a durable container w
 
 ## Architecture
 
+A workspace is one `OrchestratorAgent` Durable Object (`cf-backend/src/orchestrator.ts`, a thin adapter over the shared brain in `packages/core`). The same core runs locally through `LocalAgentSession` (`cli-backend/src/local-session.ts`), so the CLI and the cloud share one turn pipeline. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detailed diagrams.
+
 ```mermaid
 graph TB
-    subgraph "Browser"
-        UI["React UI<br/>useAgent + useAgentChat"]
+    subgraph Clients
+        UI["Web UI · 6 work surfaces<br/>Output · Brain · Reasoning<br/>Product · Tasks · Environment"]
+        CLI["proteus CLI<br/>chat · exec · create"]
     end
 
-    subgraph "Cloudflare Workers"
-        Worker["Worker<br/>routeAgentRequest()"]
-        subgraph "Durable Objects"
-            Orch["OrchestratorAgent<br/>extends Think<br/><br/>Chat · Tools · Evolution<br/>Memory · CraftStore · MCTS"]
-            E1["ExplorationAgent #1"]
-            E2["ExplorationAgent #N"]
-        end
+    subgraph WS["Workspace = OrchestratorAgent Durable Object (1 per name)"]
+        Turn["Turn pipeline<br/>Think 0.8 hooks → ExtensionHost<br/>compaction · mid-turn event injection"]
+        VFS["CompositeVFS mount plane<br/>/local · /sandbox · /nimbus · /pc"]
+        Exec["ExecutionRouter · target-native exec"]
+        Evo["EvolutionEngine · MCTS · CraftStore<br/>mutable scaffold · Evolution Changelog"]
+        Events["EventLog + DrainScheduler<br/>email · webhook · peer · timer"]
     end
 
-    subgraph "AI"
-        Model["Workers AI<br/>Kimi K2.6 / Llama 4<br/>(user-owned Cloudflare OAuth billing)"]
-    end
+    Heads["ExplorationAgent facets<br/>MCTS branches / heads"]
+    UserDO["UserDO<br/>MCP once-auth · devices · registry"]
+    Model["Models<br/>Workers AI (kimi-k2.6 default)<br/>+ bring-your-own providers"]
 
-    UI <-->|WebSocket| Worker
-    Worker --> Orch
-    Orch -->|"subAgent (Facets)"| E1
-    Orch -->|"subAgent (Facets)"| E2
-    Orch -->|streamText| Model
+    UI <-->|WebSocket| Turn
+    CLI -->|LocalAgentSession| Turn
+    Turn --> VFS
+    Turn --> Exec
+    Turn --> Evo
+    Events --> Turn
+    Evo -->|subAgent| Heads
+    Turn -->|capability-proxied callTool| UserDO
+    Turn -->|streamText| Model
 ```
 
 ## Key Features
@@ -117,11 +123,14 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 | Package | Description |
 |---------|-------------|
-| `core/` | Platform-independent: MCTS engine, EvolutionEngine, CraftStore, scaffold, tools, types |
+| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, CompositeVFS + ExecutionRouter, MCTS engine, EvolutionEngine, CraftStore, scaffold, the 10 builtin tools, EventLog, types |
 | `agent-utils/` | SqliteFS (chunked VFS), MemoryStore (FTS5), CraftStore (FTS5), POSIX shell emulator |
-| `cf-backend/` | Cloudflare Workers: OrchestratorAgent (Think), ExplorationAgent (Facets), React UI |
-| `cli/` | CLI commands: create, chat, evolve, status, list, export, import |
-| `cli-backend/` | Linux runtime: bun:sqlite, Node vm sandbox, child_process MCTS branches |
+| `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Proteus AI-SDK⇄ladder codec |
+| `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent (Facets), UserDO, React UI |
+| `cli/` | CLI commands: create, chat, exec, evolve, status, list, export, import |
+| `cli-backend/` | Local runtime: `LocalAgentSession`, bun:sqlite, subprocess sandbox, child_process MCTS branches |
+| `pc-agent/` | The device agent that mounts a user's own machine as `/pc` (connect + consent) |
+| `test-utils/` | Shared test fakes and fixtures |
 
 ## Development
 
