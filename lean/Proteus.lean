@@ -1,9 +1,11 @@
 /-
   Proteus — Formal specification of the self-evolving agent architecture.
 
-  16 modules across 5 categories. 0 sorry.
+  15 modules across 5 categories. 0 sorry. No Float axioms — the backprop
+  model is exact scaled-integer arithmetic (see MCTS/Backpropagation.lean);
+  the only remaining axiom is the FTS5 trusted assumption (Storage/FTS5Search.lean).
 
-  Core: Types, FloatAxioms
+  Core: Types
   Safety: CapabilitySafety
   MCTS: StorageIsolation, Backpropagation
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
@@ -12,9 +14,8 @@
   Execution: Capabilities (subsumption chain + router correctness), ToolSystem (5-tool model)
 -/
 
--- Core types and axioms
+-- Core types
 import Proteus.Types
-import Proteus.Safety.FloatAxioms
 
 -- Safety proofs
 import Proteus.Safety.CapabilitySafety
