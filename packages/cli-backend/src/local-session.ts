@@ -42,7 +42,8 @@ import {
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
-  parseModelSpec, agentAffinityKey,
+  parseModelSpec, agentAffinityKey, contextWindowForModel,
+  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
@@ -987,6 +988,11 @@ export class LocalAgentSession implements BackendHost {
     // measurement.
     const historyLength = this.history.length;
     const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey, historyLength);
+    // Overflow recovery (armed below on a context_length failure): consume
+    // the flag — at most one forced rebuild per arm, never a loop.
+    const transformTrigger = this.compactionState.takeForceCompaction(cache.sessionKey)
+      ? 'force' as const
+      : 'auto' as const;
 
     try {
       for await (const ev of runChat({
@@ -1003,6 +1009,7 @@ export class LocalAgentSession implements BackendHost {
         turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
         tools: turnTools,
         ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
+        transformTrigger,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
         extensions,
@@ -1053,7 +1060,28 @@ export class LocalAgentSession implements BackendHost {
       // they append in drain order).
       for (const injection of injections.recorded) this.history.push(injection.message);
       this.orch.acc.hadError = true;
-      this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({ type: 'error', message });
+      // Overflow recovery (core turn-failure policy, shared with the cf
+      // backend): a context_length-class failure arms force-compaction for
+      // the next assembly and enqueues ONE retry turn — a failed retry never
+      // enqueues another. Rate limits never force-compact (throughput is not
+      // size) unless the measured PER-REQUEST prompt crossed half the window.
+      const recovery = planOverflowRecovery({
+        error: message,
+        lastPromptTokens: this.orch.acc.lastPromptTokens,
+        contextWindow: contextWindowForModel(this.cachedModelSpec ?? this.fallbackModelSpec),
+        turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
+      });
+      if (recovery.forceCompaction) {
+        this.compactionState.armForceCompaction(cache.sessionKey);
+        if (recovery.enqueueRetry) {
+          void this.enqueueTurn({
+            text: OVERFLOW_RETRY_TEXT,
+            metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
+          });
+        }
+      }
     } finally {
       this.currentAbort = null;
     }

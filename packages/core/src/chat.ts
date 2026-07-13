@@ -63,6 +63,10 @@ export interface ChatOptions {
    *  estimates lie). Callers persist it from the last turn's step-finish
    *  `inputTokens`. */
   providerReportedTokens?: number;
+  /** Context-transform trigger: 'force' when the caller consumed an armed
+   *  force-compaction flag (overflow recovery — the previous turn's request
+   *  exceeded the window, so a stale plan replay is not enough). */
+  transformTrigger?: 'auto' | 'force';
   maxSteps?: number;
   signal?: AbortSignal;
   /** Extension seam (public API): registered extensions observe the turn
@@ -114,16 +118,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // per turn assembly, on the DURABLE history only — the ephemeral ledger
   // blocks and the turn-local tail are woven/spliced after, so a transform
   // never sees or persists them.
+  const contextWindow = opts.modelContext?.contextWindow
+    ?? contextWindowForModel(opts.modelContext?.id ?? '');
   const transformed = await extensions?.runTransformContext({
     sessionKey: opts.cache?.sessionKey ?? '',
     messages: history,
     system: opts.system,
-    contextWindow: opts.modelContext?.contextWindow
-      ?? contextWindowForModel(opts.modelContext?.id ?? ''),
+    contextWindow,
     ...(opts.providerReportedTokens !== undefined
       ? { providerReportedTokens: opts.providerReportedTokens }
       : {}),
-    trigger: 'auto',
+    trigger: opts.transformTrigger ?? 'auto',
   });
   const durable = transformed ?? history;
   const woven = opts.systemState
@@ -152,14 +157,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
     ...(cache.providerOptions ? { providerOptions: cache.providerOptions } : {}),
-    ...(extensions || rollTail ? {
-      // The shared step pipeline (prompting/prepare-step.ts): extension
-      // rewrites first, cache tail markers LAST onto the final array. The cf
-      // orchestrator's beforeStep runs the identical composition.
-      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
-        composePrepareStep(extensions, { stepNumber, messages },
-          rollTail ? { strategy: cache.strategy } : null),
-    } : {}),
+    // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
+    // first, then step-boundary tool-output pruning against the window budget,
+    // cache tail markers LAST onto the final array. The cf orchestrator's
+    // beforeStep runs the identical composition.
+    prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
+      composePrepareStep(extensions, { stepNumber, messages },
+        rollTail ? { strategy: cache.strategy } : null,
+        { contextWindow }),
     onStepFinish: (step) => {
       stepCount++;
       const inputTokens = step.usage?.inputTokens;
@@ -182,6 +187,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   });
 
   let allText = '';
+  // streamText routes provider failures into the stream as an in-band error
+  // chunk instead of throwing — captured here and rethrown VERBATIM after the
+  // loop, so callers' failure handling (the overflow-recovery classifier)
+  // sees the provider's actual error text, never the opaque
+  // AI_NoOutputGeneratedError that awaiting result.response would raise.
+  let streamError: unknown;
 
   for await (const chunk of result.fullStream) {
     if (opts.signal?.aborted) break;
@@ -218,6 +229,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         yield { type: 'tool-result', toolName: chunk.toolName, result, success: false, error };
         break;
       }
+      case 'error': {
+        streamError = (chunk as { error: unknown }).error;
+        break;
+      }
     }
 
     // Yield any step-finish events that fired via onStepFinish callback
@@ -225,6 +240,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       const ev = pendingStepEvents.shift();
       if (ev) yield { type: 'step-finish' as const, ...ev };
     }
+  }
+
+  if (streamError !== undefined) {
+    throw streamError instanceof Error ? streamError : new Error(String(streamError));
   }
 
   // Await the full result to get response messages

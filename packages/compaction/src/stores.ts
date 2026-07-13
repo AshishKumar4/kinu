@@ -59,9 +59,15 @@ export function initCompactionStateTable(execRaw: RawSqlExec): void {
       session_key        TEXT PRIMARY KEY,
       plan_json          TEXT,
       last_prompt_tokens INTEGER,
-      measured_at_length INTEGER
+      measured_at_length INTEGER,
+      force_compaction   INTEGER
     )
   `);
+  // Tables created before overflow recovery existed lack the flag column —
+  // ADD COLUMN is idempotent-by-catch (SQLite errors on a duplicate column).
+  try {
+    execRaw(`ALTER TABLE compaction_state ADD COLUMN force_compaction INTEGER`);
+  } catch { /* column already exists */ }
 }
 
 /**
@@ -84,6 +90,12 @@ export interface CompactionStateStore {
    *  shorter than the length the measurement was taken against. */
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
   savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
+  /** Arm force-compaction: the session's NEXT turn assembly runs the context
+   *  transform with trigger:'force' (overflow recovery). */
+  armForceCompaction(sessionKey: string): void;
+  /** Consume the force-compaction flag — true at most once per arm, so a
+   *  forced rebuild can never loop. */
+  takeForceCompaction(sessionKey: string): boolean;
 }
 
 export function createCompactionStateStore(sql: SqlExecutor): CompactionStateStore {
@@ -126,6 +138,17 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
           ON CONFLICT(session_key) DO UPDATE SET
             last_prompt_tokens = excluded.last_prompt_tokens,
             measured_at_length = excluded.measured_at_length`;
+    },
+    armForceCompaction(sessionKey) {
+      sql`INSERT INTO compaction_state (session_key, force_compaction) VALUES (${sessionKey}, 1)
+          ON CONFLICT(session_key) DO UPDATE SET force_compaction = 1`;
+    },
+    takeForceCompaction(sessionKey) {
+      const rows = sql<{ force_compaction: number | null }>`
+        SELECT force_compaction FROM compaction_state WHERE session_key = ${sessionKey} LIMIT 1`;
+      if (rows[0]?.force_compaction !== 1) return false;
+      sql`UPDATE compaction_state SET force_compaction = NULL WHERE session_key = ${sessionKey}`;
+      return true;
     },
   };
 }

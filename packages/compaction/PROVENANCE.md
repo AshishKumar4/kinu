@@ -44,3 +44,16 @@ The package's tsconfig inherits `"moduleResolution": "bundler"` from
 the new upstream commit over `src/engine/`, re-apply the `identity.ts` hash
 swap above, and update the commit hash here. The diff against upstream must
 remain exactly the table above.
+
+## Second modification set — `ladder.ts` + `plan.ts` overhead floor (2026-07-13)
+
+Production incident follow-up (FIX-INTRATURN): the char-based estimate cannot
+see request overhead (the assembled system prompt, tool schemas), so a fresh
+session with a large system prompt read as "small" until the first provider
+report landed. `BoundaryContextOptions.overheadFloorTokens` (plan.ts) now
+floors the measured provider-overhead delta in `buildPlan` (ladder.ts), and
+the trigger gate uses `max(providerReportedTokens, estimate + floor)`.
+
+Additive and default-inert (`overheadFloorTokens` absent → byte-identical
+behavior to upstream). Candidate to upstream to opencode-better-compact —
+the same blind spot exists there.

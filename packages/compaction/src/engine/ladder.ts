@@ -51,17 +51,22 @@ export function buildPlan(turns: Turn[], inputs: BuildPlanInputs, spec: LadderSp
     const rawEstimateTokens = spec.codec.estimateTurns(turns)
     const providerReportedTokens =
         inputs.providerReportedTokens && inputs.providerReportedTokens > 0 ? inputs.providerReportedTokens : 0
+    const overheadFloorTokens =
+        inputs.overheadFloorTokens && inputs.overheadFloorTokens > 0 ? Math.round(inputs.overheadFloorTokens) : 0
     // Provider totals include system prompt, tool schemas, and cache accounting
     // that the char-based estimate cannot see. Carrying the delta keeps every
-    // gate and stage number on the provider-equivalent scale.
-    const overheadTokens = providerReportedTokens > 0 ? Math.max(0, providerReportedTokens - rawEstimateTokens) : 0
+    // gate and stage number on the provider-equivalent scale; the caller's
+    // known overhead (system prompt) floors it when no provider total exists
+    // yet — or when the measured delta undershoots what is knowably there.
+    const measuredOverhead = providerReportedTokens > 0 ? Math.max(0, providerReportedTokens - rawEstimateTokens) : 0
+    const overheadTokens = Math.max(measuredOverhead, overheadFloorTokens)
     const estimator: Estimator = { overheadTokens }
-    const beforeTokens = providerReportedTokens > 0 ? providerReportedTokens : rawEstimateTokens
+    const beforeTokens = Math.max(providerReportedTokens, rawEstimateTokens + overheadFloorTokens)
     const triggerTokens = Math.floor(contextLimit * triggerRatio)
     // Either scale crossing the trigger means the request is in danger: the
     // provider total sees overhead the estimate cannot, and the estimate sees
     // fresh turns the provider has not priced yet.
-    if (!inputs.force && Math.max(beforeTokens, rawEstimateTokens) < triggerTokens) return null
+    if (!inputs.force && beforeTokens < triggerTokens) return null
 
     const rawTailStartIndex = findRawTailStartIndex(
         turns,
@@ -305,6 +310,7 @@ export interface Engine {
         targetRatio?: number
         recentToolResultBudgetTokens?: number
         providerReportedTokens?: number
+        overheadFloorTokens?: number
         // Side-model assistant-run summaries for the automatic path. When a
         // fresh plan queues summary jobs, the engine runs them and rebuilds
         // the plan with the accepted summaries before persisting it.
@@ -324,6 +330,7 @@ export function createEngine(spec: LadderSpec, ports: EnginePorts): Engine {
             targetRatio,
             recentToolResultBudgetTokens,
             providerReportedTokens,
+            overheadFloorTokens,
             summarize,
         }) {
             let staleSnapshotCleared = false
@@ -342,6 +349,7 @@ export function createEngine(spec: LadderSpec, ports: EnginePorts): Engine {
                 targetRatio,
                 recentToolResultBudgetTokens,
                 providerReportedTokens,
+                overheadFloorTokens,
                 priorPlan,
                 sessionKey,
                 citablePath: ports.transcripts.citablePath,

@@ -46,6 +46,12 @@ export interface BoundaryContextOptions {
     assistantSummaries?: Record<string, string>
     prefixSummary?: string
     providerReportedTokens?: number
+    // Known-but-unpriced request overhead the char estimate cannot see (the
+    // assembled system prompt, at minimum). Used as a floor under the
+    // provider-measured overhead delta, so the trigger holds even before the
+    // session's first provider report — a fresh session with a big system
+    // prompt must not read as small.
+    overheadFloorTokens?: number
     // The snapshot this plan replaces. Replacement plans treat what the
     // prior plan already pruned as a monotonic floor: applied stages stay
     // applied, tool results the model already lost are not resurrected,

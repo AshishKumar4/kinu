@@ -165,4 +165,47 @@ describe('createCompactionStateStore', () => {
     db.prepare(`INSERT INTO compaction_state (session_key, plan_json) VALUES ('s1', 'not json')`).run();
     expect(store.plans.load('s1')).toBeNull();
   });
+
+  test('force-compaction arms once and is consumed exactly once (never loops)', () => {
+    const { store } = stateRig();
+    expect(store.takeForceCompaction('s1')).toBe(false);
+    store.armForceCompaction('s1');
+    expect(store.takeForceCompaction('s1')).toBe(true);
+    expect(store.takeForceCompaction('s1')).toBe(false);
+    // Sessions are isolated.
+    store.armForceCompaction('s1');
+    expect(store.takeForceCompaction('s2')).toBe(false);
+    expect(store.takeForceCompaction('s1')).toBe(true);
+  });
+
+  test('arming force-compaction never clobbers the plan or the token signal', () => {
+    const { store } = stateRig();
+    const snap = snapshot('s1');
+    store.plans.save('s1', snap);
+    store.savePromptTokens('s1', 9_000, 30);
+    store.armForceCompaction('s1');
+    expect(store.plans.load('s1')).toEqual(snap);
+    expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
+    expect(store.takeForceCompaction('s1')).toBe(true);
+    expect(store.plans.load('s1')).toEqual(snap);
+    expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
+  });
+
+  test('a pre-overflow-recovery table gains the flag column on init', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE compaction_state (
+      session_key        TEXT PRIMARY KEY,
+      plan_json          TEXT,
+      last_prompt_tokens INTEGER,
+      measured_at_length INTEGER
+    )`);
+    db.prepare(`INSERT INTO compaction_state (session_key, last_prompt_tokens, measured_at_length)
+                VALUES ('legacy', 5000, 12)`).run();
+    initCompactionStateTable((ddl) => db.exec(ddl));
+    const store = createCompactionStateStore(sqliteSql(db));
+    expect(store.loadPromptTokens('legacy', 12)).toBe(5_000);
+    expect(store.takeForceCompaction('legacy')).toBe(false);
+    store.armForceCompaction('legacy');
+    expect(store.takeForceCompaction('legacy')).toBe(true);
+  });
 });

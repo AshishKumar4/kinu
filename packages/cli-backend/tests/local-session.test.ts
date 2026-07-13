@@ -543,6 +543,72 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
   });
 });
 
+describe('LocalAgentSession — overflow recovery (context_length turn failures)', () => {
+  /** doStream throws a context-window error for the first `failures` calls,
+   *  then streams normally — the provider-overflow shape end to end. */
+  function overflowingModel(failures: number, answer = 'recovered'): LanguageModel {
+    let calls = 0;
+    const base = fakeModel(answer) as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+    const inner = base.doStream.bind(base);
+    return {
+      ...base,
+      doStream: async (options: unknown) => {
+        calls += 1;
+        if (calls <= failures) throw new Error('context_length_exceeded: prompt is too long');
+        return inner(options);
+      },
+    } as unknown as LanguageModel;
+  }
+
+  test('a context_length failure arms force-compaction and enqueues ONE retry that resumes the work', async () => {
+    const { db, session, events } = setup('unused', overflowingModel(1));
+    await session.send('build the thing');
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+
+    // Turn 1 errored, the ONE retry ran as a programmatic overflow_retry turn.
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    const starts = turnStarts(events);
+    expect(starts.map((s) => s.kind)).toEqual(['user', 'programmatic']);
+    expect(starts[1]!.event).toBe('overflow_retry');
+    expect(starts[1]!.text).toContain('compacted');
+    // The retry turn completed…
+    const streamed = events.filter((e) => e.type === 'text-delta').map((e) => (e as { delta: string }).delta).join('');
+    expect(streamed).toContain('recovered');
+    // …and CONSUMED the armed flag: no compaction_state row stays armed.
+    const armed = db.prepare(`SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`).get() as { c: number };
+    expect(armed.c).toBe(0);
+  });
+
+  test('a retry turn that fails again never enqueues a third turn (never loops)', async () => {
+    const { session, events } = setup('unused', overflowingModel(Number.POSITIVE_INFINITY));
+    await session.send('build the thing');
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+    // Give any (wrong) further enqueue a chance to surface, then assert quiet.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(turnStarts(events)).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(2);
+  });
+
+  test('a rate-limit failure never force-compacts or retries', async () => {
+    let calls = 0;
+    const base = fakeModel('n/a') as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+    const model = {
+      ...base,
+      doStream: async () => {
+        calls += 1;
+        throw new Error('Failed after 3 attempts. Last error: Too Many Requests');
+      },
+    } as unknown as LanguageModel;
+    const { db, session, events } = setup('unused', model);
+    await session.send('build the thing');
+    await new Promise((r) => setTimeout(r, 25));
+    expect(turnStarts(events)).toHaveLength(1);
+    expect(calls).toBe(1);
+    const armed = db.prepare(`SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`).get() as { c: number };
+    expect(armed.c).toBe(0);
+  });
+});
+
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('always-active skills round-trip through agent_config', () => {
     const { session } = setup();

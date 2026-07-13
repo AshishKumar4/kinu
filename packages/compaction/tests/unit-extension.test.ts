@@ -84,6 +84,22 @@ describe('trigger gating', () => {
     expect(await transform([])).toBeUndefined();
     expect(await transform(history(2, 100), { contextWindow: 0 })).toBeUndefined();
   });
+
+  test('the system prompt floors the estimate when no provider total exists yet', async () => {
+    // history(6, 4000) estimates ~6.3k tokens against the 8.5k trigger — under
+    // on its own, but the assembled system prompt rides every request unseen
+    // by the message estimate. A ~12k-char system (~3k tokens) must push the
+    // trigger decision over the line; a small one must not.
+    const messages = history(6, 4_000);
+    const small = rig();
+    expect(await small.transform(messages)).toBeUndefined();
+    expect(small.outcomes).toHaveLength(0);
+
+    const large = rig();
+    const result = await large.transform(messages, { system: 'S'.repeat(12_000) });
+    expect(result).toBeDefined();
+    expect(large.outcomes[0]?.outcome).toBe('planned');
+  });
 });
 
 describe('plan build', () => {

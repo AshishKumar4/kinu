@@ -107,6 +107,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     targetRatio: profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
     providerReportedTokens: ctx.providerReportedTokens,
+    overheadFloorTokens: systemOverheadFloor(ctx),
     citablePath: deps.ports.transcripts.citablePath,
   });
 
@@ -217,6 +218,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
               targetRatio: profile.targetPercent / 100,
               recentToolResultBudgetTokens: profile.recentToolTokens,
               providerReportedTokens: ctx.providerReportedTokens,
+              overheadFloorTokens: systemOverheadFloor(ctx),
               summarize: runJobs,
             });
       if (processed.outcome === 'unchanged') {
@@ -239,6 +241,17 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       return proteusCodec.decode(applied.turns, messages);
     },
   };
+}
+
+/** The trigger's known-overhead floor: the assembled system prompt, priced on
+ *  the engine's chars/4 scale. The transform sees only the durable history —
+ *  the system prompt (and tool schemas it stands in for) rides every request
+ *  unseen by the message estimate, which otherwise reads systematically low
+ *  until the first provider-reported total lands (production-measured on
+ *  workspace-1a4e20: an 8-14k-token gap between the history estimate and the
+ *  real per-request prompt). */
+function systemOverheadFloor(ctx: TransformContext): number {
+  return Math.round(ctx.system.length / 4);
 }
 
 /** The most recent real user request across the FULL history (including the

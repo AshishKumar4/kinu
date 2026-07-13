@@ -65,6 +65,8 @@ import {
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
+  // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
+  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   EventInjectionBuffer, type MidTurnEventBatch,
@@ -2007,13 +2009,18 @@ export class OrchestratorAgent extends Think<Env> {
     // history shrank (undo/restore) since the measurement.
     this._turnDurableLength = baseMessages.length;
     const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, baseMessages.length);
+    this._turnContextWindow = this.sessionContextWindow();
+    // Overflow recovery (onChatResponse arms the flag on a context_length
+    // failure): consume it — at most one forced rebuild per arm, never a loop.
+    const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
+    if (trigger === 'force') this.logActivity('compaction_forced', 'overflow recovery — forced context rebuild');
     const transformed = await this.extensions.runTransformContext({
       sessionKey: this.name,
       messages: baseMessages,
       system: systemOverride,
-      contextWindow: this.sessionContextWindow(),
+      contextWindow: this._turnContextWindow,
       ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
-      trigger: 'auto',
+      trigger,
     });
     // The newest MEMORY.md lessons/reflections ride the ephemeral block too
     // (the same bounded tail the CLI weave supplies) — the reflection loop
@@ -2079,15 +2086,21 @@ export class OrchestratorAgent extends Think<Env> {
    *  beforeStep re-rolls onto the newest tail each step. */
   private _turnCachePlan: { strategy: PromptCacheStrategy; system: string | SystemModelMessage } | null = null;
 
+  /** The in-flight turn's resolved context window — set in beforeTurn, read
+   *  by beforeStep's prune budget every step. */
+  private _turnContextWindow = 0;
+
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
     // The shared step pipeline (core prompting/prepare-step.ts, identical on
-    // the CLI): extension prepareStep rewrites first, then the cache plan
-    // rolls the tail breakpoints onto the FINAL message array so each request
-    // of the agentic loop reads the prefix the previous step wrote.
+    // the CLI): extension prepareStep rewrites first, step-boundary tool-output
+    // pruning against the window budget next, then the cache plan rolls the
+    // tail breakpoints onto the FINAL message array so each request of the
+    // agentic loop reads the prefix the previous step wrote.
     return composePrepareStep(
       this.extensions,
       { stepNumber: ctx.stepNumber, messages: ctx.messages },
       this._turnCachePlan,
+      this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
     );
   }
 
@@ -2112,9 +2125,17 @@ export class OrchestratorAgent extends Think<Env> {
    *  background-job wake, consent resume) — enqueueTurn stamps proteusEvent
    *  metadata on the saved user message; real chat messages carry none. */
   private lastUserTurnIsProgrammatic(): boolean {
-    const userMessages = this.messages.filter(m => m.role === "user");
-    const last = userMessages[userMessages.length - 1] as { metadata?: unknown } | undefined;
-    return isRecord(last?.metadata) && typeof last.metadata.proteusEvent === 'string';
+    return this.turnUserMessageEvent(null) !== null;
+  }
+
+  /** The turn's proteusEvent metadata value — from the active programmatic
+   *  message when one drove the turn, else the last durable user message.
+   *  Null for real chat turns. */
+  private turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
+    const source = programmaticUserMessage
+      ?? (this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined);
+    const metadata = source?.metadata;
+    return isRecord(metadata) && typeof metadata.proteusEvent === 'string' ? metadata.proteusEvent : null;
   }
 
   async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
@@ -2176,6 +2197,30 @@ export class OrchestratorAgent extends Think<Env> {
     // durable-history length so a later shrink voids it.
     if (this.acc.lastPromptTokens > 0) {
       this.compactionState.savePromptTokens(this.name, this.acc.lastPromptTokens, this._turnDurableLength);
+    }
+    // Overflow recovery (core turn-failure policy, shared with the CLI): a
+    // context_length-class provider failure arms force-compaction for the
+    // next assembly and enqueues ONE retry turn — a failed retry never
+    // enqueues another. Rate limits never force-compact (throughput is not
+    // size) unless the measured PER-REQUEST prompt crossed half the window.
+    if (!completed && result.error) {
+      const recovery = planOverflowRecovery({
+        error: result.error,
+        lastPromptTokens: this.acc.lastPromptTokens,
+        contextWindow: this._turnContextWindow > 0 ? this._turnContextWindow : this.sessionContextWindow(),
+        turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
+      });
+      if (recovery.forceCompaction) {
+        this.compactionState.armForceCompaction(this.name);
+        this.logActivity('overflow_detected',
+          `${recovery.failureClass} — force compaction armed${recovery.enqueueRetry ? ', retry enqueued' : ''}`);
+        if (recovery.enqueueRetry) {
+          void this.host.enqueueTurn({
+            text: OVERFLOW_RETRY_TEXT,
+            metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
+          }).catch((err: unknown) => console.warn('[proteus] overflow retry enqueue failed:', err));
+        }
+      }
     }
     // Emit turn_end + run_end into the durable event log.
     try {

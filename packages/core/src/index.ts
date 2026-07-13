@@ -145,7 +145,23 @@ export {
   type TransformContext,
 } from './extension.js';
 export { composePrepareStep, type StepCachePlan } from './prompting/prepare-step.js';
+export {
+  pruneStepToolOutputs,
+  STEP_CONTEXT_BUDGET_RATIO,
+  STEP_RECENT_TOOL_BUDGET_TOKENS,
+  type StepPruneBudget,
+} from './prompting/step-prune.js';
 export { StepInjections, type RecordedInjection } from './prompting/step-injections.js';
+export {
+  classifyTurnFailure,
+  planOverflowRecovery,
+  OVERFLOW_RETRY_EVENT,
+  OVERFLOW_RETRY_TEXT,
+  type TurnFailureClass,
+  type TurnFailureSignals,
+  type OverflowRecoveryInput,
+  type OverflowRecoveryDecision,
+} from './turn-failure.js';
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';

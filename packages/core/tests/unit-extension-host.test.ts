@@ -211,6 +211,27 @@ describe('transformContext through runChat', () => {
     expect(stepTokens).toEqual([[1, 1]]);
   });
 
+  test("transformTrigger threads into the transform context ('force' on overflow recovery, 'auto' default)", async () => {
+    const triggers: string[] = [];
+    const observer: ProteusExtension = {
+      name: 'observer',
+      transformContext: async (ctx) => { triggers.push(ctx.trigger); return undefined; },
+    };
+    for (const transformTrigger of [undefined, 'force' as const]) {
+      const { model } = promptCapturingModel();
+      for await (const _ of runChat({
+        model: model as never,
+        system: 'sys',
+        history: [{ role: 'user', content: 'go' }],
+        tools: {},
+        maxSteps: 1,
+        ...(transformTrigger ? { transformTrigger } : {}),
+        extensions: new ExtensionHost().register(observer),
+      })) { /* drain */ }
+    }
+    expect(triggers).toEqual(['auto', 'force']);
+  });
+
   test('a throwing transform never breaks the turn (fail-open)', async () => {
     const { model, prompt } = promptCapturingModel();
     let doneText = '';
