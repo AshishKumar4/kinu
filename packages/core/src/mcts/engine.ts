@@ -10,7 +10,6 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MCTSConfig, MCTSPhase, SearchNode } from '../types/mcts.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
-import type { BranchScore } from './pruning.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { initSearchTables } from './schemas.js';
 import { initAlternateTakesTable } from './takes.js';
@@ -20,8 +19,7 @@ import { backpropagate } from './backpropagation.js';
 import { recordNode } from './record-node.js';
 import { converge } from './convergence.js';
 import { evaluateWithMultiModelJudging } from './evaluation.js';
-import { beamPruneByStepScore } from './step-prm.js';
-import { pruneAndReflect } from './pruning.js';
+import { pruneLowValueBranches } from './pruning.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
 import { estimateCost } from './cost.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -38,17 +36,16 @@ export async function runMCTS(
   const maxDepth = config.maxDepth ?? defaults.maxDepth;
   const W = config.explorationWeight ?? defaults.explorationWeight;
   const pruneThreshold = config.pruneThreshold ?? defaults.pruneThreshold;
+  const minVisitsForPrune = defaults.minVisitsForPrune;
   const minAcceptableScore = config.minAcceptableScore ?? defaults.minAcceptableScore;
   const maxCostUSD = config.maxCostUSD ?? defaults.maxCostUSD;
   const judgeSamples = config.judgeSamples ?? defaults.judgeSamples;
   const maxEvalLLMCalls = config.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
   const takesEpsilon = config.takesEpsilon ?? defaults.takesEpsilon;
-  const stepPrm = config.stepPrm ?? defaults.stepPrm;
-  const stepPrmPruneThreshold = config.stepPrmPruneThreshold ?? defaults.stepPrmPruneThreshold;
   const reflectionThreshold = defaults.reflectionThreshold;
   const craftExtractionThreshold = defaults.craftExtractionThreshold;
 
-  const estimate = estimateCost(config.budget, N_BRANCHES, 3, maxEvalLLMCalls);
+  const estimate = estimateCost(config.budget, N_BRANCHES, maxEvalLLMCalls);
   if (estimate.estimatedUSD > maxCostUSD) {
     throw new Error(
       `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD}. ` +
@@ -82,8 +79,12 @@ export async function runMCTS(
 
     while (phase.budget > 0) {
       throwIfAborted(config.signal);
-      const selected = selectNode(rt.storage.sql, W);
-      if (!selected || selected.depth >= maxDepth) break;
+      // Depth cap lives in selection (WP-A4): a maxed-out argmax no longer
+      // aborts the search — selection skips depth-capped nodes and the budget
+      // keeps flowing to the shallower frontier. Break only when nothing is
+      // selectable (frontier exhausted or every open node is at the cap).
+      const selected = selectNode(rt.storage.sql, W, maxDepth);
+      if (!selected) break;
 
       // EXPAND — spawn N branches
       const branchIds = Array.from({ length: N_BRANCHES }, () =>
@@ -141,18 +142,7 @@ export async function runMCTS(
         `;
       }
 
-      // STEP-PRM BEAM PRUNE (optional, config.stepPrm — default off). One cheap
-      // judge call per proposal; proposals below the threshold are pruned now and
-      // SKIP the expensive grounded evaluator below, scored at their step score.
       const proposals = explorations.map(e => e.text);
-      const stepPlan = stepPrm
-        ? await abortable(
-            beamPruneByStepScore(rt.judgeModel ?? rt.llm, task, proposals, stepPrmPruneThreshold),
-            config.signal,
-            abortBranches,
-          )
-        : null;
-      throwIfAborted(config.signal);
 
       // EVALUATE — the engine-level seam every backend shares: branches only
       // explore; scoring happens HERE through the one grounded evaluator
@@ -162,20 +152,20 @@ export async function runMCTS(
       // balanced optimum and converge falsely.
       const scoreResults = await abortable(
         Promise.allSettled(explorations.map((exploration, i) =>
-          // Pruned branches skip the grounded evaluator — their step score stands.
-          stepPlan && !stepPlan[i]!.keep
-            ? Promise.resolve({ score: stepPlan[i]!.stepScore })
-            : evaluateWithMultiModelJudging({
-                task,
-                trajectory: exploration.text,
-                codeUsed: exploration.codeUsed,
-                siblings: proposals.filter((p, j) => j !== i && p.length > 0),
-                executor: rt.executor,
-                judge: rt.judgeModel,
-                explorer: rt.llm,
-                judgeSamples,
-                maxLLMCalls: maxEvalLLMCalls,
-              }),
+          evaluateWithMultiModelJudging({
+            task,
+            trajectory: exploration.text,
+            codeUsed: exploration.codeUsed,
+            siblings: proposals.filter((p, j) => j !== i && p.length > 0),
+            // Close the band loophole (WP-A5): if a sibling attempted code,
+            // this prose-only branch is capped at the fail ceiling.
+            siblingsProducedCode: explorations.some((e, j) => j !== i && !!e.codeUsed),
+            executor: rt.executor,
+            judge: rt.judgeModel,
+            explorer: rt.llm,
+            judgeSamples,
+            maxLLMCalls: maxEvalLLMCalls,
+          }),
         )),
         config.signal,
         abortBranches,
@@ -194,18 +184,16 @@ export async function runMCTS(
         }
       }
 
-      // REFLECT on failures + PRUNE
-      const branchScores: BranchScore[] = [];
+      // REFLECT — write a failure lesson to memory for each below-threshold
+      // branch. Pruning is separate: it scans the whole open population for
+      // settled low-value nodes (pruneLowValueBranches), so it isn't confined
+      // to this iteration's freshly-expanded children.
       for (let i = 0; i < N_BRANCHES; i++) {
         const score = scores[i] ?? 0;
-        const nodeId = childNodeIds[i] ?? '';
-        const branchId = branchIds[i] ?? '';
-        let reflection: string | undefined;
-
         if (score < reflectionThreshold) {
           const handle = branchHandles[i];
           if (handle) {
-            reflection = await handle.generateReflection(task);
+            const reflection = await handle.generateReflection(task);
             throwIfAborted(config.signal);
             await rt.memory.append(
               'memory/MEMORY.md',
@@ -214,10 +202,8 @@ export async function runMCTS(
             await rt.memory.index('memory/MEMORY.md');
           }
         }
-
-        branchScores.push({ nodeId, agentKey: branchId, score, reflection });
       }
-      await pruneAndReflect(rt, branchScores, pruneThreshold);
+      await pruneLowValueBranches(rt, pruneThreshold, minVisitsForPrune);
       throwIfAborted(config.signal);
 
       // EXTRACT crafted tools from winners

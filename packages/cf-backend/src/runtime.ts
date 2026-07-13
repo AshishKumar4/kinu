@@ -45,7 +45,7 @@ import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey, diversityDirective } from "@proteus/core";
+import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,
@@ -629,13 +629,15 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
 
   return {
     explore: async (history, _tools, siblings = []) => {
-      const context = history.map((m: { role: string; content: string }) =>
-        `${m.role}: ${m.content}`).join("\n").slice(-800);
+      // Match the Facet's explore() exactly — same context formatter and token
+      // budget — so the fallback path produces branches of equal fidelity, not
+      // a slice(-800) + 512-token stub that can't ground code (WP-A7).
+      const context = formatInheritedContext(history);
       const result = await generateText({
         model: getModel(),
         system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
         messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
-        maxOutputTokens: 512,
+        maxOutputTokens: 4096,
       });
       const text = result.text.trim();
       const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);

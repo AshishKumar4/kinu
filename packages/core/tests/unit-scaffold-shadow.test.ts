@@ -153,19 +153,29 @@ describe('decidePromotion', () => {
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('promotes only with ZERO regressions and a winning record', () => {
+  test('promotes a clean winning record', () => {
     const p = make({ trialsSoFar: 5, pendingWins: 5, currentWins: 0 });
     const d = decidePromotion(p, cfg);
     expect(d.decision).toBe('promote');
     expect(d.winRate).toBeCloseTo(1, 2);
   });
 
-  test('regression veto: a SINGLE loss rolls back even with a strong win-rate', () => {
-    // 6-1 (winRate 0.86) would promote under win-rate-only logic; the
-    // regression veto (maxRegressions=0) rolls it back. This is the safety core.
+  test('tolerates one loss (maxRegressions=1, Monte-Carlo settled) but vetoes the second', () => {
+    // 6-1 (winRate 0.86): within the regression tolerance → promote. The old
+    // maxRegressions=0 rolled this back and thereby rejected most genuinely-
+    // better variants (see DEFAULT_SHADOW_CONFIG simulation table).
+    const oneLoss = make({ trialsSoFar: 8, pendingWins: 6, currentWins: 1 });
+    expect(decidePromotion(oneLoss, cfg).decision).toBe('promote');
+    // 6-2 (winRate 0.75 — still promotable on win-rate alone): the hard veto
+    // fires on the second decisive loss regardless. This is the safety core.
+    const twoLosses = make({ trialsSoFar: 9, pendingWins: 6, currentWins: 2 });
+    expect(decidePromotion(twoLosses, cfg).decision).toBe('rollback');
+  });
+
+  test('a zero-tolerance config (maxRegressions=0) still vetoes on a single loss', () => {
+    const strict: ShadowConfig = { ...cfg, maxRegressions: 0 };
     const p = make({ trialsSoFar: 8, pendingWins: 6, currentWins: 1 });
-    const d = decidePromotion(p, cfg);
-    expect(d.decision).toBe('rollback');
+    expect(decidePromotion(p, strict).decision).toBe('rollback');
   });
 
   test('rollbacks when the pending clearly loses', () => {
@@ -176,12 +186,12 @@ describe('decidePromotion', () => {
   });
 
   test('continues below minDecisiveTrials even with a perfect win-rate', () => {
-    // 2-0 with 3 ties: winRate 1.0 but only 2 decisive trials < minDecisiveTrials(3).
+    // 2-0 with 3 ties: winRate 1.0 but only 2 decisive trials < minDecisiveTrials(5).
     const p = make({ trialsSoFar: 5, pendingWins: 2, currentWins: 0, ties: 3 });
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('maxTrials force: any regression still rolls back (veto wins over the force)', () => {
+  test('maxTrials force: losses beyond tolerance still roll back (veto wins over the force)', () => {
     const p = make({ trialsSoFar: 12, pendingWins: 6, currentWins: 5, ties: 1 });
     const d = decidePromotion(p, cfg);
     expect(d.decision).toBe('rollback');

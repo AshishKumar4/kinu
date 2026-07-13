@@ -51,19 +51,6 @@ export interface MCTSConfig {
   maxEvalLLMCalls?: number;
   /** Near-tie gap for Alternate Takes capture at convergence. */
   takesEpsilon?: number;
-  /**
-   * Step-level Process Reward Model gate (default off). When on, each branch's
-   * proposal is first scored by a cheap one-call step-PRM judge; proposals below
-   * `stepPrmPruneThreshold` are pruned at that step score and SKIP the expensive
-   * grounded evaluator (assertions + judge ensemble). Off by default: at the
-   * current single-step rollout depth it duplicates the grounded evaluator's
-   * signal at extra cost — it pays off only when branches are wide or the
-   * grounded evaluator is expensive. See mcts/step-prm.ts.
-   */
-  stepPrm?: boolean;
-  /** Step-PRM prune threshold [0..1]; proposals scoring below skip the grounded
-   *  evaluator. Only consulted when `stepPrm` is on. */
-  stepPrmPruneThreshold?: number;
   signal?: AbortSignal;
   /** Called after each MCTS iteration completes — use for real-time UI updates. */
   onIterationComplete?: (iteration: number, remainingBudget: number) => void;

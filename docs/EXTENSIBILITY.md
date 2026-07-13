@@ -219,9 +219,6 @@ tests under `packages/core/tests/`.
 - **Unified `think` tool** — `core/strategy/think-tool.ts`. Dispatches by
   strategy id (`single-shot` / `mcts` / `heads` / …) so the LLM has one
   stable agent surface; adding strategies = registry entries.
-- **PRM step-scoring** — `core/mcts/step-prm.ts` exports `scoreStepWithJudge`
-  and `blendStepScore` for fine-grained intermediate-step scoring; usable
-  from MCTS engine, scaffold runtime, or any custom strategy.
 - **Eval harness** — `core/eval/{types,runner,judge,corpus}.ts`. JSONL corpus
   loader, A/B runner against any two `ExplorationStrategy`s, structured
   judge verdicts via Valibot. Seed corpus at `tests/eval/corpus/seed.jsonl`.

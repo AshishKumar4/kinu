@@ -293,7 +293,7 @@ export { backpropagate } from './mcts/backpropagation.js';
 export { recordNode } from './mcts/record-node.js';
 export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/record-node.js';
 export { converge } from './mcts/convergence.js';
-export { pruneAndReflect } from './mcts/pruning.js';
+export { pruneLowValueBranches } from './mcts/pruning.js';
 // Sibling diversity at expansion — backends render this into the explore prompt.
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity.js';
 // Whole-message branch context inheritance (shared by every explore() backend).
@@ -307,12 +307,6 @@ export {
   evaluateWithMultiModelJudging, median,
   type EvaluateBranchOptions, type BranchEvaluation,
 } from './mcts/evaluation.js';
-// Process Reward Models — step-level scoring. Wired into MCTS expansion as the
-// optional beam-prune gate (config.stepPrm, default off; see step-prm.ts header).
-export {
-  scoreStepWithJudge, blendStepScore, beamPruneByStepScore,
-  type StepScore, type StepScoreInput, type StepPrunePlan,
-} from './mcts/step-prm.js';
 export { estimateCost } from './mcts/cost.js';
 // Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
 export {

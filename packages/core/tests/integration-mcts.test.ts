@@ -93,14 +93,15 @@ describe('MCTS integration', () => {
       },
     });
 
-    // Even branches carry code that fails execution; odd branches are prose.
+    // Even branches carry code that PASSES execution; odd branches are prose.
+    // Each expansion pairs one code branch with one prose branch.
     rt.executor = markerExecutor();
     rt.spawnBranch = async () => {
       const i = branchCounter++;
       return {
         explore: async () => ({
           text: `branch ${i} explored`,
-          codeUsed: i % 2 === 0 ? 'const x = FAIL_MARKER;' : null,
+          codeUsed: i % 2 === 0 ? 'const x = 1;' : null,
         }),
         generateReflection: async () => `reflection for branch ${i}`,
       };
@@ -113,25 +114,28 @@ describe('MCTS integration', () => {
       branches: 2,
     });
 
-    // The prose branches (judge mock 0.5 → 0.75×0.5 = 0.375) clear the
-    // default minAcceptableScore; the failing-code branches cannot.
+    // The passing-code branch (judge 0.5 → 0.6 + 0.4×0.5 = 0.8) wins and clears
+    // the default minAcceptableScore.
     expect(result.converged).toBe(true);
-    expect(result.winnerValue).toBeGreaterThan(0.3);
+    expect(result.winnerValue).toBeGreaterThan(0.6);
 
     // Tree should have root + 3 iterations × 2 branches = 7 nodes
     const allNodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
     expect(allNodes.length).toBe(7); // 1 root + 6 children
 
-    // Execution grounding dominates: every failing-code branch is valued
-    // below every prose branch, regardless of identical judge prose.
+    // Execution grounding dominates AND the A5 band loophole is closed: the
+    // prose branch shares an expansion with a code branch, so it is capped at
+    // the FAIL ceiling (0.30×0.5 = 0.15) — it cannot beat a passing code branch
+    // by declining to attempt code.
     const children = allNodes.filter((n) => n.parent_id !== null);
     const codeBranches = children.filter((n) => n.code_used);
     const proseBranches = children.filter((n) => !n.code_used);
     expect(codeBranches.length).toBeGreaterThan(0);
     expect(proseBranches.length).toBeGreaterThan(0);
-    const maxFailing = Math.max(...codeBranches.map((n) => n.value));
-    const minProse = Math.min(...proseBranches.map((n) => n.value));
-    expect(maxFailing).toBeLessThan(minProse);
+    const minPassing = Math.min(...codeBranches.map((n) => n.value));
+    const maxProse = Math.max(...proseBranches.map((n) => n.value));
+    expect(maxProse).toBeLessThanOrEqual(0.3);   // capped at the fail ceiling
+    expect(minPassing).toBeGreaterThan(maxProse); // passing code dominates
 
     // Root should have been visited (backprop propagates to ancestors)
     const root = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NULL`[0]!;
@@ -180,66 +184,11 @@ describe('MCTS integration', () => {
     expect(result.winnerId).toBe(passing.id);
   });
 
-  test('#6 step-PRM gate (on): a low-scoring proposal is pruned and SKIPS the grounded evaluator', async () => {
-    // One LLM answers both judge surfaces by prompt marker: the step-PRM judge
-    // ('scoring ONE STEP') scores the bad proposal low + the good one high; the
-    // grounded evaluator ('scoring ONE candidate') always loves a candidate.
-    let stepCalls = 0;
+  test('every branch reaches the grounded evaluator (one call per branch)', async () => {
     let candidateCalls = 0;
     const llm: LLM = {
       async *stream() { yield ''; },
       async complete(prompt: string) {
-        if (prompt.includes('scoring ONE STEP')) {
-          stepCalls++;
-          return prompt.includes('BAD approach') ? '{"score": 0.05}' : '{"score": 0.9}';
-        }
-        if (prompt.includes('scoring ONE candidate')) candidateCalls++;
-        return '{"score": 0.8}';
-      },
-    };
-    const { rt } = createTestRuntime();
-    rt.llm = llm;
-    rt.judgeModel = llm;
-    let i = 0;
-    rt.spawnBranch = async () => {
-      const idx = i++;
-      return {
-        explore: async () => ({ text: idx === 0 ? 'a BAD approach' : 'a good approach', codeUsed: null }),
-        generateReflection: async () => 'n/a',
-      };
-    };
-
-    initTables(rt);
-    await runMCTS(rt, createMockSession(), 'choose an approach', {
-      budget: 1,
-      branches: 2,
-      stepPrm: true,
-      stepPrmPruneThreshold: 0.3,
-      judgeSamples: 1,
-    });
-
-    // Both proposals were step-scored (2 step-PRM calls).
-    expect(stepCalls).toBe(2);
-    // Only the kept (good) branch reached the grounded evaluator — the pruned
-    // BAD branch skipped it entirely, the beam-search efficiency win.
-    expect(candidateCalls).toBe(1);
-
-    // The pruned branch carries its low step score; the kept branch a passing one.
-    const children = rt.storage.sql<SearchNode>`
-      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL ORDER BY action`;
-    const bad = children.find((n) => n.action.includes('BAD'))!;
-    const good = children.find((n) => !n.action.includes('BAD'))!;
-    expect(bad.value).toBeLessThanOrEqual(0.05);
-    expect(good.value).toBeGreaterThan(bad.value);
-  });
-
-  test('#6 step-PRM gate (default off): every branch reaches the grounded evaluator', async () => {
-    let stepCalls = 0;
-    let candidateCalls = 0;
-    const llm: LLM = {
-      async *stream() { yield ''; },
-      async complete(prompt: string) {
-        if (prompt.includes('scoring ONE STEP')) stepCalls++;
         if (prompt.includes('scoring ONE candidate')) candidateCalls++;
         return '{"score": 0.5}';
       },
@@ -255,8 +204,7 @@ describe('MCTS integration', () => {
     initTables(rt);
     await runMCTS(rt, createMockSession(), 'no gate task', { budget: 1, branches: 2, judgeSamples: 1 });
 
-    // Gate off by default: no step-PRM calls, every branch judged by the evaluator.
-    expect(stepCalls).toBe(0);
+    // Every branch is judged by the grounded evaluator — no pre-prune gate.
     expect(candidateCalls).toBe(2);
   });
 

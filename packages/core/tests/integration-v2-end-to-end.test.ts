@@ -213,8 +213,8 @@ describe('v2 e2e: scaffold shadow rollout', () => {
       currentScore: winner === 'current' ? 0.8 : 0.5,
       pendingScore: winner === 'pending' ? 0.8 : 0.5,
     });
-    // A clean win with ZERO regressions — the regression veto (maxRegressions=0)
-    // requires the pending lose no decisive trials to be promotable.
+    // A clean 5-0 win: past minTrials/minDecisiveTrials with no losses beyond
+    // the regression tolerance — promotable.
     for (let i = 0; i < 5; i++) {
       recordShadowEvaluation(rt.storage.sql, {
         currentVersion: 0, pendingVersion: 1,

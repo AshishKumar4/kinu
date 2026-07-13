@@ -131,16 +131,19 @@ describe('runAutoShadowEval', () => {
     expect(map.get(0)).toBe('historical');
   });
 
-  test('auto-applies ROLLBACK on a regression (regression veto, end-to-end)', async () => {
+  test('auto-applies ROLLBACK on regressions beyond tolerance (regression veto, end-to-end)', async () => {
     const rt = await setup();
-    // Seed 5 pending wins (past minTrials with a strong record); this turn the
-    // judge picks 'current' — a single regression must roll the pending back
-    // despite the 5-1 record. Proves the hardened gate gates auto-apply.
-    for (let i = 0; i < 5; i++) {
+    // Seed 5 pending wins + 1 loss (a strong 5-1 record, within the
+    // maxRegressions=1 tolerance); this turn the judge picks 'current' again —
+    // the SECOND regression must roll the pending back despite the 5-2 record
+    // (winRate 0.71 would promote on win-rate alone). Proves the hardened gate
+    // gates auto-apply.
+    for (let i = 0; i < 6; i++) {
+      const winner = i < 5 ? 'pending' : 'current';
       rt.storage.sql`INSERT INTO scaffold_evaluations
         (id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
     }
     const result = await runAutoShadowEval({
       rt, task: 't', currentOutput: 'c',

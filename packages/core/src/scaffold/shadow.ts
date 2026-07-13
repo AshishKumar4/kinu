@@ -8,7 +8,7 @@
  * output; the pending runs silently). A judge LLM compares per-turn quality.
  *
  * After enough trials (default N=5), we aggregate:
- *   - any decisive trial the pending LOSES beyond maxRegressions (default 0) →
+ *   - any decisive trial the pending LOSES beyond maxRegressions (default 1) →
  *     rollback (the hard regression veto — gates promotion regardless of win-rate)
  *   - else if ≥ minDecisiveTrials decisive trials and win-rate ≥ promoteThreshold
  *     (default 0.6) → promote
@@ -79,22 +79,52 @@ export interface ShadowConfig {
   maxTrials: number;
   /** Auto-promote/rollback without user confirmation. Default false. */
   autoPromote: boolean;
-  /** Max decisive trials the pending may LOSE before it's rolled back. 0 =
-   *  any regression rolls it back (the safe default for auto-promotion). */
+  /** Max decisive trials the pending may LOSE before it's rolled back.
+   *  0 = any regression rolls it back — Monte-Carlo-shown to reject most
+   *  genuinely-better variants under judge noise (see DEFAULT_SHADOW_CONFIG). */
   maxRegressions: number;
   /** Minimum decisive (non-tie) trials required before a promote — guards
-   *  against promoting on one lucky trial. Default 3. */
+   *  against promoting on one lucky trial. Default 5. */
   minDecisiveTrials: number;
 }
 
+/**
+ * Defaults settled by binomial Monte Carlo (scripts/shadow-veto-monte-carlo.ts,
+ * 200k sims/cell over the REAL decidePromotion, sequential per-trial stopping
+ * exactly as runAutoShadowEval applies it — rerun the script to reproduce).
+ *
+ * The old maxRegressions=0 ("one loss = rollback") was the statistically
+ * indefensible constant: a genuinely-better scaffold almost always loses SOME
+ * decisive trial under judge noise before accumulating a promotable record.
+ * Config aggregates from the sweep (win-rates {.55,.6,.7,.8} × tie-rates
+ * {.3,.5,.7}; "worse" = mirror 1-win):
+ *
+ *   maxReg minDec | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
+ *        0      3 |        29.8%           |   2.5%   ← old default
+ *        0      5 |        20.8%           |   0.7%
+ *        1      3 |        66.1%           |  18.9%
+ *        1      5 |        50.6%           |   4.9%   ← CHOSEN
+ *        2      3 |        71.3%           |  20.4%
+ *        2      5 |        71.3%           |  16.3%
+ *
+ * (1,5) is the frontier: it keeps false-promotion of clearly-worse variants
+ * (true win ≤ 0.30) under 5% at tie rates ≤ 0.5 while +70% relative
+ * true-promotion vs the old default (flagship case, 70%-win / 50%-tie:
+ * 32.4% → 55.6%). A strict <5% bar against ALL worse worlds (incl. the 45%
+ * near-coin-flip mirror) is unattainable in principle at maxTrials=12 — that
+ * needs hundreds of decisive trials — and near-coin-flip promotions are
+ * low-harm and revertable from the Evolution Changelog. Known residual leak
+ * (documented, not config-fixable): the maxTrials forced decision promotes on
+ * a bare >0.5 majority, which dominates false promotions in high-tie worlds.
+ */
 export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
   minTrials: 5,
   promoteThreshold: 0.6,
   rollbackThreshold: 0.4,
   maxTrials: 12,
   autoPromote: false,
-  maxRegressions: 0,
-  minDecisiveTrials: 3,
+  maxRegressions: 1,
+  minDecisiveTrials: 5,
 };
 
 export function initShadowTables(execRaw: RawSqlExec): void {
@@ -307,9 +337,10 @@ export function decidePromotion(
   const winRate = pending.pendingWins / decisiveTrials;
 
   // Regression veto (hard, checked first): if the pending has LOST more decisive
-  // trials than allowed, roll it back immediately. With maxRegressions=0 (the
-  // safe default) a single loss is decisive — the owner's "auto-rollback on
-  // regression". This gates promotion no matter how high the win-rate is.
+  // trials than allowed, roll it back immediately. This gates promotion no
+  // matter how high the win-rate is. maxRegressions default is 1 — Monte-Carlo
+  // settled (see DEFAULT_SHADOW_CONFIG): 0 rejected most genuinely-better
+  // variants because judge noise makes some decisive loss near-certain.
   if (pending.currentWins > config.maxRegressions) {
     return { decision: 'rollback', winRate };
   }

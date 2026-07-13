@@ -92,6 +92,27 @@ describe('UCT selection', () => {
     expect(reselect.id).toBe('root');
   });
 
+  test('WP-A4: depth-capped nodes are skipped, not fatal — a shallower node is still selected', () => {
+    const { sql } = setup();
+    // The UCT-max node sits AT the depth cap; a lower-scoring node sits below it.
+    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
+        VALUES ('deep', 'test', 0.99, 1, 'open', 3)`;
+    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
+        VALUES ('shallow', 'test', 0.1, 1, 'open', 1)`;
+    // Old behavior aborted the whole search on the deep argmax. Now selection
+    // skips it and returns the shallower node so the budget keeps flowing.
+    const node = selectNode(sql, undefined, 3);
+    expect(node!.id).toBe('shallow');
+  });
+
+  test('WP-A4: returns null only when every open node is at/beyond the cap', () => {
+    const { sql } = setup();
+    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
+        VALUES ('capped', 'test', 0.9, 1, 'open', 5)`;
+    expect(selectNode(sql, undefined, 5)).toBeNull();
+    expect(selectNode(sql, undefined, 6)!.id).toBe('capped');
+  });
+
   test('exploration bonus favors less-visited nodes', () => {
     const { sql } = setup();
     // Root with many visits

@@ -80,24 +80,39 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
           siblings?: readonly string[];
         };
         const context = formatInheritedContext(history);
-        const response = await complete(
-          `You are an expert exploring one approach to solve a task.${craftedToolHints}\n\n` +
-          `Context:\n${context}\n\n` +
-          `Propose ONE specific concrete approach in 2-3 sentences.${diversityDirective(siblings)}`
-        );
-        const text = response.trim();
-        // Store trace in the branch's own DB
-        db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, text]);
-        result = { text, codeUsed: null };
+        // Mirror cf-backend/src/exploration.ts: ask for a ```js implementation
+        // when applicable so the branch is execution-groundable (the grounded
+        // evaluator runs extracted code) — not prose-only.
+        const model = modelResolver.resolveModel(readStoredModelSpec());
+        const { text } = await generateText({
+          model,
+          system: 'You are an expert agent exploring one approach to solve a task.' + craftedToolHints +
+            '\n\nIf your approach involves code, include it in a ```js code block.',
+          messages: [{ role: 'user' as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
+          maxOutputTokens: 4096,
+        });
+        const trimmed = text.trim();
+        const codeMatch = trimmed.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
+        const codeUsed = codeMatch?.[1]?.trim() ?? null;
+        // Persist code_used so reflect + the parent's trace inspection see it.
+        db.run('INSERT INTO traces (step, text, code_used) VALUES (?, ?, ?)', [1, trimmed, codeUsed]);
+        result = { text: trimmed, codeUsed };
         break;
       }
       case 'reflect': {
         const { task } = msg.args as { task: string };
-        const response = await complete(
-          `What specifically went wrong with this approach?\n${task.slice(0, 500)}\n\n` +
-          `One sentence only.`
-        );
-        result = response.trim();
+        // Read the branch's own trace table (mirror cf generateReflection): the
+        // reflection is about the attempt this branch actually made, not the
+        // bare task string.
+        const traces = db.query('SELECT text FROM traces ORDER BY step').all() as Array<{ text: string }>;
+        const attempt = traces.map(t => t.text).join('\n');
+        const model = modelResolver.resolveModel(readStoredModelSpec());
+        const { text } = await generateText({
+          model,
+          messages: [{ role: 'user' as const, content: `Task: ${task}\nAttempt: ${attempt}\n\nWhat specifically went wrong? One sentence.` }],
+          maxOutputTokens: 200,
+        });
+        result = text.trim();
         break;
       }
       default:
@@ -123,12 +138,6 @@ function readStoredModelSpec(): string | null {
   } catch {
     return null;
   }
-}
-
-async function complete(prompt: string): Promise<string> {
-  const model = modelResolver.resolveModel(readStoredModelSpec());
-  const { text } = await generateText({ model, prompt, maxOutputTokens: 2048 });
-  return text.trim();
 }
 
 function readJson<T>(raw: string | undefined): T | null {

@@ -210,6 +210,48 @@ describe('judge ensemble — median, parse-failure-robust', () => {
   });
 });
 
+describe('band loophole (WP-A5): prose cannot beat failed-but-attempted code', () => {
+  test('prose is capped at the fail ceiling when a sibling produced code', async () => {
+    const judge = createJSONLLM({ score: 1.0, rationale: 'great prose' });
+    const prose = await evaluateWithMultiModelJudging({
+      task: 'compute 42',
+      trajectory: 'a beautifully argued prose approach, no code',
+      siblings: ['```js\nconst x = 42;\n```'],
+      siblingsProducedCode: true,
+      executor: exec(),
+      judge,
+      explorer: judge,
+    });
+    // Without the cap this scored 0.75; now it tops out at the fail ceiling 0.30.
+    expect(prose.grounding).toBe('judge');
+    expect(prose.score).toBeCloseTo(0.30, 10);
+  });
+
+  test('a failed-code branch is never beaten by a prose sibling in the same expansion', async () => {
+    const judge = createJSONLLM({ score: 1.0 });
+    const failedCode = await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: 'prose', codeUsed: 'throw new Error("boom")',
+      siblings: ['some prose sibling'], siblingsProducedCode: false,
+      executor: exec({ error: 'boom' }), judge, explorer: judge,
+    });
+    const prose = await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: 'prose sibling',
+      siblings: ['```js code```'], siblingsProducedCode: true,
+      executor: exec(), judge, explorer: judge,
+    });
+    expect(prose.score).toBeLessThanOrEqual(failedCode.score);
+  });
+
+  test('prose keeps full 0.75 confidence when NO sibling attempted code', async () => {
+    const judge = createJSONLLM({ score: 1.0 });
+    const prose = await evaluateWithMultiModelJudging({
+      task: 'analyze', trajectory: 'prose', siblings: ['other prose'],
+      siblingsProducedCode: false, executor: exec(), judge, explorer: judge,
+    });
+    expect(prose.score).toBeCloseTo(0.75, 10);
+  });
+});
+
 describe('judge prompt content', () => {
   test('includes the task, siblings, and execution evidence', async () => {
     const judge = countingJudge('{"score": 0.5}');
