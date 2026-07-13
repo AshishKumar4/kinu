@@ -1006,16 +1006,19 @@ export class LocalAgentSession implements BackendHost {
           case 'tool-result': {
             const idx = findLastIndexBy(pendingCalls, (c) => c.toolName === ev.toolName);
             const call = idx >= 0 ? pendingCalls.splice(idx, 1)[0] : undefined;
-            this.orch.acc.recordToolCall({
-              toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result,
-            });
+            // Real success/error into the accumulator — the outcome signal
+            // (hadError, turn-outcome review) reads it, matching the cf
+            // backend's afterToolCall. A failed tool flags the turn.
+            this.orch.acc.recordToolCall(ev.success
+              ? { toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result }
+              : { toolName: ev.toolName, input: call?.args ?? {}, success: false, error: ev.error ?? ev.result });
             this.emit({ type: 'tool-result', toolName: ev.toolName, result: ev.result });
             break;
           }
           case 'step-finish':
             this.orch.acc.recordStep(
-              ev.inputTokens !== undefined || ev.outputTokens !== undefined
-                ? { usage: { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens } }
+              ev.inputTokens !== undefined || ev.outputTokens !== undefined || ev.cachedInputTokens !== undefined
+                ? { usage: { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedInputTokens: ev.cachedInputTokens } }
                 : {},
             );
             break;

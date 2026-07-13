@@ -387,6 +387,91 @@ describe('LocalAgentSession.send — a user turn', () => {
   });
 });
 
+describe('LocalAgentSession — tool success/error + cache telemetry fidelity', () => {
+  /** step 1: calls the `memory` save tool (which will throw via a stubbed
+   *  runtime), finishing with the caller-supplied usage; step 2: answers text. */
+  function memoryThenTextModel(firstFinishUsage: Record<string, number>, firstProviderMetadata?: Record<string, unknown>) {
+    let step = 0;
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    return {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async () => {
+        step += 1;
+        if (step === 1) {
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
+                  input: JSON.stringify({ action: 'save', content: 'note' }),
+                });
+                controller.enqueue({
+                  type: 'finish', finishReason: 'tool-calls', usage: firstFinishUsage,
+                  ...(firstProviderMetadata ? { providerMetadata: firstProviderMetadata } : {}),
+                });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    } as unknown as LanguageModel;
+  }
+
+  test('a failing tool flags hadError on the turn and still surfaces a tool-result', async () => {
+    const model = memoryThenTextModel({ inputTokens: 9, outputTokens: 2, totalTokens: 11 });
+    const { rt, session, events } = setup('unused', model);
+    // Make the memory-save path throw deterministically at execution time.
+    rt.memory.append = async () => { throw new Error('disk full'); };
+
+    await session.send('save a note please');
+
+    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    expect(turnEnd.turn.hadError).toBe(true);
+    // The error rode the tool-result path (my case), not the stream-abort catch.
+    const toolResult = events.find((e) => e.type === 'tool-result') as Extract<SessionEvent, { type: 'tool-result' }>;
+    expect(toolResult).toBeDefined();
+    expect(toolResult.result).toContain('disk full');
+    await session.end();
+  });
+
+  test('cached-prefix tokens flow from the step into the turn accumulator', async () => {
+    const model = memoryThenTextModel(
+      { inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 12 },
+      { anthropic: { cacheReadInputTokens: 3 } },
+    );
+    const { rt, session } = setup('unused', model);
+    rt.memory.append = async () => { throw new Error('irrelevant'); };
+
+    await session.send('save it');
+
+    // The accumulator is the evolution/telemetry signal — 12 (usage) + 3
+    // (Anthropic providerMetadata) combine into usage.cached (was 0 before the
+    // ChatEvent seam carried cached tokens).
+    const acc = (session as unknown as { orch: { acc: { usage: { cached: number } } } }).orch.acc;
+    expect(acc.usage.cached).toBe(15);
+    await session.end();
+  });
+});
+
 function messageText(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content;
   if (Array.isArray(message.content)) {

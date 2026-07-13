@@ -23,11 +23,16 @@ import type { ExtensionHost } from './extension.js';
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
-  | { type: 'tool-result'; toolName: string; result: string }
-  /** `inputTokens`/`outputTokens` = the step request's provider-reported
-   *  totals, when reported — inputTokens doubles as the caller's measured
-   *  compaction signal. */
-  | { type: 'step-finish'; stepIndex: number; inputTokens?: number; outputTokens?: number }
+  /** A tool call settled. `result` is the stringified output on success or the
+   *  error text on failure; `success`/`error` carry the discriminator the
+   *  evolution signal reads (hadError, outcome review) — matching the cf
+   *  backend's afterToolCall. */
+  | { type: 'tool-result'; toolName: string; result: string; success: boolean; error?: string }
+  /** `inputTokens`/`outputTokens`/`cachedInputTokens` = the step request's
+   *  provider-reported totals, when reported — inputTokens doubles as the
+   *  caller's measured compaction signal, cachedInputTokens feeds cache
+   *  telemetry. */
+  | { type: 'step-finish'; stepIndex: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
   | { type: 'done'; text: string; responseMessages: ModelMessage[] };
 
 export interface ChatOptions {
@@ -92,7 +97,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
-  const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number; outputTokens?: number }> = [];
+  const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }> = [];
   let stepCount = 0;
 
   // Model-capability attachment sanitization runs FIRST, on the whole
@@ -159,10 +164,19 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       stepCount++;
       const inputTokens = step.usage?.inputTokens;
       const outputTokens = step.usage?.outputTokens;
+      // Cached prefix tokens: the OpenAI/Workers-AI family reports them on
+      // usage.cachedInputTokens, Anthropic in providerMetadata — combine both
+      // into the one flat number the ChatEvent carries (the accumulator reads
+      // both sources too, so a CLI consumer passing only cachedInputTokens is
+      // faithful and never double-counts).
+      const anthropicCacheRead = step.providerMetadata?.anthropic?.cacheReadInputTokens;
+      const cachedInputTokens = (step.usage?.cachedInputTokens ?? 0)
+        + (typeof anthropicCacheRead === 'number' ? anthropicCacheRead : 0);
       pendingStepEvents.push({
         stepIndex: stepCount,
         ...(typeof inputTokens === 'number' && inputTokens > 0 ? { inputTokens } : {}),
         ...(typeof outputTokens === 'number' && outputTokens > 0 ? { outputTokens } : {}),
+        ...(cachedInputTokens > 0 ? { cachedInputTokens } : {}),
       });
     },
   });
@@ -191,7 +205,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         const raw = (chunk as any).output ?? (chunk as any).result ?? '';
         const result = String(raw).slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
-        yield { type: 'tool-result', toolName: chunk.toolName, result };
+        yield { type: 'tool-result', toolName: chunk.toolName, result, success: true };
+        break;
+      }
+      case 'tool-error': {
+        // A tool threw: the error is the durable outcome the evolution signal
+        // reads. The extension seam sees the error text as the result (same as
+        // the cf afterToolCall), and the discriminator rides success/error.
+        const error = errorText((chunk as any).error);
+        const result = error.slice(0, 1000);
+        await extensions?.emitToolResult({ toolName: chunk.toolName, result });
+        yield { type: 'tool-result', toolName: chunk.toolName, result, success: false, error };
         break;
       }
     }
@@ -229,4 +253,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
   yield { type: 'done', text: allText, responseMessages };
+}
+
+/** The message of a thrown tool error, from whatever shape the SDK carries. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
