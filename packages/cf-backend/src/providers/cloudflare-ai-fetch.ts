@@ -6,6 +6,7 @@
 // between the three consumers.
 import type { AuthResolution, AuthResolver } from '@proteus/core';
 import { asFetchFunction } from '@proteus/core';
+import { repairSseCachedUsage } from './stream-usage-repair.js';
 
 export interface CloudflareAIFetchOptions {
   /** Credential key resolved through `getAuth` on every request
@@ -58,7 +59,9 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       }
     }
     if (!res.ok && opts.mapError) return opts.mapError(res, resolved);
-    return res;
+    // The endpoint's trailing duplicate usage chunk can zero cached_tokens
+    // (see stream-usage-repair.ts) — repair it so cache accounting survives.
+    return repairSseCachedUsage(res);
   });
 }
 

@@ -16,8 +16,9 @@
  *
  * Both upstreams share {account}/ai/v1/chat/completions; only the credential
  * view (and its cf-aig-gateway-id header) differs. Streaming (SSE) responses
- * pass through untouched; failures get the same actionable mapping as the
- * my-gateway provider.
+ * pass through the shared fetch's cached-usage repair (stream-usage-repair.ts)
+ * but are otherwise untouched; failures get the same actionable mapping as
+ * the my-gateway provider.
  */
 import type { UserDO } from './user-do.js';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth.js';
