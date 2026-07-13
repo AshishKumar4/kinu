@@ -257,10 +257,21 @@ export class EventLog {
   // ── markConsumed ────────────────────────────────────────────────
 
   /** Bind an event to the turn that's about to handle it. */
-  markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number): void {
+  markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.sql.exec(
-      `UPDATE agent_log SET turn_id = ?, step_idx = ? WHERE id = ? AND kind = 'event'`,
-      turnId, stepIdx, eventId,
+      `UPDATE agent_log SET turn_id = ?, step_idx = ?, consumed_at = ?
+       WHERE id = ? AND kind = 'event'`,
+      turnId, stepIdx, now, eventId,
+    );
+  }
+
+  /** Close the recovery lease after a drain turn completed. The durable
+   *  turn binding remains available for reply dispatch and audit queries. */
+  markTurnCompleted(turnId: TurnId): void {
+    this.sql.exec(
+      `UPDATE agent_log SET consumed_at = NULL
+       WHERE turn_id = ? AND kind = 'event'`,
+      turnId,
     );
   }
 
@@ -268,9 +279,30 @@ export class EventLog {
    *  they re-enter the pending pool. */
   unbind(eventId: EventId): void {
     this.sql.exec(
-      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL WHERE id = ? AND kind = 'event'`,
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE id = ? AND kind = 'event'`,
       eventId,
     );
+  }
+
+  /** Re-pend unfinished synthetic drain deliveries whose recovery lease has
+   *  been stranded past the activation grace period. */
+  unbindStale(olderThanMs: number, now = Date.now()): EventId[] {
+    const cutoff = now - olderThanMs;
+    const rows = this.sql.exec(
+      `UPDATE agent_log
+       SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE id IN (
+         SELECT id FROM agent_log
+         WHERE kind = 'event'
+           AND turn_id LIKE 'evt-%'
+           AND consumed_at IS NOT NULL
+           AND consumed_at <= ?
+       )
+       RETURNING id`,
+      cutoff,
+    ).toArray() as Array<{ id: EventId }>;
+    return rows.map((row) => row.id);
   }
 
   // ── defer ───────────────────────────────────────────────────────
@@ -286,7 +318,7 @@ export class EventLog {
     const payload = JSON.parse(row[0].payload);
     payload.__defer_revisit = revisitAt;
     this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL WHERE id = ?`,
+      `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
       JSON.stringify(payload), eventId,
     );
   }
@@ -303,7 +335,7 @@ export class EventLog {
     const payload = JSON.parse(row[0].payload);
     payload.__dismissed = { reason, by, at: Date.now() };
     this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL WHERE id = ?`,
+      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
       JSON.stringify(payload), eventId,
     );
   }

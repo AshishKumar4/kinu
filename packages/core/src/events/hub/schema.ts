@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS agent_log (
   payload             TEXT    NOT NULL DEFAULT 'null',
   received_at         INTEGER NOT NULL,
   schema_version      INTEGER NOT NULL DEFAULT 1,
-  dedupe_key          TEXT
+  dedupe_key          TEXT,
+  consumed_at         INTEGER
 )`;
 
 const INDEXES: ReadonlyArray<string> = [
@@ -49,6 +50,11 @@ const INDEXES: ReadonlyArray<string> = [
   `CREATE INDEX IF NOT EXISTS idx_agent_log_events_pending
    ON agent_log (priority, received_at)
    WHERE kind = 'event' AND turn_id IS NULL`,
+
+  // Activation recovery scans only open delivery leases.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_events_consumed
+   ON agent_log (consumed_at)
+   WHERE kind = 'event' AND consumed_at IS NOT NULL`,
 
   // Phase lookups: latest phase row per turn.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_phase_current
@@ -231,6 +237,10 @@ function rebuildIfCheckMissing(sql: SqlExec, table: string, marker: string, ddl:
 /** Initialize all hub tables, indexes, and views. Idempotent. */
 export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(AGENT_LOG_DDL);
+  const agentLogColumns = sql.exec(`PRAGMA table_info(agent_log)`).toArray() as Array<{ name: string }>;
+  if (!agentLogColumns.some((column) => column.name === 'consumed_at')) {
+    sql.exec(`ALTER TABLE agent_log ADD COLUMN consumed_at INTEGER`);
+  }
   for (const ix of INDEXES) sql.exec(ix);
   for (const v of VIEWS) sql.exec(v);
   // CHECK-widening rebuilds for live DOs created before these enum members

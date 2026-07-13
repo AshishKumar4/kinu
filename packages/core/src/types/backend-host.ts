@@ -59,6 +59,9 @@ export interface EnqueueTurnResult {
  *  `metadata.drainTurnId`. */
 export interface MidTurnEventBatch {
   readonly turnId: string;
+  /** EventLog rows bound to `turnId`; required to compensate a failed or
+   *  pre-empted fallback enqueue. */
+  readonly ids: readonly string[];
   /** Rendered for the live turn's next step ("arrived while you were working"). */
   readonly stepText: string;
   /** Rendered for a standalone programmatic turn — the fallback when the live

@@ -160,6 +160,15 @@ export class EphemeralContextLedger {
   }
 
   weave(history: ReadonlyArray<ModelMessage>, state: SystemStateContext): ModelMessage[] {
+    let previousIndex = -1;
+    for (const block of this.blocks) {
+      // History rewrites invalidate frozen positions even when their caller forgot to reset the ledger.
+      if (block.index > history.length || block.index < previousIndex) {
+        this.reset();
+        break;
+      }
+      previousIndex = block.index;
+    }
     const text = renderSystemStateBlock(state);
     // A null render appends nothing; frozen blocks stay regardless (removing
     // a mid-array message would break the provider prefix cache).

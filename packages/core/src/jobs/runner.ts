@@ -11,6 +11,7 @@
 
 import type { Schedule } from '../types/primitives.js';
 import type { BackendHost } from '../types/backend-host.js';
+import type { EventLog } from '../events/hub/log.js';
 import type { ThresholdDeps } from './threshold.js';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -21,6 +22,10 @@ export interface BackgroundJobRunnerDeps {
   fiber: Schedule['fiber'];
   /** Programmatic-turn wake + (unused here) broadcast. */
   host: BackendHost;
+  /** Durable retry breadcrumb consumed by the standard event drain. */
+  eventLog: EventLog;
+  /** Existing ingress drain scheduler; called after publishing a retry event. */
+  scheduleDrain(): void;
   /** Activity-log sink (optional). */
   logActivity?(event: string, detail?: string): void;
   /** Fires once per job settle (completed/failed), before the wake turn —
@@ -74,9 +79,9 @@ export class BackgroundJobRunner {
       if (this.deps.store.get(jobId)?.status === 'cancelled') { ctx.stash({ phase: 'settled', jobId, kind }); return; }
       if (outcome.ok) this.deps.store.settle(jobId, serializeJobResult(outcome.result), Date.now());
       else this.deps.store.fail(jobId, outcome.error, Date.now());
-      ctx.stash({ phase: 'settled', jobId, kind });
       this.notifySettled(jobId);
       await this.wake(jobId);
+      ctx.stash({ phase: 'settled', jobId, kind });
     });
   }
 
@@ -95,11 +100,40 @@ export class BackgroundJobRunner {
       const result = await this.deps.host.enqueueTurn({
         text, metadata: { proteusEvent: 'background_job', jobId, kind: job.kind, status: job.status },
       });
-      if (result.status === 'skipped') {
-        this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
-      }
+      if (result.status === 'queued') return;
+      this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
     } catch (err) {
       console.warn('[proteus] wakeForBackgroundJob failed:', err instanceof Error ? err.message : err);
+    }
+    this.publishWakeRetry(job, text);
+  }
+
+  private publishWakeRetry(job: BackgroundJob, text: string): void {
+    try {
+      this.deps.eventLog.publish({
+        descriptor: {
+          ingress: 'timer_alarm',
+          variant: 'timer',
+          payload: {
+            trigger_id: `background-job-wake:${job.id}`,
+            scheduled_fire_at: job.settledAt ?? job.createdAt,
+            label: text,
+            user_payload: {
+              proteusEvent: 'background_job', jobId: job.id, kind: job.kind, status: job.status,
+            },
+          },
+          trigger_creator_trust: 'self',
+        },
+        now: Date.now(),
+      });
+    } catch (err) {
+      console.warn('[proteus] background-job retry event publish failed:', err instanceof Error ? err.message : err);
+      throw err;
+    }
+    try { this.deps.scheduleDrain(); }
+    catch (err) {
+      // The retry is already durable; another ingress or activation can drain it.
+      console.warn('[proteus] background-job retry scheduling failed:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -130,14 +164,18 @@ export class BackgroundJobRunner {
   }
 
   /** Recover an orphaned job after its fiber was evicted mid-flight (called from
-   *  the backend's onFiberRecovered for bg:* fibers). Only a job stashed
-   *  'running' is orphaned — one 'settled' already recorded its outcome + woke. */
+   *  the backend's onFiberRecovered for bg:* fibers). The settled checkpoint is
+   *  written only after wake delivery is queued or durably deferred. */
   async recover(snapshot: unknown): Promise<void> {
     const snap = (snapshot ?? {}) as { jobId?: unknown; phase?: unknown };
     const jobId = typeof snap.jobId === 'string' ? snap.jobId : '';
     if (jobId && snap.phase === 'running') {
-      this.deps.store.fail(jobId, 'interrupted by Durable Object eviction before completion', Date.now());
-      this.notifySettled(jobId);
+      const job = this.deps.store.get(jobId);
+      if (!job || job.status === 'cancelled') return;
+      if (job.status === 'running') {
+        this.deps.store.fail(jobId, 'interrupted by Durable Object eviction before completion', Date.now());
+        this.notifySettled(jobId);
+      }
       await this.wake(jobId);
     }
   }

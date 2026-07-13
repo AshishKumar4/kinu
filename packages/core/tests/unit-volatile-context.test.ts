@@ -226,6 +226,30 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
     expect(String(out[2]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
   });
 
+  test('a shorter rewritten history self-heals stale frozen indices without duplicating messages', () => {
+    const ledger = new EphemeralContextLedger();
+    const oldHistory: ModelMessage[] = [
+      { role: 'user', content: 'old-user-1' },
+      { role: 'assistant', content: 'old-assistant-1' },
+      { role: 'user', content: 'old-user-2' },
+    ];
+    ledger.weave(oldHistory, state);
+    oldHistory.push({ role: 'assistant', content: 'old-assistant-2' });
+    ledger.weave(oldHistory, { ...state, factsBlock: '- old = changed' });
+    expect(ledger.size).toBe(2);
+
+    const replacement: ModelMessage[] = [{ role: 'user', content: 'new-user-1' }];
+    const freshState = { ...state, factsBlock: '- fresh = yes' };
+    const freshBlock = renderSystemStateBlock(freshState)!;
+    const out = ledger.weave(replacement, freshState);
+
+    expect(out).toEqual([
+      { role: 'user', content: 'new-user-1' },
+      { role: 'user', content: freshBlock },
+    ]);
+    expect(ledger.size).toBe(1);
+  });
+
   test('nothing to say → no block is born and none is removed', () => {
     const ledger = new EphemeralContextLedger();
     const out = ledger.weave([{ role: 'user', content: 'hi' }], {});

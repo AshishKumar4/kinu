@@ -149,6 +149,16 @@ export class AgentOrchestrator {
     this.drains.schedule();
   }
 
+  private returnEventsToPending(ids: readonly string[]): void {
+    for (const id of ids) {
+      try {
+        this.deps.eventLog.unbind(id);
+      } catch (err) {
+        console.warn('[proteus] event unbind failed:', id, err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
   /**
    * The reactor: bind the selected pending events to a synthetic turn
    * (markConsumed — synchronous, so atomic w.r.t. the event loop; a concurrent
@@ -174,7 +184,9 @@ export class AgentOrchestrator {
       return;
     }
     try {
-      if (this.deps.host.injectIntoActiveTurn({ turnId, stepText: batch.midTurnText, turnText: batch.text })) {
+      if (this.deps.host.injectIntoActiveTurn({
+        turnId, ids: batch.ids, stepText: batch.midTurnText, turnText: batch.text,
+      })) {
         this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: batch.ids.length });
         return;
       }
@@ -182,12 +194,17 @@ export class AgentOrchestrator {
       // immediate outcome review) and carries the synthetic turn id so the
       // backend can dispatch the turn's answer to the reply channels of the
       // events it consumed (e.g. email_thread → outbound email reply).
-      await this.deps.host.enqueueTurn({
+      const result = await this.deps.host.enqueueTurn({
         text: batch.text,
         metadata: { proteusEvent: 'event_drain', drainTurnId: turnId },
       });
+      if (result.status === 'skipped') {
+        console.warn('[proteus] drainPendingEvents (turn) skipped; returning events to pending');
+        this.returnEventsToPending(batch.ids);
+      }
     } catch (err) {
       console.warn('[proteus] drainPendingEvents (turn) failed:', (err as Error).message);
+      this.returnEventsToPending(batch.ids);
     }
   }
 

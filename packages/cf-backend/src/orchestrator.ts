@@ -17,6 +17,7 @@
  */
 
 import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { parseProtocolMessage } from "agents/chat";
 import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
 import {
   createCompactionExtension, createVfsTranscriptStore,
@@ -32,7 +33,7 @@ import { Think, Session } from "@cloudflare/think";
 // on the next execute_tools call and tool bodies share lexical scope with
 // workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
 import { streamText, generateText, tool, jsonSchema, stepCountIs, convertToModelMessages } from "ai";
-import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet } from "ai";
+import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import * as v from "valibot";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
@@ -66,7 +67,7 @@ import {
   ExtensionHost, composePrepareStep,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
-  EventInjectionBuffer,
+  EventInjectionBuffer, type MidTurnEventBatch,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   type BuiltinToolName,
@@ -188,6 +189,7 @@ import {
 } from "./email/outbound.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
+const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
 // Inbound-email budget per agent (all senders combined). Email is a wake
 // channel, not a data plane — mail beyond this is dropped at the gate.
@@ -383,7 +385,20 @@ export class OrchestratorAgent extends Think<Env> {
         connection.send(rejection);
         return;
       }
-      return dispatchMessage.call(this, connection, message);
+      const event = typeof message === 'string' ? parseProtocolMessage(message) : null;
+      try {
+        return await dispatchMessage.call(this, connection, message);
+      } finally {
+        if (event?.type === 'clear') {
+          this.ephemeralLedger.reset();
+          this._pendingDrainReplyTurns.clear();
+          try {
+            await this.compactionState.plans.save(this.name, null);
+          } catch (err) {
+            console.warn('[proteus] clear-history compaction reset failed:', err);
+          }
+        }
+      }
     };
     // Constructor body (not a field initializer): boundSql's memo field must
     // be initialized before the getter caches its closure.
@@ -402,6 +417,44 @@ export class OrchestratorAgent extends Think<Env> {
    *  settled in onChatResponse (absorbed → reply dispatch, leftover → the
    *  standard programmatic drain turn). */
   private readonly _eventInjections = new EventInjectionBuffer();
+
+  private async reenqueueEventBatch(batch: MidTurnEventBatch, source: 'leftover' | 'aborted'): Promise<void> {
+    try {
+      const result = await this.host.enqueueTurn({
+        text: batch.turnText,
+        metadata: { proteusEvent: 'event_drain', drainTurnId: batch.turnId },
+      });
+      if (result.status === 'queued') return;
+      console.warn(`[proteus] ${source} event re-enqueue skipped; returning events to pending`);
+    } catch (err) {
+      console.warn(`[proteus] ${source} event re-enqueue failed:`, err);
+    }
+    for (const id of batch.ids) {
+      try {
+        this.eventLog.unbind(id);
+      } catch (err) {
+        console.warn('[proteus] event unbind failed:', id, err);
+      }
+    }
+  }
+
+  private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
+    try {
+      const replies = await dispatchEmailRepliesForTurn(
+        { log: this.eventLog, replies: this.replyChannels },
+        turnId, assistantText, Date.now(),
+      );
+      if (replies.pending) {
+        console.warn(`[proteus] event reply remains pending for ${turnId}; keeping delivery lease open`);
+        return false;
+      }
+      this.eventLog.markTurnCompleted(turnId);
+      return true;
+    } catch (err) {
+      console.warn('[proteus] event reply dispatch failed:', err);
+      return false;
+    }
+  }
 
   /** Durable per-session compaction state (plan snapshot + the measured
    *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
@@ -510,11 +563,26 @@ export class OrchestratorAgent extends Think<Env> {
       this._host = {
         broadcast: (event) => { try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ } },
         enqueueTurn: async ({ text, metadata }) => {
-          const result = await this.saveMessages([{
-            id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }],
+          const drainTurnId = isRecord(metadata) && typeof metadata.drainTurnId === 'string'
+            ? metadata.drainTurnId
+            : null;
+          const message = {
+            id: crypto.randomUUID(), role: 'user' as const, parts: [{ type: 'text' as const, text }],
             ...(metadata ? { metadata } : {}),
-          }]);
-          return { status: result.status === 'skipped' ? 'skipped' : 'queued' };
+          };
+          try {
+            const result = await this.saveMessages(() => {
+              this._activeDrainTurnId = drainTurnId;
+              this._activeProgrammaticUserMessage = message;
+              return [message];
+            });
+            return { status: result.status === 'completed' ? 'queued' : 'skipped' };
+          } finally {
+            if (this._activeProgrammaticUserMessage === message) {
+              this._activeDrainTurnId = null;
+              this._activeProgrammaticUserMessage = null;
+            }
+          }
         },
         // Mid-turn delivery: a drained batch bound while a turn is live rides
         // that turn's next step boundary (the event-injection extension)
@@ -792,6 +860,8 @@ export class OrchestratorAgent extends Think<Env> {
         store: this.jobs,
         fiber: this.rt.schedule.fiber,
         host: this.host,
+        eventLog: this.eventLog,
+        scheduleDrain: () => this.orch.scheduleDrain(),
         logActivity: (event, detail) => this.logActivity(event, detail),
         // Mission Inbox: a settled background job also notifies the owner by
         // email (skips silently when the platform email pieces are absent).
@@ -889,6 +959,13 @@ export class OrchestratorAgent extends Think<Env> {
   // Set in beforeTurn, cleared in onChatResponse (after durable persist;
   // evolution is fire-and-forget and does not extend the busy window).
   private _inFlight = false;
+  /** Synthetic drain id captured when its programmatic queue entry actually
+   *  starts. `this.messages` may already contain a newer queued user message
+   *  by the time this turn finishes. */
+  private _activeDrainTurnId: string | null = null;
+  private _activeProgrammaticUserMessage: UIMessage | null = null;
+  /** Standalone drains may span Think auto-continuations under one request id. */
+  private readonly _pendingDrainReplyTurns = new Map<string, string>();
 
   /** The public extension seam on the cloud backend — the SAME ExtensionHost
    *  contract `runChat` drives on the CLI, bridged onto Think's subclass
@@ -2021,6 +2098,10 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   async onChatResponse(result: ChatResponseResult) {
+    const drainTurnId = this._activeDrainTurnId ?? this._pendingDrainReplyTurns.get(result.requestId);
+    const programmaticUserMessage = this._activeProgrammaticUserMessage;
+    this._activeDrainTurnId = null;
+    this._activeProgrammaticUserMessage = null;
     this.logActivity("response_complete", result.status);
     // Clear the in-flight flag once the turn is durably completed — forkAgent
     // is allowed again from here forward. Evolution (engine.reviewTurnDetached)
@@ -2033,12 +2114,13 @@ export class OrchestratorAgent extends Think<Env> {
     // (the model was already finishing — or the turn aborted) rerun as the
     // standard programmatic drain turn, same metadata shape enqueueTurn
     // stamps, so the event card and reply dispatch work unchanged.
-    const injectedEvents = this._eventInjections.settle();
-    for (const leftover of injectedEvents.leftover) {
-      void this.host.enqueueTurn({
-        text: leftover.turnText,
-        metadata: { proteusEvent: 'event_drain', drainTurnId: leftover.turnId },
-      }).catch((err) => console.warn('[proteus] leftover event re-enqueue failed:', err));
+    const completed = result.status === 'completed';
+    const injectedEvents = this._eventInjections.settle({ retainForContinuation: completed });
+    const batchesToReenqueue = completed
+      ? injectedEvents.leftover
+      : [...injectedEvents.absorbed, ...injectedEvents.leftover];
+    for (const batch of batchesToReenqueue) {
+      void this.reenqueueEventBatch(batch, completed ? 'leftover' : 'aborted');
     }
     // Persist the turn's final provider-priced prompt size — the NEXT turn's
     // measured compaction trigger. Recorded even on aborted/errored turns:
@@ -2073,7 +2155,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     const userMessages = this.messages.filter(m => m.role === "user");
-    const lastUserMsg = userMessages[userMessages.length - 1];
+    const lastUserMsg = programmaticUserMessage ?? userMessages[userMessages.length - 1];
     const userText = lastUserMsg?.parts
       ?.filter(p => p.type === "text")
       .map(p => (p as { type: "text"; text: string }).text)
@@ -2155,22 +2237,18 @@ export class OrchestratorAgent extends Think<Env> {
     // Mission Inbox: a turn injected by the event drain carries the synthetic
     // turn id its events were bound to — reply their open email_thread
     // channels with this turn's answer (threaded outbound email). Detached.
-    const drainTurnId = isRecord((lastUserMsg as { metadata?: unknown } | undefined)?.metadata)
-      ? (lastUserMsg as { metadata: Record<string, unknown> }).metadata.drainTurnId
-      : undefined;
     if (typeof drainTurnId === 'string') {
-      void dispatchEmailRepliesForTurn(
-        { log: this.eventLog, replies: this.replyChannels },
-        drainTurnId, assistantText, Date.now(),
-      ).catch((err) => console.warn('[proteus] email reply dispatch failed:', err));
+      this._pendingDrainReplyTurns.set(result.requestId, drainTurnId);
+      void this.completeEventBatch(drainTurnId, assistantText).then((completed) => {
+        if (completed && this._pendingDrainReplyTurns.get(result.requestId) === drainTurnId) {
+          this._pendingDrainReplyTurns.delete(result.requestId);
+        }
+      });
     }
     // Mid-turn injected batches feed the SAME dispatch, keyed by the batch
     // turn ids this turn absorbed at its step boundaries.
     for (const injected of injectedEvents.absorbed) {
-      void dispatchEmailRepliesForTurn(
-        { log: this.eventLog, replies: this.replyChannels },
-        injected.turnId, assistantText, Date.now(),
-      ).catch((err) => console.warn('[proteus] email reply dispatch failed:', err));
+      void this.completeEventBatch(injected.turnId, assistantText);
     }
 
     const turn: CompletedTurn = {
@@ -2185,7 +2263,7 @@ export class OrchestratorAgent extends Think<Env> {
       hadError: this.acc.hadError,
       turnId: msgId,
       sessionId: 'default',
-      origin: this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
+      origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
     };
 
     // CRITICAL: Evolution hooks make LLM calls (outcome classification,
@@ -2248,9 +2326,9 @@ export class OrchestratorAgent extends Think<Env> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
       const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@proteus/core');
-      const currentFacts = this.facts.recentTopK(30).map(f => ({
-        key: f.key, value: f.value, confidence: f.confidence,
-      }));
+      const currentFacts = this.facts.all()
+        .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
+        .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
       const update = await runSleepTimeCompute(this.rt.llm, {
         task: task.slice(0, 2000),
         output: output.slice(0, 4000),
@@ -2695,6 +2773,12 @@ export class OrchestratorAgent extends Think<Env> {
   async onStart() {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
     this.ensureSchema();
+    let reconciledEventIds: string[] = [];
+    try {
+      reconciledEventIds = this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS);
+    } catch (err) {
+      console.warn('[proteus] startup event reconciliation failed:', err);
+    }
 
     // one-time per-agent migration that merges case-collision
     // duplicates in crafted_tools + craft_scores left over from older
@@ -2737,6 +2821,10 @@ export class OrchestratorAgent extends Think<Env> {
       }
     } catch (err) {
       console.error("[proteus] onStart init failed:", err);
+    }
+    if (reconciledEventIds.length > 0) {
+      console.warn(`[proteus] startup event reconciliation re-pended ${reconciledEventIds.length} event(s)`);
+      this.orch.scheduleDrain();
     }
   }
 
@@ -3156,11 +3244,18 @@ export class OrchestratorAgent extends Think<Env> {
     }
     let continuationQueued = false;
     if (record.changedAnswer) {
-      void this.host.enqueueTurn({
-        text: buildTakeContinuationPrompt(record.set, record.chosen),
-        metadata: { proteusEvent: 'take_pick' },
-      }).catch((err) => console.warn('[proteus] take_pick continuation enqueue failed:', err));
-      continuationQueued = true;
+      try {
+        const result = await this.host.enqueueTurn({
+          text: buildTakeContinuationPrompt(record.set, record.chosen),
+          metadata: { proteusEvent: 'take_pick' },
+        });
+        continuationQueued = result.status === 'queued';
+        if (result.status === 'skipped') {
+          console.warn('[proteus] take_pick continuation enqueue skipped');
+        }
+      } catch (err) {
+        console.warn('[proteus] take_pick continuation enqueue failed:', err);
+      }
     }
     this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
     return { ...record, continuationQueued };
@@ -4248,6 +4343,11 @@ export class OrchestratorAgent extends Think<Env> {
     return { displayName };
   }
 
+  async setProvisionalDisplayName(displayName: string) {
+    this.config.setDisplayName(displayName);
+    return { displayName };
+  }
+
   @callable() async getExecutors() {
     return this.rt.executionRouter?.listExecutors() ?? [];
   }
@@ -5305,4 +5405,3 @@ function uiMessageText(content: string): string {
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }
-

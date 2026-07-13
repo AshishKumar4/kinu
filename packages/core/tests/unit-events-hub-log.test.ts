@@ -41,6 +41,19 @@ function webhookDescriptor(deliveryId: string, body: unknown): IngressDescriptor
 }
 
 describe('EventLog.publish + dedupe', () => {
+  test('schema initialization adds the recovery lease column to legacy agent_log tables', () => {
+    const sql = makeSql();
+    sql.exec(`CREATE TABLE agent_log (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, turn_id TEXT, step_idx INTEGER,
+      parent_id TEXT, trace_id TEXT NOT NULL, ingress TEXT, variant TEXT,
+      trust TEXT, priority TEXT, payload_visibility TEXT, payload TEXT NOT NULL,
+      received_at INTEGER NOT NULL, schema_version INTEGER NOT NULL, dedupe_key TEXT
+    )`);
+    initEventsHubTables(sql);
+    const columns = sql.exec(`PRAGMA table_info(agent_log)`).toArray() as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === 'consumed_at')).toBe(true);
+  });
+
   test('first publish admits; second publish with same dedupe key is idempotent', () => {
     const sql = makeSql();
     initEventsHubTables(sql);
@@ -96,6 +109,38 @@ describe('EventLog.pending', () => {
     expect(log.pending()).toHaveLength(1);
     log.markConsumed(id, 'turn-1', 0);
     expect(log.pending()).toHaveLength(0);
+  });
+
+  test('startup reconciliation re-pends only stale unfinished drain leases', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const stale = log.publish({ descriptor: chatDescriptor('stale'), now: 1 }).id;
+    const completed = log.publish({ descriptor: chatDescriptor('completed'), now: 2 }).id;
+    const fresh = log.publish({ descriptor: chatDescriptor('fresh'), now: 3 }).id;
+
+    log.markConsumed(stale, 'evt-stale', 0, 1_000);
+    log.markConsumed(completed, 'evt-completed', 0, 1_000);
+    log.markTurnCompleted('evt-completed');
+    log.markConsumed(fresh, 'evt-fresh', 0, 1_900);
+
+    expect(log.unbindStale(500, 2_000)).toEqual([stale]);
+    expect(log.pending().map((event) => event.id)).toEqual([stale]);
+    expect(log.query({ turn_id: 'evt-completed' }).map((event) => event.id)).toEqual([completed]);
+    expect(log.query({ turn_id: 'evt-fresh' }).map((event) => event.id)).toEqual([fresh]);
+  });
+
+  test('startup reconciliation atomically re-pends every qualifying lease', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const first = log.publish({ descriptor: chatDescriptor('first'), now: 1 }).id;
+    const second = log.publish({ descriptor: chatDescriptor('second'), now: 2 }).id;
+    log.markConsumed(first, 'evt-first', 0, 1_000);
+    log.markConsumed(second, 'evt-second', 0, 1_000);
+
+    expect(new Set(log.unbindStale(500, 2_000))).toEqual(new Set([first, second]));
+    expect(new Set(log.pending().map((event) => event.id))).toEqual(new Set([first, second]));
   });
 });
 

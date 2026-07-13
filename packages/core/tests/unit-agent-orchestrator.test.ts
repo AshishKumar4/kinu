@@ -179,6 +179,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     // the host received — the backend dispatches the live turn's answer by it.
     const bound = log.query({ turn_id: injected[0]!.turnId });
     expect(bound).toHaveLength(1);
+    expect(injected[0]!.ids).toEqual(bound.map((event) => event.id));
     // The delivery is observable (clients get a typed fan-out, not silence).
     expect(broadcasts).toEqual([
       { type: 'background_event_injected', turnId: injected[0]!.turnId, events: 1 },
@@ -200,6 +201,51 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(broadcasts).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]!.metadata?.proteusEvent).toBe('event_drain');
+  });
+
+  test('an enqueue rejection re-pends the batch so the next drain retries it', async () => {
+    const log = newEventLog();
+    const admitted = log.publish({ descriptor: webhook('retry-rejection'), now: 1 });
+    const { engine } = fakeEngine();
+    const { host, enqueued } = fakeHost();
+    let attempts = 0;
+    host.enqueueTurn = async (turn) => {
+      enqueued.push(turn);
+      attempts++;
+      if (attempts === 1) throw new Error('queue unavailable');
+      return { status: 'queued' };
+    };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    await orch.drainPendingEvents();
+    expect(log.pending().map((event) => event.id)).toEqual([admitted.id]);
+
+    await orch.drainPendingEvents();
+    expect(enqueued).toHaveLength(2);
+    expect(log.pending()).toHaveLength(0);
+    expect(log.query({ turn_id: enqueued[1]!.metadata?.drainTurnId as string }).map((event) => event.id))
+      .toEqual([admitted.id]);
+  });
+
+  test("a skipped enqueue re-pends the batch so the next drain retries it", async () => {
+    const log = newEventLog();
+    const admitted = log.publish({ descriptor: webhook('retry-skipped'), now: 1 });
+    const { engine } = fakeEngine();
+    const { host, enqueued } = fakeHost();
+    let attempts = 0;
+    host.enqueueTurn = async (turn) => {
+      enqueued.push(turn);
+      attempts++;
+      return { status: attempts === 1 ? 'skipped' : 'queued' };
+    };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    await orch.drainPendingEvents();
+    expect(log.pending().map((event) => event.id)).toEqual([admitted.id]);
+
+    await orch.drainPendingEvents();
+    expect(enqueued).toHaveLength(2);
+    expect(log.pending()).toHaveLength(0);
   });
 });
 

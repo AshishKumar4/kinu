@@ -69,7 +69,7 @@ describe('DeviceSocketHub', () => {
     expect(hub.connectedDeviceId()).toBeNull();
   });
 
-  test('a reconnect replaces the previous socket for the same device', () => {
+  test('a reconnect replaces the previous socket for the same device', async () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
     const first = fakeSocket();
@@ -78,9 +78,12 @@ describe('DeviceSocketHub', () => {
     hub.accept('dev-a', second);
     expect(first.closed).toEqual([{ code: 1000, reason: 'replaced by a new connection' }]);
     expect(hub.liveSocket('dev-a')).toBe(second);
-    void hub.tunnel('dev-a')!.rpc('exec', ['ls']);
+    const pending = hub.tunnel('dev-a')!.rpc('exec', ['ls']);
     expect(second.sent).toHaveLength(1);
     expect(first.sent).toHaveLength(0);
+    const frame = JSON.parse(second.sent[0]!) as { id: string };
+    hub.handleMessage('dev-a', JSON.stringify({ id: frame.id, result: 'ok' }));
+    expect(await pending).toBe('ok');
   });
 
   test('a new hub over the same ctx rebuilds liveness + tunnel after a wake', async () => {

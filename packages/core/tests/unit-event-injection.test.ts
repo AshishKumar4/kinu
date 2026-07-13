@@ -12,7 +12,7 @@ const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 const texts = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.content);
 const batch = (turnId: string, brief: string): MidTurnEventBatch => ({
-  turnId, stepText: `mid-turn: ${brief}`, turnText: `new-turn: ${brief}`,
+  turnId, ids: [`event-${turnId}`], stepText: `mid-turn: ${brief}`, turnText: `new-turn: ${brief}`,
 });
 
 describe('EventInjectionBuffer', () => {
@@ -91,5 +91,16 @@ describe('EventInjectionBuffer', () => {
     buf.beginTurn(false);
     expect(buf.prepareStep({ stepNumber: 0, messages: [user('q2')] })).toBeUndefined();
     expect(buf.settle()).toEqual({ absorbed: [], leftover: [] });
+  });
+
+  test('a non-completed turn does not retain absorbed batches for a continuation', () => {
+    const buf = new EventInjectionBuffer();
+    const mail = batch('evt-aborted', 'mail from bob');
+    buf.push(mail);
+    buf.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    expect(buf.settle({ retainForContinuation: false }).absorbed).toEqual([mail]);
+
+    buf.beginTurn(true);
+    expect(buf.prepareStep({ stepNumber: 0, messages: [user('continued')] })).toBeUndefined();
   });
 });

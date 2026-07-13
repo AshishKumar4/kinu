@@ -60,8 +60,8 @@ export class EventInjectionBuffer {
 
   /** Turn over: report what was absorbed vs left waiting, and reset for the
    *  next turn. Call exactly once per turn, before anything that can throw. */
-  settle(): SettledInjections {
-    this.settled = this.absorbed;
+  settle(opts: { retainForContinuation?: boolean } = {}): SettledInjections {
+    this.settled = opts.retainForContinuation === false ? [] : this.absorbed;
     const result = { absorbed: [...this.absorbed], leftover: this.pending.splice(0) };
     this.absorbed = [];
     this.injections.reset();
