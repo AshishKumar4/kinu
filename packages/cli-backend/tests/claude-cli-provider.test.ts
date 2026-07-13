@@ -63,6 +63,7 @@ interface FakeProc {
   stdout?: string;
   stderr?: string;
   code?: number | null;
+  signal?: NodeJS.Signals | null;
   /** Resolve only after the abort signal fires (to test cancellation). */
   hangUntilAbort?: boolean;
 }
@@ -74,12 +75,19 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): { spawn: ClaudeSpawn;
     calls.push(args);
     const proc = handler(args);
     let killed = false;
-    const exit = new Promise<number | null>((resolve) => {
+    const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       if (proc.hangUntilAbort) {
-        opts.signal?.addEventListener('abort', () => { killed = true; state.killed++; resolve(null); });
+        opts.signal?.addEventListener('abort', () => {
+          killed = true;
+          state.killed++;
+          resolve({ code: null, signal: 'SIGTERM' });
+        });
         return;
       }
-      queueMicrotask(() => resolve(proc.code ?? 0));
+      queueMicrotask(() => resolve({
+        code: proc.code === undefined ? 0 : proc.code,
+        signal: proc.signal ?? null,
+      }));
     });
     async function* lines(value: string | undefined): AsyncGenerator<Uint8Array> {
       if (proc.hangUntilAbort) {
@@ -174,6 +182,20 @@ describe('claude-cli provider — doStream', () => {
     await expect(generateText({ model, prompt: 'q' })).rejects.toThrow(/sign in to your Claude subscription/i);
   });
 
+  test('a signal-killed process surfaces the signal and stderr', async () => {
+    const spawn = fakeSpawn(() => ({
+      stderr: 'fatal: process exceeded its memory limit',
+      code: null,
+      signal: 'SIGKILL',
+    })).spawn;
+    const provider = createClaudeCliProvider({ spawn });
+    const model = provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
+
+    await expect(generateText({ model, prompt: 'q' })).rejects.toThrow(
+      /SIGKILL.*process exceeded its memory limit/i,
+    );
+  });
+
   test('a result error event surfaces a clean error', async () => {
     const errLine = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, api_error_status: 'overloaded_error', result: '' });
     const spawn = fakeSpawn((args) => {
@@ -214,6 +236,7 @@ describe('claude-cli provider — abort', () => {
     }
     expect(fake.killed).toBeGreaterThanOrEqual(1);
     expect(types).toContain('finish');
+    expect(types).not.toContain('error');
   });
 });
 

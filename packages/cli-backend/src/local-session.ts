@@ -280,13 +280,6 @@ export class LocalAgentSession implements BackendHost {
     // this session as the BackendHost (enqueueTurn wakes the agent).
     initBackgroundJobsTable(this.rt.storage.execRaw);
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
-    this.jobRunner = new BackgroundJobRunner({
-      store: this.jobs,
-      fiber: this.rt.schedule.fiber,
-      host: this,
-      logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
-    });
-
     // agent_config (typed key/value) — backs always-active skills, etc.
     initAgentConfigTable(this.rt.storage.execRaw);
     this.config = createAgentConfigStore(this.rt.storage.sql);
@@ -352,6 +345,14 @@ export class LocalAgentSession implements BackendHost {
       engine: this.engine,
       eventLog: this.eventLog,
       sessionReflectionInterval: opts.sessionReflectionInterval,
+    });
+    this.jobRunner = new BackgroundJobRunner({
+      store: this.jobs,
+      fiber: this.rt.schedule.fiber,
+      host: this,
+      eventLog: this.eventLog,
+      scheduleDrain: () => this.orch.scheduleDrain(),
+      logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
     this.restoreHistory(opts.historyLimit ?? 40);
     this.ensureModelState();
@@ -846,8 +847,13 @@ export class LocalAgentSession implements BackendHost {
     try {
       let item: QueueItem | undefined;
       while ((item = this.queue.shift())) {
-        try { await this.processTurn(item); }
-        finally { item.resolve(); }
+        try {
+          await this.processTurn(item);
+        } catch (err) {
+          console.error('[proteus] turn processing failed:', err instanceof Error ? err.message : String(err));
+        } finally {
+          item.resolve();
+        }
       }
     } finally {
       this.pumping = false;
@@ -1029,50 +1035,8 @@ export class LocalAgentSession implements BackendHost {
       this.currentAbort = null;
     }
 
-    // Persist the turn's final provider-priced prompt size — the NEXT turn's
-    // measured compaction trigger. Any step that reported was a real priced
-    // request, so errored turns record too. Bound to the turn's durable
-    // history length so a later shrink voids it.
-    if (this.orch.acc.lastPromptTokens > 0) {
-      this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens, historyLength);
-    }
-
-    // Steers that never saw a step boundary (the model was already finishing)
-    // run as the IMMEDIATE next turn — ahead of any programmatic injects.
-    if (this.pendingSteers.length > 0) {
-      const leftover = this.pendingSteers.splice(0);
-      this.queue.unshift({
-        text: leftover.map((steer) => steer.text).join('\n\n'),
-        files: leftover.flatMap((steer) => steer.files ?? []),
-        kind: 'user',
-        resolve: () => {},
-      });
-    }
-
-    // One durable row PER steer (not per drain): the walk-back fork pivot
-    // matches individual user messages verbatim, exactly as surfaces and the
-    // JSONL transcript recorded them.
-    const assistantMsgId = this.persist(item.text, injections.recorded.flatMap((injection) => injection.texts), fullText);
-
-    // Alternate Takes captured during this turn's think-mcts runs get the
-    // turn id they competed for, so a pick can credit the right turn. A turn
-    // that settles without an assistant message id cannot be credited — its
-    // captures are purged so the next turn never claims them as its own.
-    try {
-      if (assistantMsgId) {
-        claimAlternateTakesForTurn(this.rt.storage.sql, {
-          turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
-        });
-      } else {
-        purgeUnclaimedAlternateTakes(this.rt.storage.sql);
-      }
-    } catch { /* no takes table yet — the first MCTS run creates it */ }
-
-    // Steer-as-Branch redirects launched during this turn settle against its
-    // answer — detached, so a slow branch never delays turn-end.
-    this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
-
-    const turn: CompletedTurn = {
+    let assistantMsgId: string | null = null;
+    const snapshotTurn = (): CompletedTurn => ({
       userMessage: item.text,
       assistantResponse: fullText,
       toolCalls: this.orch.acc.toolCalls,
@@ -1083,10 +1047,67 @@ export class LocalAgentSession implements BackendHost {
       ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
       sessionId: this.sessionId,
       origin: item.kind,
-    };
-    // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
-    await this.orch.completeTurn(turn);
-    this.emit({ type: 'turn-end', turn });
+    });
+
+    try {
+      // Persist the turn's final provider-priced prompt size — the NEXT turn's
+      // measured compaction trigger. Any step that reported was a real priced
+      // request, so errored turns record too. Bound to the turn's durable
+      // history length so a later shrink voids it.
+      if (this.orch.acc.lastPromptTokens > 0) {
+        this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens, historyLength);
+      }
+
+      // Steers that never saw a step boundary (the model was already finishing)
+      // run as the IMMEDIATE next turn — ahead of any programmatic injects.
+      if (this.pendingSteers.length > 0) {
+        const leftover = this.pendingSteers.splice(0);
+        this.queue.unshift({
+          text: leftover.map((steer) => steer.text).join('\n\n'),
+          files: leftover.flatMap((steer) => steer.files ?? []),
+          kind: 'user',
+          resolve: () => {},
+        });
+      }
+
+      // One durable row PER steer (not per drain): the walk-back fork pivot
+      // matches individual user messages verbatim, exactly as surfaces and the
+      // JSONL transcript recorded them.
+      assistantMsgId = this.persist(item.text, injections.recorded.flatMap((injection) => injection.texts), fullText);
+
+      // Alternate Takes captured during this turn's think-mcts runs get the
+      // turn id they competed for, so a pick can credit the right turn. A turn
+      // that settles without an assistant message id cannot be credited — its
+      // captures are purged so the next turn never claims them as its own.
+      try {
+        if (assistantMsgId) {
+          claimAlternateTakesForTurn(this.rt.storage.sql, {
+            turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
+          });
+        } else {
+          purgeUnclaimedAlternateTakes(this.rt.storage.sql);
+        }
+      } catch { /* no takes table yet — the first MCTS run creates it */ }
+
+      // Steer-as-Branch redirects launched during this turn settle against its
+      // answer — detached, so a slow branch never delays turn-end.
+      this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
+
+      const turn = snapshotTurn();
+      // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
+      await this.orch.completeTurn(turn);
+      this.emit({ type: 'turn-end', turn });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.orch.acc.hadError = true;
+      console.error('[proteus] turn finalization failed:', message);
+      // Any response messages runChat produced remain in live history as a
+      // best-effort recovery for later turns in this process. We do not retry
+      // potentially partial side effects, and failed persistence cannot survive
+      // a restart, so surface both the failure and a terminal turn event.
+      this.emit({ type: 'error', message });
+      this.emit({ type: 'turn-end', turn: snapshotTurn() });
+    }
   }
 
   /** Settle every branch launched during the just-finished turn (detached —

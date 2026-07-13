@@ -44,17 +44,18 @@ export interface SpawnedClaude {
   stderr: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
   stdin: { end(): void } | null;
   kill(signal?: NodeJS.Signals): void;
-  /** Resolves with the process exit code (null when killed by signal). */
-  exit: Promise<number | null>;
+  /** Resolves with Node's authoritative close outcome. */
+  exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
 
 export type ClaudeSpawn = (args: string[], opts: { signal?: AbortSignal }) => SpawnedClaude;
 
 const defaultSpawn: ClaudeSpawn = (args, opts) => {
   const child = nodeSpawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal }) as ChildProcessWithoutNullStreams;
-  const exit = new Promise<number | null>((resolve) => {
-    child.on('close', (code) => resolve(code));
-    child.on('error', () => resolve(null));
+  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.on('close', (code, signal) => resolve({ code, signal: signal ?? null }));
+    // `close` follows `error` and carries the authoritative code/signal pair.
+    child.on('error', () => {});
   });
   return {
     stdout: child.stdout,
@@ -144,7 +145,7 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
   // synchronous spawn throw; the failing exit code (null/non-zero) is the real
   // signal, so a broken stream read just means "no output".
   const stdout = await readAll(child.stdout).catch(() => '');
-  const code = await child.exit;
+  const { code } = await child.exit;
   return { code, stdout };
 }
 
@@ -294,14 +295,19 @@ function runClaudeStream(
         }
       } catch (error) {
         if (textOpen) { controller.enqueue({ type: 'text-end', id: textId }); textOpen = false; }
-        controller.enqueue({ type: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+        if (!options.abortSignal?.aborted) {
+          controller.enqueue({ type: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+        }
       }
 
       if (textOpen) controller.enqueue({ type: 'text-end', id: textId });
-      const code = await child.exit;
+      const { code, signal } = await child.exit;
       await collectStderr;
 
-      if (code !== 0 && code !== null && !usage) {
+      if (code === null && !options.abortSignal?.aborted) {
+        controller.enqueue({ type: 'error', error: new Error(signalExitError(signal, stderr)) });
+        finishReason = 'error';
+      } else if (code !== 0 && code !== null && !usage) {
         controller.enqueue({ type: 'error', error: new Error(exitError(code, stderr)) });
         finishReason = 'error';
       }
@@ -422,6 +428,11 @@ function exitError(code: number, stderr: string): string {
     return `Claude Code did not accept the model: ${detail || 'unknown model'}.`;
   }
   return `Claude Code exited with code ${code}${detail ? `: ${detail}` : ''}.`;
+}
+
+function signalExitError(signal: NodeJS.Signals | null, stderr: string): string {
+  const detail = stderr.trim().slice(-4_000);
+  return `Claude Code terminated by signal ${signal ?? 'unknown'}${detail ? `: ${detail}` : ''}.`;
 }
 
 // ─── doGenerate (wraps doStream) ────────────────────────────────────────────
