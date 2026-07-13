@@ -84,7 +84,7 @@ import {
   HeadController, HeadJournal, initHeadsTables,
   type SerializedMessage, type SplitPhaseEvent, type HeadRunView, type HeadRuntime, type MergeResult,
   // Canonical memory-note write primitive
-  appendMemoryNote,
+  appendMemoryNote, readMemoryTail,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   runScaffold, scaffoldInferenceTransform, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
@@ -2013,8 +2013,13 @@ export class OrchestratorAgent extends Think<Env> {
       ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
       trigger: 'auto',
     });
+    // The newest MEMORY.md lessons/reflections ride the ephemeral block too
+    // (the same bounded tail the CLI weave supplies) — the reflection loop
+    // assumes the model sees its latest lessons in-turn.
+    const memoryTail = await readMemoryTail(this.rt.memory);
     const woven = this.ephemeralLedger.weave(transformed ?? baseMessages, {
       factsBlock: this.renderFactsForTurn(),
+      ...(memoryTail ? { memoryTail } : {}),
       executors: execs,
     });
     const turnLocal = turnLocalContextMessage({

@@ -34,7 +34,7 @@ import {
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
   initAgentConfigTable, createAgentConfigStore,
-  initFactsTable, createFactsStore, renderFactsBlock,
+  initFactsTable, createFactsStore, renderFactsBlock, readMemoryTail,
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
   HeadController, HeadJournal, initHeadsTables,
@@ -896,7 +896,7 @@ export class LocalAgentSession implements BackendHost {
     // corrections append constantly), so it rides the ephemeral system-state
     // ledger: in the stable prefix every append would bust the cache and
     // trip the prompt-hash telemetry with no real agent event.
-    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
+    const memoryTail = await readMemoryTail(this.rt.memory);
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
     const activeSkills = await this.resolveTurnSkills(item.text);
     // Skill-filtered built-ins + the connected MCP tools (always available).
@@ -948,7 +948,7 @@ export class LocalAgentSession implements BackendHost {
       ledger: this.ephemeralLedger,
       context: {
         factsBlock: this.renderFactsForTurn(),
-        memoryTail: knowledge || undefined,
+        memoryTail,
         executors,
       },
     };
@@ -1252,7 +1252,7 @@ export class LocalAgentSession implements BackendHost {
    *  (see the engine-construction note). */
   private async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
-    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
+    const memoryTail = await readMemoryTail(this.rt.memory);
     const systemPrompt = buildSystemPromptSync(this.rt, {
       backend: 'cli-local',
       mode: 'chat',
@@ -1269,7 +1269,7 @@ export class LocalAgentSession implements BackendHost {
       // from the session's own block positions.
       systemState: {
         ledger: new EphemeralContextLedger(),
-        context: { factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined },
+        context: { factsBlock: this.renderFactsForTurn(), memoryTail },
       },
       tools: {},
       maxSteps: 1,

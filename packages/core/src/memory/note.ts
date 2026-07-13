@@ -17,6 +17,24 @@ import type { Memory } from '../types/primitives.js';
 
 const MEMORY_PATH = 'memory/MEMORY.md';
 
+/** Default bound on the MEMORY.md tail woven into a turn — enough for the
+ *  newest lessons/reflections without unbounding the prompt as the append-only
+ *  file grows. */
+export const MEMORY_TAIL_MAX_CHARS = 2000;
+
+/**
+ * The newest bytes of the append-only MEMORY.md — the live lessons/reflections
+ * tail both backends weave into each turn's ephemeral system-state block (never
+ * the byte-stable prefix, where every append would bust the cache). Bounded to
+ * the file's END because that is where the newest entries land. Undefined when
+ * memory is empty. Single source of truth for the path + bound so the cf and
+ * CLI weaves cannot drift.
+ */
+export async function readMemoryTail(memory: Memory, maxChars = MEMORY_TAIL_MAX_CHARS): Promise<string | undefined> {
+  const tail = (await memory.read(MEMORY_PATH))?.slice(-maxChars);
+  return tail && tail.length > 0 ? tail : undefined;
+}
+
 export async function appendMemoryNote(
   memory: Memory,
   content: string,

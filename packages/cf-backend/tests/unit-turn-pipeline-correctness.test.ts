@@ -5,6 +5,25 @@ import { join } from 'node:path';
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
+  test('beforeTurn weaves the bounded MEMORY.md tail into the ephemeral system-state block', () => {
+    // Parity with the CLI weave: the reflection loop assumes the model sees its
+    // newest lessons in-turn. cf previously passed only {factsBlock,executors},
+    // so hosted agents never saw their latest MEMORY.md lessons. The tail is
+    // sourced through the shared readMemoryTail helper (single source of truth
+    // for the path + bound) and rides the ephemeral block, never the prefix.
+    expect(source).toContain('readMemoryTail');
+    const weaveIdx = source.indexOf('this.ephemeralLedger.weave(transformed ?? baseMessages');
+    expect(weaveIdx).toBeGreaterThan(-1);
+    const sourceIdx = source.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
+    expect(sourceIdx).toBeGreaterThan(-1);
+    // Sourced BEFORE the weave, and passed into it alongside facts + executors.
+    expect(sourceIdx).toBeLessThan(weaveIdx);
+    const weaveArgs = source.slice(weaveIdx, source.indexOf('const turnLocal = turnLocalContextMessage', weaveIdx));
+    expect(weaveArgs).toContain('factsBlock: this.renderFactsForTurn()');
+    expect(weaveArgs).toContain('...(memoryTail ? { memoryTail } : {})');
+    expect(weaveArgs).toContain('executors: execs');
+  });
+
   test('CHAT_CLEAR resets the ephemeral ledger and durable compaction plan after Think handles it', () => {
     const constructor = source.slice(
       source.indexOf('constructor(ctx: AgentContext, env: Env)'),

@@ -464,7 +464,8 @@ export {
 
 // Memory write primitive — single canonical "save a note to MEMORY.md".
 // Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
-export { appendMemoryNote } from './memory/note.js';
+// readMemoryTail is the shared bounded-tail read both backends weave per turn.
+export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note.js';
 
 // Zero-LLM transcript search over the canonical `messages` table (FTS5).
 // Backs the `memory` tool's `sessions` action on both backends.
