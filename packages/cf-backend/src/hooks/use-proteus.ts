@@ -8,22 +8,14 @@ import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
+import type { ExecutorInfo } from "../lib/executors";
 import { touchWorkspace } from "../lib/user-api";
+
+export type { ExecutorInfo };
 
 export interface ExecutorOutput {
   id: string; command: string; stdout: string; stderr: string;
   exit_code: number; created_at: number;
-}
-
-export interface ExecutorInfo {
-  name: string;
-  kind: string;
-  capabilities: string[];
-  available: boolean;
-  configured: boolean;
-  active: boolean;
-  status: "not_configured" | "idle" | "active" | "disconnected" | "error";
-  reason?: string;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -120,8 +112,8 @@ export function useProteus(agentId?: string) {
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
   // Pinned (exposed) ports for sandbox previews. Refreshed with the live-data
-  // poll on every surface so auto-switch-to-preview, the Output/Devices badges
-  // and ExecutorsPanel auto-focus stay live wherever the user is. Listing
+  // poll on every surface so auto-switch-to-preview, the Output badge and the
+  // Environment preview auto-focus stay live wherever the user is. Listing
   // ports never provisions a sandbox: getExposedPorts returns [] server-side
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);

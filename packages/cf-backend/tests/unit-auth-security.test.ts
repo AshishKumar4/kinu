@@ -219,13 +219,13 @@ describe('auth and desktop security invariants', () => {
 
   test('browser UI uses app auth routes rather than Cloudflare Access logout/login URLs', () => {
     const sidebar = source('src/components/Sidebar.tsx');
-    const triggers = source('src/pages/TriggersTab.tsx');
+    const supervise = source('src/pages/SupervisePage.tsx'); // webhook step-up login lives here
     const routes = source('src/auth/routes.ts');
     expect(sidebar).toContain('href="/logout"');
     expect(sidebar).not.toContain('/cdn-cgi/access/logout');
     expect(routes).toContain("url.searchParams.get('return_to') ?? '/'");
-    expect(triggers).toContain("new URL('/login', window.location.origin)");
-    expect(triggers).not.toContain('/cdn-cgi/access/login');
+    expect(supervise).toContain('new URL("/login", window.location.origin)');
+    expect(supervise).not.toContain('/cdn-cgi/access/login');
   });
 
   test('OAuth sessions are HttpOnly host cookies and state is server-side', () => {
@@ -373,13 +373,17 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
+    // The shared self-fetching picker owns the reconnect CTA; the chat page
+    // renders it in the header.
+    const picker = source('src/components/ModelPicker.tsx');
     const workspace = source('src/pages/WorkspacePage.tsx');
     const home = source('src/pages/HomePage.tsx');
     const modal = source('src/components/CreateWorkspaceModal.tsx');
     const settings = source('src/pages/UserSettingsPage.tsx');
-    expect(workspace).not.toContain('(no providers connected)');
-    expect(workspace).toContain('Connect Workers AI');
-    expect(workspace).toContain('cloudflareReconnectPath');
+    expect(picker).not.toContain('(no providers connected)');
+    expect(picker).toContain('Connect Workers AI');
+    expect(picker).toContain('cloudflareReconnectPath');
+    expect(workspace).toContain('ConnectedModelPicker');
     expect(home).toContain('CloudflareAIConnectNotice');
     expect(modal).toContain('CloudflareAIConnectNotice');
     expect(settings).toContain('CloudflareAIConnectNotice');

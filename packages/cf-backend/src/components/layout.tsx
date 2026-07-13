@@ -39,7 +39,7 @@ export default function Layout() {
           <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </button>
-          <Link to="/user/settings" aria-label="Settings" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          <Link to="/user/settings" aria-label="Account settings" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <GearIcon size={16} />
           </Link>
         </div>

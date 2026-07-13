@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, useParams } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
@@ -6,7 +6,6 @@ import WorkspacePage from "./pages/WorkspacePage";
 import SettingsPage from "./pages/SettingsPage";
 import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
-import TriggersTab from "./pages/TriggersTab";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Loader } from "@cloudflare/kumo";
 
@@ -30,6 +29,13 @@ function KeyedWorkspace() {
   return <WorkspacePage key={agentId} />;
 }
 
+// Trigger management folded into the Supervise altitude's Automations block;
+// old /triggers deep links land there.
+function TriggersRedirect() {
+  const { agentId } = useParams();
+  return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -47,7 +53,7 @@ export default function App() {
             </ErrorBoundary>
           } />
           <Route path="/settings/:agentId" element={<ErrorBoundary label="agent-settings"><SettingsPage /></ErrorBoundary>} />
-          <Route path="/triggers/:agentId" element={<ErrorBoundary label="triggers"><TriggersTab /></ErrorBoundary>} />
+          <Route path="/triggers/:agentId" element={<TriggersRedirect />} />
         </Route>
       </Routes>
     </BrowserRouter>

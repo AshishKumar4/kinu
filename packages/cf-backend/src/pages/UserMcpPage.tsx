@@ -22,13 +22,9 @@ import {
   listMcpServers, addMcpServer, removeMcpServer,
   type McpServerSummary, type McpTransport,
 } from "../lib/user-api";
+import { inputCls } from "@/components/ui/form";
 
 const POLL_MS = 5000;
-
-const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
-  + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
-  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-  + " placeholder:p-text-3";
 
 function statusBadge(status: McpServerSummary['status']): {
   label: string; classes: string; Icon: React.ComponentType<{ size?: number; className?: string }>;
@@ -97,7 +93,7 @@ export default function UserMcpPage() {
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         <header>
           <Link to="/user/settings" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
-            <ArrowLeftIcon size={12} /> Back to user settings
+            <ArrowLeftIcon size={12} /> Back to account settings
           </Link>
           <div className="flex items-center justify-between gap-4">
             <div>

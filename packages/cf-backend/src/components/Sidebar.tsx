@@ -304,7 +304,7 @@ export default function Sidebar() {
             <Link to="/user/settings" onClick={() => setShowUserMenu(false)}
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover">
               <GearIcon size={14} />
-              <span>Settings</span>
+              <span>Account settings</span>
             </Link>
             <ModeToggle />
             <a

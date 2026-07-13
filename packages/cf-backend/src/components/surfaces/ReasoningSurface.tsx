@@ -5,8 +5,9 @@
  * front + ancestry → getGepaRuns / getGepaRun). All bound to wired backends.
  */
 import { useState, useRef, useEffect, useCallback } from "react";
+import { Link, useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon } from "@phosphor-icons/react";
+import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon, ArrowsOutIcon } from "@phosphor-icons/react";
 import { DEFAULT_QUALITY_THRESHOLD } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
@@ -20,6 +21,7 @@ export interface ReasoningSurfaceProps {
 }
 
 export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
+  const { agentId } = useParams();
   const [view, setView] = useState<SubView>("mcts");
   const tabs: Array<{ id: SubView; label: string; icon: React.ComponentType<{ size?: number }> }> = [
     { id: "mcts", label: "MCTS", icon: TreeStructureIcon },
@@ -36,6 +38,14 @@ export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
             <t.icon size={12} />{t.label}
           </button>
         ))}
+        {/* Full-screen MCTS explorer — the one entry point to /mcts/:id. */}
+        {view === "mcts" && agentId && (
+          <Link to={`/mcts/${agentId}`}
+            className="ml-auto flex items-center gap-1 px-2 py-1 text-[11px] rounded-md p-text-3 hover:p-text transition-colors"
+            title="Open the full-screen MCTS explorer">
+            <ArrowsOutIcon size={12} />Expand
+          </Link>
+        )}
       </div>
       <div className="flex-1 min-h-0">
         {view === "mcts" && <MctsView mctsTree={mctsTree} rpc={rpc} />}

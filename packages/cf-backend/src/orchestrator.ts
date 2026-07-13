@@ -4985,7 +4985,7 @@ export class OrchestratorAgent extends Think<Env> {
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
 
   /** List triggers (webhooks, timers, watches, mcp routes). UI uses this
-   *  for the per-agent Triggers tab. */
+   *  for the Supervise Automations block. */
   @callable()
   async listTriggers() {
     return {

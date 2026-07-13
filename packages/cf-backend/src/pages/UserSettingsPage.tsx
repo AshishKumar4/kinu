@@ -16,6 +16,7 @@ import { Combobox, Loader } from "@cloudflare/kumo";
 import {
   PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
+  DesktopTowerIcon, WarningIcon,
 } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -24,31 +25,12 @@ import {
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
   listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
+  listDevices, registerDevice, revokeDevice,
   type UserProfile, type CredentialSummary, type CodexStatus,
   type ModelMenuEntry, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
-  type CloudflareGatewayStatus,
+  type CloudflareGatewayStatus, type UserDevice,
 } from "../lib/user-api";
-
-const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
-  + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
-  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-  + " placeholder:p-text-3";
-
-function Card({ title, icon: Icon, children }: {
-  title: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="p-card rounded-xl p-5 space-y-4">
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Icon size={16} className="p-accent" />
-        <span>{title}</span>
-      </h2>
-      {children}
-    </section>
-  );
-}
+import { Card, inputCls } from "@/components/ui/form";
 
 export default function UserSettingsPage() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -104,7 +86,7 @@ export default function UserSettingsPage() {
           <Link to="/" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
             <ArrowLeftIcon size={12} /> Back
           </Link>
-          <h1 className="text-2xl font-semibold">User settings</h1>
+          <h1 className="text-2xl font-semibold">Account settings</h1>
           <p className="text-xs p-text-3 mt-1">
             Account-level: credentials apply to every agent you own.
           </p>
@@ -134,6 +116,10 @@ export default function UserSettingsPage() {
             <CommandCopy label="Setup" command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
           </div>
         </Card>
+
+        {/* Devices — account-level PC/laptop registration; every agent can use
+            a connected device (with consent). Linked from the Environment tab. */}
+        <DevicesCard />
 
         <Card title="Cloudflare AI" icon={PlugIcon}>
           {workersAIConnected ? (
@@ -196,6 +182,117 @@ export default function UserSettingsPage() {
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+
+// ── Devices — user-level PC/laptop tunnel registration ──────────────
+
+/** Register / revoke your PCs here (moved out of the work surface — this is
+ *  account state on the user-do device hub, not a per-run concern). The
+ *  daemon opens one outbound WebSocket; no inbound ports, runs as your user,
+ *  never root. Per-agent file-access tiers live in each workspace's settings. */
+function DevicesCard() {
+  const [devices, setDevices] = useState<UserDevice[] | null>(null);
+  const [install, setInstall] = useState<string | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  const refreshDevices = useCallback(() => {
+    listDevices().then(setDevices).catch(() => setDevices([]));
+  }, []);
+  useEffect(() => {
+    refreshDevices();
+    const t = setInterval(refreshDevices, 5000); // running daemon flips connected within seconds
+    return () => clearInterval(t);
+  }, [refreshDevices]);
+
+  // Deep-link target: the Environment tab's "Connect your PC" CTA points at
+  // /user/settings#devices.
+  useEffect(() => {
+    if (window.location.hash === "#devices") {
+      anchorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }, []);
+
+  const issue = useCallback(async () => {
+    setIssuing(true);
+    setErr(null);
+    try { const r = await registerDevice(); setInstall(r.installCommand); refreshDevices(); }
+    catch (e) { setErr(`Could not register device: ${(e as Error).message}`); }
+    finally { setIssuing(false); }
+  }, [refreshDevices]);
+
+  const revoke = useCallback(async (id: string, label: string) => {
+    if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
+    setErr(null);
+    try { await revokeDevice(id); }
+    catch (e) { setErr(`Could not revoke device: ${(e as Error).message}`); }
+    refreshDevices();
+  }, [refreshDevices]);
+
+  return (
+    <div ref={anchorRef} id="devices">
+      <Card title="Devices" icon={DesktopTowerIcon}>
+        <p className="text-xs p-text-2">
+          Link a laptop or PC to your account — once connected, every one of your agents can use it
+          (with your consent). The daemon opens one outbound WebSocket; no inbound ports, runs as
+          your user, never root.
+        </p>
+
+        {devices && devices.length > 0 && (
+          <div className="rounded-md border p-border overflow-hidden text-xs">
+            {devices.map((d) => (
+              <div key={d.id} className="flex items-center gap-2 px-3 py-2 border-b p-border last:border-0">
+                <span className={`size-1.5 rounded-full shrink-0 ${d.connected ? "p-dot-success" : "p-dot-neutral"}`} />
+                <span className="font-medium p-text">{d.label}</span>
+                {d.hostname && <span className="p-text-3 font-mono">{d.hostname}{d.os ? ` · ${d.os}` : ""}</span>}
+                <span className="p-text-3 ml-auto">{d.connected ? "connected" : "offline"}</span>
+                <button onClick={() => revoke(d.id, d.label)} title="Revoke device" className="p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
+          <p className="text-[11px] p-text-3">
+            Offline device? Restart the daemon on that machine with <code className="font-mono p-elevated px-1 rounded">proteus connect</code>.
+          </p>
+        )}
+
+        {err && <div className="text-xs p-danger">{err}</div>}
+
+        {!install ? (
+          <button
+            onClick={issue}
+            disabled={issuing}
+            className="px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 disabled:opacity-50"
+          >{issuing ? "Generating…" : "Connect a device"}</button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs p-text-2">Paste this on the machine you want to connect. It installs the CLI, signs in, and starts the local daemon:</p>
+            <div className="rounded-md p-elevated border p-border p-3 font-mono text-[11px] p-text break-all select-all leading-relaxed">
+              {install}
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => { navigator.clipboard.writeText(install).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
+                className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 p-text-2"
+              ><CopyIcon size={11} />{copied ? "copied" : "Copy"}</button>
+              <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
+            </div>
+            <p className="text-[11px] p-text-3 mt-1 flex items-center gap-1.5">
+              <WarningIcon size={11} /> Device secrets are written locally by <code className="font-mono">proteus connect</code>; they are not shown in this command.
+            </p>
+          </div>
+        )}
+
+        <p className="text-[11px] p-text-3">
+          Each workspace's file-access tier on a device (consented folder vs full filesystem) is set
+          in that workspace's settings.
+        </p>
+      </Card>
     </div>
   );
 }

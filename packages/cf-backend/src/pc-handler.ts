@@ -66,7 +66,7 @@ else
   echo "Node.js required. Install https://nodejs.org/ then re-run."
   exit 1
 fi
-echo "Proteus device connected. Check the Devices tab — it should flip to connected within a few seconds."
+echo "Proteus device connected. Check the Environment tab — it should flip to connected within a few seconds."
 `;
   return new Response(script, {
     status: 200,

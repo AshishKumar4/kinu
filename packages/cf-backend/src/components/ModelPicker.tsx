@@ -5,10 +5,11 @@
  * connected-provider preference order), current model pinned first, with
  * context-window and capability badges.
  */
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox } from "@cloudflare/kumo";
+import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { formatContextWindow } from "@proteus/core";
-import type { ModelMenuEntry } from "../lib/user-api";
+import { cloudflareReconnectPath, listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 
 export interface ModelPickerProps {
@@ -68,6 +69,75 @@ export function ModelPicker({
         </Combobox.List>
       </Combobox.Content>
     </Combobox>
+  );
+}
+
+/**
+ * Self-fetching ModelPicker — the shared wrapper for every picker that isn't
+ * handed a models list (chat toolbar, workspace settings). Owns the tri-state:
+ * null = loading, "error" = transient fetch failure (retryable), [] = the
+ * fetch succeeded and genuinely no provider is connected. Only the last one
+ * earns the empty-state CTA — flashing it during load or on a flaky request
+ * sent connected users through a full OAuth prompt=login.
+ */
+export function ConnectedModelPicker({
+  value, onChange, size, className, clearable, placeholder, renderEmpty,
+}: Omit<ModelPickerProps, "models"> & {
+  /** Rendered when no provider is connected. Defaults to the Workers AI
+   *  reconnect CTA. */
+  renderEmpty?: () => React.ReactNode;
+}) {
+  const [models, setModels] = useState<ModelMenuEntry[] | null | "error">(null);
+  const fetchModels = useCallback(() => {
+    setModels(null);
+    listAvailableModels()
+      .then(setModels)
+      .catch(() => setModels("error"));
+  }, []);
+  useEffect(() => { fetchModels(); }, [fetchModels]);
+  if (models === null) {
+    return (
+      <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 text-[11px] p-text-3" aria-label="Loading models">
+        …
+      </span>
+    );
+  }
+  if (models === "error") {
+    return (
+      <button
+        type="button"
+        onClick={fetchModels}
+        className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 text-[11px] p-text-3 hover:p-text-2"
+        title="Couldn't load the model list — click to retry"
+      >
+        <ArrowsClockwiseIcon size={11} />
+        models unavailable
+      </button>
+    );
+  }
+  if (models.length === 0) {
+    if (renderEmpty) return <>{renderEmpty()}</>;
+    return (
+      <a
+        href={cloudflareReconnectPath(window.location.pathname)}
+        className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] hover:opacity-80"
+        title="Reconnect Cloudflare with Workers AI permissions"
+      >
+        <WarningCircleIcon size={12} />
+        Connect Workers AI
+      </a>
+    );
+  }
+  return (
+    <ModelPicker
+      models={models}
+      value={value}
+      onChange={onChange}
+      size={size}
+      className={className}
+      clearable={clearable}
+      placeholder={placeholder}
+    />
   );
 }
 

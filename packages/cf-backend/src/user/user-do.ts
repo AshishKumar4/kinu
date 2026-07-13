@@ -780,7 +780,7 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  /** The remembered consent policies (Devices tab — see/revoke which agents may
+  /** The remembered consent policies (Account settings → Devices — see/revoke which agents may
    *  use a device). */
   async listDeviceConsents(): Promise<Array<{
     agentName: string;
@@ -806,7 +806,7 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Grant or reduce an agent's consent tier on a device (Devices tab / CLI).
+  /** Grant or reduce an agent's consent tier on a device (workspace settings / CLI).
    *  Granting full_filesystem also records the base 'allow' policy. */
   async setDeviceConsentScope(agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
     if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) {
@@ -834,7 +834,7 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** The user's devices for the Devices tab (live-connected flag from the
+  /** The user's devices for Account settings → Devices (live-connected flag from the
    *  hibernatable-socket tags). */
   async listDevices(): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;

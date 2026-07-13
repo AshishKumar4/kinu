@@ -1,8 +1,8 @@
 /**
  * The one preview-iframe pipeline. Every surface that renders an exposed-port
- * app — the chat inline preview card, the Output surface, and the Devices
- * (ExecutorsPanel) preview tab — uses this frame, so the chrome (copy /
- * reload / open-in-new-tab) and the sandbox policy never drift apart.
+ * app — the chat inline preview card, the Output surface, and the Environment
+ * preview pane — uses this frame, so the chrome (copy / reload /
+ * open-in-new-tab) and the sandbox policy never drift apart.
  *
  * Fills its parent: render inside a sized container (flex-1 min-h-0 column,
  * or a fixed-height wrapper for the inline chat card).

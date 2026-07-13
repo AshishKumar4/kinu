@@ -2,7 +2,7 @@
 // Prefers the sticky last-active executor only when it is already active, else
 // workspace. This keeps status/diff reads from waking idle remote executors.
 import { describe, test, expect } from "bun:test";
-import { pickDefaultExecutor } from "../src/lib/executor-default";
+import { pickDefaultExecutor } from "../src/lib/executors";
 
 const avail = (...names: string[]) => names.map((name) => ({ name, available: true }));
 const active = (...names: string[]) => names.map((name) => ({ name, available: true, active: true }));
