@@ -142,6 +142,12 @@
       "migrations_dir": "migrations/auth"
     }
   ],
+  // Semantic memory: runtime.ts auto-detects MEMORY_VECTORS and builds the
+  // CloudflareVectorStore so search_memory / searchMemoryHybrid return
+  // RRF-merged FTS5 + Vectorize hits (384-dim to match the Workers AI embedder).
+  "vectorize": [
+    { "binding": "MEMORY_VECTORS", "index_name": "proteus-memory" }
+  ],
   // ── Staging environment (headless testing) ──────────────────────
   // A second deployment on *.workers.dev for testing think/tools directly
   // without production OAuth secrets in the way. Differences from prod: a distinct
