@@ -8,6 +8,10 @@
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).
   "compatibility_flags": ["nodejs_compat"],
+  // Persisted Workers Logs — without this, provider/turn errors are gone the
+  // moment they scroll out of a live `wrangler tail` (made the 2026-07-13
+  // abrupt-stop incident's root error unrecoverable).
+  "observability": { "enabled": true },
   "worker_loaders": [{ "binding": "LOADER" }],
   // Main site served by the custom domain. Sandbox and Nimbus previews use
   // authenticated path-style URLs on this same domain, so Proteus does not
@@ -165,6 +169,7 @@
       "main": "src/server.ts",
       "compatibility_date": "2025-12-01",
       "compatibility_flags": ["nodejs_compat"],
+      "observability": { "enabled": true },
       "worker_loaders": [{ "binding": "LOADER" }],
       "assets": {
         "directory": "dist/client",
