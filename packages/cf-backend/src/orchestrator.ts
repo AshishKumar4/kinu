@@ -1670,6 +1670,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     const tools: ToolSet = {};
+    const callerAgentName = this.name;
     for (const d of descriptors) {
       const serverId = d.serverId;
       const mcpName = d.name;
@@ -1679,7 +1680,7 @@ export class OrchestratorAgent extends Think<Env> {
           (d.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0],
         ),
         execute: async (args: unknown) => {
-          try { return await userDOStub.userMcp_callTool(serverId, mcpName, args); }
+          try { return await userDOStub.userMcp_callTool(callerAgentName, serverId, mcpName, args); }
           catch (err) { return { isError: true, error: (err as Error).message }; }
         },
       });

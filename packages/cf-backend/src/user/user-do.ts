@@ -68,6 +68,7 @@ import {
 } from './device-consent.js';
 import {
   validateMcpServerInput, mcpToolKey, parseAllowedTools, mapConnectionStatus,
+  parseMcpHeaders, buildMcpHeaderTransportOpts,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
 } from './mcp.js';
@@ -1358,18 +1359,10 @@ export class UserDO extends Agent<Env> {
     );
     authProvider.serverId = id;
 
-	    // Header passthrough for non-OAuth servers behind private/bearer auth.
-    // Set both eventSourceInit (SSE path) and requestInit (Streamable HTTP)
-    // so `transport: 'auto'` works either way.
-    const headerOpts = cfg.headers
-      ? {
-          eventSourceInit: {
-            fetch: (url: string | URL, init?: RequestInit) =>
-              fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...cfg.headers } }),
-          },
-          requestInit: { headers: cfg.headers },
-        }
-      : {};
+    // Header passthrough for non-OAuth servers behind private/bearer auth.
+    // requestInit.headers is what survives hibernation and authenticates both
+    // transports; see buildMcpHeaderTransportOpts.
+    const headerOpts = buildMcpHeaderTransportOpts(cfg.headers ?? null) ?? {};
 
     let authUrl: string | null = null;
     try {
@@ -1415,8 +1408,12 @@ export class UserDO extends Agent<Env> {
     this._userMcpUpdatedAt = Date.now();
   }
 
-  /** Patch-update editable fields. `name`, `allowedTools`, and `headers` are
-   *  safe to change without reconnecting. `serverUrl` / `transport` changes
+  /** Patch-update editable fields. `name` and `allowedTools` take effect
+   *  without reconnecting (name is cosmetic; allowedTools is enforced from SQL
+   *  at descriptor/dispatch time). A `headers` change re-registers the live
+   *  connection — the SSE/HTTP transport reads its auth headers at connect
+   *  time, so a rotated bearer only takes effect (and re-persists into the
+   *  SDK's snapshot) after a reconnect. `serverUrl` / `transport` changes still
    *  require remove + re-add (the SDK doesn't support live re-targeting). */
   async userMcp_update(id: string, patch: unknown): Promise<void> {
     this.ensureInit();
@@ -1456,6 +1453,48 @@ export class UserDO extends Agent<Env> {
     args.push(id);
     this.sqlx(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
     this._userMcpUpdatedAt = now;
+
+    // A headers patch must re-register the live transport (and the SDK's
+    // stored snapshot) — writing the SQL column alone never reaches the wire.
+    if (p.headers !== undefined) {
+      try { await this.reregisterUserMcpServer(id); }
+      catch (err) { console.warn('[user-do] userMcp_update header re-register:', (err as Error).message); }
+    }
+  }
+
+  /** Rebuild a server's live MCP connection from its current `user_mcp_servers`
+   *  row. The transport reads auth headers at connect time, so applying a
+   *  rotated bearer means tearing down the connection and re-establishing it
+   *  with freshly-built transport options (which also re-persists the new
+   *  headers into the SDK's `server_options` snapshot). Any OAuth callback URL
+   *  is preserved across the re-register. */
+  private async reregisterUserMcpServer(id: string): Promise<void> {
+    const row = this.sqlx<{ name: string; server_url: string; transport: string; headers: string | null }>(
+      `SELECT name, server_url, transport, headers FROM user_mcp_servers WHERE id = ?`, id,
+    )[0];
+    if (!row) return;
+    const mgr = this.userMcp();
+    const callbackUrl = mgr.listServers().find((s) => s.id === id)?.callback_url ?? '';
+    try { await mgr.removeServer(id); }
+    catch (err) { console.warn('[user-do] reregister removeServer:', (err as Error).message); }
+
+    const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(row.headers)) ?? {};
+    let authProvider: AgentMcpOAuthProvider | undefined;
+    if (callbackUrl) {
+      authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'proteus-user-mcp', callbackUrl);
+      authProvider.serverId = id;
+    }
+    await mgr.registerServer(id, {
+      url: row.server_url,
+      name: row.name,
+      callbackUrl,
+      transport: {
+        ...headerOpts,
+        ...(authProvider ? { authProvider } : {}),
+        type: (row.transport as McpTransport) ?? 'auto',
+      },
+    });
+    void mgr.establishConnection(id).catch(() => undefined);
   }
 
   /** Monotonic watermark — the orchestrator caches by this value. */
@@ -1518,11 +1557,21 @@ export class UserDO extends Agent<Env> {
    *  per-tool closure. The result must be JSON-serializable; the SDK already
    *  guarantees this (no closures in CallToolResult). */
   async userMcp_callTool(
+    callerAgentName: string,
     serverId: string,
     name: string,
     args: unknown,
   ): Promise<unknown> {
     this.ensureInit();
+    // Caller-ownership gate: only an agent that is one of THIS user's live
+    // workspaces may dispatch through the user-level manager. Fails closed —
+    // a stray worker stub without a registered workspace is rejected before
+    // any credential-bearing MCP call goes out.
+    let owns = false;
+    try { owns = await this.hasWorkspace(callerAgentName); } catch { owns = false; }
+    if (!owns) {
+      throw new Error(`MCP call rejected: '${callerAgentName}' is not one of your workspaces.`);
+    }
     if (!this._userMcp) {
       // Cold start: hydrate the manager before dispatching.
       this.userMcp();
