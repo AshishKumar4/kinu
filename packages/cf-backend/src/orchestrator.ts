@@ -1206,8 +1206,10 @@ export class OrchestratorAgent extends Think<Env> {
    *  routes through env.AI.toMarkdown when the AI binding is present. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
-    this._webSearchProvider = buildCfWebSearchProvider(this.env, getAuth);
+    // Ownership resolves PER CALL: the provider is cached for the DO lifetime,
+    // so a first web call before owner claim must not bake getAuth=undefined.
+    this._webSearchProvider = buildCfWebSearchProvider(this.env,
+      () => this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined);
     return this._webSearchProvider;
   }
 

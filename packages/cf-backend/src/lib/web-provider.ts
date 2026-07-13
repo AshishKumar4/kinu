@@ -12,11 +12,24 @@ interface AiToMarkdown {
   toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>>;
 }
 
-export function buildCfWebSearchProvider(env: unknown, getAuth: AuthResolver | undefined): WebSearchProvider {
+/**
+ * @param resolveAuth Thunk resolving the owner-scoped auth resolver, or
+ *   undefined when the agent has no owner yet. Resolved PER CALL, not baked at
+ *   construction: this provider (and the toolset holding it) is cached across
+ *   turns, and the first web call may precede owner claim — a baked-undefined
+ *   resolver would then never see the Tavily credential even after the claim.
+ */
+export function buildCfWebSearchProvider(
+  env: unknown,
+  resolveAuth: () => AuthResolver | undefined,
+): WebSearchProvider {
   const ai = (env as { AI?: AiToMarkdown }).AI;
   return createDefaultWebSearchProvider({
     fetch: globalThis.fetch,
-    ...(getAuth ? { getAuth } : {}),
+    getAuth: async (key, opts) => {
+      const auth = resolveAuth();
+      return auth ? auth(key, opts) : null;
+    },
     ...(ai?.toMarkdown
       ? {
           htmlToMarkdown: async (html: string, opts?: { url?: string }) => {

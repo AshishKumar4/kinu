@@ -181,8 +181,10 @@ export class ExplorationAgent extends Agent<Env> {
    *  live information rather than reason from clipped inherited context. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
-    this._webSearchProvider = buildCfWebSearchProvider(this.env, getAuth);
+    // Ownership resolves PER CALL: the cached provider must not bake
+    // getAuth=undefined when a first web call precedes owner claim.
+    this._webSearchProvider = buildCfWebSearchProvider(this.env,
+      () => this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined);
     return this._webSearchProvider;
   }
 
