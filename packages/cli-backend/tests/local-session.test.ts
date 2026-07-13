@@ -656,6 +656,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(trigger.fire_count).toBe(1);
   });
 
+  test('daemon-style tick: flushPendingDrains runs the fired trigger turn before end()', async () => {
+    // Regression: the scheduler daemon fires triggers then ends immediately.
+    // fireDueTriggers only ARMS the ~250ms debounced drain, and end() sets
+    // `ended` which makes the drain timer skip — so the fired trigger's
+    // autonomous turn was silently dropped. The daemon now flushes before end.
+    const { session, events } = setup('handled timer');
+    const fireAt = Date.now() + 60_000;
+    session.createTimerTrigger({ atMs: fireAt, label: 'wake', trust: 'owner' });
+
+    const outcome = await session.fireDueTriggers(fireAt);
+    expect(outcome.fired).toBe(1);
+    // The turn runs synchronously as part of the flush (drainPendingEvents
+    // awaits the enqueued turn to completion) — asserted with NO waitFor, so
+    // this proves the flush drained it, not the debounce timer.
+    await session.flushPendingDrains();
+
+    const starts = turnStarts(events);
+    expect(starts.some((s) => s.kind === 'programmatic')).toBe(true);
+    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+    expect(session.pendingEvents()).toEqual([]);
+    await session.end();
+  });
+
+  test('flushPendingDrains is a no-op once the session has ended', async () => {
+    const { session, events } = setup('handled timer');
+    session.createTimerTrigger({ atMs: Date.now() + 60_000, label: 'wake', trust: 'owner' });
+    await session.fireDueTriggers(Date.now() + 60_000);
+    await session.end();
+    events.length = 0;
+    await session.flushPendingDrains();
+    expect(events).toEqual([]);
+  });
+
   test('cron timer triggers reschedule after firing', async () => {
     const { session, events } = setup('handled cron');
     const created = session.createTimerTrigger({ cron: '*/5 * * * *', label: 'heartbeat' });

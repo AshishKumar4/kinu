@@ -770,6 +770,21 @@ export class LocalAgentSession implements BackendHost {
     this.mcpClose = conn.close;
   }
 
+  /** Run any pending event drain to completion NOW, bypassing the ~250ms
+   *  debounce window. The scheduler daemon fires due triggers then ends the
+   *  session immediately, so the debounced drain fireDueTriggers armed would
+   *  never fire (end() sets `ended`, and the drain timer skips when ended) —
+   *  the fired trigger's autonomous turn would be silently dropped. A batch
+   *  tick calls this before end() to flush its work synchronously. A direct
+   *  drain is safe: pending events are durable in the EventLog until
+   *  markConsumed, so drainPendingEvents consumes-or-returns them exactly once.
+   *  Interactive sessions keep the debounced path untouched — end() on Ctrl-C
+   *  must not suddenly run an autonomous turn. */
+  async flushPendingDrains(): Promise<void> {
+    if (this.ended) return;
+    await this.orch.drainPendingEvents();
+  }
+
   /** End the session: flush a partial evolution window + disconnect MCP. */
   async end(): Promise<void> {
     this.ended = true;

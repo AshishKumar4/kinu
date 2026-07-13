@@ -154,6 +154,10 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
       await session.recoverBackgroundJobs();
       const result = await session.fireDueTriggers(now);
       if (result.fired > 0) log(`${name}: fired ${result.fired} timer trigger${result.fired === 1 ? '' : 's'}`);
+      // fireDueTriggers only ARMS the debounced drain; end() would disarm it
+      // before it fires. Flush synchronously so the fired trigger's autonomous
+      // turn actually runs (also drains any recovered background-job wake).
+      await session.flushPendingDrains();
     } finally {
       await session.end().catch(() => {});
     }
