@@ -396,10 +396,11 @@ export class EventLog {
 
   // ── audit-log writes (steps, tool calls, etc.) ─────────────────
 
-  /** Append a row to the unified log. The TurnRunner uses this for phase
-   *  transitions, step boundaries, tool calls/results, reactor decisions,
-   *  and reply attempts. Direct callers must NOT use this to insert
-   *  `kind='event'` rows — only `publish()` is allowed. */
+  /** Append a non-event row to the unified log (phase transitions, step
+   *  boundaries, tool calls/results, reactor decisions, reply attempts —
+   *  e.g. the email dispatcher's reply_attempt audit rows). Direct callers
+   *  must NOT use this to insert `kind='event'` rows — only `publish()` is
+   *  allowed. */
   appendNonEventRow(opts: {
     kind: 'phase' | 'step' | 'tool_call' | 'tool_result' | 'reactor_decision' | 'reply_attempt';
     turn_id: TurnId | null;
@@ -422,9 +423,8 @@ export class EventLog {
     return id;
   }
 
-  /** The latest phase row for a turn — used by recovery + by the TurnRunner
-   *  to read current phase. Orders by received_at desc (strictly monotonic
-   *  per write) with id desc as a tiebreaker. */
+  /** The latest phase row for a turn. Orders by received_at desc (strictly
+   *  monotonic per write) with id desc as a tiebreaker. */
   currentPhase(turn_id: TurnId): { phase: string; at: number } | null {
     const rows = this.sql.exec(
       `SELECT payload, received_at FROM agent_log

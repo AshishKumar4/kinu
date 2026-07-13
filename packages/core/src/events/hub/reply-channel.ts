@@ -186,8 +186,8 @@ export class ReplyChannelStore {
     );
   }
 
-  /** Expire channels whose TTL has passed. Called periodically by TurnRunner
-   *  on phase-idle transitions. Returns the number of channels expired. */
+  /** Expire channels whose TTL has passed. Returns the number of channels
+   *  expired. Currently unwired — no periodic caller exists. */
   expireDue(now: number): number {
     const before = this.countOpen();
     this.sql.exec(

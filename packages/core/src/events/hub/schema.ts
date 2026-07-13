@@ -195,28 +195,6 @@ const PEER_OUTBOX_INDEXES: ReadonlyArray<string> = [
    WHERE state = 'pending'`,
 ];
 
-const BUDGET_DDL = `
-CREATE TABLE IF NOT EXISTS reactor_budget_log (
-  id                  TEXT    PRIMARY KEY,
-  turn_id             TEXT,
-  trace_id            TEXT    NOT NULL,
-  source_key          TEXT    NOT NULL,
-  invoked_at          INTEGER NOT NULL,
-  outcome             TEXT    NOT NULL
-                              CHECK(outcome IN ('decided', 'fallback_defer', 'budget_exhausted'))
-)`;
-
-const BUDGET_INDEXES: ReadonlyArray<string> = [
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_hour
-   ON reactor_budget_log (invoked_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_turn
-   ON reactor_budget_log (turn_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_trace
-   ON reactor_budget_log (trace_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_source
-   ON reactor_budget_log (turn_id, source_key)`,
-];
-
 /** Rebuild a table whose CHECK constraints predate a newly-added enum member.
  *  SQLite bakes CHECK text into the stored table definition, so `CREATE TABLE
  *  IF NOT EXISTS` never refreshes it on live DOs — detect the stale definition
@@ -253,6 +231,4 @@ export function initEventsHubTables(sql: SqlExec): void {
   for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
   sql.exec(PEER_OUTBOX_DDL);
   for (const ix of PEER_OUTBOX_INDEXES) sql.exec(ix);
-  sql.exec(BUDGET_DDL);
-  for (const ix of BUDGET_INDEXES) sql.exec(ix);
 }

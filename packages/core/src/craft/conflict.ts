@@ -7,6 +7,7 @@
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { nowMs } from '../utils/date.js';
 import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution.js';
+import { DEFAULT_CONFIG } from '../config.js';
 
 interface CraftCandidate {
   name: string;
@@ -28,7 +29,7 @@ export function checkConflictsBeforeAdding(
   const similar = rt.craftStore.search(candidate.description, 5);
   const highSimilarity = similar.filter(t => {
     const overlap = wordOverlap(t.description, candidate.description);
-    return overlap > 0.85;
+    return overlap > DEFAULT_CONFIG.craftStore.conflictSimilarityThreshold;
   });
 
   return { conflicting: highSimilarity.map(t => t.name) };

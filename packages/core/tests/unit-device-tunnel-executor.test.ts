@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createSSHTunnelExecutor, type DeviceTransport } from '../src/execution/ssh.js';
+import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor.js';
 import type { DeviceStatus } from '../src/execution/device-status.js';
 
 function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
@@ -19,10 +19,10 @@ function transport(resultFor: (method: string, params: unknown[]) => unknown): D
   };
 }
 
-describe('createSSHTunnelExecutor', () => {
+describe('createDeviceTunnelExecutor', () => {
   test('keeps exec as the full shell escape hatch', async () => {
     const t = transport(() => ({ stdout: 'ok', stderr: '', exitCode: 0 }));
-    const provider = createSSHTunnelExecutor(t);
+    const provider = createDeviceTunnelExecutor(t);
 
     await provider.tools.exec.execute('echo one; echo two');
 
@@ -37,7 +37,7 @@ describe('createSSHTunnelExecutor', () => {
       if (method === 'exists') return true;
       throw new Error(`unexpected method ${method}`);
     });
-    const provider = createSSHTunnelExecutor(t);
+    const provider = createDeviceTunnelExecutor(t);
     const path = '/tmp/a; echo PWNED';
 
     await provider.tools.readFile.execute(path);
@@ -57,8 +57,8 @@ describe('createSSHTunnelExecutor', () => {
     const legacy = transport(() => 'ok');
     const structured = transport(() => ({ success: true }));
 
-    const a = await createSSHTunnelExecutor(legacy).tools.writeFile.execute('/tmp/a', 'x');
-    const b = await createSSHTunnelExecutor(structured).tools.writeFile.execute('/tmp/b', 'yy');
+    const a = await createDeviceTunnelExecutor(legacy).tools.writeFile.execute('/tmp/a', 'x');
+    const b = await createDeviceTunnelExecutor(structured).tools.writeFile.execute('/tmp/b', 'yy');
 
     expect(a).toBe('Written 1 bytes to /tmp/a');
     expect(b).toBe('Written 2 bytes to /tmp/b');
@@ -69,7 +69,7 @@ describe('createSSHTunnelExecutor', () => {
     // every call on the cached flag, so false could never flip back to true.
     const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
     t.status = () => ({ connected: false, registered: true });
-    const provider = createSSHTunnelExecutor(t);
+    const provider = createDeviceTunnelExecutor(t);
 
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
     expect(t.calls).toEqual([{ method: 'exec', params: ['echo hi'] }]);
@@ -79,9 +79,9 @@ describe('createSSHTunnelExecutor', () => {
 
   test('getStatus maps the hub snapshot to the three lifecycle states', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
-    const connected = createSSHTunnelExecutor(staticTransport({ connected: true, registered: true }, rpc));
-    const offline = createSSHTunnelExecutor(staticTransport({ connected: false, registered: true }, rpc));
-    const none = createSSHTunnelExecutor(staticTransport({ connected: false, registered: false }, rpc));
+    const connected = createDeviceTunnelExecutor(staticTransport({ connected: true, registered: true }, rpc));
+    const offline = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: true }, rpc));
+    const none = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: false }, rpc));
 
     expect(connected.getStatus?.()).toMatchObject({ available: true, configured: true, status: 'active' });
     expect(offline.getStatus?.()).toMatchObject({ available: false, configured: true, status: 'disconnected' });
@@ -97,18 +97,18 @@ describe('createSSHTunnelExecutor', () => {
       throw new Error('device tunnel not connected');
     });
 
-    const fromHub = await createSSHTunnelExecutor(hubRejects).tools.exec.execute('ls');
-    const fromTunnel = await createSSHTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
+    const fromHub = await createDeviceTunnelExecutor(hubRejects).tools.exec.execute('ls');
+    const fromTunnel = await createDeviceTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
 
     expect(fromHub).toContain('proteus connect');
     expect(fromTunnel).toContain('proteus connect');
-    await expect(createSSHTunnelExecutor(hubRejects).connect()).rejects.toThrow('proteus connect');
+    await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('proteus connect');
   });
 
   test('non-connection errors keep their own message', async () => {
     const t = staticTransport({ connected: true, registered: true }, async () => {
       throw new Error('permission denied');
     });
-    expect(await createSSHTunnelExecutor(t).tools.exec.execute('ls')).toBe('exec error: permission denied');
+    expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toBe('exec error: permission denied');
   });
 });

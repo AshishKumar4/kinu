@@ -120,7 +120,7 @@ import {
   // Background-job system (#173 — auto-background >30s tool calls)
   BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold, type BackgroundJob,
   // EventsHub primitives (spec §1)
-  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore,
+  EventLog, TriggerRegistry, ReplyChannelStore,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   type RevisitCondition,
@@ -688,20 +688,14 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
-  // Six load-bearing primitives (spec §1):
+  // Load-bearing primitives (spec §1):
   //   - `agent_log`     unified append-only ledger (initEventsHubTables)
   //   - EventLog        publish/pending/defer/dismiss/query
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
-  //   - ReactorBudget   per-turn/-trace/-hour caps on reactor invocations
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
-  //   - TurnRunner      phase machine; built but currently unused (chat
-  //                     flows through Think; webhook/timer/etc. publish
-  //                     events that wake the agent via Think's chat
-  //                     injection mechanism)
   // Spec: docs/EVENTS-HUB-SPEC.md
   private _eventLog: import('@proteus/core').EventLog | null = null;
   private _triggerRegistry: import('@proteus/core').TriggerRegistry | null = null;
-  private _reactorBudget: import('@proteus/core').ReactorBudget | null = null;
   private _replyChannels: import('@proteus/core').ReplyChannelStore | null = null;
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
@@ -725,12 +719,6 @@ export class OrchestratorAgent extends Think<Env> {
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
     }
     return this._triggerRegistry;
-  }
-  protected get reactorBudget(): ReactorBudget {
-    if (!this._reactorBudget) {
-      this._reactorBudget = new ReactorBudget(this.ctx.storage.sql);
-    }
-    return this._reactorBudget;
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
@@ -2812,7 +2800,7 @@ export class OrchestratorAgent extends Think<Env> {
     // constructs the engine, and the legacy CHECK would reject the insert.
     initTurnOutcomeTables(execRaw, this.boundSql);
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + reactor_budget_log + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
+    // + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
     initEventsHubTables(this.ctx.storage.sql);
     initWebhookRateLimitTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
@@ -4453,10 +4441,11 @@ export class OrchestratorAgent extends Think<Env> {
     return this.rt.compositeVfs.listMounts();
   }
 
-  /** The workspace's agent roster: this DO's orchestrator is the default
-   *  agent (always present); the rest are the owner's team peers, reachable
-   *  and spawnable via the `team` tool. Unowned workspaces have only their
-   *  default agent. */
+  /** The agent roster as seen from this workspace: this DO's orchestrator is
+   *  the default agent (always present); the rest are the default agents of
+   *  the owner's OTHER workspaces, listed as team peers (reachable/spawnable
+   *  via the `team` tool) — not co-residents of this workspace. Unowned
+   *  workspaces roster only their default agent. */
   @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
     const self = { name: this.name, displayName: this.getDisplayName() };
     if (!this.getOwnerUserId()) return buildWorkspaceAgents(self, []);

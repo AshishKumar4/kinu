@@ -14,9 +14,10 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { CraftScoreEntry } from '../types/craft.js';
 import { effectiveScore } from './ema.js';
 import { isoDate, nowMs } from '../utils/date.js';
+import { DEFAULT_CONFIG } from '../config.js';
 
-const RETIREMENT_THRESHOLD = 0.1;
-const MIN_USES_BEFORE_RETIREMENT = 2;
+const RETIREMENT_THRESHOLD = DEFAULT_CONFIG.craftStore.retirementThreshold;
+const MIN_USES_BEFORE_RETIREMENT = DEFAULT_CONFIG.craftStore.minUsesBeforeRetirement;
 
 /**
  * Consolidate the CraftStore: retire tools with low effective scores.

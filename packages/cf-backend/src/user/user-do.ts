@@ -339,25 +339,6 @@ export class UserDO extends Agent<Env> {
     return !!row;
   }
 
-  /** Grant or revoke a foreign (sender user, sender agent) pair. Idempotent. */
-  async setPeerGrant(senderAgentName: string, senderUserId: string, allowed: boolean): Promise<{ ok: true; allowed: boolean }> {
-    validateWorkspaceName(senderAgentName);
-    if (!/^[a-f0-9]{32}$/.test(senderUserId)) throw new Error('invalid sender user id');
-    if (allowed) {
-      this.sqlx(
-        `INSERT INTO user_peer_grants (sender_user_id, sender_agent_name, created_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(sender_user_id, sender_agent_name) DO NOTHING`,
-        senderUserId, senderAgentName, Date.now(),
-      );
-    } else {
-      this.sqlx(
-        `DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
-        senderUserId, senderAgentName,
-      );
-    }
-    return { ok: true, allowed };
-  }
 
   // ── CLI auth tokens ────────────────────────────────────────────────
 
@@ -551,11 +532,6 @@ export class UserDO extends Agent<Env> {
       capabilities,
       ...(bearerScopes === 'all' ? {} : { scopes: bearerScopes }),
     };
-  }
-
-  async revokeCliToken(tokenHash: string): Promise<{ ok: boolean }> {
-    if (!/^[a-f0-9]{64}$/.test(tokenHash)) throw new Error('invalid token hash');
-    return this.revokeCliTokenHash(tokenHash);
   }
 
   /** A connect ticket stays bound to the bearer that minted it: an
@@ -829,12 +805,6 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Forget a remembered consent (next use re-asks). */
-  async clearDeviceConsent(agentName: string, deviceId: string): Promise<{ ok: boolean }> {
-    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
-    return { ok: true };
-  }
-
   /** Grant or reduce an agent's consent tier on a device (Devices tab / CLI).
    *  Granting full_filesystem also records the base 'allow' policy. */
   async setDeviceConsentScope(agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
@@ -900,10 +870,6 @@ export class UserDO extends Agent<Env> {
 
   async createProductChange(agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
     return this.productChanges().createChange(agentName, input);
-  }
-
-  async listProductChanges(agentName?: string, limit = 20): Promise<ProductChangeRequest[]> {
-    return this.productChanges().listChanges(agentName, limit);
   }
 
   async updateProductChange(

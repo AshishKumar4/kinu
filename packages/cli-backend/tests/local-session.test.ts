@@ -774,11 +774,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('Node execute fallback exposes the local agent.schedule namespace', async () => {
-    const { rt } = setup();
     let received: { atMs?: number; label?: string } | null = null;
     const executeTool = createNodeExecuteToolFactory({
-      vfs: rt.storage.vfs,
-      memory: rt.memory,
       extraProviders: [createLocalAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],

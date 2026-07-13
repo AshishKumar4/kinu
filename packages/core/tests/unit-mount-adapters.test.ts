@@ -13,7 +13,7 @@ import {
 } from '../src/vfs/index.js';
 import type { SandboxHandle } from '../src/execution/sandbox.js';
 import type { NimbusSandboxHandle, NimbusExecResult } from '../src/execution/nimbus.js';
-import type { DeviceTransport } from '../src/execution/ssh.js';
+import type { DeviceTransport } from '../src/execution/device-tunnel-executor.js';
 import { createInlineVFS } from '../src/identity/inline-primitives.js';
 import { makeSql } from './helpers.js';
 

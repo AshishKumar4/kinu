@@ -18,7 +18,7 @@
 import type { VFS } from '../types/primitives.js';
 import type { SandboxHandle } from '../execution/sandbox.js';
 import type { NimbusSandboxHandle } from '../execution/nimbus.js';
-import type { DeviceTransport } from '../execution/ssh.js';
+import type { DeviceTransport } from '../execution/device-tunnel-executor.js';
 import { makeVfsError } from './errno.js';
 import { shellQuote } from '../utils/shell.js';
 

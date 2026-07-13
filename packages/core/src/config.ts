@@ -61,9 +61,7 @@ export interface CraftStoreDefaults {
   minUsesBeforeRetirement: number;
   /** Minimum effective score to be included in codemode preamble */
   minEffectiveScoreForInjection: number;
-  /** Maximum tools injected per codemode execution */
-  maxToolsPerExecution: number;
-  /** Word overlap threshold for semantic conflict detection */
+  /** Word overlap threshold for semantic conflict detection (craft/conflict.ts) */
   conflictSimilarityThreshold: number;
 }
 
@@ -71,14 +69,6 @@ export interface CraftStoreDefaults {
 export interface ScaffoldDefaults {
   /** Minimum rationale length for scaffold modifications */
   minRationaleLength: number;
-  /** Score gap threshold: canary must be within this of baseline */
-  canaryScoreGap: number;
-  /** Error rate threshold for auto-rollback (absolute) */
-  autoRollbackErrorRate: number;
-  /** Error rate relative increase threshold for auto-rollback */
-  autoRollbackRelativeIncrease: number;
-  /** Minimum task history entries before error-rate monitoring kicks in */
-  minTasksForMonitoring: number;
 }
 
 /** Full agent configuration */
@@ -120,15 +110,10 @@ export const DEFAULT_CONFIG: AgentConfig = {
     retirementThreshold: 0.1,
     minUsesBeforeRetirement: 2,
     minEffectiveScoreForInjection: 0.2,
-    maxToolsPerExecution: 10,
     conflictSimilarityThreshold: 0.85,
   },
   scaffold: {
     minRationaleLength: 50,
-    canaryScoreGap: 0.10,
-    autoRollbackErrorRate: 0.1,
-    autoRollbackRelativeIncrease: 1.2,
-    minTasksForMonitoring: 5,
   },
 };
 

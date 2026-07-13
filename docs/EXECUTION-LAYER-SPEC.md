@@ -56,7 +56,7 @@ graph TB
         Inline[InlineExecutor<br/>V8 isolate<br/>fastest, JS only]
         Nimbus[NimbusExecutor<br/>DO + Facets<br/>shell, node, npm, git]
         Sandbox[SandboxExecutor<br/>CF Container<br/>full Linux, any language]
-        SSH[SSHTunnelExecutor<br/>User's PC<br/>full hardware, local repos]
+        SSH[DeviceTunnelExecutor<br/>User's PC<br/>full hardware, local repos]
     end
 
     Router --> CapCheck
@@ -311,12 +311,12 @@ Capabilities: `javascript`, `typescript`, `python`, `native_binary`, `shell`, `n
 
 Container port: 8080. Startup: 30s polling at 500ms intervals. Communication is via HTTP fetch to the container's TCP port.
 
-### 4.4 SSHTunnelExecutor (laptop) **(Implemented)**
+### 4.4 DeviceTunnelExecutor (laptop) **(Implemented)**
 
 Connects to the user's machine via a WebSocket bridge using JSON-RPC.
 Namespace: `laptop`. Kind: `laptop`. 5 tools.
 
-From `packages/core/src/execution/ssh.ts`:
+From `packages/core/src/execution/device-tunnel-executor.ts`:
 
 | Tool | Description |
 |------|-------------|
@@ -419,7 +419,7 @@ Uses Linux containers with strong isolation:
   - After `MAX_RECOVERY_ATTEMPTS` (3), destroy and reprovision with same ID
 - **Risk**: Medium — full Linux means more attack surface, but container boundary is strong
 
-### 6.4 SSHTunnelExecutor Security
+### 6.4 DeviceTunnelExecutor Security
 
 This is the most sensitive executor. The agent running on Cloudflare sends
 commands to the user's personal machine. The security model must prevent:
@@ -522,7 +522,7 @@ interface DaemonCapabilityReport {
 }
 ```
 
-The `SSHTunnelExecutor` converts this report into `ExecutorCapability` tokens.
+The `DeviceTunnelExecutor` converts this report into `ExecutorCapability` tokens.
 
 #### Session Lifecycle
 
@@ -564,7 +564,7 @@ const router = new DefaultExecutionRouter();
 
 // Always registered:
 router.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
-router.register(createSSHTunnelExecutor());
+router.register(createDeviceTunnelExecutor());
 
 // Conditional on bindings:
 if (env.NIMBUS_SESSION) router.register(createNimbusExecutor(env.NIMBUS_SESSION));

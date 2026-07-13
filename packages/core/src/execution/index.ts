@@ -20,7 +20,7 @@ export {
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   isSandboxTransientError,
 } from './sandbox.js';
-export { createSSHTunnelExecutor, type DeviceTransport } from './ssh.js';
+export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor.js';
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,

@@ -676,7 +676,7 @@ function QualityView({ rpc }: { rpc: Rpc }) {
   useEffect(() => { rpc<ReplayEvalRow[]>("getReplayEvals", [50]).then(setRows).catch(() => setRows([])); }, [rpc]);
 
   if (rows === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  if (rows.length === 0) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (lifetime evolution, or agent.runReplayEval) re-score the live scaffold against graded turns. The loss curve and latest aggregate appear here." />;
+  if (rows.length === 0) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve and latest aggregate appear here." />;
 
   const chrono = [...rows].reverse(); // oldest → newest for the curve
   const latest = rows[0];

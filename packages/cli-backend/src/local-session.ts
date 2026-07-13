@@ -1523,12 +1523,9 @@ export class LocalAgentSession implements BackendHost {
       shellApprovalMode: this.config.getShellApprovalMode(),
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
-        vfs: this.rt.storage.vfs,
-        memory: this.rt.memory,
-        shell: this.rt.shell,
         extraProviders: [createLocalAgentSelfProvider(this), createWebCodemodeProvider(this.getWebSearchProvider())],
-      }) as never,
-      codemodeLoader: { __cli: true } as unknown,
+      }),
+      codemodeLoader: { __cli: true },
       thinkTool: this.buildThinkTool(),
       facts: this.factsStore,
       skills: {

@@ -4,8 +4,8 @@
  * lineage, the line diff of what changed, the shadow-eval per-trial verdict
  * grid that drives promotion, and Preview-live / Promote / Rollback actions.
  *
- * Binds to wired RPCs: listScaffoldVersions, getScaffoldDiff, getShadowStatus,
- * getShadowVerdict, applyScaffoldDecision, previewScaffoldLive.
+ * Binds to wired RPCs: listScaffoldVersions, getScaffoldDiff, getShadowVerdict,
+ * applyScaffoldDecision, previewScaffoldLive.
  */
 import { useState, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";

@@ -45,6 +45,11 @@ function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
   return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
 }
 
+/** Users whose MCP connections we've already kicked off warming for this
+ *  isolate. Warm-once-per-process so a cold UserDO re-establishes connections
+ *  in parallel with the first orchestrator turn, not on its 5s critical path. */
+const warmedMcpUsers = new Set<string>();
+
 export async function handleUserRequest(
   request: Request,
   env: Env,
@@ -59,6 +64,12 @@ export async function handleUserRequest(
   const stub = getUserDOStub(env, identity.userId);
   // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
   await stub.ensureProfile(identity.email, identity.displayName ?? undefined);
+
+  // Fire-and-forget MCP warmup on the first hit for this user this isolate.
+  if (ctx && !warmedMcpUsers.has(identity.userId)) {
+    warmedMcpUsers.add(identity.userId);
+    ctx.waitUntil(stub.userMcp_warmConnections().then(() => {}, () => {}));
+  }
 
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {

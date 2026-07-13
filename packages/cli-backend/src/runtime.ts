@@ -198,7 +198,7 @@ export function createCLIRuntime(
   const vfs = new CompositeVFS({ local: sqliteFs });
 
   // MemoryStore consumes the full agent-utils VFS surface (FTS index walks).
-  const memoryStore = new MemoryStore(sqliteFs as any, sql);
+  const memoryStore = new MemoryStore(sqliteFs, sql);
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, vfs);
 

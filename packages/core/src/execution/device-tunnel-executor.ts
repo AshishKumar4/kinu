@@ -1,5 +1,5 @@
 /**
- * SSHTunnelExecutor — user's personal machine via WebSocket bridge.
+ * DeviceTunnelExecutor — user's personal machine via WebSocket bridge.
  *
  * The user runs a small daemon on their machine that connects to the
  * agent's WebSocket endpoint. Commands are sent as JSON-RPC over the
@@ -49,7 +49,7 @@ export interface DeviceTransport {
  * Create the laptop (`laptop.*`) executor over a device transport. The transport
  * forwards to the user's device hub; this executor just shapes the tool surface.
  */
-export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorProvider {
+export function createDeviceTunnelExecutor(transport: DeviceTransport): ExecutorProvider {
   const rpc = (method: string, params: unknown[]): Promise<unknown> => transport.rpc(method, params);
 
   // Three-state lifecycle from the hub snapshot: connected, registered-but-
@@ -68,7 +68,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
 
   const tools: ExecutorProvider['tools'] = {
     exec: {
-      description: 'Execute a command on the user\'s local machine via SSH tunnel.',
+      description: 'Execute a command on the user\'s local machine via the device tunnel.',
       execute: async (command: unknown, options?: unknown): Promise<string> => {
         const signal = readExecSignal(options);
         try {
@@ -104,7 +104,7 @@ export function createSSHTunnelExecutor(transport: DeviceTransport): ExecutorPro
     },
 
     writeFile: {
-      description: 'Write content to a file on the user\'s local filesystem via SSH tunnel.',
+      description: 'Write content to a file on the user\'s local filesystem via the device tunnel.',
       execute: async (path: unknown, content: unknown): Promise<string> => {
         try {
           const result = await rpc('writeFile', [String(path), String(content)]);

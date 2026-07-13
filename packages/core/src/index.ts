@@ -416,7 +416,7 @@ export {
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   isSandboxTransientError,
-  createSSHTunnelExecutor, type DeviceTransport,
+  createDeviceTunnelExecutor, type DeviceTransport,
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
@@ -518,10 +518,6 @@ export {
 // six load-bearing primitives (trust, reactor, channels, triggers, budget,
 // turn orchestration).
 export * from './events/hub/index.js';
-
-// InferenceLoop — universal contract for "run a turn." Adapts Think /
-// scaffold / Heads / RLM behind one AsyncIterable<RunEvent> stream.
-export * from './loops/types.js';
 
 // ExplorationStrategy — single seam for "search candidate continuations,
 // score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.

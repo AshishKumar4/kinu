@@ -392,24 +392,6 @@ export type RevisitCondition =
   | { kind: 'after_event'; variant: EventVariant; source?: string }
   | { kind: 'after_seconds'; n: number };       // n capped at 3600
 
-// ── Budget ───────────────────────────────────────────────────────
-
-export interface ReactorBudgetConfig {
-  per_turn_invocations: number;
-  per_trace_invocations: number;
-  per_hour_agent_invocations: number;
-  per_hour_user_tokens: number;
-  per_source_invocations: number;
-}
-
-export const DEFAULT_REACTOR_BUDGET: ReactorBudgetConfig = {
-  per_turn_invocations: 3,
-  per_trace_invocations: 5,
-  per_hour_agent_invocations: 60,
-  per_hour_user_tokens: 100_000,
-  per_source_invocations: 10,
-};
-
 // ── agent_log row (storage shape) ────────────────────────────────
 
 /** The kinds of rows in `agent_log`. Discriminated by `kind`. */
@@ -501,19 +483,5 @@ export class IngressRejectedError extends Error {
   constructor(public readonly ingress: IngressKind, public readonly reason: string) {
     super(`Ingress ${ingress} rejected: ${reason}`);
     this.name = 'IngressRejectedError';
-  }
-}
-
-export class LegalityError extends Error {
-  constructor(public readonly decision: ReactorDecision) {
-    super(`Illegal reactor decision: head_op=${decision.head_op.kind} event_op=${decision.event_op.kind}`);
-    this.name = 'LegalityError';
-  }
-}
-
-export class BudgetExhaustedError extends Error {
-  constructor(public readonly axis: string, public readonly limit: number) {
-    super(`Reactor budget exhausted on axis ${axis} (limit ${limit})`);
-    this.name = 'BudgetExhaustedError';
   }
 }
