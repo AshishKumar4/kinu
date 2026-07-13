@@ -178,11 +178,11 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(userDO).toContain('scopes: bearerScopes');
   });
 
-  test('the orchestrator gates rpc frames and pins scoped sockets readonly', () => {
-    const orchestrator = source('src/orchestrator.ts');
-    expect(orchestrator).toContain('rejectOutOfScopeRpc(connection.tags, message)');
-    expect(orchestrator).toContain('cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER))');
-    expect(orchestrator).toContain('override shouldConnectionBeReadonly');
+  test('the actor substrate gates rpc frames and pins scoped sockets readonly', () => {
+    const actor = source('src/actor-agent.ts');
+    expect(actor).toContain('rejectOutOfScopeRpc(connection.tags, message)');
+    expect(actor).toContain('cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER))');
+    expect(actor).toContain('override shouldConnectionBeReadonly');
   });
 
   test('the HTTP dispatcher consumes THIS table — no second scope policy anywhere', () => {

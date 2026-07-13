@@ -66,17 +66,28 @@ type AgentHost = Think<Env> & {
   readonly ctx: DurableObjectState;
 };
 
-/** Read owner_user_id from the orchestrator's workspace_identity. Empty/missing -> null. */
-function readOwnerUserId(agent: AgentHost): string | null {
-  try {
-    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
-    const v = rows[0]?.owner_user_id;
-    return v && v !== '' ? v : null;
-  } catch { return null; }
+/**
+ * The actor's identity bootstrap + exec-plane keying — the two things that
+ * differ between a top-level workspace DO and a facet actor riding it.
+ *
+ * The orchestrator passes its own owner lookup (workspace_identity) and its
+ * DO name; a facet actor passes its own owner row and the PARENT workspace
+ * name, so it shares the workspace's sandbox container, Nimbus session, and
+ * device consent instead of materializing fresh planes keyed by facet name.
+ * Mounts need no parameter here: `CFRuntime.compositeVfs.mount()` attaches
+ * additional planes (e.g. a facet's /workspace RPC mount) post-construction.
+ */
+export interface ActorRuntimeIdentity {
+  /** Owner userId, or null while unclaimed. Resolved per call — never cached
+   *  here, so a first use before owner claim can't bake in null. */
+  ownerUserId(): string | null;
+  /** The workspace whose exec planes (sandbox, nimbus, /pc consent) this
+   *  actor rides. */
+  workspaceName: string;
 }
 
-function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
-  const userId = readOwnerUserId(agent);
+function userDOStubFor(agent: AgentHost, actor: ActorRuntimeIdentity): DurableObjectStub<UserDO> | null {
+  const userId = actor.ownerUserId();
   if (!userId) return null;
   return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
 }
@@ -112,7 +123,7 @@ export interface CFRuntimeHooks {
 /**
  * Build a full AgentRuntime from a Think agent's DO context.
  */
-export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): CFRuntime {
+export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, hooks: CFRuntimeHooks = {}): CFRuntime {
   const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
@@ -145,7 +156,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
   const executor = createExecutor(envForExec.LOADER);
-  const llm = createDualPathLLM(agent);
+  const llm = createDualPathLLM(agent, actor);
   const schedule = createRealSchedule(agent);
   const identity = createIdentity(agent, vfs, sql as unknown as CoreSqlExecutor);
 
@@ -169,7 +180,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   const previewHostname = typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0
     ? env.PREVIEW_HOSTNAME
     : undefined;
-  const sandboxId = `proteus-${agent.name}`;
+  const sandboxId = `proteus-${actor.workspaceName}`;
   // Every remote mount exposes the environment's REAL root ('/'); the
   // ergonomic working dir is metadata, not a path rewrite.
   const sandboxMountPolicy: MountPolicy =
@@ -213,7 +224,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
   if (env.NIMBUS_SESSION) {
     try {
-      const nimbusBox = createAgentNimbusHandle(agent);
+      const nimbusBox = createAgentNimbusHandle(agent, actor);
       executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
       compositeVfs.mount('nimbus', {
         vfs: createNimbusMountVFS(nimbusBox),
@@ -238,8 +249,8 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
       ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
       : null;
   const deviceTransport = createHubDeviceTransport({
-    hub: () => userDOStubFor(agent),
-    agentName: agent.name,
+    hub: () => userDOStubFor(agent, actor),
+    agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => {
       const host = agent as unknown as { getCheckpointMetaForDevice?: () => { turnId: string; sessionId: string } | null };
@@ -257,9 +268,9 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     vfs: createDeviceMountVFS(deviceTransport, {
       consentedRoot: cliCwdForDevice,
       hasFullFilesystem: async () => {
-        const hub = userDOStubFor(agent);
+        const hub = userDOStubFor(agent, actor);
         if (!hub) return false;
-        try { return (await hub.getDeviceFsConsent(agent.name)).fullFilesystem; }
+        try { return (await hub.getDeviceFsConsent(actor.workspaceName)).fullFilesystem; }
         catch { return false; } // consent unverifiable → subtree scope (fail closed)
       },
     }),
@@ -297,8 +308,8 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   return {
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
-    judgeModel: createJudgeLLM(agent),
-    spawnBranch: createFacetSpawner(agent),
+    judgeModel: createJudgeLLM(agent, actor),
+    spawnBranch: createFacetSpawner(agent, actor),
     abortBranch: createFacetAborter(agent),
     executionRouter,
     shell,
@@ -321,15 +332,15 @@ function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
   return "https://proteus.local";
 }
 
-function createAgentNimbusHandle(agent: AgentHost): NimbusSandboxHandle {
+function createAgentNimbusHandle(agent: AgentHost, actor: ActorRuntimeIdentity): NimbusSandboxHandle {
   let cachedKey = "";
   let cachedBox: any = null;
 
   const current = () => {
     const env = agent.env as Env & Record<string, unknown>;
-    const tenant = nimbusTenantForUser(readOwnerUserId(agent));
-    const subject = nimbusSubjectForAgent(agent.name);
-    const sessionId = nimbusSandboxIdForAgent(agent.name);
+    const tenant = nimbusTenantForUser(actor.ownerUserId());
+    const subject = nimbusSubjectForAgent(actor.workspaceName);
+    const sessionId = nimbusSandboxIdForAgent(actor.workspaceName);
     const origin = publicOriginForNimbus(env);
     const key = `${origin}|${tenant}|${subject}|${sessionId}`;
     if (!cachedBox || cachedKey !== key) {
@@ -494,14 +505,14 @@ function readStoredModelSpec(agent: AgentHost): string | null {
   ).getModel();
 }
 
-function createDualPathLLM(agent: AgentHost): LLM {
+function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
         const reg = createAgentProviderRegistry({
           env: agent.env,
-          userDOStub: userDOStubFor(agent),
+          userDOStub: userDOStubFor(agent, actor),
           appTitle: 'Proteus',
           workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
@@ -525,7 +536,7 @@ function createDualPathLLM(agent: AgentHost): LLM {
  * separate code path. Errors propagate — the evaluator's judge ensemble
  * drops failed samples instead of misreading them as scores.
  */
-function createJudgeLLM(agent: AgentHost): LLM {
+function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
@@ -534,7 +545,7 @@ function createJudgeLLM(agent: AgentHost): LLM {
       );
       const reg = createAgentProviderRegistry({
         env: agent.env,
-        userDOStub: userDOStubFor(agent),
+        userDOStub: userDOStubFor(agent, actor),
         appTitle: 'Proteus (judge)',
         workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
       });
@@ -581,11 +592,11 @@ function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): I
 
 // ── MCTS branches via real Facets (subAgent) ─────────────────────
 
-function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<BranchHandle> {
+function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
       const stub = await agent.subAgent(ExplorationAgent, branchId);
-      const owner = readOwnerUserId(agent);
+      const owner = actor.ownerUserId();
       if (owner) await stub.setOwner(owner);
       return {
         explore: async (history, tools, siblings) => stub.explore(history, tools, siblings ?? []),

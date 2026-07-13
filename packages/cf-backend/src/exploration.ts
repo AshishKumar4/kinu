@@ -23,9 +23,13 @@
  * spawn infrastructure (rt.spawnBranch). Heads are a mode of this Facet, not
  * a separate agent class.
  *
- * Constraints (Agent SDK facets):
- *   • schedule(), keepAlive(), runFiber() all throw in facets
- *   • Own SQLite — independent from the orchestrator's
+ * Constraints (Agent SDK facets, verified against agents 0.14.1 dist):
+ *   • schedule()/keepAlive()/runFiber() WORK in facets — each delegates to
+ *     the root DO (_cf_scheduleForFacet / _cf_acquireFacetKeepAlive /
+ *     _cf_registerFacetRun), which owns the single physical alarm slot.
+ *     This class simply doesn't need them.
+ *   • Own SQLite — independent from the orchestrator's (shares the parent
+ *     DO's storage quota)
  *   • LLM config derived per-call from the owner user's provider registry
  */
 

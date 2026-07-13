@@ -156,9 +156,9 @@ describe('default-agent prompt model context (Kimi family gating)', () => {
 
     // Wiring: both orchestrator prompt-build sites must derive the model
     // context from the resolved spec, never the raw stored id.
-    const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-    expect(orchestrator).toContain('private promptModelContext()');
-    expect(orchestrator.match(/model: this\.promptModelContext\(\)|const model = this\.promptModelContext\(\)/g)?.length).toBe(2);
-    expect(orchestrator).not.toContain('model: { id: modelId ?? undefined }');
+    const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+    expect(actor).toContain('private promptModelContext()');
+    expect(actor.match(/model: this\.promptModelContext\(\)|const model = this\.promptModelContext\(\)/g)?.length).toBe(2);
+    expect(actor).not.toContain('model: { id: modelId ?? undefined }');
   });
 });
