@@ -148,7 +148,7 @@ requirements:
       - packages/core/src/execution/inline.ts:207
       - packages/core/src/execution/nimbus.ts:352
       - packages/core/src/execution/sandbox.ts:477
-      - packages/core/src/execution/ssh.ts:153
+      - packages/core/src/execution/device-tunnel-executor.ts:156
     remainingEvidence:
       - WP-F3.6 must realign stale executor names and the false container-subsumes-Nimbus relation with the current provider set
       - The production router filters availability but does not implement the modeled required-capability search

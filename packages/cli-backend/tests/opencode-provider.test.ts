@@ -1,0 +1,260 @@
+import { describe, test, expect, mock } from 'bun:test';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
+import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
+
+// ─── Helpers: fake spawn + fake fetch ────────────────────────────────────────
+
+function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
+  return (_args: string[], _opts: { signal?: AbortSignal }) => {
+    const encoder = new TextEncoder();
+    const chunks = output.match(/[\s\S]{1,1024}/g) ?? [output];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+    const errStream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.close(); },
+    });
+    const spawned: SpawnedOpenCode = {
+      stdout: stream,
+      stderr: errStream,
+      stdin: { end() {} },
+      kill() {},
+      exit: Promise.resolve(exitCode),
+    };
+    return spawned;
+  };
+}
+
+function makeAuthFile(origin: string, token: string): string {
+  const dir = `/tmp/proteus-test-${Date.now()}`;
+  const path = `${dir}/auth.json`;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path, JSON.stringify({ [origin]: { type: 'wellknown', key: 'TOKEN', token } }));
+  return path;
+}
+
+const FAKE_WELLKNOWN = JSON.stringify({
+  remote_config: {
+    url: 'https://opencode.example.com/config/opencode.json',
+    headers: { 'cf-access-token': '{env:TOKEN}' },
+  },
+});
+
+const FAKE_CONFIG = JSON.stringify({
+  model: 'openai/gpt-5.6-sol',
+  provider: {
+    openai: {
+      options: {
+        baseURL: 'https://opencode.example.com/openai',
+        headers: { 'Authorization': 'Bearer {env:TOKEN}' },
+      },
+    },
+  },
+});
+
+const FAKE_MODELS_OUTPUT = [
+  'openai/gpt-5.6-sol',
+  JSON.stringify({
+    name: 'GPT 5.6 Sol',
+    limit: { context: 1050000 },
+    capabilities: { output: { text: true }, toolcall: true },
+    api: { id: 'gpt-5.6-sol' },
+  }),
+  '',
+  'openai/gpt-5.4-nano',
+  JSON.stringify({
+    name: 'GPT 5.4 Nano',
+    limit: { context: 200000 },
+    capabilities: { output: { text: true }, toolcall: true },
+    api: { id: 'gpt-5.4-nano' },
+  }),
+  '',
+].join('\n');
+
+function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): typeof fetch {
+  return mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith('/.well-known/opencode')) {
+      return new Response(wellKnown, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.includes('/config/opencode.json')) {
+      return new Response(configJson, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('Not Found', { status: 404 });
+  }) as unknown as typeof fetch;
+}
+
+function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): OpenCodeProviderOptions {
+  const authPath = makeAuthFile('https://opencode.example.com', 'test-token-123');
+  return {
+    authPath,
+    fetch: makeFakeFetch(),
+    spawn: makeSpawn(FAKE_MODELS_OUTPUT),
+    probe: undefined, // use real probe
+    ...overrides,
+  };
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe('OpenCode provider', () => {
+  test('provider id and label', () => {
+    const provider = createOpenCodeProvider(makeProviderOpts());
+    expect(provider.id).toBe(OPENCODE_PROVIDER_ID);
+    expect(provider.label).toBe('OpenCode (shared auth)');
+  });
+
+  test('isAvailable returns true when binary + auth present', async () => {
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      spawn: makeSpawn('opencode 1.17.13\n'),
+    }));
+    expect(await provider.isAvailable({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    })).toBe(true);
+  });
+
+  test('isAvailable returns false when opencode binary missing', async () => {
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      spawn: makeSpawn('', 1), // exit code 1 = not found
+    }));
+    expect(await provider.isAvailable({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    })).toBe(false);
+  });
+
+  test('isAvailable returns false when auth.json missing', async () => {
+    const provider = createOpenCodeProvider({
+      authPath: '/nonexistent/path/auth.json',
+      fetch: makeFakeFetch(),
+      spawn: makeSpawn('opencode 1.17.13\n'),
+    });
+    expect(await provider.isAvailable({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    })).toBe(false);
+  });
+
+  test('listModels discovers models from opencode models --verbose', async () => {
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      spawn: makeSpawn(FAKE_MODELS_OUTPUT),
+    }));
+    const models = await provider.listModels({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    });
+    expect(models.length).toBe(2);
+    expect(models[0].id).toBe('openai/gpt-5.6-sol');
+    expect(models[0].label).toBe('GPT 5.6 Sol');
+    expect(models[0].contextWindow).toBe(1050000);
+    expect(models[1].id).toBe('openai/gpt-5.4-nano');
+    expect(models[1].label).toBe('GPT 5.4 Nano');
+  });
+
+  test('listModels skips models without text or toolcall capability', async () => {
+    const output = [
+      'openai/text-only-model',
+      JSON.stringify({
+        name: 'Text Only',
+        capabilities: { output: { text: true }, toolcall: false },
+      }),
+      '',
+      'openai/good-model',
+      JSON.stringify({
+        name: 'Good Model',
+        capabilities: { output: { text: true }, toolcall: true },
+      }),
+      '',
+    ].join('\n');
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      spawn: makeSpawn(output),
+    }));
+    const models = await provider.listModels({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    });
+    expect(models.length).toBe(1);
+    expect(models[0].id).toBe('openai/good-model');
+  });
+
+  test('unavailableReason gives install hint when binary missing', async () => {
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      spawn: makeSpawn('', 1),
+    }));
+    const reason = await provider.unavailableReason?.({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    });
+    expect(reason).toContain('Install opencode');
+  });
+
+  test('unavailableReason gives login hint when not authenticated', async () => {
+    const provider = createOpenCodeProvider({
+      authPath: '/nonexistent/path/auth.json',
+      fetch: makeFakeFetch(),
+      spawn: makeSpawn('opencode 1.17.13\n'),
+    });
+    const reason = await provider.unavailableReason?.({
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    });
+    expect(reason).toContain('opencode auth login');
+  });
+
+  test('createModel returns a LanguageModel', async () => {
+    const provider = createOpenCodeProvider(makeProviderOpts());
+    const model = provider.createModel('openai/gpt-5.6-sol', {
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    });
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe('openai/gpt-5.6-sol');
+  });
+
+  test('createModel throws on invalid model id (no slash)', () => {
+    const provider = createOpenCodeProvider(makeProviderOpts());
+    expect(() => provider.createModel('invalid-no-slash', {
+      env: {},
+      getAuth: async () => null,
+      hasCredential: async () => false,
+    })).toThrow();
+  });
+
+  test('config is cached and not re-fetched within TTL', async () => {
+    let fetchCount = 0;
+    const countingFetch = mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      fetchCount++;
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith('/.well-known/opencode')) {
+        return new Response(FAKE_WELLKNOWN, { status: 200 });
+      }
+      return new Response(FAKE_CONFIG, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const provider = createOpenCodeProvider(makeProviderOpts({
+      fetch: countingFetch,
+    }));
+
+    // First call fetches
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const countAfterFirst = fetchCount;
+
+    // Second call within TTL should reuse cache
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+
+    expect(fetchCount).toBe(countAfterFirst); // no additional fetches
+  });
+});

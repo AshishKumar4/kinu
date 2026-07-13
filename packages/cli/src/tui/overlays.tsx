@@ -1,5 +1,5 @@
 import type { SelectOption } from '@opentui/core';
-import type { ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@proteus/core';
 import { takeEvidence } from '@proteus/core';
 import type { SlashCommandInfo } from '../slash-commands.js';
@@ -451,11 +451,19 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
   );
 }
 
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 export function PhaseLine({ label }: { label: string | null }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!label) { setFrame(0); return; }
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(id);
+  }, [label]);
   if (!label) return null;
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={tuiColors.accent}>⟳ {label}</span></text>
+      <text><span fg={tuiColors.accent}>{`${SPINNER_FRAMES[frame]} ${label}`}</span></text>
     </box>
   );
 }

@@ -1,4 +1,4 @@
-import { checkClaudeAvailability } from '@proteus/cli-backend';
+import { checkClaudeAvailability, checkOpenCodeAvailability } from '@proteus/cli-backend';
 import { loadConfigFile } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { authCommand } from './auth.js';
@@ -12,7 +12,8 @@ type ProviderName =
   | 'openai'
   | 'openrouter'
   | 'anthropic'
-  | 'openai-compatible';
+  | 'openai-compatible'
+  | 'opencode';
 
 const PROVIDERS = new Set<ProviderName>([
   'cloudflare',
@@ -22,6 +23,7 @@ const PROVIDERS = new Set<ProviderName>([
   'openrouter',
   'anthropic',
   'openai-compatible',
+  'opencode',
 ]);
 
 const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
@@ -40,7 +42,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   }
 
   if (!provider) {
-    throw new Error('Choose a provider to connect: cloudflare, claude, codex, openai, openrouter, anthropic, or openai-compatible.');
+    throw new Error('Choose a provider to connect: cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
   }
 
   if (provider === 'cloudflare') {
@@ -54,6 +56,11 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
 
   if (provider === 'claude') {
     await connectClaude();
+    return;
+  }
+
+  if (provider === 'opencode') {
+    await connectOpenCode(opts);
     return;
   }
 
@@ -87,6 +94,33 @@ async function connectClaude(): Promise<void> {
   console.log(DIM('Cloud workspaces cannot use the subscription — connect an Anthropic API key for those.'));
 }
 
+/** opencode bridge "connect" — probes the local opencode CLI for
+ *  availability and delegates to the full setup flow which reads auth.json,
+ *  discovers models, and writes the model spec. */
+async function connectOpenCode(opts: { model?: string }): Promise<void> {
+  console.log('');
+  console.log(ACCENT('OpenCode (shared auth)'));
+  console.log(DIM('Reuses the model providers and auth tokens from your local opencode CLI.'));
+  const avail = await checkOpenCodeAvailability();
+  console.log('');
+  if (avail.binary && avail.authenticated) {
+    console.log(`${OK('✓')} opencode detected and authenticated`);
+    console.log(DIM('Run `proteus provider connect opencode` to configure, or `proteus setup --provider opencode`.'));
+    // Delegate to the full setup flow for model discovery + config write.
+    await setupCommand({ provider: 'opencode', model: opts.model, localModel: true, skipCloud: true });
+  } else if (avail.binary) {
+    console.log(`${WARN('!')} opencode found but not authenticated.`);
+    console.log(DIM(LOGIN_HINT_OPENCODE));
+  } else {
+    console.log(`${WARN('!')} opencode CLI not found.`);
+    console.log(DIM(INSTALL_HINT_OPENCODE));
+  }
+  console.log(DIM('Cloud agents cannot use opencode — they need their own provider credentials.'));
+}
+
+const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
+const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `proteus setup` again.';
+
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): {
   action: ProviderAction;
   provider?: ProviderName;
@@ -114,10 +148,11 @@ function normalizeProvider(value: string): ProviderName {
           ? 'codex'
           : v === 'compat' || v === 'ollama'
             ? 'openai-compatible'
+            : v === 'opencode' ? 'opencode'
             : v;
 
   if (PROVIDERS.has(provider as ProviderName)) return provider as ProviderName;
-  throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, or openai-compatible.');
+  throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
 }
 
 function normalizeToken(value: string): string {
@@ -166,6 +201,11 @@ async function printProviders(): Promise<void> {
   if (providers.openaiCompat?.default) connected('OpenAI-compatible', currentModel(config.model, 'openai-compat'));
   else missing('OpenAI-compatible', 'proteus provider connect openai-compatible');
 
+  const oc = await checkOpenCodeAvailability();
+  if (oc.binary && oc.authenticated) connected('OpenCode', currentModel(config.model, 'opencode'));
+  else if (oc.binary) missing('OpenCode', LOGIN_HINT_OPENCODE);
+  else missing('OpenCode', 'proteus provider connect opencode');
+
   console.log('');
 }
 
@@ -173,3 +213,5 @@ function currentModel(model: string | undefined, prefix: string): string | undef
   if (!model?.startsWith(`${prefix}/`)) return undefined;
   return model.slice(prefix.length + 1);
 }
+
+

@@ -16,7 +16,7 @@
  */
 
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
-import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
+import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@proteus/core';
@@ -46,6 +46,7 @@ import { describePromptAttachment, resolvePromptAttachments } from '../attachmen
 import { watchDeviceConsents } from '../consent-watch.js';
 import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
 import { requireInteractiveTerminal } from '../prompt.js';
+import { openBrowser } from '../commands/auth.js';
 import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
@@ -80,6 +81,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   // sibling client pointed at the forked agent.
   const [client, setClient] = useState(initialClient);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
@@ -656,6 +659,34 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     void handleSubmit(prompt);
   }, [handleSubmit, initialPrompt, ready]);
 
+  // Auto-copy selected text to clipboard (OSC 52) on mouse release.
+  const rendererInstance = useRenderer();
+  useEffect(() => {
+    if (!rendererInstance?.root) return;
+    let copied = false;
+    rendererInstance.root.onMouseUp = () => {
+      // Defer slightly so the selection is finalized by the renderer.
+      setTimeout(() => {
+        if (!rendererInstance.hasSelection) { copied = false; return; }
+        if (copied) return; // already copied this selection
+        const selection = rendererInstance.getSelection();
+        if (!selection) return;
+        // Walk selected renderables and extract text.
+        const parts: string[] = [];
+        for (const r of selection.selectedRenderables ?? []) {
+          const text = (r as unknown as { getSelectedText?: () => string }).getSelectedText?.();
+          if (text) parts.push(text);
+        }
+        const text = parts.join('\n').trim();
+        if (text) {
+          rendererInstance.copyToClipboardOSC52(text);
+          copied = true;
+        }
+      }, 10);
+    };
+    return () => { rendererInstance.root.onMouseUp = undefined; };
+  }, [rendererInstance]);
+
   useKeyboard((key) => {
     if (deviceConnect.handleKey(key)) return;
     if (pendingConsent) {
@@ -673,6 +704,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       }
     }
     const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+    // Ctrl+L: open the last URL from assistant messages in the browser.
+    if (key.name === 'l' && key.ctrl && !overlayOpen) {
+      const url = lastUrlFromMessages(messagesRef.current);
+      if (url) openBrowser(url);
+      return;
+    }
     if (key.name === 'b' && key.ctrl) {
       if (!overlayOpen) runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
       return;
@@ -833,13 +870,25 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   );
 }
 
+/** Extract the last URL from assistant message content. */
+function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
+  const urlRe = /https?:\/\/[^\s)\]\}>'"]+/g;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' && msg.role !== 'system') continue;
+    const matches = msg.content.match(urlRe);
+    if (matches && matches.length > 0) return matches[matches.length - 1];
+  }
+  return null;
+}
+
 function welcomeMessage(agentName: string): DisplayMessage {
   return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();
-  const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
   const root = createRoot(renderer);
   let currentClient = opts.client;
 

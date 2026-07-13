@@ -29,6 +29,7 @@ import { generateText, streamText } from 'ai';
 import type { LanguageModel } from 'ai';
 import type { LLM } from '@proteus/core';
 import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider.js';
+import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 
 export interface LocalOpenAICompatCredential {
@@ -91,6 +92,10 @@ export interface LocalModelResolverConfig {
    *  `claude` binary). Production leaves this undefined — the provider spawns
    *  the real binary and probes `claude auth status`. */
   claudeCli?: ClaudeCliProviderOptions;
+  /** Seam for the local opencode bridge provider. Production leaves this
+   *  undefined — the provider probes the real opencode binary and reads
+   *  ~/.local/share/opencode/auth.json. */
+  opencode?: OpenCodeProviderOptions;
 }
 
 export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
@@ -192,6 +197,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   }
 
   registry.register(createClaudeCliProvider(opts.claudeCli));
+  registry.register(createOpenCodeProvider(opts.opencode));
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
@@ -401,12 +407,13 @@ function createSignedOutCloudProvider(id: 'workers-ai' | 'my-gateway', label: st
   };
 }
 
-function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' {
+function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' | 'opencode' {
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
   if (llm.name === 'codex') return 'codex';
   if (llm.name === 'openai') return 'openai';
   if (llm.name === 'anthropic') return 'anthropic';
   if (llm.name === 'openrouter') return 'openrouter';
+  if (llm.name === 'opencode') return 'opencode';
   return 'openai-compat';
 }
 

@@ -3,7 +3,7 @@ import {
   decodeCodexAccountId,
   tokensToCredential,
 } from '@proteus/core';
-import { checkClaudeAvailability } from '@proteus/cli-backend';
+import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@proteus/cli-backend';
 import { loadConfigFile, saveConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { ask, askSecret, canPrompt, confirm } from '../prompt.js';
@@ -148,8 +148,58 @@ export async function setupCommand(opts: {
     return;
   }
 
+  if (provider === 'opencode') {
+    console.log(ACCENT('Connecting to OpenCode…'));
+    console.log(DIM('Reading your opencode auth and model configuration.'));
+    const avail = await checkOpenCodeAvailability();
+    if (!avail.binary) {
+      console.log(`${WARN('!')} opencode CLI not found.`);
+      console.log(DIM(INSTALL_HINT_OPENCODE));
+      return;
+    }
+    if (!avail.authenticated) {
+      console.log(`${WARN('!')} opencode is not authenticated.`);
+      console.log(DIM(LOGIN_HINT_OPENCODE));
+      return;
+    }
+    // Discover available models by creating the provider and calling listModels
+    // with stub deps (the provider reads from the filesystem, not from deps).
+    const ocProvider = createOpenCodeProvider();
+    let model = opts.model ?? '';
+    if (!model) {
+      try {
+        const models = await ocProvider.listModels({
+          env: {},
+          getAuth: async () => null,
+          hasCredential: async () => false,
+        });
+        if (models.length === 0) {
+          console.log(`${WARN('!')} No models found in your opencode configuration.`);
+          return;
+        }
+        // Pick the provider's configured default, or fall back to the first model.
+        model = models[0].id;
+      } catch (e) {
+        console.log(`${WARN('!')} Could not read opencode models: ${e instanceof Error ? e.message : String(e)}`);
+        console.log(DIM(LOGIN_HINT_OPENCODE));
+        return;
+      }
+    }
+    saveConfigFile(withProvider(next, {
+      model: `opencode/${model}`,
+      providers: {},
+    }));
+    console.log(`${OK('✓')} Connected OpenCode`);
+    console.log(DIM(`Default model: opencode/${model}`));
+    console.log(DIM('Models and auth are read from your local opencode installation at request time.'));
+    return;
+  }
+
   throw new Error(`Unknown provider: ${provider}`);
 }
+
+const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
+const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `proteus setup` again.';
 
 function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' | 'providers'>): ProteusConfig {
   return {
@@ -173,7 +223,8 @@ async function chooseProvider(): Promise<string> {
   console.log(`  ${ACCENT('3')} OpenRouter`);
   console.log(`  ${ACCENT('4')} Anthropic`);
   console.log(`  ${ACCENT('5')} OpenAI-compatible`);
-  console.log(`  ${ACCENT('6')} Skip`);
+  console.log(`  ${ACCENT('6')} OpenCode (share your opencode auth & models)`);
+  console.log(`  ${ACCENT('7')} Skip`);
   // No-friction discovery: the Claude Code subscription stores no credential
   // here (the binary owns its own login), so mention it inline rather than as a
   // step — only when it is actually usable on this machine.
@@ -184,15 +235,16 @@ async function chooseProvider(): Promise<string> {
   return value;
 }
 
-function normalizeProvider(value: string): 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'skip' {
+function normalizeProvider(value: string): 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
   const v = value.trim().toLowerCase();
   if (v === '1' || v === 'codex' || v === 'chatgpt' || v === 'chatgpt-codex') return 'codex';
   if (v === '2' || v === 'openai') return 'openai';
   if (v === '3' || v === 'openrouter') return 'openrouter';
   if (v === '4' || v === 'anthropic' || v === 'claude') return 'anthropic';
   if (v === '5' || v === 'openai-compatible' || v === 'compat' || v === 'ollama') return 'openai-compatible';
-  if (v === '6' || v === 'skip' || v === 'none') return 'skip';
-  throw new Error('Provider must be codex, openai, openrouter, anthropic, openai-compatible, or skip.');
+  if (v === '6' || v === 'opencode') return 'opencode';
+  if (v === '7' || v === 'skip' || v === 'none') return 'skip';
+  throw new Error('Provider must be codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
 }
 
 async function runCodexDeviceFlow() {

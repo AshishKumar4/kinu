@@ -455,6 +455,19 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
     };
   }
 
+  // OpenCode bridge — no credential stored in config; the provider reads
+  // opencode's auth.json and remote config at request time. We just need to
+  // return a config whose `name` maps to the opencode provider in the
+  // registry so the model spec resolves correctly.
+  if (providerModel?.startsWith('opencode/')) {
+    return {
+      name: 'opencode',
+      baseURL: '',
+      headers: {},
+      model: stripProvider(providerModel, 'opencode'),
+    };
+  }
+
   return null;
 }
 
@@ -484,5 +497,6 @@ function directEndpointModelId(model: string): string {
   if (model.startsWith('openai/')) return model.slice('openai/'.length);
   if (model.startsWith('openrouter/')) return model.slice('openrouter/'.length);
   if (model.startsWith('openai-compat/')) return model.slice('openai-compat/'.length);
+  if (model.startsWith('opencode/')) return model.slice('opencode/'.length);
   return model;
 }

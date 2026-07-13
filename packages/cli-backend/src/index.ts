@@ -26,5 +26,13 @@ export {
   CLAUDE_CLI_PROVIDER_ID, CLAUDE_CLI_DEFAULT_MODEL,
   type ClaudeCliProviderOptions, type ClaudeSpawn, type SpawnedClaude, type ClaudeAvailability,
 } from './claude-cli-provider.js';
+
+export {
+  createOpenCodeProvider, probeOpenCode, checkOpenCodeAvailability,
+  OPENCODE_PROVIDER_ID, OPENCODE_LABEL,
+  type OpenCodeProviderOptions, type OpenCodeAvailability,
+  type OpenCodeModelInfo, type OpenCodeSpawn, type SpawnedOpenCode,
+} from './opencode-provider.js';
+
 export { createCLIHeadRuntime } from './head-runtime.js';
 export { connectMcpServers, type McpServerConfig, type McpConnection } from './mcp.js';
