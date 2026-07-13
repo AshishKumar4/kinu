@@ -1237,6 +1237,35 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     await session.end();
   });
 
+  test('an errored turn purges its unclaimed takes instead of claiming them', async () => {
+    // A turn whose stream errored produced no durable answer to compare the
+    // captured takes against — claiming them would credit a turn that failed.
+    // Mirrors the cf backend's purge-on-error.
+    const erroringModel = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.error(new Error('provider exploded'));
+          },
+        }),
+        response: { headers: {} },
+      }),
+    } as unknown as LanguageModel;
+    const { session, rt, events } = setup('unused', erroringModel);
+    seedTakes(rt);
+
+    await session.send('solve it');
+
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    expect(turnEnd.turn.hadError).toBe(true);
+    // The seeded (unclaimed) take was purged, not claimed for the failed turn.
+    expect(session.latestAlternateTakes()).toBeNull();
+    await session.end();
+  });
+
   test('picking a sibling writes the take_pick ledger row, re-points, and queues the continuation', async () => {
     const { session, rt, events } = setup('answered with A');
     seedTakes(rt);

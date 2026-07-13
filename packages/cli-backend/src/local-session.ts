@@ -1100,10 +1100,12 @@ export class LocalAgentSession implements BackendHost {
 
       // Alternate Takes captured during this turn's think-mcts runs get the
       // turn id they competed for, so a pick can credit the right turn. A turn
-      // that settles without an assistant message id cannot be credited — its
-      // captures are purged so the next turn never claims them as its own.
+      // that settles without an assistant message id — or that errored, whose
+      // captures competed for an answer that no longer exists — cannot be
+      // credited, so its captures are purged (mirroring the cf backend's
+      // purge-on-error) and the next turn never claims them as its own.
       try {
-        if (assistantMsgId) {
+        if (assistantMsgId && !this.orch.acc.hadError) {
           claimAlternateTakesForTurn(this.rt.storage.sql, {
             turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
           });
