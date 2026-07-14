@@ -303,13 +303,41 @@ describe('summaries', () => {
     const messages: ModelMessage[] = [];
     for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
     await transform(messages); // first prefix-summary plan (checkpoint-wrapped)
+    const promptsBeforeGrowth = prompts.length;
 
     const grown = [...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)];
     await transform(grown); // regrown past trigger → boundary advances → rebuild
-    const updatePrompts = prompts.filter((p) => p.includes('PREVIOUS SUMMARY'));
-    expect(updatePrompts).toHaveLength(1);
-    expect(updatePrompts[0]).toContain(validSummary('1'));
-    expect(updatePrompts[0]).not.toContain(CONTEXT_CHECKPOINT_PREFIX);
+    const growthPrompts = prompts.slice(promptsBeforeGrowth);
+    const rollingPrompts = growthPrompts.filter((p) =>
+      p.includes('Roll this prior prefix summary forward'),
+    );
+    expect(rollingPrompts).toHaveLength(1);
+    expect(rollingPrompts[0]).toContain(validSummary('1'));
+    expect(rollingPrompts[0]).toContain(CONTEXT_CHECKPOINT_PREFIX);
+    expect(growthPrompts.some((p) => p.includes('PREVIOUS SUMMARY'))).toBe(false);
+  });
+
+  test('a rejected rolling summary does not bypass the scheduler for a second attempt', async () => {
+    const summaryPrompts: string[] = [];
+    const { transform } = rig({
+      summarize: async (prompt) => {
+        summaryPrompts.push(prompt);
+        if (summaryPrompts.length === 1) return validSummary('initial');
+        throw new Error('rolling summary unavailable');
+      },
+    });
+    const fatUser = (i: number): ModelMessage[] => [
+      user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
+      assistant([{ type: 'text', text: `noted ${i}` }]),
+    ];
+    const messages: ModelMessage[] = [];
+    for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
+    await transform(messages);
+
+    await transform([...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)]);
+    expect(summaryPrompts).toHaveLength(2);
+    expect(summaryPrompts[1]).toContain('Roll this prior prefix summary forward');
+    expect(summaryPrompts.some((prompt) => prompt.includes('PREVIOUS SUMMARY'))).toBe(false);
   });
 
   test('prefix fallback upgrades to the tuned handoff summary and stays sticky', async () => {
@@ -343,6 +371,21 @@ describe('summaries', () => {
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
   });
 
+  test('a split first turn upgrades the exact compacted fragment', async () => {
+    const { ports, prompts, transform } = rig();
+    const result = await transform([{
+      role: 'user',
+      content: [
+        { type: 'text', text: `old requirement ${'x'.repeat(72_000)}` },
+        { type: 'text', text: 'newest requirement stays raw' },
+      ],
+    }]);
+    expect(result).toBeDefined();
+    expect(prompts.filter((prompt) => prompt.includes('## Active Task'))).toHaveLength(1);
+    expect(ports.plans.snapshots.get(SESSION)?.rawTailItemBoundary).toBeDefined();
+    expect(ports.plans.snapshots.get(SESSION)?.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)).toBe(true);
+  });
+
   test('a failing summarizer degrades to deterministic previews, never breaks the turn', async () => {
     const { transform, outcomes } = rig({
       summarize: async () => {
@@ -357,8 +400,9 @@ describe('summaries', () => {
     const result = await transform(messages);
     expect(result).toBeDefined();
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
-    // Deterministic fallback summary, not the LLM one.
-    expect(JSON.stringify(result)).toContain('compacted as a last resort');
+    // Deterministic structured fallback, not the LLM one.
+    expect(JSON.stringify(result)).toContain('[Context Summary]');
+    expect(JSON.stringify(result)).not.toContain('Summary(');
   });
 
   test('too-short summaries are discarded in favor of previews', async () => {

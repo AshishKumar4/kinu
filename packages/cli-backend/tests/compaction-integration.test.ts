@@ -13,8 +13,9 @@
  *     lossless-recall round-trip;
  *  3. the plan persists durably and an identical next turn REPLAYS it
  *     byte-stably without re-summarizing;
- *  4. the ledger resets ONLY on 'planned' — before the weave — so the fresh
- *     block lands at the compacted tail, and a replay keeps it frozen.
+ *  4. the ledger resets on every non-replayed outcome — before the weave —
+ *     so the fresh block lands at the compacted tail, while replay keeps it
+ *     frozen.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -111,7 +112,7 @@ function ephemeralBlocks(prompt: PromptMessage[]): number[] {
 }
 
 describe('default compaction over the real storage plane', () => {
-  test('rewrite → VFS transcript read-back → durable replay → ledger reset only on planned', async () => {
+  test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
     const db = new Database(':memory:');
     const rt = createCLIRuntime(db as never, {
       dbPath: `/tmp/proteus-compaction-itest-${Math.floor(performance.now())}.db`,
@@ -124,7 +125,7 @@ describe('default compaction over the real storage plane', () => {
     const outcomes: CompactionOutcomeEvent[] = [];
     let summarizeCalls = 0;
     // Wired EXACTLY as both backends wire it: shared stores + model-transport
-    // summarize + the planned-only ledger reset.
+    // summarize + the non-replayed ledger reset.
     const extension = createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => rt.storage.vfs),
@@ -133,11 +134,24 @@ describe('default compaction over the real storage plane', () => {
       },
       summarize: async () => {
         summarizeCalls++;
-        return `Summary(${summarizeCalls}): completed the historical steps, recorded outcomes, decisions, and file paths for future reference in detail.`;
+        return [
+          '## Decisions',
+          `- Summary(${summarizeCalls}): preserve the verified implementation decisions.`,
+          '## Files & Symbols',
+          '- packages/compaction/src/extension.ts',
+          '## Errors (verbatim)',
+          '- (none)',
+          '## What failed and why',
+          '- (none)',
+          '## Constraints',
+          '- Preserve exact IDs and paths.',
+          '## Next step',
+          '- Continue from the compacted checkpoint.',
+        ].join('\n');
       },
       onOutcome: (event) => {
         outcomes.push(event);
-        if (event.outcome === 'planned') ledger.reset();
+        if (event.outcome !== 'replayed') ledger.reset();
       },
     });
 

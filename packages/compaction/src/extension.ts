@@ -10,11 +10,11 @@
  *
  *  - assistant runs use the core per-run prompt already embedded in each
  *    summary job by the ladder;
- *  - the prefix summary uses core's tuned handoff template
+ *  - the first prefix summary uses Proteus's tuned handoff template
  *    (`buildCompactionSummaryPrompt` — Active Task verbatim → Remaining Work,
  *    recall-first, secret redaction, iterative updates), the single summary
  *    spec the old single-shot path used, wrapped in the [CONTEXT CHECKPOINT]
- *    preamble so upgraded plans are recognizable and sticky across replays.
+ *    preamble; published core rolls that checkpoint across later deltas.
  *
  * Everything is injected ports (transcripts/plans/logger/summarize), so the
  * engine runs identically off-backend under test fakes; 2B binds the real
@@ -32,9 +32,9 @@ import {
 } from '@proteus/core';
 import {
   buildPlan,
+  createSummaryScheduler,
   createEngine,
   formatTranscript,
-  summarizeJobs,
   toPlanSnapshot,
   transformTurns,
   writeTranscript,
@@ -81,6 +81,7 @@ export interface CompactionExtensionDeps {
 export function createCompactionExtension(deps: CompactionExtensionDeps): ProteusExtension {
   const profile = deps.profile ?? COMPACTION_PRESETS.light;
   const engine = createEngine(proteusSpec, deps.ports);
+  const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
   const summarizer: Summarizer = {
     async complete(job) {
@@ -97,17 +98,21 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     },
   };
 
-  const runJobs = (jobs: BoundarySummaryJob[]): Promise<Record<string, string>> =>
-    summarizeJobs({ jobs, summarizer, logger: deps.ports.logger, concurrency: profile.summarizerConcurrency });
+  const runJobs = (sessionKey: string, jobs: BoundarySummaryJob[]): Promise<Record<string, string>> =>
+    summaryScheduler.summarize({
+      sessionKey,
+      jobs,
+      summarizer,
+      concurrency: profile.summarizerConcurrency,
+    });
 
-  const buildInputs = (ctx: TransformContext): BuildPlanInputs => ({
+  const buildInputs = (ctx: TransformContext, turns: Turn[]): BuildPlanInputs => ({
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: profile.triggerPercent / 100,
     targetRatio: profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
-    providerReportedTokens: ctx.providerReportedTokens,
-    overheadFloorTokens: systemOverheadFloor(ctx),
+    providerReportedTokens: providerReportedTokensWithFloor(ctx, turns),
     citablePath: deps.ports.transcripts.citablePath,
   });
 
@@ -119,14 +124,19 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     turns: Turn[],
     ctx: TransformContext,
     prior: PlanSnapshot | null,
+    summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>,
   ): Promise<ProcessResult> {
-    const inputs: BuildPlanInputs = { ...buildInputs(ctx), force: true, priorPlan: prior ?? undefined };
+    const inputs: BuildPlanInputs = { ...buildInputs(ctx, turns), force: true, priorPlan: prior ?? undefined };
     let plan = buildPlan(turns, inputs, proteusSpec);
     if (!plan) return { outcome: 'unchanged' };
     if (plan.summaryJobs.length > 0) {
-      const summaries = await runJobs(plan.summaryJobs);
+      const summaries = await summarize(plan.summaryJobs);
       if (Object.keys(summaries).length > 0) {
-        plan = buildPlan(turns, { ...inputs, assistantSummaries: summaries }, proteusSpec) ?? plan;
+        plan = buildPlan(
+          turns,
+          { ...inputs, priorPlan: toPlanSnapshot(plan), assistantSummaries: summaries },
+          proteusSpec,
+        ) ?? plan;
       }
     }
     await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: proteusCodec });
@@ -140,23 +150,28 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
    *  core's tuned template, then rebuild so the upgraded summary is what the
    *  model sees this turn AND what future replays carry. Skipped when the
    *  plan already carries an upgraded ([CONTEXT CHECKPOINT]-wrapped) summary
-   *  inherited from a prior plan. */
+   *  inherited from a prior plan, or when published core already accepted a
+   *  rolling summary for an expanded prefix. */
   async function upgradePrefixSummary(
     turns: Turn[],
     plan: BoundaryContextPlan,
     prior: PlanSnapshot | null,
     ctx: TransformContext,
+    rollingSummaryAttempted: boolean,
   ): Promise<Extract<ProcessResult, { outcome: 'planned' }> | null> {
     if (!plan.requiresCustomCompaction) return null;
+    // Published core owns rolling attempts, including validation and its
+    // circuit breaker. Never bypass that policy with a second direct call.
+    if (rollingSummaryAttempted) return null;
     if (plan.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return null;
-    const prefixTurns = turns.slice(0, plan.rawTailStartIndex);
+    const prefixTurns = compactedTurnsForPlan(turns, plan);
     if (prefixTurns.length === 0) return null;
 
     const previous = prior?.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)
       ? stripCheckpointPreamble(prior.prefixSummary)
       : null;
     const prompt = buildCompactionSummaryPrompt({
-      transcript: formatTranscript(prefixTurns, proteusCodec),
+      transcript: plan.transcript.content || formatTranscript(prefixTurns, proteusCodec),
       latestUserAsk: latestUserAsk(ctx.messages),
       previousSummary: previous,
       // The agents-SDK budget rule the old path used: 20% of the compacted
@@ -177,7 +192,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     const upgraded = buildPlan(
       turns,
       {
-        ...buildInputs(ctx),
+        ...buildInputs(ctx, turns),
         force: true,
         // The just-built plan is the floor; its snapshot already carries the
         // assistant summaries and preserved tool ids forward.
@@ -206,10 +221,16 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       // upgrade can thread the prior summary through as an iterative update.
       const cached = await deps.ports.plans.load(ctx.sessionKey);
       const prior = cached && cached.sessionId === ctx.sessionKey ? cached : null;
+      let rollingSummaryAttempted = false;
+      const summarize = async (jobs: BoundarySummaryJob[]): Promise<Record<string, string>> => {
+        rollingSummaryAttempted ||= jobs.some((job) => job.key.startsWith('prefix-summary:'));
+        const summaries = await runJobs(ctx.sessionKey, jobs);
+        return summaries;
+      };
 
       const processed =
         ctx.trigger === 'force'
-          ? await forceRebuild(turns, ctx, prior)
+          ? await forceRebuild(turns, ctx, prior, summarize)
           : await engine.process({
               sessionKey: ctx.sessionKey,
               turns,
@@ -217,12 +238,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
               triggerRatio: profile.triggerPercent / 100,
               targetRatio: profile.targetPercent / 100,
               recentToolResultBudgetTokens: profile.recentToolTokens,
-              providerReportedTokens: ctx.providerReportedTokens,
-              overheadFloorTokens: systemOverheadFloor(ctx),
-              summarize: runJobs,
+              providerReportedTokens: providerReportedTokensWithFloor(ctx, turns),
+              summarize,
             });
       if (processed.outcome === 'unchanged') {
-        if (processed.invalidatedPlan) {
+        const remaining = prior ? await deps.ports.plans.load(ctx.sessionKey) : null;
+        if (prior && remaining === null) {
           deps.onOutcome?.({ sessionKey: ctx.sessionKey, outcome: 'invalidated' });
         }
         return undefined;
@@ -230,7 +251,13 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
 
       const applied =
         processed.outcome === 'planned'
-          ? ((await upgradePrefixSummary(turns, processed.plan, prior, ctx)) ?? processed)
+          ? ((await upgradePrefixSummary(
+              turns,
+              processed.plan,
+              prior,
+              ctx,
+              rollingSummaryAttempted,
+            )) ?? processed)
           : processed;
 
       deps.onOutcome?.({
@@ -252,6 +279,31 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
  *  real per-request prompt). */
 function systemOverheadFloor(ctx: TransformContext): number {
   return Math.round(ctx.system.length / 4);
+}
+
+function providerReportedTokensWithFloor(ctx: TransformContext, turns: Turn[]): number {
+  return Math.max(
+    ctx.providerReportedTokens ?? 0,
+    proteusCodec.estimateTurns(turns) + systemOverheadFloor(ctx),
+  );
+}
+
+function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[] {
+  const turnIndex = turns.findIndex((turn) => turn.key === plan.rawTailStartMessageId);
+  if (turnIndex < 0) return turns.slice(0, plan.rawTailStartIndex);
+  const boundary = plan.rawTailItemBoundary;
+  if (!boundary) return turns.slice(0, turnIndex);
+
+  const turn = turns[turnIndex];
+  const boundaryItemIndex = turn.items.findIndex((item) => item.key === boundary.itemKey);
+  if (boundaryItemIndex < 0) return turns.slice(0, turnIndex);
+  const endIndex = boundary.side === 'after' ? boundaryItemIndex + 1 : boundaryItemIndex;
+  if (endIndex <= 0) return turns.slice(0, turnIndex);
+  const items = turn.items.slice(0, endIndex);
+  return [
+    ...turns.slice(0, turnIndex),
+    { ...turn, items, fragmentKey: JSON.stringify(items.map((item) => item.key)) },
+  ];
 }
 
 /** The most recent real user request across the FULL history (including the

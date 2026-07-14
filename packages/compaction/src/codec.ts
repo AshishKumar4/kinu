@@ -28,14 +28,17 @@ import type {
   ToolCallPart,
   ToolModelMessage,
   ToolResultPart,
+  UserModelMessage,
 } from 'ai';
 import { fnv1a64 } from '@proteus/core';
 import {
   assistantRunsStage,
   contentHashKey,
   keyDeduper,
+  purgeErrorInputsStage,
   reasoningStage,
   skillsStage,
+  supersedeReadsStage,
   toolsOldStage,
   toolsRemainingStage,
   truncate,
@@ -47,7 +50,7 @@ import {
 } from '@better-compact/core';
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
-type ToolMessagePart = ToolModelMessage['content'][number];
+type UserPart = Exclude<UserModelMessage['content'], string>[number];
 
 /** One IR tool item owns the call part and its paired result: when the ladder
  *  drops the item, every native footprint vanishes; when it survives, each
@@ -79,7 +82,7 @@ export const proteusCodec: Codec<ModelMessage> = {
   },
 
   // Chars/4 over the content Proteus actually serializes for the model —
-  // the shared estimation scale (vendored countTokens); the engine's
+  // the shared estimation scale (core countTokens); the engine's
   // measured provider-overhead delta corrects for what chars cannot see.
   estimateTurns(turns) {
     const chars = turns.reduce(
@@ -107,7 +110,7 @@ export const proteusCodec: Codec<ModelMessage> = {
   // tool output instead of a preview.
   transcriptDocument(turns) {
     const blocks = turns.map((turn) => {
-      const native = turn.handle ?? { role: turn.role, content: syntheticText(turn.items) };
+      const native = turn.handle ? decodeTurn(turn) : { role: turn.role, content: syntheticText(turn.items) };
       return [
         `## ${turn.role.toUpperCase()} ${turn.key}`,
         '```json',
@@ -125,6 +128,14 @@ export const proteusConventions: Conventions = {
   // bodies are re-readable on demand, so the skills stage prunes them first.
   isSkillItem: (item) =>
     item.kind === 'tool' && isSkillBodyLoad(pairOf(item).call),
+  tool: (item) => {
+    const pair = pairOf(item);
+    return {
+      name: pair.call.toolName,
+      input: pair.call.input,
+      error: toolError(pair),
+    };
+  },
   // No in-band todo surface (task state lives in the jobs subsystem, outside
   // messages) and no per-item notes — those conventions are simply absent,
   // so the stages that would need them find nothing to act on.
@@ -133,7 +144,15 @@ export const proteusConventions: Conventions = {
 export const proteusSpec: LadderSpec = {
   codec: proteusCodec,
   conventions: proteusConventions,
-  stages: [skillsStage, toolsOldStage, reasoningStage, toolsRemainingStage, assistantRunsStage],
+  stages: [
+    skillsStage,
+    supersedeReadsStage,
+    purgeErrorInputsStage,
+    toolsOldStage,
+    reasoningStage,
+    toolsRemainingStage,
+    assistantRunsStage,
+  ],
 };
 
 // ── encode ────────────────────────────────────────────────────────────────
@@ -250,8 +269,6 @@ function stampOf(key: string): number {
 /** Reference-identity survival sets over a turn's (possibly pruned) items. */
 interface Survival {
   handles: Set<unknown>;
-  calls: Set<ToolCallPart>;
-  inlineResults: Set<ToolResultPart>;
   results: Set<ToolResultPart>;
 }
 
@@ -265,17 +282,16 @@ function decodeTurn(turn: Turn): ModelMessage[] {
   }
 
   const survival = collectSurvival(turn.items);
-  const synthetic = syntheticText(turn.items);
   const hasAssistant = group.some((message) => message.role === 'assistant');
   const out: ModelMessage[] = [];
 
   for (const message of group) {
     if (message.role === 'assistant') {
-      const rebuilt = rebuildAssistant(message, survival, synthetic);
+      const rebuilt = rebuildAssistant(message, turn.items);
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'user') {
-      // No stage ever removes user items; user messages re-emit verbatim.
-      out.push(message);
+      const rebuilt = rebuildUser(message, turn.items);
+      if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'tool') {
       const rebuilt = rebuildToolMessage(message, survival);
       if (rebuilt) out.push(rebuilt);
@@ -285,23 +301,22 @@ function decodeTurn(turn: Turn): ModelMessage[] {
   }
   // Synthetic replacement text with no assistant message to carry it (a
   // collapsed headless run) re-emits as a user-role notice.
-  if (synthetic && !hasAssistant) out.unshift({ role: 'user', content: synthetic });
+  const synthetic = syntheticText(turn.items);
+  if (synthetic && !hasAssistant && !group.some((message) => message.role === 'user')) {
+    out.unshift({ role: 'user', content: synthetic });
+  }
   return out;
 }
 
 function collectSurvival(items: Item[]): Survival {
   const survival: Survival = {
     handles: new Set(),
-    calls: new Set(),
-    inlineResults: new Set(),
     results: new Set(),
   };
   for (const item of items) {
     if (item.kind === 'synthetic') continue;
     if (item.kind === 'tool') {
       const pair = pairOf(item);
-      survival.calls.add(pair.call);
-      if (pair.inlineResult) survival.inlineResults.add(pair.inlineResult);
       if (pair.result) survival.results.add(pair.result);
     } else {
       survival.handles.add(item.handle);
@@ -310,42 +325,111 @@ function collectSurvival(items: Item[]): Survival {
   return survival;
 }
 
-/** Walk the ORIGINAL content in order, keeping each part iff its item
- *  survived the ladder — order preservation is structural, and an untouched
- *  message re-emits as the same object (byte-verbatim). Synthetic text
- *  (todo state, "[tool calls cleared]" markers, run summaries) appends at
- *  the end, mirroring where the stages append their items. */
+/** Rebuild in IR order so a synthetic tool stub occupies the native position
+ *  of the tool item it replaced. Untouched messages retain object identity. */
 function rebuildAssistant(
   message: AssistantModelMessage,
-  survival: Survival,
-  synthetic: string,
+  items: Item[],
 ): AssistantModelMessage | null {
   if (typeof message.content === 'string') {
-    const textSurvives = survival.handles.has(message);
+    const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
+    const synthetic = syntheticText(items);
     if (textSurvives && !synthetic) return message;
     const text = [textSurvives ? message.content : '', synthetic].filter(Boolean).join('\n\n');
     return text ? { ...message, content: text } : null;
   }
 
+  if (
+    !items.some((item) => item.kind === 'synthetic') &&
+    message.content.every((part) => assistantPartSurvives(part, items))
+  ) {
+    return message;
+  }
+
+  const survivingCalls = new Set(
+    items
+      .filter((item): item is ToolItem => item.kind === 'tool')
+      .map((item) => pairOf(item).call),
+  );
+  const removedCalls = message.content.filter(
+    (part): part is ToolCallPart => part.type === 'tool-call' && !survivingCalls.has(part),
+  );
+  const stubs = items.filter(
+    (item): item is Extract<Item, { kind: 'synthetic' }> =>
+      item.kind === 'synthetic' && isToolStub(item),
+  );
+  const stubByCall = new Map(
+    removedCalls.slice(0, stubs.length).map((call, index) => [call, stubs[index]]),
+  );
+
   const parts: AssistantPart[] = [];
-  let changed = false;
   for (const part of message.content) {
-    if (assistantPartSurvives(part, survival)) parts.push(part);
-    else changed = true;
+    if (part.type === 'tool-call') {
+      const stub = stubByCall.get(part);
+      if (stub) parts.push({ type: 'text', text: stub.text });
+      else if (assistantPartSurvives(part, items)) parts.push(part);
+    } else if (assistantPartSurvives(part, items)) {
+      parts.push(part);
+    }
   }
-  if (synthetic) {
-    parts.push({ type: 'text', text: synthetic });
-    changed = true;
+  for (const item of items) {
+    if (item.kind === 'synthetic' && !isToolStub(item)) {
+      parts.push({ type: 'text', text: item.text });
+    }
   }
-  if (!changed) return message;
   if (parts.length === 0) return null;
+  if (sameParts(parts, message.content)) return message;
   return { ...message, content: parts };
 }
 
-function assistantPartSurvives(part: AssistantPart, survival: Survival): boolean {
-  if (part.type === 'tool-call') return survival.calls.has(part);
-  if (part.type === 'tool-result') return survival.inlineResults.has(part) || survival.handles.has(part);
-  return survival.handles.has(part);
+function assistantPartSurvives(part: AssistantPart, items: Item[]): boolean {
+  if (part.type === 'tool-call') {
+    return items.some((item) => item.kind === 'tool' && pairOf(item).call === part);
+  }
+  if (part.type === 'tool-result') {
+    return items.some(
+      (item) =>
+        (item.kind === 'tool' && pairOf(item).inlineResult === part) ||
+        (item.kind === 'opaque' && item.handle === part),
+    );
+  }
+  return items.some(
+    (item) => item.kind !== 'synthetic' && item.kind !== 'tool' && item.handle === part,
+  );
+}
+
+function isToolStub(item: Item): boolean {
+  return item.kind === 'synthetic' && item.text.startsWith('[tool:');
+}
+
+function rebuildUser(message: UserModelMessage, items: Item[]): UserModelMessage | null {
+  if (typeof message.content === 'string') {
+    const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
+    const synthetic = syntheticText(items);
+    if (textSurvives && !synthetic) return message;
+    const text = [textSurvives ? message.content : '', synthetic].filter(Boolean).join('\n\n');
+    return text ? { ...message, content: text } : null;
+  }
+
+  const parts: UserPart[] = [];
+  const originalParts = new Set<UserPart>(message.content);
+  for (const item of items) {
+    if (item.kind === 'synthetic') {
+      parts.push({ type: 'text', text: item.text });
+    } else if (
+      (item.kind === 'text' || item.kind === 'opaque') &&
+      originalParts.has(item.handle as UserPart)
+    ) {
+      parts.push(item.handle as UserPart);
+    }
+  }
+  if (parts.length === 0) return null;
+  if (sameParts(parts, message.content)) return message;
+  return { ...message, content: parts };
+}
+
+function sameParts<T>(left: T[], right: T[]): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
 }
 
 function rebuildToolMessage(message: ToolModelMessage, survival: Survival): ToolModelMessage | null {
@@ -377,6 +461,15 @@ function isSkillBodyLoad(call: ToolCallPart): boolean {
   if (typeof input !== 'object' || input === null) return false;
   const action = (input as { action?: unknown }).action;
   return action === 'read' || action === 'invoke';
+}
+
+function toolError(pair: ToolPairHandle): string | undefined {
+  const output = (pair.result ?? pair.inlineResult)?.output;
+  if (!output) return undefined;
+  if (output.type === 'error-text') return output.value;
+  if (output.type === 'error-json') return previewJson(output.value);
+  if (output.type === 'execution-denied') return output.reason ?? 'execution denied';
+  return undefined;
 }
 
 // ── estimation ────────────────────────────────────────────────────────────

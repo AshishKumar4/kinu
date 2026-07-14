@@ -84,5 +84,18 @@ export function memoryPorts(): MemoryPorts {
 
 /** A summary comfortably above the engine's 80-char validity floor. */
 export function validSummary(tag: string): string {
-  return `Summary(${tag}): completed the historical steps, recorded outcomes, decisions, and file paths for future reference in detail.`;
+  return [
+    '## Decisions',
+    `- Summary(${tag}): keep the verified implementation decisions.`,
+    '## Files & Symbols',
+    '- packages/compaction/src/extension.ts',
+    '## Errors (verbatim)',
+    '- (none)',
+    '## What failed and why',
+    '- (none)',
+    '## Constraints',
+    '- Preserve exact IDs and paths.',
+    '## Next step',
+    '- Continue from the compacted checkpoint.',
+  ].join('\n');
 }

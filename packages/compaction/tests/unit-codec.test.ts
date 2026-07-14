@@ -5,7 +5,16 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { proteusCodec, proteusConventions, type ToolPairHandle, type Item, type Turn } from '../src/index.js';
+import {
+  buildPlan,
+  proteusCodec,
+  proteusConventions,
+  proteusSpec,
+  transformTurns,
+  type ToolPairHandle,
+  type Item,
+  type Turn,
+} from '../src/index.js';
 import { assistant, toolCall, toolMessage, toolResult, user } from './helpers.js';
 
 function roundTrip(messages: ModelMessage[]): ModelMessage[] {
@@ -58,6 +67,16 @@ describe('round-trip identity', () => {
         { type: 'text', text: 'Found it.' },
       ]),
       user('thanks'),
+    ]);
+  });
+
+  test('non-adjacent provider-executed results still round-trip verbatim', () => {
+    expectVerbatim([
+      assistant([
+        toolCall('ws1', 'web_search', { query: 'proteus' }),
+        { type: 'text', text: 'provider interstitial' },
+        toolResult('ws1', 'web_search', 'results...'),
+      ]),
     ]);
   });
 
@@ -189,6 +208,69 @@ describe('decode after pruning', () => {
     expect(last.type === 'text' && last.text).toBe('[tool calls/results cleared]');
   });
 
+  test('a synthetic tool stub renders at the replaced tool position', () => {
+    const ordered: ModelMessage[] = [
+      assistant([
+        { type: 'text', text: 'before' },
+        toolCall('c1', 'run', { command: 'pwd' }),
+        { type: 'text', text: 'after' },
+      ]),
+      toolMessage([toolResult('c1', 'run', '/workspace')]),
+    ];
+    const turns = proteusCodec.encode(ordered);
+    const toolIndex = turns[0].items.findIndex((item) => item.kind === 'tool');
+    turns[0].items[toolIndex] = {
+      kind: 'synthetic',
+      key: 'stub',
+      text: '[tool:run] pwd — ok',
+    };
+
+    const decoded = proteusCodec.decode(turns, ordered);
+    expect(decoded).toHaveLength(1);
+    const rebuilt = decoded[0];
+    if (rebuilt.role !== 'assistant' || typeof rebuilt.content === 'string') throw new Error('unexpected shape');
+    expect(rebuilt.content.map((part) => part.type === 'text' ? part.text : part.type)).toEqual([
+      'before',
+      '[tool:run] pwd — ok',
+      'after',
+    ]);
+  });
+
+  test('stubbing another tool preserves a non-adjacent inline result position', () => {
+    const ordered: ModelMessage[] = [
+      assistant([
+        toolCall('a', 'web_search', { query: 'proteus' }),
+        { type: 'text', text: 'between call and provider result' },
+        toolResult('a', 'web_search', 'result-a'),
+        toolCall('b', 'run', { command: 'pwd' }),
+      ]),
+      toolMessage([toolResult('b', 'run', '/workspace')]),
+    ];
+    const turns = proteusCodec.encode(ordered);
+    const toolIndex = turns[0].items.findIndex(
+      (item) => item.kind === 'tool' && item.callId === 'b',
+    );
+    turns[0].items[toolIndex] = {
+      kind: 'synthetic',
+      key: 'stub-b',
+      text: '[tool:run] pwd — ok',
+    };
+
+    const decoded = proteusCodec.decode(turns, ordered);
+    const rebuilt = decoded[0];
+    if (rebuilt.role !== 'assistant' || typeof rebuilt.content === 'string') throw new Error('unexpected shape');
+    expect(rebuilt.content.map((part) => {
+      if (part.type === 'text') return part.text;
+      if (part.type === 'tool-call' || part.type === 'tool-result') return `${part.type}:${part.toolCallId}`;
+      return part.type;
+    })).toEqual([
+      'tool-call:a',
+      'between call and provider result',
+      'tool-result:a',
+      '[tool:run] pwd — ok',
+    ]);
+  });
+
   test('string-content assistant merges synthetic text into the string', () => {
     const stringHistory: ModelMessage[] = [user('q'), { role: 'assistant', content: 'plain answer' }];
     const turns = proteusCodec.encode(stringHistory);
@@ -206,6 +288,40 @@ describe('decode after pruning', () => {
     };
     const decoded = proteusCodec.decode([synthetic], []);
     expect(decoded).toEqual([{ role: 'user', content: '[Better Compact context pruning applied]' }]);
+  });
+
+  test('an oversized multipart user turn emits only the re-coalesced raw fragment', () => {
+    const compacted = { type: 'text' as const, text: `old requirement ${'x'.repeat(72_000)}` };
+    const raw = { type: 'text' as const, text: 'newest requirement stays raw' };
+    const messages: ModelMessage[] = [{ role: 'user', content: [compacted, raw] }];
+    const turns = proteusCodec.encode(messages);
+    const plan = buildPlan(
+      turns,
+      {
+        sessionKey: 'fragment-test',
+        contextLimit: 10_000,
+        targetRatio: 0.3,
+        force: true,
+        citablePath: (_sessionKey, hash) => `transcripts/${hash}.md`,
+      },
+      proteusSpec,
+    );
+    if (!plan) throw new Error('expected a split-turn plan');
+    expect(plan.rawTailItemBoundary).toEqual({ itemKey: turns[0].items[1].key, side: 'before' });
+
+    const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, proteusSpec);
+    const decoded = proteusCodec.decode(transformed, messages);
+    const rebuilt = decoded.at(-1);
+    if (!rebuilt || rebuilt.role !== 'user' || typeof rebuilt.content === 'string') {
+      throw new Error('expected a multipart raw-tail user message');
+    }
+    expect(rebuilt.content).toHaveLength(1);
+    expect(rebuilt.content[0]).toBe(raw);
+    expect(JSON.stringify(rebuilt)).not.toContain('old requirement');
+
+    const transcript = proteusCodec.transcriptDocument?.(plan.transcript.turns ?? []) ?? '';
+    expect(transcript).toContain('old requirement');
+    expect(transcript).not.toContain('newest requirement stays raw');
   });
 });
 
@@ -283,5 +399,36 @@ describe('conventions', () => {
   test('todo and itemNote conventions are intentionally absent', () => {
     expect(proteusConventions.todo).toBeUndefined();
     expect(proteusConventions.itemNote).toBeUndefined();
+  });
+
+  test('tool metadata exposes names, inputs, and explicit SDK errors', () => {
+    const turns = proteusCodec.encode([
+      assistant([toolCall('e1', 'workspace.readFile', { path: '/tmp/missing' })]),
+      toolMessage([{
+        type: 'tool-result',
+        toolCallId: 'e1',
+        toolName: 'workspace.readFile',
+        output: { type: 'error-text', value: 'ENOENT: /tmp/missing' },
+      }]),
+    ]);
+    const item = turns[0].items[0];
+    if (item.kind !== 'tool') throw new Error('expected a tool item');
+    expect(proteusConventions.tool?.(item)).toEqual({
+      name: 'workspace.readFile',
+      input: { path: '/tmp/missing' },
+      error: 'ENOENT: /tmp/missing',
+    });
+  });
+
+  test('ladder order enables skills, superseding, and error purging before old tools', () => {
+    expect(proteusSpec.stages.map((stage) => stage.name)).toEqual([
+      'skills',
+      'supersede-reads',
+      'purge-error-inputs',
+      'tools-old',
+      'reasoning',
+      'tools-remaining',
+      'assistant-runs',
+    ]);
   });
 });
