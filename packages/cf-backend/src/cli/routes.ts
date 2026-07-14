@@ -162,6 +162,18 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return handleCreateWorkspaceRequest(request, env, cli.userId, cli.userDO, ctx);
   }
 
+  const workspaceMatch = path.match(/^\/workspaces\/([^/]+)$/);
+  if (workspaceMatch && method === 'DELETE') {
+    try {
+      const name = decodeURIComponent(workspaceMatch[1]);
+      if (!(await cli.userDO.hasWorkspace(name))) return err(404, `Agent ${name} not found.`);
+      await cli.userDO.removeWorkspace(name, cli.userId);
+      return json({ ok: true });
+    } catch (e) {
+      return err(400, e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
@@ -1039,4 +1051,3 @@ function isSameOriginPost(request: Request): boolean {
   const referer = request.headers.get('referer');
   return !referer || referer.startsWith(`${url.origin}/`);
 }
-

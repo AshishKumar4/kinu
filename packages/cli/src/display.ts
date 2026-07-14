@@ -269,6 +269,7 @@ export function printHelp(): void {
   console.log(`  ${ACCENT('whoami')}             Show the signed-in account`);
   console.log(`  ${ACCENT('tokens')}             Manage long-lived CI access tokens`);
   console.log(`  ${ACCENT('create')} [name]      Create a cloud or local workspace`);
+  console.log(`  ${ACCENT('workspace delete')} <name>  Permanently delete a cloud workspace`);
   console.log(`  ${ACCENT('run')}    <name>      Run once, open chat, or use JSON/RPC mode`);
   console.log(`  ${ACCENT('exec')}   "task"      Headless one-shot run for scripts and CI (--json)`);
   console.log(`  ${ACCENT('chat')}   <name>      Interactive conversation`);

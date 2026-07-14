@@ -26,6 +26,9 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     async hasWorkspace(name: string) {
       return name === 'jarvis';
     },
+    async removeWorkspace(name: string, ownerUserId: string) {
+      calls.push(`workspace:remove:${name}:${ownerUserId}`);
+    },
     async issueCliAgentConnectTicket(input: { userId: string; agentName: string; cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.userId}:${input.agentName}:${input.cliTokenHash}`);
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
@@ -139,6 +142,19 @@ async function rpcResult(env: Env, method: string, args: unknown[] = []): Promis
 }
 
 describe('CLI control routes', () => {
+  test('deletes an owned workspace through the authenticated user DO', async () => {
+    const { env, calls } = setupEnv();
+
+    const deleted = await handleCliRequest(cliRequest('/api/cli/workspaces/%6Aarvis', { method: 'DELETE' }), env);
+    expect(deleted?.status).toBe(200);
+    expect(await deleted?.json()).toEqual({ ok: true });
+    expect(calls).toContain(`workspace:remove:jarvis:${USER_ID}`);
+
+    const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
+    expect(missing?.status).toBe(404);
+    expect(calls.some((call) => call.includes('workspace:remove:unknown'))).toBe(false);
+  });
+
   test('mints scoped agent websocket tickets for owned agents', async () => {
     const { env, calls } = setupEnv();
 

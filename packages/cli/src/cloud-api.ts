@@ -170,6 +170,10 @@ export async function createCloudAgent(origin: string, token: string, input: {
   return cloudJson(origin, '/api/cli/workspaces', { method: 'POST', token, body: input });
 }
 
+export async function deleteCloudAgent(origin: string, token: string, name: string): Promise<{ ok: boolean }> {
+  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', token });
+}
+
 export async function createCloudAgentConnectTicket(origin: string, token: string, name: string): Promise<CloudAgentConnectTicket> {
   return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/connect-ticket`, {
     method: 'POST',

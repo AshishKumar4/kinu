@@ -181,6 +181,7 @@ describe('access token scope enforcement', () => {
       ['/api/cli/devices', jsonInit({ label: 'pc' })],
       ['/api/cli/devices', { method: 'GET' }],
       ['/api/cli/workspaces', jsonInit({ name: 'new-agent' })],
+      ['/api/cli/workspaces/jarvis', { method: 'DELETE' }],
       [RPC, rpcInit('resolveDeviceConsent', ['cons-1', 'always'])],
       [RPC, rpcInit('setModel', ['openai/gpt-5.1'])],
       ['/api/cli/tokens', jsonInit({ name: 'more', scopes: ['workspace.exec'] })],

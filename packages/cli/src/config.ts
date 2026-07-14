@@ -48,6 +48,7 @@ const RESERVED_ALIASES = new Set([
   'evolve',
   'status',
   'list',
+  'workspace',
   'alias',
   'unalias',
   'aliases',
@@ -166,16 +167,24 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 }
 
 export function requireAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
-  const config = loadConfigFile();
-  const origin = resolveCloudOrigin();
   // CI path: a token from the environment (typically a scoped `pta_…` access
   // token from `proteus tokens create`) wins over the stored interactive
   // session. Long-lived by design — the server is the validity authority.
   const envToken = process.env.PROTEUS_TOKEN?.trim();
-  if (envToken) return { origin, token: envToken };
+  if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
+  return storedAuthConfig('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
+}
+
+export function requireStoredAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
+  return storedAuthConfig('No interactive CLI session found. Run: proteus auth');
+}
+
+function storedAuthConfig(missingTokenMessage: string): { origin: string; token: string; user?: ProteusConfig['user'] } {
+  const config = loadConfigFile();
+  const origin = resolveCloudOrigin();
   const token = config.accessToken;
   if (!token) {
-    throw new Error('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
+    throw new Error(missingTokenMessage);
   }
   if (config.tokenExpiresAt) {
     const expiresAt = Date.parse(config.tokenExpiresAt);
@@ -227,6 +236,27 @@ export function upsertAgentConfig(agent: Omit<ProteusAgentConfig, 'createdAt' | 
     config.agents = { ...(config.agents ?? {}), [agent.name]: saved };
   });
   return saved;
+}
+
+export function removeCloudAgentConfig(cloudName: string): boolean {
+  let removed = false;
+  updateConfigFile((config) => {
+    const agents = config.agents ?? {};
+    const removedNames = new Set<string>();
+    for (const [name, agent] of Object.entries(agents)) {
+      if (agent.mode !== 'cloud' || (agent.cloudName ?? agent.name) !== cloudName) continue;
+      delete agents[name];
+      removedNames.add(name);
+      removed = true;
+    }
+    if (config.aliases) {
+      for (const [alias, target] of Object.entries(config.aliases)) {
+        if (removedNames.has(target)) delete config.aliases[alias];
+      }
+    }
+    config.agents = agents;
+  });
+  return removed;
 }
 
 export function setAliasConfig(agentName: string, alias: string): void {

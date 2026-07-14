@@ -34,6 +34,7 @@ import {
 } from '../src/commands/inspect.js';
 import { exportCommand, importCommand } from '../src/commands/export-import.js';
 import { tokensCommand } from '../src/commands/tokens.js';
+import { workspaceDeleteCommand } from '../src/commands/workspace.js';
 import { printHelp, printError } from '../src/display.js';
 
 const program = new Command();
@@ -180,6 +181,16 @@ program
   .command('list')
   .description('List all workspaces')
   .action(wrapAction(listCommand));
+
+const workspaceCommand = program
+  .command('workspace')
+  .description('Manage cloud workspaces');
+
+workspaceCommand
+  .command('delete <name>')
+  .description('Permanently delete a cloud workspace')
+  .option('-y, --yes', 'Skip the confirmation prompt')
+  .action(wrapAction(workspaceDeleteCommand));
 
 program
   .command('stop <name>')
