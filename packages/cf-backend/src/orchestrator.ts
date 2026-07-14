@@ -69,7 +69,7 @@ import {
   hybridSearch, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, initBackgroundJobsTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  effortFor, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA offline optimisation (scaffold + crafted-tool)
@@ -1285,6 +1285,8 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Background-job registry — work auto-detached past the 30s threshold.
     initBackgroundJobsTable(execRaw);
+    // Durable MCTS search checkpoints — an evicted think(mcts) resumes from here.
+    initMctsSearchTable(execRaw);
 
     // Compaction: the replayable plan snapshot + the measured prompt-token
     // trigger signal, one row per session (@proteus/compaction stores).

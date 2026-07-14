@@ -22,6 +22,8 @@ import { evaluateWithMultiModelJudging } from './evaluation.js';
 import { pruneLowValueBranches } from './pruning.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
 import { estimateCost } from './cost.js';
+import { persistableMCTSConfig } from './search-store.js';
+import { initMctsSearchTable } from './search-store.js';
 import { nanoid } from '../utils/nanoid.js';
 import { isoDate } from '../utils/date.js';
 
@@ -31,51 +33,75 @@ export async function runMCTS(
   task: string,
   config: MCTSConfig,
 ): Promise<ConvergenceResult> {
-  const defaults = DEFAULT_CONFIG.mcts;
-  const N_BRANCHES = Math.max(1, config.branches);
-  const maxDepth = config.maxDepth ?? defaults.maxDepth;
-  const W = config.explorationWeight ?? defaults.explorationWeight;
-  const pruneThreshold = config.pruneThreshold ?? defaults.pruneThreshold;
-  const minVisitsForPrune = defaults.minVisitsForPrune;
-  const minAcceptableScore = config.minAcceptableScore ?? defaults.minAcceptableScore;
-  const maxCostUSD = config.maxCostUSD ?? defaults.maxCostUSD;
-  const judgeSamples = config.judgeSamples ?? defaults.judgeSamples;
-  const maxEvalLLMCalls = config.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
-  const takesEpsilon = config.takesEpsilon ?? defaults.takesEpsilon;
-  const reflectionThreshold = defaults.reflectionThreshold;
-  const craftExtractionThreshold = defaults.craftExtractionThreshold;
-
-  const estimate = estimateCost(config.budget, N_BRANCHES, maxEvalLLMCalls);
-  if (estimate.estimatedUSD > maxCostUSD) {
-    throw new Error(
-      `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD}. ` +
-      `Reduce budget (${config.budget}) or branches (${N_BRANCHES}).`,
-    );
-  }
-
   initSearchTables(rt.storage.execRaw);
   initAlternateTakesTable(rt.storage.execRaw);
 
-  const rootId = nanoid();
-  const rootMsgId = await recordNode(session, rt.storage.sql, {
-    nodeId: rootId,
-    parentNodeId: null,
-    parentMsgId: null,
-    task,
-    action: '',
-    observation: task,
-    codeUsed: null,
-    depth: 0,
-  });
+  const search = config.search;
+  if (search) initMctsSearchTable(rt.storage.execRaw);
+
+  // Resume an unfinished search for this task (one evicted mid-run): continue its
+  // remaining budget against the persisted tree instead of starting over (B6).
+  // The stored config is authoritative for the loop — knobs can't drift on resume.
+  const resumed = search?.findResumable(task) ?? null;
+  const effective: MCTSConfig = resumed ? { ...config, ...resumed.config } : config;
+
+  const defaults = DEFAULT_CONFIG.mcts;
+  const N_BRANCHES = Math.max(1, effective.branches);
+  const maxDepth = effective.maxDepth ?? defaults.maxDepth;
+  const W = effective.explorationWeight ?? defaults.explorationWeight;
+  const pruneThreshold = effective.pruneThreshold ?? defaults.pruneThreshold;
+  const minVisitsForPrune = defaults.minVisitsForPrune;
+  const minAcceptableScore = effective.minAcceptableScore ?? defaults.minAcceptableScore;
+  const maxCostUSD = effective.maxCostUSD ?? defaults.maxCostUSD;
+  const judgeSamples = effective.judgeSamples ?? defaults.judgeSamples;
+  const maxEvalLLMCalls = effective.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
+  const takesEpsilon = effective.takesEpsilon ?? defaults.takesEpsilon;
+  const reflectionThreshold = defaults.reflectionThreshold;
+  const craftExtractionThreshold = defaults.craftExtractionThreshold;
+
+  const estimate = estimateCost(effective.budget, N_BRANCHES, maxEvalLLMCalls);
+  if (estimate.estimatedUSD > maxCostUSD) {
+    throw new Error(
+      `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD}. ` +
+      `Reduce budget (${effective.budget}) or branches (${N_BRANCHES}).`,
+    );
+  }
+
+  let rootId: string;
+  let rootMsgId: string;
+  let initialPhase: MCTSPhase;
+  // Lease epoch for this executor's search-store writes — bumped when a resume
+  // reclaims a running search (fences the dead executor, §5.3).
+  let searchEpoch = 0;
+
+  if (resumed) {
+    rootId = resumed.rootId;
+    rootMsgId = resumed.rootMsgId;
+    initialPhase = { iteration: resumed.iteration, budget: resumed.budget, rootId, rootMsgId, task };
+    searchEpoch = search!.reclaim(rootId, Date.now()) ?? resumed.epoch;
+  } else {
+    rootId = nanoid();
+    rootMsgId = await recordNode(session, rt.storage.sql, {
+      nodeId: rootId,
+      parentNodeId: null,
+      parentMsgId: null,
+      task,
+      action: '',
+      observation: task,
+      codeUsed: null,
+      depth: 0,
+    });
+    initialPhase = { iteration: 0, budget: effective.budget, rootId, rootMsgId, task };
+    search?.begin({
+      rootId, task, rootMsgId,
+      config: persistableMCTSConfig(effective), budget: effective.budget, now: Date.now(),
+    });
+  }
 
   return rt.schedule.fiber<ConvergenceResult>('mcts', async (ctx) => {
-    const phase: MCTSPhase = (ctx.snapshot as MCTSPhase | null) ?? {
-      iteration: 0,
-      budget: config.budget,
-      rootId,
-      rootMsgId,
-      task,
-    };
+    // The durable search store is the resume source of truth when injected; the
+    // fiber snapshot is the fallback for the inline/no-store path (tests).
+    const phase: MCTSPhase = search ? initialPhase : ((ctx.snapshot as MCTSPhase | null) ?? initialPhase);
 
     while (phase.budget > 0) {
       throwIfAborted(config.signal);
@@ -218,12 +244,17 @@ export async function runMCTS(
       phase.iteration++;
       phase.budget--;
       ctx.stash(phase);
+      // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
+      // continue from the remaining budget against the persisted tree (B6).
+      search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
 
       // Notify caller for real-time UI updates
       config.onIterationComplete?.(phase.iteration, phase.budget);
     }
 
-    return converge(rt, session, minAcceptableScore, takesEpsilon);
+    const result = converge(rt, session, minAcceptableScore, takesEpsilon);
+    search?.converge(rootId, searchEpoch, Date.now());
+    return result;
   });
 }
 

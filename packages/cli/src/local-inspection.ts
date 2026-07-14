@@ -404,7 +404,7 @@ export function cancelLocalJob(name: string, id: string): { ok: boolean } {
     const store = new BackgroundJobStore(makeSql(db));
     const before = store.get(id);
     if (!before || before.status !== 'running') return { ok: false };
-    store.cancel(id, Date.now());
+    store.cancel(id, before.epoch, Date.now());
     return { ok: true };
   });
 }

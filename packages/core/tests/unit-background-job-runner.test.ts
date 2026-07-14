@@ -4,7 +4,7 @@
 // fake BackendHost, with no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobRunner } from '../src/jobs/runner.js';
+import { BackgroundJobRunner, JobNotResumable, type JobResumer } from '../src/jobs/runner.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index.js';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
@@ -46,7 +46,7 @@ function fakeHost() {
   };
 }
 
-function setup() {
+function setup(opts: { resume?: JobResumer } = {}) {
   const db = new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
   const store = new BackgroundJobStore(makeSql(db));
@@ -68,6 +68,7 @@ function setup() {
     scheduleDrain: () => { drainSchedules++; },
     logActivity: (e, d) => logs.push({ e, d }),
     onSettled: (job) => notified.push({ id: job.id, status: job.status }),
+    ...(opts.resume ? { resume: opts.resume } : {}),
   });
   return {
     runner, store, eventLog, stashes, runs, settled, host, enqueued,
@@ -150,7 +151,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const { runner, store, eventLog, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
     const id = runner.create('run', {}, new AbortController());
-    store.settle(id, '"saved"', Date.now());
+    store.settle(id, 0, '"saved"', Date.now());
     eventLog.publish = () => { throw new Error('ledger unavailable'); };
 
     await expect(runner.wake(id)).rejects.toThrow('ledger unavailable');
@@ -183,7 +184,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     const id1 = runner.create('run', { one: true }, c1);
     const id2 = runner.create('think', { two: true }, c2);
     const done = runner.create('run', { done: true }, new AbortController());
-    store.settle(done, '"done"', Date.now());
+    store.settle(done, 0, '"done"', Date.now());
 
     expect(new Set(runner.cancelRunning())).toEqual(new Set([id1, id2]));
 
@@ -210,7 +211,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
   test('a job already stashed settled is NOT re-failed or re-woken', async () => {
     const { runner, store, enqueued } = setup();
     const id = runner.create('think', {}, new AbortController());
-    store.settle(id, '"x"', 123);
+    store.settle(id, 0, '"x"', 123);
     await runner.recover({ jobId: id, phase: 'settled' });
 
     expect(store.get(id)?.status).toBe('completed');
@@ -220,7 +221,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
   test('an outcome persisted before the settled checkpoint is re-woken without duplicate notification', async () => {
     const { runner, store, enqueued, notified } = setup();
     const id = runner.create('think', {}, new AbortController());
-    store.settle(id, '"saved"', Date.now());
+    store.settle(id, 0, '"saved"', Date.now());
 
     await runner.recover({ jobId: id, phase: 'running' });
 
@@ -232,12 +233,64 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
   test('a cancelled outcome with a running checkpoint stays silent on recovery', async () => {
     const { runner, store, enqueued } = setup();
     const id = runner.create('think', {}, new AbortController());
-    store.cancel(id, Date.now());
+    store.cancel(id, 0, Date.now());
 
     await runner.recover({ jobId: id, phase: 'running' });
 
     expect(store.get(id)?.status).toBe('cancelled');
     expect(enqueued).toEqual([]);
+  });
+});
+
+describe('BackgroundJobRunner.recover — resume from durable checkpoint', () => {
+  test('a resumable job is reclaimed under a fresh epoch and re-driven to completion', async () => {
+    let seenInput: unknown = undefined;
+    const resume: JobResumer = async (_kind, input) => { seenInput = input; return { text: 'resumed answer' }; };
+    const { runner, store, enqueued, settled, notified, logs } = setup({ resume });
+    // A job created with its tool input, then interrupted mid-flight (stashed running).
+    store.create({ id: 'jr', kind: 'think', input: '{"strategy":"mcts","task":"t"}', now: 1 });
+
+    await runner.recover({ jobId: 'jr', phase: 'running' });
+    await settled(); // let the re-drive fiber finish
+
+    const job = store.get('jr');
+    expect(job?.epoch).toBe(1);                         // reclaimed → dead executor fenced
+    expect(job?.resumeAttempts).toBe(1);
+    expect(job?.status).toBe('completed');
+    expect(job?.result).toBe('{"text":"resumed answer"}');
+    expect(seenInput).toEqual({ strategy: 'mcts', task: 't' });
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0].metadata?.status).toBe('completed');
+    expect(notified).toEqual([{ id: 'jr', status: 'completed' }]);
+    expect(logs.find((l) => l.e === 'bg_job_resume')).toBeTruthy();
+  });
+
+  test('a kind the resumer cannot re-drive falls back to the eviction failure', async () => {
+    const resume: JobResumer = async (kind) => { throw new JobNotResumable(kind); };
+    const { runner, store, enqueued, settled } = setup({ resume });
+    store.create({ id: 'jn', kind: 'run', input: '{}', now: 1 });
+
+    await runner.recover({ jobId: 'jn', phase: 'running' });
+    await settled();
+
+    expect(store.get('jn')?.status).toBe('failed');
+    expect(store.get('jn')?.error).toContain('eviction');
+    expect(enqueued[0].metadata?.status).toBe('failed');
+  });
+
+  test('a job that evicts on every activation is failed after the resume-attempt cap', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ evicted again
+    const { runner, store, enqueued } = setup({ resume });
+    store.create({ id: 'jc', kind: 'think', input: '{}', now: 1 });
+
+    // Five recoveries re-drive; the sixth exceeds the cap and fails the job.
+    for (let i = 0; i < 6; i++) await runner.recover({ jobId: 'jc', phase: 'running' });
+
+    const job = store.get('jc');
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toContain('gave up');
+    expect(job?.resumeAttempts).toBe(6);
+    expect(enqueued.at(-1)?.metadata?.status).toBe('failed');
   });
 });
 

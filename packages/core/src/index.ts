@@ -330,6 +330,13 @@ export {
 
 // Schemas
 export { initSearchTables } from './mcts/schemas.js';
+export {
+  MctsSearchStore,
+  initMctsSearchTable,
+  persistableMCTSConfig,
+  type PersistedMCTSConfig,
+  type ResumableSearch,
+} from './mcts/search-store.js';
 export { initScaffoldTables } from './scaffold/schemas.js';
 export { initCraftScoreTables } from './craft/schemas.js';
 
@@ -595,9 +602,9 @@ export {
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
-  BackgroundJobRunner,
+  BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
-  type BackgroundJobRunnerDeps,
+  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
 } from './jobs/index.js';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.

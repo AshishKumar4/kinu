@@ -54,4 +54,11 @@ export interface MCTSConfig {
   signal?: AbortSignal;
   /** Called after each MCTS iteration completes — use for real-time UI updates. */
   onIterationComplete?: (iteration: number, remainingBudget: number) => void;
+  /** Durable search checkpoint. When present, the loop's progress + resolved
+   *  config are persisted per iteration under a lease epoch, so a DO eviction can
+   *  re-enter runMCTS and continue the remaining budget against the persisted
+   *  tree instead of discarding the search (B6). Absent ⇒ fiber-snapshot resume
+   *  only (tests / inline fast path). Typed loosely here to avoid a mcts→store
+   *  import cycle; the concrete type is MctsSearchStore. */
+  search?: import('../mcts/search-store.js').MctsSearchStore;
 }

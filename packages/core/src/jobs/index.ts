@@ -4,6 +4,7 @@ export {
   serializeJobResult,
   type BackgroundJob,
   type BackgroundJobStatus,
+  type JobClaim,
 } from './store.js';
 export {
   withBackgroundThreshold,
@@ -13,5 +14,8 @@ export {
 } from './threshold.js';
 export {
   BackgroundJobRunner,
+  JobNotResumable,
+  EVICTION_INTERRUPT_ERROR,
   type BackgroundJobRunnerDeps,
+  type JobResumer,
 } from './runner.js';

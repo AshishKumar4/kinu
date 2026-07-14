@@ -80,7 +80,8 @@ import {
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
   createHeadsStrategy, createThinkTool,
   // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, BackgroundJobRunner, withBackgroundThreshold,
+  BackgroundJobStore, BackgroundJobRunner, withBackgroundThreshold, JobNotResumable,
+  MctsSearchStore,
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills (Claude-Code / Hermes SKILL.md spec, VFS-backed)
@@ -696,6 +697,14 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
     return this._jobs;
   }
+
+  // Durable MCTS search checkpoints — the resume record a think(mcts) evicted
+  // mid-search continues from (B6). One per DO; keyed by search root id.
+  private _mctsSearchStore: MctsSearchStore | null = null;
+  protected get mctsSearchStore(): MctsSearchStore {
+    if (!this._mctsSearchStore) this._mctsSearchStore = new MctsSearchStore(this.boundSql);
+    return this._mctsSearchStore;
+  }
   // The backend-agnostic background-job lifecycle (detach → settle → wake +
   // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
   // and the BackendHost programmatic-turn wake. Owns the cancel-controller map.
@@ -717,6 +726,12 @@ export abstract class ActorAgent extends Think<Env> {
             ? `Background ${job.kind} job ${job.id} completed.\n\nResult:\n${job.result ?? '(empty)'}`
             : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
         ),
+        // Evict-resume (B6): re-drive an interrupted job from its durable
+        // checkpoint. `think` re-runs the raw strategy tool — MCTS continues its
+        // remaining search budget via the search store; heads re-run from input.
+        // Side-effecting kinds (execute_tools / run) are not safe to blindly
+        // re-execute, so they decline and fall back to the eviction failure.
+        resume: (kind, input, signal) => this.resumeBackgroundJob(kind, input, signal),
       });
     }
     return this._jobRunner;
@@ -760,7 +775,7 @@ export abstract class ActorAgent extends Think<Env> {
       // inheritedContext, and an onPhase sink that streams head_split /
       // head_merge into the durable event log.
       defaultOptions: () => ({
-        mcts: { session: this.createMCTSSession(), ...this.config.getMctsOverrides() },
+        mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
         heads: {
           controller: this.getHeadController(),
           inheritedContext: this.readInheritedContext(),
@@ -2011,27 +2026,55 @@ export abstract class ActorAgent extends Think<Env> {
   // ── Internal: MCTS session writer ──────────────────────────────
 
   private createMCTSSession(): SessionWriter {
-    const messages: Array<{ id: string; parentId: string | null; role: "user" | "assistant"; content: string }> = [];
-    const agentSql = (strings: TemplateStringsArray, ...values: unknown[]) =>
-      (this.sql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown[])(strings, ...values);
+    // Source of truth is the durable `messages` table (session_id='mcts'), NOT an
+    // in-memory array: after a DO eviction, a resumed search re-enters with a
+    // fresh session, and getHistory(leafId) must still reconstruct a branch's
+    // ancestry from the persisted rows so resumed branches keep their context (B6).
+    const sql = this.boundSql;
 
     return {
       async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
         const content = msg.parts.map(p => p.text).join("");
-        messages.push({ id: msg.id, parentId: parentId ?? null, role: msg.role, content });
-        agentSql`INSERT INTO messages (id, session_id, parent_id, role, content)
+        sql`INSERT INTO messages (id, session_id, parent_id, role, content)
           VALUES (${msg.id}, ${"mcts"}, ${parentId ?? null}, ${msg.role}, ${content})`;
       },
       getHistory(leafId?: string | null): Array<{ role: string; content: string }> {
-        if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
+        if (!leafId) {
+          return sql<{ role: string; content: string }>`
+            SELECT role, content FROM messages WHERE session_id='mcts' ORDER BY created_at ASC`
+            .map(r => ({ role: r.role, content: r.content }));
+        }
+        // Walk ancestry by parent_id from the durable table (cycle-guarded).
+        type MsgRow = { parent_id: string | null; role: string; content: string };
         const result: Array<{ role: string; content: string }> = [];
-        let current = messages.find(m => m.id === leafId);
-        while (current) {
-          result.unshift({ role: current.role, content: current.content });
-          current = current.parentId ? messages.find(m => m.id === current!.parentId) : undefined;
+        const seen = new Set<string>();
+        let currentId: string | null = leafId;
+        while (currentId && !seen.has(currentId)) {
+          seen.add(currentId);
+          const row: MsgRow | undefined = sql<MsgRow>`
+            SELECT parent_id, role, content FROM messages WHERE id=${currentId} LIMIT 1`[0];
+          if (!row) break;
+          result.unshift({ role: row.role, content: row.content });
+          currentId = row.parent_id;
         }
         return result;
       },
     };
+  }
+
+  /** Re-drive an evicted background job from its durable checkpoint (B6).
+   *  Only `think` is resumable: re-running the RAW strategy tool (no 30s re-detach)
+   *  continues an evicted MCTS from its search checkpoint — runMCTS.findResumable
+   *  matches the unfinished run by task — and re-runs heads. The runner settles the
+   *  returned result onto the job under a fresh lease epoch. Side-effecting kinds
+   *  (execute_tools / run) can't be safely re-executed, so they decline. */
+  protected async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
+    if (kind !== 'think') throw new JobNotResumable(kind);
+    const tool = this.getRawTools()[kind];
+    const exec = tool?.execute;
+    if (typeof exec !== 'function') throw new JobNotResumable(kind);
+    return (exec as (i: unknown, o: unknown) => unknown)(input, {
+      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
+    });
   }
 }
