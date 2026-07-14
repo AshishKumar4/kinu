@@ -80,6 +80,10 @@ export class SubordinateAgent extends ActorAgent {
     };
   }
 
+  protected isClientRpcMethodDenied(method: string): boolean {
+    return method === 'setSubordinateIdentity';
+  }
+
   protected notifyOwner(subject: string, body: string): void {
     void this.sendReport('progress', `${subject}\n\n${body}`).catch((error: unknown) => {
       console.warn('[subordinate] parent notification failed:', error);
@@ -202,6 +206,69 @@ export class SubordinateAgent extends ActorAgent {
       `SELECT MAX(created_at) AS last_activity FROM activity_log`,
     ).toArray()[0];
     return { lastActivity: typeof row?.last_activity === 'number' ? row.last_activity : null };
+  }
+
+  @callable()
+  async getSubordinateSnapshot(): Promise<{
+    name: string;
+    displayName: string;
+    role: string;
+    mission: string;
+    model: string | null;
+  }> {
+    this.ensureSchema();
+    const identity = this.identity.read();
+    if (!identity) throw new Error('Subordinate identity is not initialized.');
+    return {
+      name: identity.name,
+      displayName: identity.displayName,
+      role: identity.role,
+      mission: identity.mission,
+      model: this.getStoredModelId(),
+    };
+  }
+
+  @callable()
+  async getStoredModelSpec(): Promise<{ spec: string | null }> {
+    this.ensureSchema();
+    return { spec: this.getStoredModelId() };
+  }
+
+  @callable()
+  async setModel(spec: string): Promise<{ ok: true; spec: string }> {
+    this.ensureSchema();
+    try {
+      const normalized = this.providerRegistry().normalizeSpecSync(spec);
+      this.config.setModel(normalized);
+      this.invalidateModelCaches();
+      return { ok: true, spec: normalized };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`setModel(${spec}) failed: ${message}`);
+    }
+  }
+
+  @callable()
+  async cancelCurrentWork(): Promise<{ ok: true; cancelledJobs: string[]; abortedTools: number }> {
+    this.ensureSchema();
+    const cancelledJobs = this.jobRunner.cancelRunning();
+    let abortedTools = 0;
+    for (const controller of [...this._activeToolControllers]) {
+      if (!controller.signal.aborted) {
+        try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
+        abortedTools++;
+      }
+      this._activeToolControllers.delete(controller);
+    }
+    try {
+      this.broadcast(JSON.stringify({
+        type: 'work_cancelled',
+        cancelledJobs,
+        abortedTools,
+        timestamp: Date.now(),
+      }));
+    } catch { /* no connected clients */ }
+    return { ok: true, cancelledJobs, abortedTools };
   }
 
   private async sendReport(status: SubordinateReportStatus, content: string): Promise<unknown> {

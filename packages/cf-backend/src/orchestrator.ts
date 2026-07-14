@@ -18,7 +18,12 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
-import type { TimelineSpan, DirEntry, WorkspaceAgent } from "./lib/protocol.js";
+import type {
+  TimelineSpan,
+  DirEntry,
+  WorkspaceAgent,
+  SubordinateActivityEvent,
+} from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
@@ -89,7 +94,7 @@ import {
   type ProductChangeToolDeps, type ProductSourceBindingInput,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
-  type TeamToolDeps, type SubordinateReportStatus,
+  type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
   // Peer-agent teams (the `team` tool contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
@@ -105,6 +110,7 @@ import {
   SubordinateRosterStore,
   admitSubordinateReport,
   createTeamToolDeps,
+  type SubordinatesChangedEvent,
 } from "./subordinate-support.js";
 import type { CodemodeProvider } from "./rlm.js";
 import { timingSafeEqual } from "./lib/crypto.js";
@@ -282,12 +288,29 @@ export class OrchestratorAgent extends ActorAgent {
     return this._subordinateRoster;
   }
 
-  private broadcastSubordinatesChanged(): void {
+  private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
     try {
-      this.broadcast(JSON.stringify({
+      this.broadcast(JSON.stringify(event ?? {
         type: 'subordinates_changed',
         subordinates: this.subordinateRoster.list(),
       }));
+    } catch { /* no connected clients */ }
+  }
+
+  private broadcastSubordinateEvent(
+    event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
+  ): void {
+    try {
+      this.broadcast(JSON.stringify({
+        type: 'subordinate_event',
+        id: event.id ?? nanoid(),
+        kind: event.kind,
+        subordinate: event.subordinate,
+        ...(event.status ? { status: event.status } : {}),
+        content: event.content,
+        ...(event.task ? { task: event.task } : {}),
+        timestamp: event.timestamp,
+      } satisfies SubordinateActivityEvent));
     } catch { /* no connected clients */ }
   }
   /** /workspace backups are debounced via the persisted last-backup time +
@@ -526,7 +549,11 @@ export class OrchestratorAgent extends ActorAgent {
         const base = slugifyName(role).slice(0, 48) || 'subordinate';
         return `${base}-${nanoid(6)}`;
       },
-      broadcast: () => orchestrator.broadcastSubordinatesChanged(),
+      broadcast: (event) => orchestrator.broadcastSubordinatesChanged(event),
+      broadcastTask: (event) => orchestrator.broadcastSubordinateEvent({
+        kind: 'task',
+        ...event,
+      }),
       runtime: {
         async spawn(input) {
           const ownerUserId = orchestrator.getOwnerUserId();
@@ -2841,6 +2868,28 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
+  /** Browser-only subordinate controls. These delegate to the exact same
+   * orchestration policy as the model's team tool, including rollback and the
+   * authoritative roster broadcast. */
+  @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
+    return this.getTeamToolDeps().list();
+  }
+
+  @callable() async spawnSubordinate(role: string, mission: string): Promise<{
+    name: string;
+    displayName: string;
+  }> {
+    return this.getTeamToolDeps().spawn({ role, mission, createdBy: 'user' });
+  }
+
+  @callable() async dismissSubordinate(name: string): Promise<{
+    ok: true;
+    name: string;
+    historyKept: boolean;
+  }> {
+    return this.getTeamToolDeps().dismiss({ name });
+  }
+
   async getExecutorOutput(executorId: string, limit: number = 50) {
     return this.sql`SELECT id, executor, command, stdout, stderr, exit_code, created_at
       FROM executor_output WHERE executor = ${executorId}
@@ -3692,13 +3741,14 @@ export class OrchestratorAgent extends ActorAgent {
     if (!subordinate || subordinate.status === 'dismissed') {
       throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
     }
+    const receivedAt = Date.now();
     const result = this.ctx.storage.transactionSync(() => {
       const published = admitSubordinateReport(this.eventLog, {
         fromSubordinate: input.fromSubordinate,
         status: input.status,
         content: input.content,
         ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
-        now: Date.now(),
+        now: receivedAt,
       });
       if (published.admitted) {
         this.subordinateRoster.applyReport(input.fromSubordinate, input.status);
@@ -3706,7 +3756,26 @@ export class OrchestratorAgent extends ActorAgent {
       return published;
     });
     if (result.admitted) {
+      this.broadcast(JSON.stringify({
+        type: 'subordinate_report',
+        subordinate: {
+          name: subordinate.name,
+          displayName: subordinate.displayName,
+        },
+        status: input.status,
+        content: input.content,
+        task: subordinate.currentTask,
+      }));
       this.broadcastSubordinatesChanged();
+      this.broadcastSubordinateEvent({
+        id: result.id,
+        kind: 'report',
+        subordinate: input.fromSubordinate,
+        status: input.status,
+        content: input.content,
+        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+        timestamp: receivedAt,
+      });
       this.orch.scheduleDrain();
     }
     return result;

@@ -7,7 +7,7 @@ import {
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, GearSixIcon, TimerIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
-  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon,
+  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -27,7 +27,8 @@ import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
-import type { TimelineSpan, TimelineKind, PendingConsent } from "@/lib/protocol";
+import { SubordinateTabs } from "@/components/SubordinateTabs";
+import type { TimelineSpan, TimelineKind, PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -349,6 +350,29 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
   );
 }
 
+/** A subordinate's task assignment or progress report, mirrored into the main
+ *  chat as a centered marker that links to that subordinate's tab. */
+function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
+  const done = event.status === "completed";
+  const failed = event.status === "failed" || event.status === "error";
+  const Icon = event.kind === "task" ? UserPlusIcon : done ? CheckCircleIcon : failed ? WarningCircleIcon : ClockIcon;
+  const tone = done ? "p-success" : failed ? "p-danger" : "p-text-3";
+  const verb = event.kind === "task" ? "assigned" : done ? "reported done" : failed ? "hit an error" : "reported progress";
+  const detail = event.task || event.content;
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <Link
+        to={`/workspace/${workspace}/agents/${event.subordinate}`}
+        title={detail}
+        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 text-[11px] p-text-2 hover:p-card-hover transition-colors"
+      >
+        <Icon size={13} className={`${tone} shrink-0`} weight="fill" />
+        <span className="truncate"><span className="font-medium p-text">{event.subordinate}</span> {verb}: {detail}</span>
+      </Link>
+    </div>
+  );
+}
+
 // Memoized: @ai-sdk's replaceMessage only clones the streaming message, so
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
@@ -647,10 +671,105 @@ function surfaceForKind(kind: TimelineKind): SurfaceKind | null {
   }
 }
 
+/* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
+
+/** Drives one subordinate's conversation over its own facet socket. The Work
+ *  Surface and Timeline stay workspace-scoped on the parent socket (§A5) — only
+ *  the chat switches here. A focused surface: messages, model pick, send/stop
+ *  (no fork/feedback/takes/restore — the facet exposes none of those). */
+function SubordinateChatColumn({ workspace, subName }: { workspace: string; subName: string }) {
+  const state = useProteus({ workspace, subordinate: subName });
+  const [input, setInput] = useState("");
+  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
+  const send = useCallback(() => {
+    const t = input.trim();
+    if (!t || state.isStreaming) return;
+    state.sendChat(t);
+    setInput("");
+  }, [input, state]);
+
+  if (state.connectionStatus === "connecting" && !state.agentStatus) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting…</span></div>
+      </div>
+    );
+  }
+
+  const as = state.agentStatus;
+  return (
+    <div className="relative flex flex-col flex-1 min-h-0">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
+        <div className="flex min-w-0 items-center gap-3">
+          <ConnectionIndicator status={state.connectionStatus} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || subName}</span>
+              {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+            </div>
+            {as?.purpose && <span className="block text-[11px] p-text-3 truncate max-w-[220px]">{as.purpose}</span>}
+          </div>
+        </div>
+        <ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs" className="w-52" />
+      </div>
+
+      <ErrorBoundary label="Subordinate chat">
+        <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+          {state.messages.length === 0 && !state.isStreaming && (
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <BrainIcon size={36} className="p-text-3 mb-3" />
+              <p className="text-sm p-text-3">This subordinate's conversation starts here.</p>
+              {as?.soul && <p className="mt-2 max-w-sm whitespace-pre-wrap text-xs p-text-3">{as.soul}</p>}
+            </div>
+          )}
+          {state.messages.map((msg, i) => (
+            <MessageView
+              key={msg.id}
+              message={msg}
+              isLast={i === state.messages.length - 1}
+              isStreaming={state.isStreaming}
+            />
+          ))}
+          {state.chatError && (
+            <ChatErrorCard
+              message={state.chatError}
+              streaming={state.isStreaming}
+              onRetry={state.retryLastMessage}
+              onDismiss={state.clearChatError}
+            />
+          )}
+        </div>
+      </ErrorBoundary>
+
+      <div className="px-5 py-3 border-t p-border lg:px-7">
+        {state.error && <div className="mb-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+        <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+          <InputArea ref={inputRef} value={input} onValueChange={setInput}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={`Message ${as?.displayName || subName}…`} disabled={state.connectionStatus !== "connected"} rows={1}
+            className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
+          {state.isStreaming
+            ? <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
+            : <button onClick={send} disabled={!input.trim() || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main page ────────────────────────────────────────────────── */
 
 export default function WorkspacePage() {
-  const { agentId } = useParams();
+  const { agentId, subName } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const state = useProteus(agentId);
@@ -890,6 +1009,7 @@ export default function WorkspacePage() {
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
     <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
   );
+  if (!agentId) return null;
 
   const as = state.agentStatus;
   const workspaceTitle = as?.displayName || "Workspace";
@@ -928,8 +1048,22 @@ export default function WorkspacePage() {
       <PanelGroup className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
         <Panel minSize={24} defaultSize={42}>
-          <div className="relative flex flex-col h-full border-r p-border"
-            onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
+          <div className="flex flex-col h-full border-r p-border">
+            {/* Agent tabs — the workspace's orchestrator + durable subordinates.
+                Roster + live status ride the parent socket; the CHAT below
+                switches per tab while Columns B/C stay workspace-scoped. */}
+            <SubordinateTabs
+              workspace={agentId}
+              subordinates={state.subordinates}
+              activeName={subName}
+              onSpawn={state.spawnSubordinate}
+              onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
+            />
+            {subName ? (
+              <SubordinateChatColumn key={subName} workspace={agentId} subName={subName} />
+            ) : (
+            <div className="relative flex flex-col flex-1 min-h-0"
+              onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
             {dragOver && (
               <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
                 style={{ borderColor: "var(--c-accent)", background: "var(--c-accent-subtle)" }}>
@@ -1010,6 +1144,9 @@ export default function WorkspacePage() {
                   onDismiss={() => state.dismissBranchRun(run.branchId)}
                 />
               ))}
+              {state.subordinateEvents.map((event) => (
+                <SubordinateEventCard key={event.id} event={event} workspace={agentId} />
+              ))}
               {state.chatError && (
                 <ChatErrorCard
                   message={state.chatError}
@@ -1082,6 +1219,8 @@ export default function WorkspacePage() {
                   : <button onClick={handleSend} disabled={(!chatInput.trim() && pendingAttachments.length === 0) || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
               </div>
             </div>
+            </div>
+            )}
           </div>
         </Panel>
 

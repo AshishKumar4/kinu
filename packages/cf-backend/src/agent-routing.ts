@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
+import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@proteus/core";
 
 /**
  * The `/agents/*` transport boundary — the single policy for which requests may
@@ -21,7 +21,7 @@ const ROOT_AGENT_PATH = `/agents/${ORCHESTRATOR_AGENT_SLUG}`;
 // the subordinate name, but another literal `sub` segment may not: the agents
 // SDK treats that marker as recursive facet routing.
 export const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
-  `^${ROOT_AGENT_PATH}/([^/]+)(?:$|/sub/subordinate-agent/[^/]+(?:/(?!sub(?:/|$))[^/]+)*/?$)`,
+  `^${ROOT_AGENT_PATH}/([^/]+)(?:$|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+(?:/(?!sub(?:/|$))[^/]+)*/?$)`,
 );
 
 const ORCHESTRATOR_ROOT_AGENT_PATH_RE = new RegExp(`^${ROOT_AGENT_PATH}/([^/]+)$`);

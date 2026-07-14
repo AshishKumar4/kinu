@@ -198,7 +198,15 @@ export interface TeamToolDeps {
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
   /** Create a durable subordinate; its first turn is the mission. */
-  spawn(input: { name?: string; role: string; mission: string; model?: string }): Promise<{
+  spawn(input: {
+    name?: string;
+    role: string;
+    mission: string;
+    model?: string;
+    /** Trusted caller attribution. The model tool omits this, so its spawns
+     * remain orchestrator-created; the interactive UI RPC supplies `user`. */
+    createdBy?: 'orchestrator' | 'user';
+  }): Promise<{
     name: string; displayName: string;
   }>;
   /** Enqueue a task on the subordinate (drained as its next turn). */

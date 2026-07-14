@@ -101,6 +101,17 @@ describe('subordinate identity', () => {
     expect(profile).not.toContain('peers:');
     expect(profile).not.toContain('productChanges:');
   });
+
+  test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {
+    const orchestrator = source('orchestrator.ts');
+    const subordinate = source('subordinate-agent.ts');
+    expect(orchestrator).toContain('return this.getTeamToolDeps().list();');
+    expect(orchestrator).toContain("return this.getTeamToolDeps().spawn({ role, mission, createdBy: 'user' });");
+    expect(orchestrator).toContain('return this.getTeamToolDeps().dismiss({ name });');
+    expect(subordinate).not.toContain('spawnSubordinate(');
+    expect(subordinate).not.toContain('dismissSubordinate(');
+    expect(subordinate).not.toContain('listSubordinates(');
+  });
 });
 
 const initialRosterEntry: SubordinateRosterEntry = {
@@ -161,6 +172,7 @@ interface TeamHarness {
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
   broadcasts: number[];
+  tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
   failures: Set<keyof SubordinateRuntime>;
 }
 
@@ -169,6 +181,7 @@ function makeTeamHarness(): TeamHarness {
   roster.ensureSchema();
   const calls: string[] = [];
   const broadcasts: number[] = [];
+  const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
   const failures = new Set<keyof SubordinateRuntime>();
   const fail = (operation: keyof SubordinateRuntime) => {
     if (failures.has(operation)) throw new Error(`${operation} failed`);
@@ -186,8 +199,9 @@ function makeTeamHarness(): TeamHarness {
     createName: () => 'researcher-a1b2c3',
     now: () => 1_700_000_000_000,
     broadcast: () => { broadcasts.push(Date.now()); },
+    broadcastTask: (event) => { tasks.push(event); },
   });
-  return { roster, team, calls, broadcasts, failures };
+  return { roster, team, calls, broadcasts, tasks, failures };
 }
 
 describe('team action routing', () => {
@@ -206,8 +220,14 @@ describe('team action routing', () => {
       'spawn:researcher-a1b2c3:Map the market.',
       'assign:researcher-a1b2c3:Map the market.',
     ]);
+    expect(h.tasks).toEqual([{
+      subordinate: 'researcher-a1b2c3', content: 'Map the market.', timestamp: 1_700_000_000_000,
+    }]);
 
     await h.team.assign({ name: 'researcher-a1b2c3', task: 'Compare vendors' });
+    expect(h.tasks.at(-1)).toEqual({
+      subordinate: 'researcher-a1b2c3', content: 'Compare vendors', timestamp: 1_700_000_000_000,
+    });
     expect(await h.team.status({ name: 'researcher-a1b2c3' })).toEqual({
       roster: h.roster.requireActive('researcher-a1b2c3'),
       live: { lastActivity: 'researcher-a1b2c3'.length },
@@ -247,6 +267,7 @@ describe('team action routing', () => {
       await expect(action).rejects.toThrow(`${operation} failed`);
       expect(h.roster.get('researcher-a1b2c3')).toEqual(before);
       expect(h.broadcasts).toHaveLength(broadcastsBefore);
+      expect(h.tasks).toHaveLength(operation === 'spawn' ? 0 : 1);
     }
   });
 
@@ -296,6 +317,7 @@ describe('team action routing', () => {
       createName: () => 'researcher-a1b2c3',
       now: () => 123,
       broadcast: () => {},
+      broadcastTask: () => {},
     });
 
     await team.spawn({ role: 'researcher', mission: 'Initial mission' });

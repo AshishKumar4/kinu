@@ -72,6 +72,33 @@ export interface WorkspaceAgent {
 	role: "orchestrator" | "subordinate";
 }
 
+export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismissed";
+
+/** Parent-owned product roster delivered by listSubordinates and the
+ * subordinates_changed socket event. */
+export interface SubordinateRosterEntry {
+	name: string;
+	displayName: string;
+	role: string;
+	createdBy: "orchestrator" | "user";
+	status: SubordinateStatus;
+	currentTask: string | null;
+	createdAt: number;
+	dismissedAt: number | null;
+}
+
+/** A task assignment or report mirrored into the main chat as a linked card. */
+export interface SubordinateActivityEvent {
+	type: "subordinate_event";
+	id: string;
+	kind: "task" | "report";
+	subordinate: string;
+	status?: string;
+	content: string;
+	task?: string;
+	timestamp: number;
+}
+
 /** Typed agent RPC. The single boundary cast (unknown → T) lives in the hook's
  *  wrapper, so call sites read `rpc<Foo>("getFoo", [])` cast-free. */
 export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;

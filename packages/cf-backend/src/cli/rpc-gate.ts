@@ -106,6 +106,7 @@ export const AGENT_RPC_ACCESS = {
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
   getWorkspaceAgents: 'interactive',
+  listSubordinates: 'interactive',
   latestAlternateTakes: 'interactive',
   listFileCheckpoints: 'interactive',
   listMounts: 'interactive',
@@ -115,6 +116,7 @@ export const AGENT_RPC_ACCESS = {
   createTimerTrigger: 'interactive',
   decideProductChangeApproval: 'interactive',
   dismissBackgroundJob: 'interactive',
+  dismissSubordinate: 'interactive',
   forkAgent: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
@@ -151,6 +153,7 @@ export const AGENT_RPC_ACCESS = {
   setShellApprovalMode: 'interactive',
   setSoul: 'interactive',
   setTurnFeedback: 'interactive',
+  spawnSubordinate: 'interactive',
   upsertProductSourceBinding: 'interactive',
   writeExecutorFile: 'interactive',
 

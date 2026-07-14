@@ -20,10 +20,10 @@ function LazyFallback() {
   );
 }
 
-// Remount the whole workspace — and with it the useAgent/useAgentChat hooks and
-// their message buffer — whenever the agent changes. Without the key, switching
-// /workspace/A → /workspace/B reuses the same component instance and one session's
-// messages bleed into the next.
+// Remount the whole workspace — and with it the parent useAgent/useAgentChat
+// hooks — when the workspace changes. Subordinate route changes intentionally
+// keep this key stable so the main socket remains mounted while the active
+// facet socket is swapped lazily.
 function KeyedWorkspace() {
   const { agentId } = useParams();
   return <WorkspacePage key={agentId} />;
@@ -45,6 +45,7 @@ export default function App() {
           <Route path="/user/settings" element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
           <Route path="/user/settings/mcp" element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
           <Route path="/workspace/:agentId" element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
+          <Route path="/workspace/:agentId/agents/:subName" element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
           <Route path="/mcts/:agentId" element={
             <ErrorBoundary label="mcts-explorer">
               <Suspense fallback={<LazyFallback />}>

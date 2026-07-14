@@ -545,7 +545,12 @@ export * from './providers/index.js';
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store.js';
 
 // Wire constants shared by the cf-backend Worker and the CLI.
-export { DEVICE_CONNECT_PATH, MAX_INLINE_ATTACHMENT_BYTES, ORCHESTRATOR_AGENT_SLUG } from './cloud-wire.js';
+export {
+  DEVICE_CONNECT_PATH,
+  MAX_INLINE_ATTACHMENT_BYTES,
+  ORCHESTRATOR_AGENT_SLUG,
+  SUBORDINATE_AGENT_SLUG,
+} from './cloud-wire.js';
 
 // safety — approval gating for shell exec
 export {

@@ -420,6 +420,10 @@ export interface SubordinateRuntime {
 export interface SubordinatesChangedEvent {
   type: 'subordinates_changed';
   subordinates: SubordinateRosterEntry[];
+  assignedTask?: {
+    name: string;
+    task: string;
+  };
 }
 
 function displayNameForRole(role: string): string {
@@ -494,10 +498,12 @@ export function createTeamToolDeps(deps: {
   createName(role: string): string;
   now(): number;
   broadcast(event: SubordinatesChangedEvent): void;
+  broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
 }): TeamToolDeps {
-  const changed = () => deps.broadcast({
+  const changed = (assignedTask?: SubordinatesChangedEvent['assignedTask']) => deps.broadcast({
     type: 'subordinates_changed',
     subordinates: deps.roster.list(),
+    ...(assignedTask ? { assignedTask } : {}),
   });
 
   return {
@@ -521,15 +527,16 @@ export function createTeamToolDeps(deps: {
         ...(input.model ? { model: input.model } : {}),
       });
       let rosterCreated = false;
+      const createdAt = deps.now();
       try {
         deps.roster.create({
           name,
           displayName,
           role,
-          createdBy: 'orchestrator',
+          createdBy: input.createdBy ?? 'orchestrator',
           status: 'working',
           currentTask: mission,
-          createdAt: deps.now(),
+          createdAt,
           dismissedAt: null,
         });
         rosterCreated = true;
@@ -537,7 +544,8 @@ export function createTeamToolDeps(deps: {
       } catch (error) {
         await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
       }
-      changed();
+      changed({ name, task: mission });
+      deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
       return { name, displayName };
     },
 
@@ -556,7 +564,8 @@ export function createTeamToolDeps(deps: {
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
       }
-      changed();
+      changed({ name: input.name, task });
+      deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
       return { ok: true, name: input.name };
     },
 
