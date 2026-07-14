@@ -15,6 +15,7 @@
 import type { EventLog, ReplyChannelStore } from '@proteus/core';
 import type { EmailThreadAddr } from '../events/ingress/email.js';
 import { agentEmailAddress } from './inbound.js';
+import type { EmailOutbox } from './outbox.js';
 
 /** What the dispatcher needs at send time. Resolved per dispatch so binding
  *  and display-name changes never go stale on a long-lived DO. */
@@ -23,6 +24,8 @@ export interface EmailSendContext {
   email: SendEmail | undefined;
   /** Friendly From name (agent display name). */
   agentDisplayName: string;
+  /** Write-ahead + idempotency for the send (SPEC §7.4). */
+  outbox: EmailOutbox;
 }
 
 function replySubject(subject: string): string {
@@ -69,18 +72,17 @@ export function createEmailThreadDispatcher(
       // RFC 3834: mark our reply auto-replied so peers (and our own inbound
       // guard) don't bounce it back into an infinite thread loop.
       const headers = { 'Auto-Submitted': 'auto-replied', ...threadingHeaders(addr) };
-      try {
-        await ctx.email.send({
-          from: { email: addr.from, name: ctx.agentDisplayName },
-          to: addr.to,
-          subject: replySubject(addr.subject),
-          text,
-          headers,
-        });
-        return { delivered: true };
-      } catch (err) {
-        return { delivered: false, detail: err instanceof Error ? err.message : String(err) };
-      }
+      // Idempotency key = the channel (one reply per channel); a lease re-drive
+      // after a crash mid-send re-sends the SAME Message-ID, deduped downstream.
+      const result = await ctx.outbox.send(ctx.email, `reply:${channel.id}`, {
+        from: { email: addr.from, name: ctx.agentDisplayName },
+        to: addr.to,
+        subject: replySubject(addr.subject),
+        text,
+        headers,
+      }, Date.now());
+      if (result.status === 'failed') return { delivered: false, detail: result.error };
+      return { delivered: true };
     },
   };
 }
@@ -139,30 +141,33 @@ export interface OwnerEmailDeps {
   agentName: string;
   agentDisplayName: string;
   ownerEmail: string | null;
+  /** Write-ahead + idempotency for the send (SPEC §7.4). */
+  outbox: EmailOutbox;
 }
 
 /** One-off notification to the owner (changelog digest, job completion).
  *  Silently skips (returns false) when the platform email pieces aren't
- *  configured — email is a capability, never a requirement. */
+ *  configured — email is a capability, never a requirement. `key` is the
+ *  caller's stable idempotency key: a re-fire with the same key never
+ *  double-sends. */
 export async function sendOwnerEmail(
   deps: OwnerEmailDeps,
-  note: { subject: string; text: string },
+  note: { subject: string; text: string; key: string },
 ): Promise<boolean> {
   if (!deps.email || !deps.emailDomain || !deps.ownerEmail) return false;
-  try {
-    await deps.email.send({
-      from: {
-        email: agentEmailAddress(deps.agentName, deps.emailDomain),
-        name: deps.agentDisplayName,
-      },
-      to: deps.ownerEmail,
-      subject: `[${deps.agentDisplayName}] ${note.subject}`,
-      text: note.text,
-      headers: { 'Auto-Submitted': 'auto-generated' },
-    });
-    return true;
-  } catch (err) {
-    console.warn('[proteus-email] owner notification failed:', err instanceof Error ? err.message : err);
+  const result = await deps.outbox.send(deps.email, `owner:${note.key}`, {
+    from: {
+      email: agentEmailAddress(deps.agentName, deps.emailDomain),
+      name: deps.agentDisplayName,
+    },
+    to: deps.ownerEmail,
+    subject: `[${deps.agentDisplayName}] ${note.subject}`,
+    text: note.text,
+    headers: { 'Auto-Submitted': 'auto-generated' },
+  }, Date.now());
+  if (result.status === 'failed') {
+    console.warn('[proteus-email] owner notification failed:', result.error);
     return false;
   }
+  return true;
 }

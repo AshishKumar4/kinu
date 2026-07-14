@@ -16,8 +16,13 @@ export {
   isProductChangeTerminal,
 } from './lifecycle.js';
 export {
-  ProductChangeEngine,
+  approvalTypeForEnvironment,
+  deployApprovalDigest,
   deployTargetAsCommand,
+  type DeployApprovalBinding,
+} from './approval-digest.js';
+export {
+  ProductChangeEngine,
   parseDeployOutput,
   type ApplyResult,
   type CheckRunResult,

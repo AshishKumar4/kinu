@@ -10,6 +10,7 @@ import {
   type ProductSourceKind,
 } from './types.js';
 import { assertProductChangeTransition } from './lifecycle.js';
+import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest.js';
 import { redactProductDiff } from './path-safety.js';
 
 export interface ProductChangeSqlExec {
@@ -113,18 +114,26 @@ export function initProductChangeTables(sql: ProductChangeSqlExec): void {
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS product_change_approvals (
-      id            TEXT PRIMARY KEY,
-      change_id     TEXT NOT NULL,
-      approval_type TEXT NOT NULL CHECK (approval_type IN ('apply', 'deploy_staging', 'deploy_production', 'rollback')),
-      decision      TEXT NOT NULL CHECK (decision IN ('pending', 'approved', 'rejected')),
-      approved_by   TEXT,
-      note          TEXT,
-      created_at    INTEGER NOT NULL,
-      decided_at    INTEGER,
+      id              TEXT PRIMARY KEY,
+      change_id       TEXT NOT NULL,
+      approval_type   TEXT NOT NULL CHECK (approval_type IN ('apply', 'deploy_staging', 'deploy_production', 'rollback')),
+      decision        TEXT NOT NULL CHECK (decision IN ('pending', 'approved', 'rejected')),
+      approved_by     TEXT,
+      note            TEXT,
+      argument_digest TEXT NOT NULL DEFAULT '',
+      created_at      INTEGER NOT NULL,
+      decided_at      INTEGER,
       FOREIGN KEY (change_id) REFERENCES product_change_requests(id)
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_product_change_approvals_change ON product_change_approvals (change_id, created_at DESC)`);
+  // Live-table migration: bind the argument digest (SPEC §7.3) on stores that
+  // predate the column. Existing rows get '' — an empty digest never matches a
+  // recomputed one, so a stale approval fails closed and is re-requested.
+  const approvalColumns = sql.exec(`PRAGMA table_info(product_change_approvals)`).toArray() as Array<{ name: string }>;
+  if (!approvalColumns.some((c) => c.name === 'argument_digest')) {
+    sql.exec(`ALTER TABLE product_change_approvals ADD COLUMN argument_digest TEXT NOT NULL DEFAULT ''`);
+  }
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS product_deployments (
@@ -214,11 +223,16 @@ function mapProductChangeCheck(r: {
   };
 }
 
-function mapProductChangeApproval(r: {
+interface ApprovalRow {
   id: string; change_id: string; approval_type: ProductChangeApproval['approvalType'];
   decision: ProductChangeApproval['decision']; approved_by: string | null; note: string | null;
-  created_at: number; decided_at: number | null;
-}): ProductChangeApproval {
+  argument_digest: string; created_at: number; decided_at: number | null;
+}
+
+const APPROVAL_COLUMNS =
+  'id, change_id, approval_type, decision, approved_by, note, argument_digest, created_at, decided_at';
+
+function mapProductChangeApproval(r: ApprovalRow): ProductChangeApproval {
   return {
     id: r.id,
     changeId: r.change_id,
@@ -226,6 +240,7 @@ function mapProductChangeApproval(r: {
     decision: r.decision,
     approvedBy: r.approved_by,
     note: r.note,
+    argumentDigest: r.argument_digest,
     createdAt: r.created_at,
     decidedAt: r.decided_at,
   };
@@ -431,6 +446,16 @@ export class ProductChangeStore {
       .map(mapProductChangeCheck)[0]!;
   }
 
+  /** The binding's declared deploy command for a change (null when the binding
+   *  carries a bare environment label or no target) — the reviewable command a
+   *  deploy approval binds (SPEC §7.3). */
+  private deployCommandForChange(change: ProductChangeRequest): string | null {
+    const row = this.sql.all<{ deploy_target: string | null }>(
+      `SELECT deploy_target FROM product_source_bindings WHERE id = ?`, change.bindingId,
+    )[0];
+    return deployTargetAsCommand(row?.deploy_target ?? null);
+  }
+
   requestApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']): ProductChangeApproval {
     const existing = this.getChange(changeId);
     if (!existing) throw new Error(`unknown product change: ${changeId}`);
@@ -441,20 +466,22 @@ export class ProductChangeStore {
     }
     const id = this.makeId('pca', 10);
     const now = this.now();
+    // Bind the reviewable deploy identity (patch + declared command). deploy
+    // recomputes this and rejects a mismatch, so the approval can't be
+    // redirected to a mutated patch or an injected command.
+    const digest = deployApprovalDigest({
+      approvalType,
+      patch: existing.patch,
+      command: this.deployCommandForChange(existing),
+    });
     this.sql.run(
       `INSERT INTO product_change_approvals
-         (id, change_id, approval_type, decision, approved_by, note, created_at, decided_at)
-       VALUES (?, ?, ?, 'pending', NULL, NULL, ?, NULL)`,
-      id, changeId, approvalType, now,
+         (id, change_id, approval_type, decision, approved_by, note, argument_digest, created_at, decided_at)
+       VALUES (?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL)`,
+      id, changeId, approvalType, digest, now,
     );
-    return this.sql.all<{
-      id: string; change_id: string; approval_type: ProductChangeApproval['approvalType'];
-      decision: ProductChangeApproval['decision']; approved_by: string | null; note: string | null;
-      created_at: number; decided_at: number | null;
-    }>(
-      `SELECT id, change_id, approval_type, decision, approved_by, note, created_at, decided_at
-       FROM product_change_approvals WHERE id = ?`,
-      id,
+    return this.sql.all<ApprovalRow>(
+      `SELECT ${APPROVAL_COLUMNS} FROM product_change_approvals WHERE id = ?`, id,
     ).map(mapProductChangeApproval)[0]!;
   }
 
@@ -471,14 +498,8 @@ export class ProductChangeStore {
        WHERE id = ? AND decision = 'pending'`,
       decision, cleanRequired(approvedBy, 'approvedBy', 200), cleanOptional(note, 2000), this.now(), approvalId,
     );
-    const row = this.sql.all<{
-      id: string; change_id: string; approval_type: ProductChangeApproval['approvalType'];
-      decision: ProductChangeApproval['decision']; approved_by: string | null; note: string | null;
-      created_at: number; decided_at: number | null;
-    }>(
-      `SELECT id, change_id, approval_type, decision, approved_by, note, created_at, decided_at
-       FROM product_change_approvals WHERE id = ?`,
-      approvalId,
+    const row = this.sql.all<ApprovalRow>(
+      `SELECT ${APPROVAL_COLUMNS} FROM product_change_approvals WHERE id = ?`, approvalId,
     ).map(mapProductChangeApproval)[0];
     if (!row) throw new Error(`unknown product change approval: ${approvalId}`);
     return row;
@@ -535,13 +556,8 @@ export class ProductChangeStore {
        FROM product_change_checks WHERE change_id = ? ORDER BY updated_at DESC`,
       changeId,
     ).map(mapProductChangeCheck);
-    const approvals = this.sql.all<{
-      id: string; change_id: string; approval_type: ProductChangeApproval['approvalType'];
-      decision: ProductChangeApproval['decision']; approved_by: string | null; note: string | null;
-      created_at: number; decided_at: number | null;
-    }>(
-      `SELECT id, change_id, approval_type, decision, approved_by, note, created_at, decided_at
-       FROM product_change_approvals WHERE change_id = ? ORDER BY created_at DESC`,
+    const approvals = this.sql.all<ApprovalRow>(
+      `SELECT ${APPROVAL_COLUMNS} FROM product_change_approvals WHERE change_id = ? ORDER BY created_at DESC`,
       changeId,
     ).map(mapProductChangeApproval);
     const deployments = this.sql.all<{
@@ -576,13 +592,8 @@ export class ProductChangeStore {
        FROM product_change_checks WHERE change_id IN (${marks}) ORDER BY updated_at DESC`,
       ...ids,
     ).map(mapProductChangeCheck);
-    const approvals = this.sql.all<{
-      id: string; change_id: string; approval_type: ProductChangeApproval['approvalType'];
-      decision: ProductChangeApproval['decision']; approved_by: string | null; note: string | null;
-      created_at: number; decided_at: number | null;
-    }>(
-      `SELECT id, change_id, approval_type, decision, approved_by, note, created_at, decided_at
-       FROM product_change_approvals WHERE change_id IN (${marks}) ORDER BY created_at DESC`,
+    const approvals = this.sql.all<ApprovalRow>(
+      `SELECT ${APPROVAL_COLUMNS} FROM product_change_approvals WHERE change_id IN (${marks}) ORDER BY created_at DESC`,
       ...ids,
     ).map(mapProductChangeApproval);
     const deployments = this.sql.all<{

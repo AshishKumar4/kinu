@@ -15,6 +15,7 @@ import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,
 } from '../src/email/outbound.js';
+import { EmailOutbox } from '../src/email/outbox.js';
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
@@ -28,6 +29,12 @@ function makeSql(): SqlExec {
       return { toArray: () => rows };
     },
   };
+}
+
+function freshOutbox(): EmailOutbox {
+  const outbox = new EmailOutbox(makeSql());
+  outbox.ensureSchema();
+  return outbox;
 }
 
 type SentEmail = {
@@ -69,9 +76,11 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     initEventsHubTables(sql);
     const log = new EventLog(sql);
     const { binding, sent } = fakeSendBinding(sendOpts);
+    const outbox = new EmailOutbox(sql);
+    outbox.ensureSchema();
     const replies = new ReplyChannelStore(sql, {
       email_thread: createEmailThreadDispatcher(() => ({
-        email: binding, agentDisplayName: 'Scout',
+        email: binding, agentDisplayName: 'Scout', outbox,
       })),
     });
     return { sql, log, replies, sent };
@@ -111,7 +120,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     expect(result).toEqual({ delivered: 1, pending: false });
 
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({
+    expect(sent[0]).toMatchObject({
       from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
       to: 'owner@example.com',
       subject: 'Re: Check the deploy',
@@ -122,6 +131,8 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
         References: '<root@mail.example.com> <abc@mail.example.com>',
       },
     });
+    // The idempotency key rides the wire as a stable Message-ID (SPEC §7.4).
+    expect(sent[0].headers?.['Message-ID']).toMatch(/^<proteus\.[0-9a-f]{64}@agents\.example\.com>$/);
 
     // The channel is settled and an audit row exists.
     expect(replies.findOpenByEvent(eventId)).toBeNull();
@@ -223,32 +234,35 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 });
 
 describe('sendOwnerEmail — changelog digests + job completions', () => {
-  test('sends from the agent address to the owner with a tagged subject', async () => {
+  test('sends from the agent address to the owner with a tagged subject + stable Message-ID', async () => {
     const { binding, sent } = fakeSendBinding();
     const ok = await sendOwnerEmail({
       email: binding, emailDomain: 'agents.example.com',
       agentName: 'scout-a1b2c3', agentDisplayName: 'Scout',
-      ownerEmail: 'owner@example.com',
-    }, { subject: 'Evolution changelog digest', text: 'Self-change digest: 3 entries…' });
+      ownerEmail: 'owner@example.com', outbox: freshOutbox(),
+    }, { subject: 'Evolution changelog digest', text: 'Self-change digest: 3 entries…', key: 'digest-1' });
     expect(ok).toBe(true);
-    expect(sent[0]).toEqual({
+    expect(sent[0]).toMatchObject({
       from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
       to: 'owner@example.com',
       subject: '[Scout] Evolution changelog digest',
       text: 'Self-change digest: 3 entries…',
-      headers: { 'Auto-Submitted': 'auto-generated' },
     });
+    expect(sent[0].headers?.['Auto-Submitted']).toBe('auto-generated');
+    // The idempotency key materializes as a deterministic Message-ID on the wire.
+    expect(sent[0].headers?.['Message-ID']).toMatch(/^<proteus\.[0-9a-f]{64}@agents\.example\.com>$/);
   });
 
   test('skips quietly when the platform email pieces are missing', async () => {
     const { binding, sent } = fakeSendBinding();
     const base = {
       email: binding, emailDomain: 'agents.example.com',
-      agentName: 'a', agentDisplayName: 'A', ownerEmail: 'o@e.com',
+      agentName: 'a', agentDisplayName: 'A', ownerEmail: 'o@e.com', outbox: freshOutbox(),
     };
-    expect(await sendOwnerEmail({ ...base, email: undefined }, { subject: 's', text: 't' })).toBe(false);
-    expect(await sendOwnerEmail({ ...base, emailDomain: undefined }, { subject: 's', text: 't' })).toBe(false);
-    expect(await sendOwnerEmail({ ...base, ownerEmail: null }, { subject: 's', text: 't' })).toBe(false);
+    const note = { subject: 's', text: 't', key: 'k' };
+    expect(await sendOwnerEmail({ ...base, email: undefined }, note)).toBe(false);
+    expect(await sendOwnerEmail({ ...base, emailDomain: undefined }, note)).toBe(false);
+    expect(await sendOwnerEmail({ ...base, ownerEmail: null }, note)).toBe(false);
     expect(sent).toHaveLength(0);
   });
 
@@ -256,7 +270,7 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
     const { binding } = fakeSendBinding({ fail: true });
     expect(await sendOwnerEmail({
       email: binding, emailDomain: 'agents.example.com',
-      agentName: 'a', agentDisplayName: 'A', ownerEmail: 'o@e.com',
-    }, { subject: 's', text: 't' })).toBe(false);
+      agentName: 'a', agentDisplayName: 'A', ownerEmail: 'o@e.com', outbox: freshOutbox(),
+    }, { subject: 's', text: 't', key: 'k' })).toBe(false);
   });
 });

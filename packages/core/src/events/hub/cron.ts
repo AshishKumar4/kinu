@@ -1,19 +1,21 @@
 /**
  * Fold the next-soonest DO alarm out of the active triggers' fire times and
- * the peer-outbox retry. Trigger times compete only when in the future (due
- * triggers were just handled by the alarm body); a due/past-due peer retry is
- * CLAMPED to `now` instead of dropped — a pending delivery whose retry time
- * already passed (reentrancy-skipped dispatch, order-blocked receiver) must
- * re-arm immediately, or it stalls until an unrelated event wakes the DO.
- * Returns null when nothing is pending.
+ * any durable-retry clocks (peer outbox, email outbox). Trigger times compete
+ * only when in the future (due triggers were just handled by the alarm body);
+ * a due/past-due retry is CLAMPED to `now` instead of dropped — a pending
+ * delivery whose retry time already passed (reentrancy-skipped dispatch,
+ * order-blocked receiver) must re-arm immediately, or it stalls until an
+ * unrelated event wakes the DO. Returns null when nothing is pending.
  */
 export function nextAlarmTime(
   now: number,
   triggerFireTimes: ReadonlyArray<number | null | undefined>,
-  peerRetryAt: number | null,
+  ...retryAts: Array<number | null>
 ): number | null {
   const candidates = triggerFireTimes.filter((t): t is number => typeof t === 'number' && t > now);
-  if (peerRetryAt != null) candidates.push(Math.max(peerRetryAt, now));
+  for (const retryAt of retryAts) {
+    if (retryAt != null) candidates.push(Math.max(retryAt, now));
+  }
   return candidates.length === 0 ? null : Math.min(...candidates);
 }
 

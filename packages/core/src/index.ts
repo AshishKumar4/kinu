@@ -92,8 +92,10 @@ export {
   PRODUCT_CHANGE_STATUSES,
   ProductChangeEngine,
   ProductChangeStore,
+  approvalTypeForEnvironment,
   createProductChangeStore,
   createSandboxProductChangeExec,
+  deployApprovalDigest,
   deployTargetAsCommand,
   initProductChangeTables,
   isEngineOwnedTransitionTarget,
@@ -106,6 +108,7 @@ export {
   validateProductPatchPath,
   type ApplyResult,
   type CheckRunResult,
+  type DeployApprovalBinding,
   type DeployResult,
   type PreviewResult,
   type ProductChangeBoard,
@@ -559,7 +562,7 @@ export {
   SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire.js';
 
-// safety — approval gating for shell exec
+// safety — approval gating for shell exec + digest-bound approvals
 export {
   reviewCommand,
   formatApproval,
@@ -567,6 +570,9 @@ export {
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
+  argumentDigest,
+  sha256Hex,
+  stableStringify,
 } from './safety/index.js';
 
 // Utils

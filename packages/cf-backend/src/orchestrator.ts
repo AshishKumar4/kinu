@@ -40,6 +40,7 @@ import {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
+  argumentDigest,
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
@@ -128,6 +129,7 @@ import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
 } from "./email/outbound.js";
+import { EmailOutbox } from "./email/outbox.js";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
@@ -279,6 +281,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   private _engine: EvolutionEngine | null = null;
   private _subordinateRoster: SubordinateRosterStore | null = null;
+  private _emailOutbox: EmailOutbox | null = null;
 
   private get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
@@ -286,6 +289,16 @@ export class OrchestratorAgent extends ActorAgent {
       this._subordinateRoster.ensureSchema();
     }
     return this._subordinateRoster;
+  }
+
+  /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
+   *  replies and owner notifications (SPEC §7.4). */
+  private get emailOutbox(): EmailOutbox {
+    if (!this._emailOutbox) {
+      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql);
+      this._emailOutbox.ensureSchema();
+    }
+    return this._emailOutbox;
   }
 
   private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
@@ -384,6 +397,7 @@ export class OrchestratorAgent extends ActorAgent {
       const emailDispatcher = createEmailThreadDispatcher(() => ({
         email: orchestrator.env.EMAIL,
         agentDisplayName: orchestrator.safeDisplayName(),
+        outbox: orchestrator.emailOutbox,
       }));
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
         ws_session: wsDispatcher,
@@ -1436,15 +1450,25 @@ export class OrchestratorAgent extends ActorAgent {
       console.warn('[proteus] peer outbox dispatch failed:', (err as Error).message);
     }
 
-    // Reschedule the next-soonest alarm (triggers ∪ peer-outbox retries).
-    // A due/past-due peer retry is clamped to `now` (see nextAlarmTime), and
-    // the arm is soonest-wins so this reschedule never clobbers a sooner
+    // Reconcile indeterminate outbound email: an intent left `pending` (crash
+    // between the send and its status write) is safely re-driven here — the
+    // stored Message-ID makes the re-send idempotent downstream (SPEC §7.4).
+    try {
+      if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
+    } catch (err) {
+      console.warn('[proteus] email outbox reconcile failed:', (err as Error).message);
+    }
+
+    // Reschedule the next-soonest alarm (triggers ∪ peer-outbox ∪ email-outbox
+    // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
+    // and the arm is soonest-wins so this reschedule never clobbers a sooner
     // retry alarm armed during dispatch.
     try {
       const next = nextAlarmTime(
         now,
         this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
         this.peerHub.nextRetryAt(),
+        this.emailOutbox.nextRetryAt(),
       );
       if (next !== null) this.scheduleAlarmAt(next);
     } catch (err) {
@@ -3884,6 +3908,10 @@ export class OrchestratorAgent extends ActorAgent {
       if (!this.config.getEmailNotificationsEnabled()) return;
       if (this.ctx.getWebSockets().length > 0) return;
     } catch { return; }
+    // Idempotency key = content hash: a retry of the same notification dedupes,
+    // while two genuinely distinct notifications (different job/status/digest)
+    // key apart and both send.
+    const key = argumentDigest({ subject, text });
     void (async () => {
       await sendOwnerEmail({
         email: this.env.EMAIL,
@@ -3891,7 +3919,8 @@ export class OrchestratorAgent extends ActorAgent {
         agentName: this.name,
         agentDisplayName: this.safeDisplayName(),
         ownerEmail: await this.getOwnerEmail(),
-      }, { subject, text });
+        outbox: this.emailOutbox,
+      }, { subject, text, key });
     })().catch((err) => console.warn('[proteus-email] notification failed:', err));
   }
 

@@ -7,7 +7,7 @@
  * Pure function. The same input always produces the same key.
  */
 
-import { createHash } from 'node:crypto';
+import { sha256Hex, stableStringify } from '../../safety/argument-digest.js';
 import type { ProteusEvent } from './types.js';
 
 /** Map an event to its dedupe key, or null if the variant is not deduped. */
@@ -16,7 +16,7 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
     case 'webhook': {
       const p = event.payload;
       const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
-      const bodyHash = sha256Hex(stableStringify(p.body));
+      const bodyHash = sha256Hex(stableStringify(p.body), 24);
       return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;
     }
 
@@ -42,7 +42,7 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
       const p = event.payload;
       if (p.message_id) return `email:${p.message_id}`;
       const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
-      return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`)}:${bucket}`;
+      return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`, 24)}:${bucket}`;
     }
 
     case 'chat':
@@ -56,19 +56,4 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
       // redelivery loop to dedupe against).
       return null;
   }
-}
-
-// ── helpers ──────────────────────────────────────────────────────
-
-function sha256Hex(s: string): string {
-  return createHash('sha256').update(s).digest('hex').slice(0, 24);
-}
-
-/** Deterministic JSON-like serializer (sorts object keys). */
-function stableStringify(v: unknown): string {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
-  const obj = v as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
 }

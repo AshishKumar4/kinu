@@ -42,6 +42,11 @@ import type {
   ProductSourceBinding,
 } from './types.js';
 import { shellQuote } from '../utils/shell.js';
+import {
+  approvalTypeForEnvironment,
+  deployApprovalDigest,
+  deployTargetAsCommand,
+} from './approval-digest.js';
 
 // ── Seams ────────────────────────────────────────────────────────────────
 
@@ -166,22 +171,6 @@ export function parseDeployOutput(output: string): { versionId: string | null; d
   const deployment = /Current Deployment ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output)
     ?? /\bDeployment ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output);
   return { versionId: version?.[1] ?? null, deploymentId: deployment?.[1] ?? null };
-}
-
-/** A binding's deployTarget doubles as the deploy command when it reads like
- *  one (has whitespace, e.g. "bunx wrangler deploy"); a bare label like
- *  "production" is an environment tag, not a command. */
-export function deployTargetAsCommand(deployTarget: string | null): string | null {
-  if (!deployTarget) return null;
-  return /\s/.test(deployTarget.trim()) ? deployTarget.trim() : null;
-}
-
-function approvalTypeForEnvironment(
-  environment: ProductDeploymentRecord['environment'],
-): ProductChangeApproval['approvalType'] {
-  if (environment === 'production') return 'deploy_production';
-  if (environment === 'staging') return 'deploy_staging';
-  return 'apply';
 }
 
 function hasApproved(approvals: ProductChangeApproval[], type: ProductChangeApproval['approvalType']): boolean {
@@ -530,6 +519,28 @@ export class ProductChangeEngine {
 
     const workdir = this.workdirFor(changeId);
     const command = opts.command?.trim() || deployTargetAsCommand(binding?.deployTarget ?? null);
+
+    // Digest-bound approval (SPEC §7.3): the owner approved deploying THIS
+    // patch via THIS declared command. Recompute the digest of what is about
+    // to run and require an approved approval bound to it — a patch mutated or
+    // a deploy command injected after approval fails closed here.
+    const expectedDigest = deployApprovalDigest({
+      approvalType: requiredApproval,
+      patch: change.patch,
+      command,
+    });
+    const digestBound = approvals.some(
+      (a) => a.approvalType === requiredApproval && a.decision === 'approved' && a.argumentDigest === expectedDigest,
+    );
+    if (!digestBound) {
+      return {
+        ok: false,
+        error:
+          `deploy to ${environment} rejected: the approved '${requiredApproval}' approval was for different ` +
+          `arguments (the patch or deploy command changed after approval). Request a fresh approval for the ` +
+          `current change and command, then deploy.`,
+      };
+    }
     if (!command && !change.previewUrl) {
       return {
         ok: false,

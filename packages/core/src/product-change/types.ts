@@ -62,6 +62,9 @@ export interface ProductChangeApproval {
   decision: 'pending' | 'approved' | 'rejected';
   approvedBy: string | null;
   note: string | null;
+  /** SHA-256 binding the reviewable deploy identity (patch + declared command)
+   *  this approval authorizes — verified at deploy time (SPEC §7.3). */
+  argumentDigest: string;
   createdAt: number;
   decidedAt: number | null;
 }
