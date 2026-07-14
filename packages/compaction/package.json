@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@better-compact/core": "^0.1.0",
     "@proteus/core": "workspace:*",
     "ai": "^6.0.182"
   },

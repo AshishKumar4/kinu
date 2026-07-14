@@ -16,7 +16,7 @@
  */
 
 import type { RawSqlExec, SqlExecutor, VFS } from '@proteus/core';
-import type { PlanSnapshot, PlanStore, TranscriptStore } from './engine/index.js';
+import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 
 const COMPACTION_DIR = '/local/.proteus/compaction';
 

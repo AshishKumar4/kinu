@@ -44,7 +44,7 @@ import {
   type Item,
   type LadderSpec,
   type Turn,
-} from './engine/index.js';
+} from '@better-compact/core';
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
 type ToolMessagePart = ToolModelMessage['content'][number];

@@ -1,6 +1,6 @@
 /**
  * The compaction extension — Proteus's `transformContext` adapter over the
- * vendored better-compact ladder engine.
+ * published better-compact ladder engine.
  *
  * Encode the durable history to IR turns, run the engine (cached-plan replay
  * when the prefix still holds, else build/persist/apply a fresh plan), decode
@@ -8,7 +8,7 @@
  * assistant-run summaries and the last-resort prefix summary go through ONE
  * injected `summarize` callback:
  *
- *  - assistant runs use the vendored per-run prompt already embedded in each
+ *  - assistant runs use the core per-run prompt already embedded in each
  *    summary job by the ladder;
  *  - the prefix summary uses core's tuned handoff template
  *    (`buildCompactionSummaryPrompt` — Active Task verbatim → Remaining Work,
@@ -48,7 +48,7 @@ import {
   type ProcessResult,
   type Summarizer,
   type Turn,
-} from './engine/index.js';
+} from '@better-compact/core';
 import { proteusCodec, proteusSpec } from './codec.js';
 
 export interface CompactionOutcomeEvent {
