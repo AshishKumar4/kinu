@@ -96,7 +96,7 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCliInPty(["setup"], { home, stdin: "6\n" });
+    const proc = runCliInPty(["setup"], { home, stdin: "7\n" });
     const stdout = proc.stdout.toString();
 
     expect(proc.exitCode).toBe(0);
