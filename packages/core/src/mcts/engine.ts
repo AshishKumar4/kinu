@@ -219,13 +219,17 @@ export async function runMCTS(
         if (score < reflectionThreshold) {
           const handle = branchHandles[i];
           if (handle) {
-            const reflection = await handle.generateReflection(task);
+            const reflection = (await handle.generateReflection(task)).trim();
             throwIfAborted(config.signal);
-            await rt.memory.append(
-              'memory/MEMORY.md',
-              `\n### Failure lesson (${isoDate()})\n${reflection}\n`,
-            );
-            await rt.memory.index('memory/MEMORY.md');
+            // An empty reflection carries no lesson — writing it just litters
+            // MEMORY.md with duplicate bare "### Failure lesson" headers.
+            if (reflection) {
+              await rt.memory.append(
+                'memory/MEMORY.md',
+                `\n### Failure lesson (${isoDate()})\n${reflection}\n`,
+              );
+              await rt.memory.index('memory/MEMORY.md');
+            }
           }
         }
       }
