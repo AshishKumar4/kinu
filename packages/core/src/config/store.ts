@@ -57,6 +57,12 @@ export const AGENT_CONFIG_KEYS = {
   /** 'false' silences owner emails (changelog digests, job completions).
    *  Defaults on; sends only happen when the platform email pieces exist. */
   emailNotifications: 'email_notifications',
+  /** One-time semantic-memory backfill markers. Vectorize was added after FTS5,
+   *  so chunks indexed earlier are embedded lazily on boot. 'true' once the whole
+   *  memory_chunks table is embedded; the cursor pages a large table across boots
+   *  without re-embedding. Internal plumbing — accessed via generic get/set. */
+  memoryVectorBackfillDone: 'memory_vector_backfill_done',
+  memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 

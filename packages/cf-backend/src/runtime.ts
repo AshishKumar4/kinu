@@ -14,7 +14,7 @@
 
 import type {
   AgentRuntime, BranchHandle,
-  VFS as CoreVFS, Memory, Executor, LLM, Schedule, Identity,
+  VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor as CoreSqlExecutor, RawSqlExec,
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
@@ -45,6 +45,7 @@ import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "./exploration.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
 import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
@@ -135,6 +136,15 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const memoryStore = new MemoryStore(sqliteFS, sql);
   memoryStore.ensureSchema();
 
+  // Vectorize-backed semantic memory, scoped to this workspace's namespace.
+  // Noop when env.AI / env.MEMORY_VECTORS aren't configured, so hybrid search
+  // degrades to FTS5-only. Built before the memory adapter so writes embed.
+  const vectorStore = buildVectorStore(agent, actor);
+  // One-time backfill of chunks indexed before the vector store existed.
+  // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
+  // per boot, idempotent, and a no-op once the marker is set.
+  void backfillMemoryVectors(memoryStore, createAgentConfigStore(sql as unknown as CoreSqlExecutor), vectorStore);
+
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
@@ -145,8 +155,8 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const compositeVfs = new CompositeVFS({ local: sqliteFS });
   const vfs: CoreVFS = compositeVfs;
 
-  // Adapt MemoryStore to core's Memory interface
-  const memory = adaptMemory(memoryStore);
+  // Adapt MemoryStore to core's Memory interface (writes sync to vectorStore)
+  const memory = adaptMemory(memoryStore, vectorStore);
 
   // Adapt CraftStore to core's CraftStore interface
   const craftStore = adaptCraftStore(craftStoreImpl);
@@ -278,33 +288,6 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
     live: () => deviceTransport.status().connected,
   });
 
-  // Vectorize-backed semantic memory. Only constructs when both
-  // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
-  // binding) are configured. Otherwise falls back to a noop that lets
-  // hybrid search degrade to FTS5-only.
-  const aiBinding = (agent.env as Env & Record<string, unknown>).AI;
-  const vectorizeBinding = (agent.env as Env & Record<string, unknown>).MEMORY_VECTORS;
-  let vectorStore: VectorStore;
-  if (aiBinding && typeof aiBinding !== 'string' && vectorizeBinding) {
-    try {
-      const embedder = createWorkersAIEmbedder({
-        aiBinding: aiBinding as Parameters<typeof createWorkersAIEmbedder>[0]['aiBinding'],
-        model: '@cf/baai/bge-small-en-v1.5',
-        dimensions: 384,
-      });
-      vectorStore = createCloudflareVectorStore({
-        index: vectorizeBinding as VectorizeIndex,
-        embedder,
-      });
-      console.log('[proteus] VectorStore (Cloudflare Vectorize) registered');
-    } catch (err) {
-      console.warn('[proteus] VectorStore construction failed; falling back to noop:', (err as Error).message);
-      vectorStore = createNoopVectorStore();
-    }
-  } else {
-    vectorStore = createNoopVectorStore();
-  }
-
   return {
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
@@ -423,18 +406,40 @@ function createRestoringSandboxHandle(
 }
 
 // ── Adapters: agent-utils → core interfaces ──────────────────────
+// adaptMemory + backfillMemoryVectors live in ./memory-sync (dependency-light,
+// unit-tested against a fake VectorStore).
 
-function adaptMemory(store: MemoryStore): Memory {
-  return {
-    write: (path, content) => store.writeFile(path, content),
-    append: (path, content) => store.appendToFile(path, content),
-    async index(path) {
-      const content = await store.readFile(path);
-      if (content) await store.indexFile(path, content);
-    },
-    search: (query, limit) => Promise.resolve(store.search(query, limit)),
-    read: (path) => store.readFile(path),
-  };
+/**
+ * Build the workspace's semantic memory store. Constructs a Cloudflare-Vectorize
+ * store (scoped to this workspace's namespace) only when both env.AI (Workers AI
+ * embedder) and env.MEMORY_VECTORS (Vectorize index) are bound; otherwise a noop
+ * that makes hybrid search degrade to FTS5-only.
+ */
+function buildVectorStore(agent: AgentHost, actor: ActorRuntimeIdentity): VectorStore {
+  const aiBinding = (agent.env as Env & Record<string, unknown>).AI;
+  const vectorizeBinding = (agent.env as Env & Record<string, unknown>).MEMORY_VECTORS;
+  if (!aiBinding || typeof aiBinding === 'string' || !vectorizeBinding) {
+    return createNoopVectorStore();
+  }
+  try {
+    const embedder = createWorkersAIEmbedder({
+      aiBinding: aiBinding as Parameters<typeof createWorkersAIEmbedder>[0]['aiBinding'],
+      model: '@cf/baai/bge-small-en-v1.5',
+      dimensions: 384,
+    });
+    const store = createCloudflareVectorStore({
+      index: vectorizeBinding as VectorizeIndex,
+      embedder,
+      // Shared index across all of the user's workspaces — scope every write
+      // and query to this workspace so memories never leak across agents.
+      namespace: actor.workspaceName,
+    });
+    console.log(`[proteus] VectorStore (Cloudflare Vectorize) registered (namespace=${actor.workspaceName})`);
+    return store;
+  } catch (err) {
+    console.warn('[proteus] VectorStore construction failed; falling back to noop:', (err as Error).message);
+    return createNoopVectorStore();
+  }
 }
 
 function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {

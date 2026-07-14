@@ -175,6 +175,90 @@ describe('CloudflareVectorStore', () => {
   });
 });
 
+// ── Workspace isolation (namespaces) ─────────────────────────────────
+//
+// Models real Vectorize: a vector id is unique per *index* (not per namespace),
+// so the same upsert id in two namespaces would collide — the store must make
+// storage ids workspace-unique. A query filters to its namespace.
+function makeNamespacedIndex(): { index: VectorizeIndex; records: Map<string, { values: number[]; namespace?: string; metadata?: Record<string, unknown> }> } {
+  const records = new Map<string, { values: number[]; namespace?: string; metadata?: Record<string, unknown> }>();
+  const put = (vecs: VectorMemoryChunkRecord[]) => {
+    for (const v of vecs) records.set(v.id, { values: [...v.values], namespace: v.namespace, metadata: v.metadata });
+    return { ids: vecs.map((v) => v.id) };
+  };
+  const index: VectorizeIndex = {
+    async insert(vecs) { return put(vecs as VectorMemoryChunkRecord[]); },
+    async upsert(vecs) { return put(vecs as VectorMemoryChunkRecord[]); },
+    async query(vector, options) {
+      const topK = options?.topK ?? 10;
+      const ns = options?.namespace;
+      const scored = [...records.entries()]
+        .filter(([, rec]) => ns === undefined || rec.namespace === ns)
+        .map(([id, rec]) => {
+          let dot = 0;
+          for (let i = 0; i < Math.min(vector.length, rec.values.length); i++) dot += vector[i] * rec.values[i];
+          return { id, score: dot, metadata: options?.returnMetadata ? rec.metadata : undefined };
+        });
+      scored.sort((a, b) => b.score - a.score);
+      return { matches: scored.slice(0, topK) };
+    },
+    async deleteByIds(ids) { for (const id of ids) records.delete(id); return {}; },
+    async getByIds() { return []; },
+  };
+  return { index, records };
+}
+type VectorMemoryChunkRecord = { id: string; values: number[]; namespace?: string; metadata?: Record<string, unknown> };
+
+describe('CloudflareVectorStore — workspace isolation', () => {
+  test('two namespaces sharing a chunk id do not cross-contaminate', async () => {
+    const { index, records } = makeNamespacedIndex();
+    const wsA = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-a' });
+    const wsB = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-b' });
+
+    // SAME chunk id in both workspaces, DIFFERENT text.
+    const id = 'memory/MEMORY.md:1-5';
+    await wsA.upsertChunk({ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' });
+    await wsB.upsertChunk({ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'zebras roam' });
+
+    // Both survive — storage ids are workspace-scoped (no collision on write).
+    expect(records.size).toBe(2);
+
+    // Each workspace only sees its own vector, and the returned hit id is the
+    // verbatim chunk id (so RRF can fuse it with FTS5).
+    const aHits = await wsA.search('apples', 5);
+    expect(aHits.length).toBe(1);
+    expect(aHits[0].id).toBe(id);
+
+    const bHits = await wsB.search('zebras', 5);
+    expect(bHits.length).toBe(1);
+    expect(bHits[0].id).toBe(id);
+  });
+
+  test('delete is namespace-scoped — removing A leaves B intact', async () => {
+    const { index } = makeNamespacedIndex();
+    const wsA = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-a' });
+    const wsB = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-b' });
+    const id = 'memory/notes.md:1-2';
+    await wsA.upsertChunk({ id, path: 'memory/notes.md', startLine: 1, endLine: 2, text: 'alpha beta' });
+    await wsB.upsertChunk({ id, path: 'memory/notes.md', startLine: 1, endLine: 2, text: 'alpha beta' });
+
+    await wsA.deleteChunks([id]);
+    expect((await wsA.search('alpha', 5)).length).toBe(0);
+    // B's identically-keyed chunk is untouched.
+    expect((await wsB.search('alpha', 5)).map((h) => h.id)).toEqual([id]);
+  });
+
+  test('storage ids stay within Vectorize’s 64-byte limit for long paths', async () => {
+    const { index, records } = makeNamespacedIndex();
+    const store = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'a-fairly-long-workspace-name-xyz' });
+    const longId = 'memory/logs/2026-07-13-some-very-long-session-file-name.md:100000-100050';
+    await store.upsertChunk({ id: longId, path: 'memory/logs/x.md', startLine: 100000, endLine: 100050, text: 'hello world' });
+    for (const key of records.keys()) expect(new TextEncoder().encode(key).length).toBeLessThanOrEqual(64);
+    const hits = await store.search('hello', 5);
+    expect(hits[0].id).toBe(longId);
+  });
+});
+
 describe('createNoopVectorStore', () => {
   test('reports unavailable + accepts upserts as nop + returns []', async () => {
     const store = createNoopVectorStore();

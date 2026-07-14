@@ -18,7 +18,7 @@ export interface VectorizeIndex {
   upsert(vectors: VectorRecord[]): Promise<{ ids: string[] } | unknown>;
   query(
     vector: number[],
-    options?: { topK?: number; returnMetadata?: boolean | 'all' | 'indexed'; filter?: Record<string, unknown> },
+    options?: { topK?: number; namespace?: string; returnMetadata?: boolean | 'all' | 'indexed'; filter?: Record<string, unknown> },
   ): Promise<{ matches: VectorMatch[] }>;
   deleteByIds(ids: string[]): Promise<unknown>;
   getByIds(ids: string[]): Promise<VectorRecord[]>;
@@ -27,6 +27,9 @@ export interface VectorizeIndex {
 export interface VectorRecord {
   readonly id: string;
   readonly values: number[];
+  /** Vectorize namespace — segments the index so a query can be scoped to one
+   *  workspace/agent. A vector belongs to exactly one namespace. */
+  readonly namespace?: string;
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -121,23 +124,68 @@ export function reciprocalRankFusion<T extends { id: string }>(
 /**
  * Build a CloudflareVectorStore — pairs an Embedder with a Vectorize index.
  *
- * Metadata convention: { path, startLine, endLine } on every record.
+ * Metadata convention: { path, startLine, endLine, chunkId } on every record.
  * The chunk text is NOT stored in Vectorize (cheaper) — the caller is
  * expected to rehydrate text from FTS5 by id, or read straight from the VFS.
+ *
+ * Workspace isolation (`namespace`): the Vectorize index is shared across all
+ * of a user's workspaces/agents, so every write and query is scoped to the
+ * owning workspace. Scoping is two-layered because Vectorize vector ids are
+ * unique per *index*, not per namespace:
+ *   • the stored vector id is a namespace-derived hash of the chunk id, so two
+ *     workspaces holding the same chunk id (e.g. `memory/MEMORY.md:1-5`) never
+ *     collide on write. It stays within Vectorize's 64-byte id limit
+ *     regardless of path/workspace-name length.
+ *   • the Vectorize `namespace` field + query filter keep a search from ever
+ *     ranking another workspace's vectors.
+ * The verbatim chunk id is carried in metadata and returned as the hit id, so
+ * hits still fuse (RRF) with FTS5 hits that key off that same chunk id.
  */
 export function createCloudflareVectorStore(opts: {
   index: VectorizeIndex;
   embedder: Embedder;
+  /** Owning workspace/agent. When set, writes and queries are scoped to it.
+   *  Omitted only where the index is not shared (e.g. a dedicated test index). */
+  namespace?: string;
 }): VectorStore {
-  const { index, embedder } = opts;
+  const { index, embedder, namespace } = opts;
   let available = true;
+
+  // Namespace-scoped, collision-free, ≤64-byte storage id for a chunk. SHA-256
+  // of `${namespace}\0${chunkId}`, truncated to 40 hex chars (160 bits — a
+  // birthday collision needs ~2^80 chunks). Deterministic, so delete recomputes
+  // the same id. Without a namespace the raw chunk id is used verbatim.
+  async function storageId(chunkId: string): Promise<string> {
+    if (!namespace) return chunkId;
+    const data = new TextEncoder().encode(`${namespace}\u0000${chunkId}`);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
+  }
+
+  async function toRecords(chunks: readonly VectorMemoryChunk[]): Promise<VectorRecord[]> {
+    const vectors = embedder.embedBatch
+      ? await embedder.embedBatch(chunks.map((c) => c.text))
+      : await Promise.all(chunks.map((c) => embedder.embed(c.text)));
+    return Promise.all(chunks.map(async (c, i) => ({
+      id: await storageId(c.id),
+      values: vectors[i],
+      ...(namespace ? { namespace } : {}),
+      metadata: { path: c.path, startLine: c.startLine, endLine: c.endLine, chunkId: c.id },
+    })));
+  }
 
   async function safeQuery(text: string, topK: number): Promise<VectorSearchHit[]> {
     try {
       const vec = await embedder.embed(text);
-      const res = await index.query(vec, { topK, returnMetadata: true });
+      const res = await index.query(vec, {
+        topK,
+        returnMetadata: true,
+        ...(namespace ? { namespace } : {}),
+      });
       return (res.matches ?? []).map((m) => ({
-        id: m.id,
+        // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
+        // fuses the two sources. Falls back to the raw id for un-namespaced stores.
+        id: String(m.metadata?.chunkId ?? m.id),
         path: String(m.metadata?.path ?? ''),
         startLine: Number(m.metadata?.startLine ?? 0),
         endLine: Number(m.metadata?.endLine ?? 0),
@@ -155,12 +203,7 @@ export function createCloudflareVectorStore(opts: {
 
     async upsertChunk(chunk: VectorMemoryChunk) {
       try {
-        const vec = await embedder.embed(chunk.text);
-        await index.upsert([{
-          id: chunk.id,
-          values: vec,
-          metadata: { path: chunk.path, startLine: chunk.startLine, endLine: chunk.endLine },
-        }]);
+        await index.upsert(await toRecords([chunk]));
       } catch (err) {
         console.warn('[vector-store] upsert failed:', err instanceof Error ? err.message : err);
       }
@@ -169,15 +212,7 @@ export function createCloudflareVectorStore(opts: {
     async upsertChunks(chunks: readonly VectorMemoryChunk[]) {
       if (chunks.length === 0) return;
       try {
-        const vectors = embedder.embedBatch
-          ? await embedder.embedBatch(chunks.map((c) => c.text))
-          : await Promise.all(chunks.map((c) => embedder.embed(c.text)));
-        const records: VectorRecord[] = chunks.map((c, i) => ({
-          id: c.id,
-          values: vectors[i],
-          metadata: { path: c.path, startLine: c.startLine, endLine: c.endLine },
-        }));
-        await index.upsert(records);
+        await index.upsert(await toRecords(chunks));
       } catch (err) {
         console.warn('[vector-store] batch upsert failed:', err instanceof Error ? err.message : err);
       }
@@ -186,7 +221,7 @@ export function createCloudflareVectorStore(opts: {
     async deleteChunks(ids: readonly string[]) {
       if (ids.length === 0) return;
       try {
-        await index.deleteByIds([...ids]);
+        await index.deleteByIds(await Promise.all(ids.map(storageId)));
       } catch (err) {
         console.warn('[vector-store] delete failed:', err instanceof Error ? err.message : err);
       }

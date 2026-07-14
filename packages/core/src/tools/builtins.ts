@@ -597,7 +597,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       const lexicalFn = async (q: string, k: number): Promise<LexicalHit[]> => {
         const results = await memory.search(q, k);
         return results.map((r) => ({
-          id: `${r.path}#${r.startLine}-${r.endLine}`,
+          // Canonical chunk id (`path:start-end`) — matches the id the vector
+          // store returns, so RRF fuses the lexical and semantic hits.
+          id: `${r.path}:${r.startLine}-${r.endLine}`,
           path: r.path, startLine: r.startLine, endLine: r.endLine,
           score: r.score, snippet: r.snippet,
         }));

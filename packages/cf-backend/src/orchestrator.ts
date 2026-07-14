@@ -2730,9 +2730,9 @@ export class OrchestratorAgent extends ActorAgent {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
       return results.map((r) => ({
-        // Construct a stable id from path + line range — matches how the
-        // VectorStore stores chunks (caller upserts with this same id).
-        id: `${r.path}#${r.startLine}-${r.endLine}`,
+        // Canonical chunk id (`path:start-end`) — matches the id the vector
+        // store returns, so RRF fuses the lexical and semantic hits.
+        id: `${r.path}:${r.startLine}-${r.endLine}`,
         path: r.path,
         startLine: r.startLine,
         endLine: r.endLine,
