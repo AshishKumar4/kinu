@@ -35,7 +35,7 @@
 
 import { Agent, callable } from "agents";
 import { generateText, tool, jsonSchema } from "ai";
-import { diversityDirective, formatInheritedContext } from "@proteus/core";
+import { diversityDirective, formatInheritedContext, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
@@ -82,6 +82,15 @@ export class ExplorationAgent extends Agent<Env> {
     ownerRequired: false,
     getOwnerUserId: () => this.getOwnerUserId(),
   });
+
+  private resolveLowEffortModel(spec?: string | null) {
+    const registry = this.ownedModelServices.providerRegistry();
+    const normalizedSpec = registry.normalizeSpecSync(spec);
+    return {
+      model: registry.resolveModel(normalizedSpec),
+      providerOptions: reasoningEffortOptions('low', parseModelSpec(normalizedSpec).provider),
+    };
+  }
 
   // Lazy per-facet VFS + shell — only built when head mode runs.
   private _vfs: SqliteFS | null = null;
@@ -179,7 +188,7 @@ export class ExplorationAgent extends Agent<Env> {
     craftedTools: CraftedTool[],
     siblings: readonly string[] = [],
   ): Promise<{ text: string; codeUsed: string | null }> {
-    const model = this.ownedModelServices.resolveModel();
+    const { model, providerOptions } = this.resolveLowEffortModel();
     const context = formatInheritedContext(priorHistory);
     const toolHints = craftedTools.length > 0
       ? `\nKnown patterns:\n${craftedTools.map(t => `- ${t.name}: ${t.description}`).join("\n")}`
@@ -190,7 +199,7 @@ export class ExplorationAgent extends Agent<Env> {
       system: "You are an expert agent exploring one approach to solve a task." + toolHints +
         "\n\nIf your approach involves code, include it in a ```js code block.",
       messages: [{ role: "user" as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
-      maxOutputTokens: 4096,
+      ...(providerOptions ? { providerOptions } : {}),
     });
 
     const trimmed = text.trim();
@@ -203,14 +212,14 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async generateReflection(task: string): Promise<string> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
-    const model = this.ownedModelServices.resolveModel();
+    const { model, providerOptions } = this.resolveLowEffortModel();
     const { text } = await generateText({
       model,
       messages: [{
         role: "user" as const,
         content: `Task: ${task}\nAttempt: ${traces.map(t => t.text).join("\n")}\n\nWhat specifically went wrong? One sentence.`,
       }],
-      maxOutputTokens: 200,
+      ...(providerOptions ? { providerOptions } : {}),
     });
     return text.trim();
   }
@@ -432,11 +441,12 @@ export class ExplorationAgent extends Agent<Env> {
         };
       },
       async mergeLLM(prompt: string): Promise<MergeOutput> {
+        const { model, providerOptions } = facet.resolveLowEffortModel(parentInput.model);
         return generateJson({
-          model: facet.ownedModelServices.resolveModel(parentInput.model),
+          model,
           schema: MergeOutputSchema,
           prompt,
-          maxOutputTokens: 2048,
+          ...(providerOptions ? { providerOptions } : {}),
         });
       },
     };

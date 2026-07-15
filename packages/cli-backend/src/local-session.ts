@@ -59,6 +59,8 @@ import {
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
+  isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  type ReasoningEffort,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
 import { discoverAgentsMd } from './agents-md.js';
@@ -82,6 +84,11 @@ export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
   return createChatModel({
     kind: 'openai-compat', name: llm.name, baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
   });
+}
+
+function providerFamilyForSpec(spec: string): string | undefined {
+  try { return parseModelSpec(spec).provider; }
+  catch { return undefined; }
 }
 
 /** Tools whose calls auto-detach to the background past the 30s threshold —
@@ -321,7 +328,13 @@ export class LocalAgentSession implements BackendHost {
     initCurriculumTable(this.rt.storage.execRaw);
 
     initHeadsTables(this.rt.storage.execRaw);
-    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider(), grounding: this.buildHeadGrounding() });
+    this._headRuntime = createCLIHeadRuntime({
+      model: this.fallbackModel,
+      providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
+      sharedVfs: this.rt.storage.vfs,
+      webSearch: this.getWebSearchProvider(),
+      grounding: this.buildHeadGrounding(),
+    });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     // The EventsHub substrate (reactor source of truth). Local external
@@ -431,6 +444,16 @@ export class LocalAgentSession implements BackendHost {
     this.invalidateModelState();
     this.ensureModelState();
     return { ok: true, spec: normalized };
+  }
+
+  getReasoningEffort(): { effort: ReasoningEffort | null } {
+    return { effort: this.config.getReasoningEffort() };
+  }
+
+  setReasoningEffort(effort: unknown): { ok: true; effort: ReasoningEffort } {
+    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+    this.config.setReasoningEffort(effort);
+    return { ok: true, effort };
   }
 
   listModelProviders() {
@@ -982,6 +1005,8 @@ export class LocalAgentSession implements BackendHost {
       .register(this.compactionExtension)
       .register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
     const cache = this.cacheIdentity();
+    const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
+    const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
     // The measured trigger: the previous turn's final request as the provider
     // actually priced it, persisted at turn end below — voided by the length
     // guard when the durable history shrank (restart truncation) since the
@@ -1014,6 +1039,7 @@ export class LocalAgentSession implements BackendHost {
         signal: abort.signal,
         extensions,
         cache,
+        ...(providerOptions ? { providerOptions } : {}),
       })) {
         switch (ev.type) {
           case 'text-delta':
@@ -1515,7 +1541,13 @@ export class LocalAgentSession implements BackendHost {
   private rebuildModelBoundState(model: LanguageModel): void {
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
     // The agent's VFS backs the shared findings scratch sibling heads write to.
-    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider(), grounding: this.buildHeadGrounding() });
+    this._headRuntime = createCLIHeadRuntime({
+      model,
+      providerFamily: providerFamilyForSpec(this.cachedModelSpec ?? this.fallbackModelSpec),
+      sharedVfs: this.rt.storage.vfs,
+      webSearch: this.getWebSearchProvider(),
+      grounding: this.buildHeadGrounding(),
+    });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     const rawTools = buildBuiltinTools({

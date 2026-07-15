@@ -70,7 +70,8 @@ import {
   hybridSearch, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  effortFor, reasoningEffortOptions, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  isReasoningEffort, type ReasoningEffort,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA offline optimisation (scaffold + crafted-tool)
@@ -962,8 +963,7 @@ export class OrchestratorAgent extends ActorAgent {
           model: this.getModelForReview(),
           schema: JudgeOutputSchema,
           prompt,
-          maxOutputTokens: 512,
-          providerOptions: effortFor('judge').providerOptions,
+          providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
         });
 
       const judgeTask = task.slice(0, 2000);
@@ -1557,12 +1557,14 @@ export class OrchestratorAgent extends ActorAgent {
         craftedToolCount: craftedTools[0]?.c ?? 0,
         messageCount,
         model: this.getStoredModelId(),
+        reasoningEffort: this.config.getReasoningEffort(),
         forkLineage,
       };
     } catch {
       return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", soul: "", createdAt: 0,
         scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
         model: this.getStoredModelId(),
+        reasoningEffort: this.config.getReasoningEffort(),
         forkLineage: null };
     }
   }
@@ -3103,6 +3105,16 @@ export class OrchestratorAgent extends ActorAgent {
       console.error(`[orchestrator] setModel(${spec}) failed:`, msg);
       throw new Error(`setModel(${spec}) failed: ${msg}`);
     }
+  }
+
+  @callable() async getReasoningEffort(): Promise<{ effort: ReasoningEffort | null }> {
+    return { effort: this.config.getReasoningEffort() };
+  }
+
+  @callable() async setReasoningEffort(effort: unknown): Promise<{ ok: true; effort: ReasoningEffort }> {
+    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+    this.config.setReasoningEffort(effort);
+    return { ok: true, effort };
   }
 
   // ── Voyager curriculum: propose / list / accept next tasks ─────────

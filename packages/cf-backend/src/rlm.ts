@@ -21,6 +21,7 @@
 
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
+import { isReasoningEffort, parseModelSpec, reasoningEffortOptions } from '@proteus/core';
 import type { AgentProviderRegistry } from './providers/agent-registry.js';
 
 /** A codemode sandbox provider: a named namespace of callable tools plus the
@@ -44,7 +45,7 @@ export interface RLMOptions {
   reasoning_effort?: 'low' | 'medium' | 'high';
   /** Override system prompt. Default: a small "answer concisely" prefix. */
   system?: string;
-  /** Max output tokens. Default 1024. */
+  /** Optional explicit output cap. Omitted by default. */
   maxOutputTokens?: number;
 }
 
@@ -74,21 +75,30 @@ export function createRLMProvider(
           if (typeof text !== 'string' || !text) {
             return { error: 'llm.query: first arg must be a non-empty string' };
           }
+          if (opts.reasoning_effort !== undefined && !isReasoningEffort(opts.reasoning_effort)) {
+            return { error: 'llm.query: reasoning_effort must be low, medium, or high' };
+          }
           const spec = opts.model ?? currentSpec();
+          let normalizedSpec: string;
           let model: LanguageModel;
-          try { model = registry.resolveModel(registry.normalizeSpecSync(spec)); }
+          try {
+            normalizedSpec = registry.normalizeSpecSync(spec);
+            model = registry.resolveModel(normalizedSpec);
+          }
           catch (err) {
             return { error: `llm.query: model ${spec} unresolvable: ${(err as Error).message}` };
           }
+          const providerOptions = reasoningEffortOptions(
+            opts.reasoning_effort ?? 'low',
+            parseModelSpec(normalizedSpec).provider,
+          );
           try {
             const { text: out } = await generateText({
               model,
               system: opts.system ?? 'You are a helpful assistant. Answer concisely and directly.',
               prompt: text,
-              maxOutputTokens: opts.maxOutputTokens ?? 1024,
-              ...(opts.reasoning_effort
-                ? { providerOptions: { 'workers-ai': { reasoning_effort: opts.reasoning_effort } } }
-                : {}),
+              ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+              ...(providerOptions ? { providerOptions } : {}),
             });
             return out.trim();
           } catch (err) {

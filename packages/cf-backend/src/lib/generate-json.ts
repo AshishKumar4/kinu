@@ -29,7 +29,7 @@ export async function generateJson<TOutput>(opts: {
     prompt:
       opts.prompt +
       `\n\n${jsonObjectOnlyInstruction()}`,
-    maxOutputTokens: opts.maxOutputTokens ?? 4096,
+    ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
   });
   return v.parse(opts.schema, extractJsonObject(text));

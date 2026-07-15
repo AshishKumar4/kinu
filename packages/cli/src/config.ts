@@ -17,6 +17,8 @@ import {
   OPENROUTER_BASE_URL,
   type LLMProviderConfig,
   type OAuthCredential,
+  isReasoningEffort,
+  type ReasoningEffort,
 } from '@proteus/core';
 import {
   cloudProxyBaseURL,
@@ -47,6 +49,7 @@ const RESERVED_ALIASES = new Set([
   'chat',
   'evolve',
   'status',
+  'effort',
   'list',
   'workspace',
   'alias',
@@ -86,6 +89,7 @@ export interface ProteusConfig {
   agents?: Record<string, ProteusAgentConfig>;
   aliases?: Record<string, string>;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   providers?: {
     openai?: { apiKey?: string };
     anthropic?: { apiKey?: string };
@@ -143,10 +147,26 @@ export function listAgentDirs(): string[] {
 export function loadConfigFile(): ProteusConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as ProteusConfig;
+    const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as ProteusConfig;
+    if (config.reasoningEffort !== undefined && !isReasoningEffort(config.reasoningEffort)) {
+      delete config.reasoningEffort;
+    }
+    return config;
   } catch {
     return {};
   }
+}
+
+export function setDefaultModel(spec: string): void {
+  const normalized = spec.trim();
+  if (!normalized) throw new Error('model spec required');
+  updateConfigFile((config) => { config.model = normalized; });
+}
+
+export function setDefaultReasoningEffort(effort: unknown): ReasoningEffort {
+  if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+  updateConfigFile((config) => { config.reasoningEffort = effort; });
+  return effort;
 }
 
 export function saveConfigFile(config: ProteusConfig): void {

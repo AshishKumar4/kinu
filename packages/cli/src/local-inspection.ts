@@ -19,6 +19,7 @@ import {
   type EventVariant,
   type ProductChangeBoard,
   type SearchNode,
+  type ReasoningEffort,
   readSoul,
   summarizeSoul,
 } from '@proteus/core';
@@ -77,6 +78,8 @@ export interface LocalAgentInfoSnapshot {
   memorySize: number;
   createdAt: number;
   conversationCount: number;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
 }
 
 export function getLocalAgentState(name: string): unknown {
@@ -102,6 +105,8 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       scaffoldVersion: number;
       searchNodeCount: number;
       craftedToolCount: number;
+      model: string | null;
+      reasoningEffort: ReasoningEffort | null;
     };
     return {
       id: status.id ?? name,
@@ -121,6 +126,8 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       conversationCount: tableExists(db, 'messages')
         ? get<{ c: number }>(db, `SELECT COUNT(DISTINCT session_id) AS c FROM messages`)?.c ?? 0
         : 0,
+      model: status.model,
+      reasoningEffort: status.reasoningEffort,
     };
   });
 }
@@ -355,6 +362,18 @@ export function setLocalStoredModel(name: string, spec: string): { ok: true; spe
   });
 }
 
+export function getLocalReasoningEffort(name: string): { effort: ReasoningEffort | null } {
+  return withLocalDb(name, (db) => ({ effort: createAgentConfigStore(makeSql(db)).getReasoningEffort() }));
+}
+
+export function setLocalReasoningEffort(name: string, effort: ReasoningEffort): { ok: true; effort: ReasoningEffort } {
+  return withLocalWritableDb(name, (db) => {
+    initAgentConfigTable((ddl) => db.exec(ddl));
+    createAgentConfigStore(makeSql(db)).setReasoningEffort(effort);
+    return { ok: true, effort };
+  });
+}
+
 export function listLocalTriggers(name: string): { triggers: unknown[] } {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'triggers')) return { triggers: [] };
@@ -580,6 +599,9 @@ function getLocalStatus(db: SqliteDb): unknown {
       : 0,
     model: tableExists(db, 'agent_config')
       ? get<{ value: string | null }>(db, `SELECT value FROM agent_config WHERE key = 'model' LIMIT 1`)?.value ?? null
+      : null,
+    reasoningEffort: tableExists(db, 'agent_config')
+      ? createAgentConfigStore(makeSql(db)).getReasoningEffort()
       : null,
   };
 }

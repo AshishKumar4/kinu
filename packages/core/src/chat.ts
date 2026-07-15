@@ -19,6 +19,7 @@ import { sanitizeAttachmentsForModel, type AttachmentPolicy } from './prompting/
 import { contextWindowForModel } from './context-window.js';
 import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
+import { mergeProviderOptions } from './strategy/effort.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -80,6 +81,9 @@ export interface ChatOptions {
    *  a tail rolled forward every step) or prompt_cache_key routing for the
    *  OpenAI-compatible family. See prompting/cache-breakpoints.ts. */
   cache?: { providerId?: string; modelId?: string; sessionKey: string };
+  /** Request-level provider options contributed by the caller. They are
+   *  merged by provider namespace with the cache options assembled here. */
+  providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 }
 
 /**
@@ -148,6 +152,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     sessionKey: opts.cache?.sessionKey ?? '',
   });
   const rollTail = hasCacheMarkers(cache.strategy);
+  const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
   const result = streamText({
     model: opts.model,
@@ -156,7 +161,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
-    ...(cache.providerOptions ? { providerOptions: cache.providerOptions } : {}),
+    ...(providerOptions ? { providerOptions } : {}),
     // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
     // first, then step-boundary tool-output pruning against the window budget,
     // cache tail markers LAST onto the final array. The cf orchestrator's

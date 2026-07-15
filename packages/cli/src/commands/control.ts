@@ -1,16 +1,21 @@
 import {
   requireAuthConfig,
+  setDefaultModel,
+  setDefaultReasoningEffort,
 } from '../config.js';
+import { isReasoningEffort, type ReasoningEffort } from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
 import {
   cancelLocalJob,
   cancelLocalTrigger,
   createLocalTimerTrigger,
   getLocalStoredModel,
+  getLocalReasoningEffort,
   getLocalToolSurface,
   listLocalJobs,
   listLocalTriggers,
   setLocalStoredModel,
+  setLocalReasoningEffort,
 } from '../local-inspection.js';
 import {
   callAgentRpc,
@@ -52,6 +57,7 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
       ? await callAgentRpc<{ ok: true; spec: string }>(auth.origin, auth.token, target.cloudName, 'setModel', [spec])
       : await callAgentRpc<{ spec: string | null }>(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec');
     console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+    if (spec && result.spec) setDefaultModel(result.spec);
     return;
   }
 
@@ -69,6 +75,29 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   }
   const result = resolvedSpec ? setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+  if (spec && result.spec) setDefaultModel(result.spec);
+}
+
+export async function effortCommand(name: string, level: string | undefined): Promise<void> {
+  const target = resolveAgentTarget(name);
+  if (level !== undefined && !isReasoningEffort(level)) {
+    throw new Error('Reasoning effort must be low, medium, or high.');
+  }
+  let result: { effort: ReasoningEffort | null };
+  if (target.mode === 'cloud') {
+    const auth = requireAuthConfig();
+    result = level
+      ? await callAgentRpc<{ ok: true; effort: ReasoningEffort }>(auth.origin, auth.token, target.cloudName, 'setReasoningEffort', [level])
+      : await callAgentRpc<{ effort: ReasoningEffort | null }>(auth.origin, auth.token, target.cloudName, 'getReasoningEffort');
+  } else {
+    result = level
+      ? setLocalReasoningEffort(target.localName, level)
+      : getLocalReasoningEffort(target.localName);
+  }
+  if (level && result.effort) setDefaultReasoningEffort(result.effort);
+  console.log(level
+    ? `${OK('set')} ${result.effort}`
+    : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);
 }
 
 async function loadModelCatalog(load: () => Promise<unknown[]>): Promise<AgentModelEntry[] | null> {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -158,6 +158,34 @@ describe("CLI inspection commands", () => {
 
     const stored = runCli(home, ["model", "localtest"], llmEnv);
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).model)
+      .toBe("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+  });
+
+  test("proteus effort sets workspace and global defaults and appears in status", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-effort-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+
+    const initial = runCli(home, ["effort", "localtest"]);
+    expect(initial.exitCode).toBe(0);
+    expect(initial.stdout.toString()).toContain("medium (chat default)");
+
+    const set = runCli(home, ["effort", "localtest", "high"]);
+    expect(set.exitCode).toBe(0);
+    expect(set.stdout.toString()).toContain("set high");
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).reasoningEffort).toBe("high");
+
+    const stored = runCli(home, ["effort", "localtest"]);
+    expect(stored.stdout.toString()).toContain("high");
+    const status = runCli(home, ["status", "localtest"]);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout.toString()).toContain("Effort:");
+    expect(status.stdout.toString()).toContain("high");
+
+    const invalid = runCli(home, ["effort", "localtest", "extreme"]);
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.stderr.toString()).toContain("low, medium, or high");
   });
 
   test("proteus model validates known, uncatalogued, and unknown-provider specs", () => {

@@ -46,8 +46,10 @@ function startMockAgentServer(): MockAgentServer {
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
       if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
-        const { method } = await req.json() as { method: string };
+        const { method, args = [] } = await req.json() as { method: string; args?: unknown[] };
         if (method === 'getChatHistory') return Response.json({ result: chatMessages });
+        if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
+        if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] } });
         return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
@@ -119,6 +121,14 @@ function responseChunk(id: string, chunk: Record<string, unknown>, done = false)
 }
 
 describe('CloudAgentClient protocol', () => {
+  test('reasoning effort reads and writes through the agent RPC seam', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    await expect(client.getReasoningEffort()).resolves.toBe('medium');
+    await expect(client.setReasoningEffort('high')).resolves.toEqual({ effort: 'high' });
+    await client.close();
+  });
+
   test('send transmits only the new user message and streams the reply', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

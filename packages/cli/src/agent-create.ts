@@ -14,6 +14,7 @@ import {
   initSearchTables,
   parseWorkspaceIdentityOutput,
   type LLMProviderConfig,
+  type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
 } from '@proteus/core';
 import {
@@ -50,6 +51,7 @@ export interface CreateCliAgentInput {
   auth?: string;
   origin?: string;
   allowInteractiveAuth?: boolean;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface CreatedCliAgent {
@@ -99,7 +101,7 @@ export interface CreateCloudAgentFromMissionOptions {
 }
 
 export async function createCloudAgentFromMission(
-  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth'>,
+  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth' | 'reasoningEffort'>,
   options: CreateCloudAgentFromMissionOptions,
 ): Promise<CloudAgent> {
   const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
@@ -116,6 +118,8 @@ export async function createCloudAgentFromMission(
     name: identity.name,
     displayName: identity.displayName,
     purpose: input.purpose,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
   });
 }
 
@@ -143,7 +147,13 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-    const agent = await createCloudAgentFromMission({ ...input, purpose }, {
+    const defaults = loadConfigFile();
+    const agent = await createCloudAgentFromMission({
+      ...input,
+      purpose,
+      model: input.model ?? defaults.model,
+      reasoningEffort: input.reasoningEffort ?? defaults.reasoningEffort,
+    }, {
       create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
     });
     upsertAgentConfig({
@@ -176,6 +186,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     initAgentConfigTable(rt.storage.execRaw);
     const agentConfig = createAgentConfigStore(rt.storage.sql);
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
+    const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
+    if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
     agentConfig.setDisplayName(displayName);
     agentConfig.setNameOrigin(input.nameOrigin ?? 'user');
   } finally {

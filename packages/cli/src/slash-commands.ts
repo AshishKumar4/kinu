@@ -5,8 +5,9 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type TakePickOutcome } from '@proteus/core';
+import { isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@proteus/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client.js';
+import { setDefaultModel, setDefaultReasoningEffort } from './config.js';
 
 export interface SlashCommandInfo {
   name: string;
@@ -21,6 +22,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/status', description: 'Show agent state and stats' },
   { name: '/tools', description: 'List available tools' },
   { name: '/model', description: 'Open model picker or set a model', usage: '/model [spec]' },
+  { name: '/effort', description: 'Show or set reasoning effort', usage: '/effort [low|medium|high]' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
@@ -83,6 +85,7 @@ export type SlashOutcome =
   | { kind: 'exit' }
   | { kind: 'model-picker' }
   | { kind: 'model-set'; spec: string }
+  | { kind: 'effort-set'; effort: ReasoningEffort }
   | { kind: 'sessions'; mode: 'list' | 'resume'; resumeRef?: string }
   | { kind: 'device-connect' }
   /** Queue text to send after the active turn (surface-owned queue). */
@@ -162,8 +165,11 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     }
     case '/model': {
       if (!arg) return { kind: 'model-picker' };
-      const result = await client.setModel(arg);
+      const result = await setModelPreference(client, arg);
       return { kind: 'model-set', spec: result.spec };
+    }
+    case '/effort': {
+      return executeEffortCommand(client, arg);
     }
     case '/models': {
       if (!client.localControls) return { kind: 'unknown', command: cmd };
@@ -252,6 +258,40 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     default:
       return { kind: 'unknown', command: cmd };
   }
+}
+
+export async function setModelPreference(client: Pick<AgentClient, 'setModel'>, spec: string): Promise<{ spec: string }> {
+  const result = await client.setModel(spec);
+  setDefaultModel(result.spec);
+  return result;
+}
+
+export async function setReasoningEffortPreference(
+  client: Pick<AgentClient, 'setReasoningEffort'>,
+  effort: ReasoningEffort,
+): Promise<{ effort: ReasoningEffort }> {
+  const result = await client.setReasoningEffort(effort);
+  setDefaultReasoningEffort(result.effort);
+  return result;
+}
+
+export async function executeEffortCommand(
+  client: Pick<AgentClient, 'getReasoningEffort' | 'setReasoningEffort'>,
+  arg: string,
+): Promise<SlashOutcome> {
+  if (!arg) {
+    const stored = await client.getReasoningEffort();
+    const current = stored ?? 'medium';
+    return {
+      kind: 'text',
+      text: `Reasoning effort: ${current}${stored ? '' : ' (chat default)'}\nOptions: low, medium, high\nSet with /effort <level>.`,
+    };
+  }
+  if (!isReasoningEffort(arg)) {
+    return { kind: 'text', text: 'Usage: /effort low | medium | high' };
+  }
+  const result = await setReasoningEffortPreference(client, arg);
+  return { kind: 'effort-set', effort: result.effort };
 }
 
 export interface UndoResult {
@@ -393,6 +433,7 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Name:', status.name),
     row('Mission:', status.purpose.replace(/\s+/g, ' ').slice(0, 120)),
     row('Model:', status.model ?? '(default)'),
+    row('Effort:', status.reasoningEffort ?? 'medium (chat default)'),
     row('Scaffold:', status.scaffoldVersion === undefined ? undefined : `v${status.scaffoldVersion}`),
     row('Messages:', status.messageCount),
     row('MCTS:', status.searchNodeCount === undefined ? undefined : `${status.searchNodeCount} nodes`),

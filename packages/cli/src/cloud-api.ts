@@ -1,4 +1,5 @@
 import { resolveCloudOrigin } from './config.js';
+import type { ReasoningEffort } from '@proteus/core';
 
 export interface CliAuthStart {
   deviceToken: string;
@@ -59,6 +60,7 @@ export interface CloudAgentStatus {
   craftedToolCount: number;
   messageCount: number;
   model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
 }
 
 export interface CloudChatMessage {
@@ -165,7 +167,11 @@ export async function listCloudAvailableModels(origin: string, token: string): P
 }
 
 export interface CreateCloudAgentInput {
-  name?: string; displayName?: string; purpose?: string;
+  name?: string;
+  displayName?: string;
+  purpose?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export async function createCloudAgent(origin: string, token: string, input: CreateCloudAgentInput): Promise<CloudAgent> {

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode } from '@proteus/core';
+import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
@@ -306,6 +306,7 @@ export class LocalAgentClient implements AgentClient {
       name: info.name,
       purpose: info.purpose,
       model: this.session.getEffectiveModelSpec(),
+      reasoningEffort: this.session.getReasoningEffort().effort,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
       craftedToolCount: info.craftedToolCount,
@@ -371,6 +372,14 @@ export class LocalAgentClient implements AgentClient {
 
   async setModel(spec: string): Promise<{ spec: string }> {
     return { spec: this.session.setModel(spec).spec };
+  }
+
+  async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    return this.session.getReasoningEffort().effort;
+  }
+
+  async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+    return { effort: this.session.setReasoningEffort(effort).effort };
   }
 
   async listModels(): Promise<AgentModelEntry[]> {

@@ -2,9 +2,40 @@ import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
-import { cloudProxyBaseURL, createLocalModelResolver } from '../src/model-resolver.js';
+import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver.js';
 
 describe('createLocalModelResolver', () => {
+  test('local LLM has no default output cap but honors an explicitly configured cap', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const body = await request.json() as Record<string, unknown>;
+        bodies.push(body);
+        return Response.json({
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+    const llm: LLMProviderConfig = {
+      name: 'workers-ai',
+      baseURL: `http://127.0.0.1:${server.port}/v1`,
+      headers: { Authorization: 'Bearer test' },
+      model: '@cf/test/model',
+    };
+    try {
+      await createLocalProviderLLM({ llm }).complete('uncapped');
+      await createLocalProviderLLM({ llm: { ...llm, maxTokens: 123 } }).complete('capped');
+      expect(bodies[0]?.max_tokens).toBeUndefined();
+      expect(bodies[1]?.max_tokens).toBe(123);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test('normalizes Workers AI model ids to provider-style specs', async () => {
     const resolver = createLocalModelResolver({
       llm: {

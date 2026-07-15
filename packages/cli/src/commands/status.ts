@@ -40,7 +40,11 @@ export async function statusCommand(name: string): Promise<void> {
 
   const info = getLocalAgentInfo(name);
   const dbSize = statSync(dbPath).size;
-  printAgentStatus(info, dbSize, { conversationCount: info.conversationCount });
+  printAgentStatus(info, dbSize, {
+    conversationCount: info.conversationCount,
+    model: info.model,
+    reasoningEffort: info.reasoningEffort,
+  });
 }
 
 function printCloudStatus(
@@ -60,6 +64,7 @@ function printCloudStatus(
   console.log(`${DIM('State')}      ${OK('connected')}`);
   console.log(`${DIM('Mission')}    ${status.purpose || DIM('(none)')}`);
   console.log(`${DIM('Model')}      ${status.model ?? DIM('(default)')}`);
+  console.log(`${DIM('Effort')}     ${status.reasoningEffort ?? 'medium (chat default)'}`);
   console.log(`${DIM('Messages')}   ${status.messageCount}`);
   console.log(`${DIM('Scaffold')}   v${status.scaffoldVersion}`);
   console.log(`${DIM('MCTS')}       ${status.searchNodeCount} node${status.searchNodeCount === 1 ? '' : 's'}`);

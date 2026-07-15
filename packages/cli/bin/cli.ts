@@ -18,7 +18,7 @@ import { doctorCommand, uninstallCommand, updateCommand } from '../src/commands/
 import { evolveCommand } from '../src/commands/evolve.js';
 import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
-import { jobsCommand, modelCommand, toolsCommand, triggersCommand } from '../src/commands/control.js';
+import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from '../src/commands/control.js';
 import {
   eventsCommand,
   executorsCommand,
@@ -154,6 +154,11 @@ llmOpts(
     .command('model <name> [spec]')
     .description('Show or change a workspace model'),
 ).action(wrapAction(modelCommand));
+
+program
+  .command('effort <name> [level]')
+  .description('Show or change workspace reasoning effort (low, medium, high)')
+  .action(wrapAction(effortCommand));
 
 llmOpts(
   program

@@ -15,6 +15,7 @@ import {
   createProviderRegistry,
   listModelsDevProviderModels,
   parseModelSpec,
+  reasoningEffortOptions,
   type AuthResolution,
   type AuthResolver,
   type ModelCapability,
@@ -100,7 +101,9 @@ export interface LocalModelResolverConfig {
 
 export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
   const resolver = createLocalModelResolver(opts);
-  const maxOutputTokens = opts.llm.maxTokens ?? 2048;
+  const spec = resolver.normalizeSpecSync(null);
+  const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
+  const maxOutputTokens = opts.llm.maxTokens;
   const model = () => resolver.resolveModel(null);
   return {
     async *stream(input) {
@@ -111,7 +114,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
           role: m.role as 'user' | 'assistant',
           content: m.content,
         })),
-        maxOutputTokens,
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(providerOptions ? { providerOptions } : {}),
       });
       for await (const chunk of result.textStream) yield chunk;
     },
@@ -119,7 +123,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
       const result = await generateText({
         model: model(),
         prompt,
-        maxOutputTokens,
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(providerOptions ? { providerOptions } : {}),
       });
       return result.text.trim();
     },

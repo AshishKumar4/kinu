@@ -99,6 +99,7 @@ import {
   acceptedMediaForModel, sanitizeAttachmentsForModel, type MediaModality, type ModelInfo,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
+  mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
 } from "@proteus/core";
 import { combineAbortSignals } from "@proteus/agent-utils";
 import { createCodeTool } from "@cloudflare/codemode/ai";
@@ -1481,6 +1482,11 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
+  protected effectiveModelProviderFamily(): string {
+    try { return parseModelSpec(this.effectiveModelSpec()).provider; }
+    catch { return ''; }
+  }
+
   /** Prompt model context from the RESOLVED spec. The raw stored id is null
    *  on default-configured agents, which left family gating (the Kimi bare
    *  tool-name index + operating guidance) inert on the primary hosted path —
@@ -1797,7 +1803,12 @@ export abstract class ActorAgent extends Think<Env> {
       ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
       : null;
     const cacheOptions = promptCacheOptions(cacheStrategy, this.ownedModelServices.affinityKey);
-    if (cacheOptions) cfg.providerOptions = cacheOptions;
+    const reasoningOptions = reasoningEffortOptions(
+      this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat,
+      this.effectiveModelProviderFamily(),
+    );
+    const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
+    if (providerOptions) cfg.providerOptions = providerOptions;
 
     // Shadow-eval context parity + the evolved-scaffold task source (see the
     // _lastTurnOpts field doc): the effective opts the streamText Think runs
@@ -1811,7 +1822,7 @@ export abstract class ActorAgent extends Think<Env> {
       tools: { ...ctx.tools, ...(cfg.tools ?? {}) },
       activeTools: cfg.activeTools,
       stopWhen: stepCountIs(this.maxSteps),
-      ...(cacheOptions ? { providerOptions: cacheOptions } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
     };
     return cfg;
   }

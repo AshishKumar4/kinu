@@ -10,7 +10,16 @@
 // RLM sub-calls), medium for user-visible work, high for rare-but-important
 // turns (scaffold mutation). Callers can override.
 
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+import type { streamText } from 'ai';
+
+export const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return value === 'low' || value === 'medium' || value === 'high';
+}
 
 export type InferenceStage =
   | 'chat'              // User-facing chat turn
@@ -43,6 +52,55 @@ export function workersAIEffortOption(
 ): { providerOptions?: { 'workers-ai': { reasoning_effort: ReasoningEffort } } } {
   if (!effort) return {};
   return { providerOptions: { 'workers-ai': { reasoning_effort: effort } } };
+}
+
+const ANTHROPIC_THINKING_BUDGET: Record<ReasoningEffort, number> = {
+  low: 4_000,
+  medium: 16_000,
+  high: 32_000,
+};
+
+/** Provider-native reasoning options for a resolved model-spec prefix. */
+export function reasoningEffortOptions(
+  effort: ReasoningEffort | undefined,
+  providerFamily: string,
+): ProviderOptions | undefined {
+  if (!effort) return undefined;
+  const family = providerFamily.split(':', 1)[0];
+  switch (family) {
+    case 'workers-ai':
+      return workersAIEffortOption(effort).providerOptions;
+    case 'openai':
+    case 'opencode':
+    case 'codex':
+    case 'openai-compat':
+      return { openai: { reasoningEffort: effort } };
+    case 'openrouter':
+      return { openrouter: { reasoningEffort: effort } };
+    case 'anthropic':
+      return {
+        anthropic: {
+          thinking: { type: 'enabled', budgetTokens: ANTHROPIC_THINKING_BUDGET[effort] },
+        },
+      };
+    default:
+      return undefined;
+  }
+}
+
+/** Merge request-level options by provider namespace so cache and reasoning
+ *  settings can coexist on the same model request. */
+export function mergeProviderOptions(
+  base: ProviderOptions | undefined,
+  override: ProviderOptions | undefined,
+): ProviderOptions | undefined {
+  if (!base) return override;
+  if (!override) return base;
+  const merged: ProviderOptions = { ...base };
+  for (const [provider, options] of Object.entries(override)) {
+    merged[provider] = { ...(base[provider] ?? {}), ...options };
+  }
+  return merged;
 }
 
 /** Shortcut: `effortFor('judge')` → `{ providerOptions: ... }`. */

@@ -3,6 +3,7 @@
  */
 
 import type { AgentClientMode } from '../agent-client.js';
+import type { ReasoningEffort } from '@proteus/core';
 import { formatContextUsage, modelDisplayName } from './context-status.js';
 import { clipText } from './format.js';
 import { tuiColors } from './theme.js';
@@ -11,6 +12,8 @@ interface Props {
   name: string;
   mode: AgentClientMode;
   model: string;
+  reasoningEffort: ReasoningEffort;
+  onModelSelect?: () => void;
   connected: boolean;
   scaffoldVersion?: number;
   toolCount?: number;
@@ -21,7 +24,7 @@ interface Props {
   branchCount?: number;
 }
 
-export function StatusBar({ name, mode, model, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0 }: Props) {
+export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0 }: Props) {
   return (
     <box
       style={{
@@ -42,18 +45,25 @@ export function StatusBar({ name, mode, model, connected, scaffoldVersion, toolC
         <strong fg={tuiColors.accentStrong}>{clipText(name, 32)}</strong>{' '}
         <span fg={tuiColors.muted}>{mode}{scaffoldVersion !== undefined ? ` v${scaffoldVersion}` : ''}</span>
       </text>
-      <text>
-        <span fg={tuiColors.text}>{clipText(modelDisplayName(model), 24)}</span>
-        {'  '}
-        <span fg={tuiColors.muted}>{formatContextUsage(model, contextTokens, contextWindow)}</span>
-        {branchCount > 0 ? <span fg={tuiColors.amber}>{'  '}⎇ {branchCount > 1 ? `${branchCount} branches` : 'branch'} running</span> : null}
-        {toolCount !== undefined ? <span fg={tuiColors.muted}>{'  '}⚡ {toolCount} tools</span> : null}
-        {autoEvolve !== undefined ? (
-          <span fg={autoEvolve ? tuiColors.accent : tuiColors.muted}>{'  '}{autoEvolve ? '↻ auto' : '⏸ manual'}</span>
-        ) : null}
-        {'  '}
-        <span fg={connected ? tuiColors.green : tuiColors.red}>{connected ? '●' : '○'}</span>
-      </text>
+      <box style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <box onMouseDown={onModelSelect} style={{ flexDirection: 'row' }}>
+          <text>
+            <span fg={tuiColors.text}>{clipText(modelDisplayName(model), 24)}</span>
+            <span fg={tuiColors.muted}> [Ctrl+P]</span>
+          </text>
+        </box>
+        <text>
+          <span fg={tuiColors.muted}>{'  '}effort {reasoningEffort}</span>
+          <span fg={tuiColors.muted}>{'  '}{formatContextUsage(model, contextTokens, contextWindow)}</span>
+          {branchCount > 0 ? <span fg={tuiColors.amber}>{'  '}⎇ {branchCount > 1 ? `${branchCount} branches` : 'branch'} running</span> : null}
+          {toolCount !== undefined ? <span fg={tuiColors.muted}>{'  '}⚡ {toolCount} tools</span> : null}
+          {autoEvolve !== undefined ? (
+            <span fg={autoEvolve ? tuiColors.accent : tuiColors.muted}>{'  '}{autoEvolve ? '↻ auto' : '⏸ manual'}</span>
+          ) : null}
+          {'  '}
+          <span fg={connected ? tuiColors.green : tuiColors.red}>{connected ? '●' : '○'}</span>
+        </text>
+      </box>
     </box>
   );
 }

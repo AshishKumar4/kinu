@@ -652,6 +652,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(turns[1]!.turn.assistantResponse).toBe('from b');
   });
 
+  test('reasoning effort persists and merges with prompt-cache options on the main chat turn', async () => {
+    let providerOptions: Record<string, Record<string, unknown>> | undefined;
+    const model = fakeModel('reasoned') as unknown as Record<string, unknown> & {
+      doStream: (options: unknown) => unknown;
+    };
+    const stream = model.doStream.bind(model);
+    model.doStream = async (options: { providerOptions?: Record<string, Record<string, unknown>> }) => {
+      providerOptions = options.providerOptions;
+      return stream(options);
+    };
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: () => 'openai/gpt-5.5',
+      resolveModel: () => model as unknown as LanguageModel,
+      listProviders: async () => [],
+      listModels: async () => [],
+      modelInfo: async () => null,
+    };
+    const { session } = setupWithResolver(resolver);
+
+    expect(session.getReasoningEffort()).toEqual({ effort: null });
+    expect(session.setReasoningEffort('high')).toEqual({ ok: true, effort: 'high' });
+    expect(session.getReasoningEffort()).toEqual({ effort: 'high' });
+    expect(() => session.setReasoningEffort('extreme')).toThrow('Invalid reasoning effort');
+
+    await session.send('think hard');
+    expect(providerOptions).toEqual({
+      openai: {
+        promptCacheKey: expect.any(String),
+        reasoningEffort: 'high',
+      },
+    });
+  });
+
   test('broadcast fans out as a SessionEvent', () => {
     const { session, events } = setup();
     session.broadcast({ type: 'job_update', jobId: 'x' });

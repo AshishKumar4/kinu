@@ -66,6 +66,14 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
       calls.push(`model:set:${spec}`);
       return { ok: true, spec };
     },
+    async getReasoningEffort() {
+      calls.push('effort:get');
+      return { effort: 'medium' };
+    },
+    async setReasoningEffort(effort: string) {
+      calls.push(`effort:set:${effort}`);
+      return { ok: true, effort };
+    },
     async createTimerTrigger(opts: unknown) {
       calls.push(`triggers:create:${JSON.stringify(opts)}`);
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 123 };
@@ -182,6 +190,8 @@ describe('CLI control routes', () => {
     ]);
     expect(await rpcResult(env, 'resolveDeviceConsent', ['cons-1', 'once'])).toEqual({ ok: true });
     expect(await rpcResult(env, 'setModel', ['openai/gpt-5.1'])).toEqual({ ok: true, spec: 'openai/gpt-5.1' });
+    expect(await rpcResult(env, 'getReasoningEffort')).toEqual({ effort: 'medium' });
+    expect(await rpcResult(env, 'setReasoningEffort', ['high'])).toEqual({ ok: true, effort: 'high' });
     expect(await rpcResult(env, 'createTimerTrigger', [{ atMs: 123, label: 'wake', trust: 'owner' }]))
       .toMatchObject({ id: 'trg_1', nextFireAt: 123 });
     expect(await rpcResult(env, 'listBackgroundJobs', [7])).toEqual([{ id: 'job_1', kind: 'run', status: 'running' }]);
@@ -197,6 +207,8 @@ describe('CLI control routes', () => {
     expect(calls).toContain('consents:list');
     expect(calls).toContain('consents:resolve:cons-1:once');
     expect(calls).toContain('model:set:openai/gpt-5.1');
+    expect(calls).toContain('effort:get');
+    expect(calls).toContain('effort:set:high');
     expect(calls).toContain('triggers:create:{"atMs":123,"label":"wake","trust":"owner"}');
     expect(calls).toContain('jobs:list:7');
     expect(calls).toContain('jobs:cancel:job_1');

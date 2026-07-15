@@ -63,6 +63,16 @@ describe("CLI config safety", () => {
     const result = runRequireAuth(new Date(Date.now() - 60_000).toISOString(), ciToken);
     expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
   });
+
+  test("model and effort selections persist as validated global defaults", () => {
+    const out = runPreferenceWrite();
+    expect(out.modelResult).toEqual({ spec: "openai/gpt-5.5" });
+    expect(out.effortShow).toMatchObject({ kind: "text", text: expect.stringContaining("medium (chat default)") });
+    expect(out.effortSet).toEqual({ kind: "effort-set", effort: "high" });
+    expect(out.invalid).toMatchObject({ kind: "text", text: expect.stringContaining("Usage") });
+    expect(out.config).toMatchObject({ model: "openai/gpt-5.5", reasoningEffort: "high" });
+    expect(out.invalidLoaded).toBeUndefined();
+  });
 });
 
 const CLOUD_ORIGIN = "https://proteus.example.com";
@@ -171,4 +181,44 @@ function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
     stdout: "pipe",
     stderr: "pipe",
   });
+}
+
+function runPreferenceWrite(): {
+  modelResult: unknown;
+  effortShow: unknown;
+  effortSet: unknown;
+  invalid: unknown;
+  config: Record<string, unknown>;
+  invalidLoaded: unknown;
+} {
+  const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-preferences-"));
+  tempDirs.push(proteusHome);
+  const script = `
+    import { writeFileSync } from 'node:fs';
+    import { CONFIG_PATH, loadConfigFile } from './packages/cli/src/config.ts';
+    import { executeEffortCommand, setModelPreference } from './packages/cli/src/slash-commands.ts';
+    const modelClient = { setModel: async (spec: string) => ({ spec }) };
+    let effort: 'low' | 'medium' | 'high' | null = null;
+    const effortClient = {
+      getReasoningEffort: async () => effort,
+      setReasoningEffort: async (next: 'low' | 'medium' | 'high') => ({ effort: effort = next }),
+    };
+    const modelResult = await setModelPreference(modelClient, 'openai/gpt-5.5');
+    const effortShow = await executeEffortCommand(effortClient, '');
+    const effortSet = await executeEffortCommand(effortClient, 'high');
+    const invalid = await executeEffortCommand(effortClient, 'extreme');
+    const config = loadConfigFile();
+    writeFileSync(CONFIG_PATH, JSON.stringify({ ...config, reasoningEffort: 'extreme' }));
+    const invalidLoaded = loadConfigFile().reasoningEffort;
+    console.log(JSON.stringify({ modelResult, effortShow, effortSet, invalid, config, invalidLoaded }));
+  `;
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, "-e", script],
+    cwd: resolve(__dirname, "../../.."),
+    env: { ...process.env, PROTEUS_HOME: proteusHome },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(proc.exitCode).toBe(0);
+  return JSON.parse(proc.stdout.toString());
 }

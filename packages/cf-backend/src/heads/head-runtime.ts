@@ -10,7 +10,13 @@
 import type {
   HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
 } from "@proteus/core";
-import { type MergeOutput, MergeOutputSchema, effortFor, createAgentConfigStore } from "@proteus/core";
+import {
+  type MergeOutput,
+  MergeOutputSchema,
+  createAgentConfigStore,
+  parseModelSpec,
+  reasoningEffortOptions,
+} from "@proteus/core";
 import type { Think } from "@cloudflare/think";
 import { ExplorationAgent } from "../exploration.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
@@ -45,13 +51,14 @@ export function createCFHeadRuntime(
   );
   const mergeLLM: MergeLLMFn = async (prompt): Promise<MergeOutput> => {
     const stored = config.getModel();
-    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
+    const spec = reg.normalizeSpecSync(stored);
+    const model = reg.resolveModel(spec);
+    const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
     return generateJson({
       model,
       schema: MergeOutputSchema,
       prompt,
-      maxOutputTokens: 4096,
-      providerOptions: effortFor('head_merge').providerOptions,
+      ...(providerOptions ? { providerOptions } : {}),
     });
   };
 

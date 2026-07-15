@@ -9,6 +9,8 @@ import {
   fallbackWorkspaceIdentity,
   parseWorkspaceIdentityOutput,
   renderSoulMarkdown,
+  isReasoningEffort,
+  type ReasoningEffort,
 } from '@proteus/core';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
@@ -19,6 +21,8 @@ export interface CreateCloudWorkspaceInput {
   name?: string;
   displayName?: string;
   purpose?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface CreateCloudWorkspaceOptions {
@@ -34,8 +38,11 @@ export async function createCloudWorkspaceForUser(
   options: CreateCloudWorkspaceOptions = {},
 ): Promise<WorkspaceEntry> {
   const purpose = input.purpose?.trim() || undefined;
+  if (input.reasoningEffort !== undefined && !isReasoningEffort(input.reasoningEffort)) {
+    throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
+  }
   const models = await listAvailableModels(env, userId);
-  const model = pickInitialModel(await userDO.getConfig('default_model'), models);
+  const model = pickInitialModel(input.model ?? await userDO.getConfig('default_model'), models);
   if (!model) {
     throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the workspace again.');
   }
@@ -44,7 +51,7 @@ export async function createCloudWorkspaceForUser(
 
   const { entry, existed } = await userDO.registerWorkspace(identity.name, identity.displayName, purpose);
   try {
-    await initializeOrchestrator(env, userId, entry.name, entry.displayName, purpose, model);
+    await initializeOrchestrator(env, userId, entry.name, entry.displayName, purpose, model, input.reasoningEffort);
     if (identity.nameOrigin === 'auto' && purpose) {
       scheduleCloudAgentDisplayNameGeneration(env, userDO, entry.name, purpose, model, options);
     }
@@ -146,6 +153,7 @@ async function initializeOrchestrator(
   displayName: string,
   mission?: string,
   model?: string,
+  reasoningEffort?: ReasoningEffort,
 ): Promise<void> {
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
@@ -154,6 +162,7 @@ async function initializeOrchestrator(
   await orchestrator.setProvisionalDisplayName(displayName);
   await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
   if (model) await orchestrator.setModel(model);
+  if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
 }
 
 function pickInitialModel(defaultModel: string | null, models: ModelMenuEntry[]): string | null {

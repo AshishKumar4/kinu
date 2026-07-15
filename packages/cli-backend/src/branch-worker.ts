@@ -16,7 +16,15 @@
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, diversityDirective, formatInheritedContext, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
+import {
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  diversityDirective,
+  formatInheritedContext,
+  parseModelSpec,
+  reasoningEffortOptions,
+  type CraftedTool,
+  type LLMProviderConfig,
+} from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -83,13 +91,13 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         // Mirror cf-backend/src/exploration.ts: ask for a ```js implementation
         // when applicable so the branch is execution-groundable (the grounded
         // evaluator runs extracted code) — not prose-only.
-        const model = modelResolver.resolveModel(readStoredModelSpec());
+        const { model, providerOptions } = resolveLowEffortModel();
         const { text } = await generateText({
           model,
           system: 'You are an expert agent exploring one approach to solve a task.' + craftedToolHints +
             '\n\nIf your approach involves code, include it in a ```js code block.',
           messages: [{ role: 'user' as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
-          maxOutputTokens: 4096,
+          ...(providerOptions ? { providerOptions } : {}),
         });
         const trimmed = text.trim();
         const codeMatch = trimmed.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
@@ -106,11 +114,11 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         // bare task string.
         const traces = db.query('SELECT text FROM traces ORDER BY step').all() as Array<{ text: string }>;
         const attempt = traces.map(t => t.text).join('\n');
-        const model = modelResolver.resolveModel(readStoredModelSpec());
+        const { model, providerOptions } = resolveLowEffortModel();
         const { text } = await generateText({
           model,
           messages: [{ role: 'user' as const, content: `Task: ${task}\nAttempt: ${attempt}\n\nWhat specifically went wrong? One sentence.` }],
-          maxOutputTokens: 200,
+          ...(providerOptions ? { providerOptions } : {}),
         });
         result = text.trim();
         break;
@@ -138,6 +146,14 @@ function readStoredModelSpec(): string | null {
   } catch {
     return null;
   }
+}
+
+function resolveLowEffortModel() {
+  const spec = modelResolver.normalizeSpecSync(readStoredModelSpec());
+  return {
+    model: modelResolver.resolveModel(spec),
+    providerOptions: reasoningEffortOptions('low', parseModelSpec(spec).provider),
+  };
 }
 
 function readJson<T>(raw: string | undefined): T | null {

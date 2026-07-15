@@ -104,6 +104,18 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.get(AGENT_CONFIG_KEYS.model)).toBe('codex/gpt-5.5');
   });
 
+  test('reasoning effort: validates and round-trips the canonical key', () => {
+    const c = setup();
+    expect(c.getReasoningEffort()).toBeNull();
+    c.setReasoningEffort('high');
+    expect(c.getReasoningEffort()).toBe('high');
+    expect(c.get(AGENT_CONFIG_KEYS.reasoningEffort)).toBe('high');
+
+    c.set(AGENT_CONFIG_KEYS.reasoningEffort, 'extreme');
+    expect(c.getReasoningEffort()).toBeNull();
+    expect(() => c.setReasoningEffort('extreme' as never)).toThrow('Invalid reasoning effort');
+  });
+
   test('displayName: default null', () => {
     const c = setup();
     expect(c.getDisplayName()).toBeNull();

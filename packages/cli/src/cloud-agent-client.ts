@@ -21,7 +21,7 @@ import {
 } from './session.js';
 import { SessionRecorder } from './session-recorder.js';
 import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
-import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, TakePickOutcome } from '@proteus/core';
+import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@proteus/core';
 import {
   asRecord,
   createUserUiMessage,
@@ -311,6 +311,7 @@ export class CloudAgentClient implements AgentClient {
       name: status.displayName ?? status.name,
       purpose: status.purpose,
       model: status.model ?? null,
+      reasoningEffort: status.reasoningEffort ?? null,
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
@@ -386,6 +387,16 @@ export class CloudAgentClient implements AgentClient {
 
   async setModel(spec: string): Promise<{ spec: string }> {
     return { spec: (await this.callHttp<{ ok: true; spec: string }>('setModel', [spec])).spec };
+  }
+
+  async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    return (await this.callHttp<{ effort: ReasoningEffort | null }>('getReasoningEffort')).effort;
+  }
+
+  async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+    return {
+      effort: (await this.callHttp<{ ok: true; effort: ReasoningEffort }>('setReasoningEffort', [effort])).effort,
+    };
   }
 
   async listModels(): Promise<AgentModelEntry[]> {

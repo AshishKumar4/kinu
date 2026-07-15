@@ -8,6 +8,8 @@ import { join } from 'node:path';
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
+const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+const generateJson = readFileSync(join(import.meta.dir, '..', 'src', 'lib', 'generate-json.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
@@ -48,6 +50,34 @@ describe('turn-pipeline correctness wiring', () => {
     expect(weaveArgs).toContain('factsBlock: this.renderFactsForTurn()');
     expect(weaveArgs).toContain('...(memoryTail ? { memoryTail } : {})');
     expect(weaveArgs).toContain('executors: execs');
+  });
+
+  test('beforeTurn merges user reasoning effort with cache provider options', () => {
+    const beforeTurn = actor.slice(
+      actor.indexOf('async beforeTurn(ctx: TurnContext)'),
+      actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
+    );
+    expect(beforeTurn).toContain('this.config.getReasoningEffort()');
+    expect(beforeTurn).toContain("REASONING_EFFORT_FOR_STAGE.chat");
+    expect(beforeTurn).toContain('reasoningEffortOptions');
+    expect(beforeTurn).toContain('mergeProviderOptions(cacheOptions, reasoningOptions)');
+    expect(beforeTurn).toContain('cfg.providerOptions = providerOptions');
+    expect(beforeTurn).toContain('...(providerOptions ? { providerOptions } : {})');
+  });
+
+  test('provider-agnostic auxiliary calls use low effort without implicit output caps', () => {
+    expect(exploration).not.toContain('maxOutputTokens');
+    expect(exploration.match(/reasoningEffortOptions\('low'/g)?.length).toBe(1);
+    expect(headRuntime).not.toContain('maxOutputTokens');
+    expect(headRuntime).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
+
+    const shadowJudge = source.slice(
+      source.indexOf('private async runShadowEvalSampled'),
+      source.indexOf('private async maybeGenerateTitle'),
+    );
+    expect(shadowJudge).not.toContain('maxOutputTokens');
+    expect(shadowJudge).toContain("reasoningEffortOptions('low', this.effectiveModelProviderFamily())");
+    expect(generateJson).not.toContain('opts.maxOutputTokens ??');
   });
 
   test('CHAT_CLEAR resets the ephemeral ledger and durable compaction plan after Think handles it', () => {

@@ -4,7 +4,7 @@
  */
 
 import chalk from 'chalk';
-import type { WorkspaceInfo, SearchNode } from '@proteus/core';
+import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
 
 // ── Brand ────────────────────────────────────────────────────────
 
@@ -121,6 +121,8 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
 
 export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
   conversationCount?: number;
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
 }): void {
   const w = termWidth();
   console.log('');
@@ -134,6 +136,8 @@ export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
   console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 22), w));
   console.log(boxRow(L('Created:'), DIM(new Date(info.createdAt).toLocaleDateString()), w));
   console.log(boxRow(L('Database:'), DIM(formatBytes(dbSize)), w));
+  console.log(boxRow(L('Model:'), extra?.model ?? '(default)', w));
+  console.log(boxRow(L('Effort:'), extra?.reasoningEffort ?? 'medium (chat default)', w));
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   // Evolution section

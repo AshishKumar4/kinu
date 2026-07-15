@@ -1,7 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createStrategyRegistry, createSingleShotStrategy,
-  workersAIEffortOption, effortFor, REASONING_EFFORT_FOR_STAGE,
+  workersAIEffortOption, effortFor, reasoningEffortOptions,
+  mergeProviderOptions, REASONING_EFFORT_FOR_STAGE,
 } from '../src/index.ts';
 import type { ExplorationStrategy } from '../src/index.ts';
 
@@ -63,5 +64,45 @@ describe('reasoning_effort plumbing', () => {
   test('effortFor(stage) shortcut', () => {
     const opt = effortFor('scaffold_mutation');
     expect(opt.providerOptions?.['workers-ai'].reasoning_effort).toBe('high');
+  });
+
+  test('maps user effort to each provider family exactly', () => {
+    expect(reasoningEffortOptions('low', 'workers-ai')).toEqual({
+      'workers-ai': { reasoning_effort: 'low' },
+    });
+    for (const provider of ['openai', 'opencode', 'codex', 'openai-compat', 'openai-compat:groq'] as const) {
+      expect(reasoningEffortOptions('medium', provider)).toEqual({
+        openai: { reasoningEffort: 'medium' },
+      });
+    }
+    expect(reasoningEffortOptions('low', 'openrouter')).toEqual({
+      openrouter: { reasoningEffort: 'low' },
+    });
+    expect(reasoningEffortOptions('high', 'anthropic')).toEqual({
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 32_000 } },
+    });
+  });
+
+  test('maps Anthropic effort levels to their token budgets', () => {
+    expect(reasoningEffortOptions('low', 'anthropic')).toEqual({
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 4_000 } },
+    });
+    expect(reasoningEffortOptions('medium', 'anthropic')).toEqual({
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 16_000 } },
+    });
+  });
+
+  test('returns no options for an unsupported provider or missing effort', () => {
+    expect(reasoningEffortOptions(undefined, 'openai')).toBeUndefined();
+    expect(reasoningEffortOptions('high', 'unknown')).toBeUndefined();
+  });
+
+  test('merges effort into an existing provider namespace without clobbering it', () => {
+    expect(mergeProviderOptions(
+      { openai: { promptCacheKey: 'session-1' } },
+      reasoningEffortOptions('high', 'openai'),
+    )).toEqual({
+      openai: { promptCacheKey: 'session-1', reasoningEffort: 'high' },
+    });
   });
 });

@@ -40,6 +40,7 @@ import {
   isBranchStatusEvent,
   performUndo,
   resolveCommandDraft,
+  setModelPreference,
   type SlashOutcome,
 } from '../slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
@@ -276,7 +277,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
 
   const selectModel = useCallback(async (model: AgentModelEntry) => {
     try {
-      const result = await client.setModel(model.spec);
+      const result = await setModelPreference(client, model.spec);
       setModelSpec(result.spec);
       setModelPicker(null);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
@@ -334,6 +335,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       case 'model-set':
         setModelSpec(outcome.spec);
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
+        return;
+      case 'effort-set':
+        setStatus((current) => current ? { ...current, reasoningEffort: outcome.effort } : current);
+        addMessage({ role: 'system', content: `Reasoning effort: ${outcome.effort}` });
         return;
       case 'status':
         setStatus(outcome.status);
@@ -655,6 +660,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     consentDecisionRef.current?.(decision);
   }, []);
 
+  const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+
   useEffect(() => {
     if (!ready || initialPromptSentRef.current) return;
     const prompt = initialPrompt?.trim();
@@ -710,11 +717,14 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         return;
       }
     }
-    const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
     // Ctrl+L: open the last URL from assistant messages in the browser.
     if (key.name === 'l' && key.ctrl && !overlayOpen) {
       const url = lastUrlFromMessages(messagesRef.current);
       if (url) openBrowser(url);
+      return;
+    }
+    if (key.name === 'p' && key.ctrl) {
+      if (!overlayOpen) void openModelPicker();
       return;
     }
     if (key.name === 'b' && key.ctrl) {
@@ -771,6 +781,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         name={status?.name ?? client.agentName}
         mode={client.mode}
         model={modelSpec}
+        reasoningEffort={status?.reasoningEffort ?? 'medium'}
+        onModelSelect={() => { if (!overlayOpen) void openModelPicker(); }}
         connected={ready}
         scaffoldVersion={status?.scaffoldVersion}
         toolCount={status?.toolCount}
@@ -825,7 +837,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} · Ctrl+P model ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}

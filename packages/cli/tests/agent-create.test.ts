@@ -53,6 +53,7 @@ describe('CLI mission workspace names', () => {
       {
         purpose: 'Build a benchmark for Rust web frameworks',
         model: 'openai/gpt-5-mini',
+        reasoningEffort: 'high',
       },
       {
         id: 'abcdef123456',
@@ -77,6 +78,8 @@ describe('CLI mission workspace names', () => {
       name: 'rust-framework-benchmark-abcdef',
       displayName: 'Rust Framework Benchmark',
       purpose: 'Build a benchmark for Rust web frameworks',
+      model: 'openai/gpt-5-mini',
+      reasoningEffort: 'high',
     });
     expect(created).toMatchObject({
       name: 'rust-framework-benchmark-abcdef',

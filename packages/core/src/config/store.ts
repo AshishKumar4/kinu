@@ -8,6 +8,7 @@
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { DirectoryBackup } from '../execution/sandbox.js';
+import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -15,6 +16,7 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
  *  catches typos at compile time. */
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
+  reasoningEffort: 'reasoning_effort',
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
@@ -80,6 +82,8 @@ export interface AgentConfigStore {
   // ── Typed accessors for known keys ──
   getModel(): string | null;
   setModel(spec: string): void;
+  getReasoningEffort(): ReasoningEffort | null;
+  setReasoningEffort(effort: ReasoningEffort): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
   getNameOrigin(): 'user' | 'auto' | null;
@@ -177,6 +181,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
+    getReasoningEffort() {
+      const effort = get(AGENT_CONFIG_KEYS.reasoningEffort);
+      return isReasoningEffort(effort) ? effort : null;
+    },
+    setReasoningEffort(effort) {
+      if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+      set(AGENT_CONFIG_KEYS.reasoningEffort, effort);
+    },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
     getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },

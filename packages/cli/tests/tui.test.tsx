@@ -10,10 +10,42 @@ import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackO
 import type { AgentModelEntry } from '../src/model-catalog.js';
 import { MessageList } from '../src/tui/messages.js';
 import { tuiColors } from '../src/tui/theme.js';
+import { StatusBar } from '../src/tui/status-bar.js';
 
 const repoRoot = resolve(__dirname, '../../..');
 
 describe('CLI TUI layout', () => {
+  test('status bar makes the model control discoverable and shows effort', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 110, height: 8, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <StatusBar
+          name="jarvis"
+          mode="local"
+          model="openai/gpt-5.5"
+          reasoningEffort="high"
+          connected={true}
+          onModelSelect={() => {}}
+        />,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('GPT 5.5');
+      expect(frame).toContain('[Ctrl+P]');
+      expect(frame).toContain('effort high');
+
+      const statusSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/status-bar.tsx'), 'utf8');
+      const chatSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/chat-app.tsx'), 'utf8');
+      expect(statusSource).toContain('onMouseDown={onModelSelect}');
+      expect(chatSource).toContain("key.name === 'p' && key.ctrl");
+      expect(chatSource).toContain('setModelPreference(client, model.spec)');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
   test('model picker is an absolute overlay and does not move the input area', async () => {
     const withoutOverlay = await renderOverlayFrame(false);
     const withOverlay = await renderOverlayFrame(true);
