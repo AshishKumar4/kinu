@@ -15,11 +15,19 @@ import {
 import {
   callAgentRpc,
   createCloudWebhookTrigger,
+  listCloudAvailableModels,
   type CloudBackgroundJob,
   type CloudToolDescriptions,
   type CloudTriggerList,
 } from '../cloud-api.js';
-import { ACCENT, DIM, OK } from '../display.js';
+import { ACCENT, DIM, OK, WARN } from '../display.js';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
+import {
+  dedupeModelEntries,
+  normalizeModelEntries,
+  validateModelSpec,
+  type AgentModelEntry,
+} from '../model-catalog.js';
 
 interface ControlOpts {
   model?: string;
@@ -36,6 +44,10 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
+    if (spec) {
+      const models = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
+      validateModelSelection(models, catalogSpec(models, spec), spec, name);
+    }
     const result = spec
       ? await callAgentRpc<{ ok: true; spec: string }>(auth.origin, auth.token, target.cloudName, 'setModel', [spec])
       : await callAgentRpc<{ spec: string | null }>(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec');
@@ -43,8 +55,76 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
     return;
   }
 
-  const result = spec ? setLocalStoredModel(target.localName, spec) : getLocalStoredModel(target.localName);
+  let resolvedSpec = spec;
+  if (spec) {
+    const configured = createConfiguredLocalModelResolver({
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      auth: opts.auth,
+      agentName: target.localName,
+    });
+    resolvedSpec = configured.resolver.normalizeSpecSync(spec);
+    const models = await loadModelCatalog(() => configured.resolver.listModels());
+    validateModelSelection(models, resolvedSpec, spec, name);
+  }
+  const result = resolvedSpec ? setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+}
+
+async function loadModelCatalog(load: () => Promise<unknown[]>): Promise<AgentModelEntry[] | null> {
+  try {
+    return dedupeModelEntries(normalizeModelEntries(await load()));
+  } catch {
+    return null;
+  }
+}
+
+function validateModelSelection(
+  models: readonly AgentModelEntry[] | null,
+  resolvedSpec: string,
+  rawSpec: string,
+  workspace: string,
+): void {
+  if (!models || models.length === 0) {
+    console.log(`${WARN('!')} The model catalog is unavailable; setting ${resolvedSpec} without catalog validation.`);
+    return;
+  }
+
+  const explicitProvider = providerPrefix(rawSpec);
+  const validation = validateModelSpec(models, explicitProvider ? rawSpec.trim() : resolvedSpec);
+  if (validation.status === 'known') return;
+  if (validation.status === 'unknown-provider') {
+    if (!explicitProvider) {
+      console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog; setting it anyway.`);
+      console.log(`  ${DIM('List models:')} run ${ACCENT(`proteus chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+      return;
+    }
+    throw new Error(
+      `Unknown model provider ${JSON.stringify(validation.provider)} in ${JSON.stringify(rawSpec)}. `
+      + `Valid providers: ${validation.providers.join(', ')}.`,
+    );
+  }
+
+  console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog for ${validation.provider}; setting it anyway.`);
+  if (validation.suggestions.length > 0) {
+    console.log(`  ${DIM('Close matches:')} ${validation.suggestions.join(', ')}`);
+  }
+  console.log(`  ${DIM('List models:')} run ${ACCENT(`proteus chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+}
+
+function providerPrefix(spec: string): string | null {
+  const normalized = spec.trim();
+  if (!normalized || normalized.startsWith('@cf/')) return null;
+  const slash = normalized.indexOf('/');
+  return slash > 0 ? normalized.slice(0, slash) : null;
+}
+
+function catalogSpec(models: readonly AgentModelEntry[] | null, spec: string): string {
+  const normalized = spec.trim();
+  if (normalized.startsWith('@cf/')) return `workers-ai/${normalized}`;
+  if (!models || normalized.includes('/')) return normalized;
+  const suffixMatches = models.filter((model) => model.spec.endsWith(`/${normalized}`));
+  return suffixMatches.length === 1 ? suffixMatches[0]!.spec : normalized;
 }
 
 export async function toolsCommand(name: string, opts: ControlOpts): Promise<void> {

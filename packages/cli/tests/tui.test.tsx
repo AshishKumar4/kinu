@@ -20,6 +20,8 @@ describe('CLI TUI layout', () => {
 
     expect(lineContaining(withoutOverlay, 'INPUT-SENTINEL')).toBe(lineContaining(withOverlay, 'INPUT-SENTINEL'));
     expect(withOverlay).toContain('Select model');
+    expect(withOverlay).toContain('Type to filter');
+    expect(withOverlay).toContain('Filter models');
     expect(withOverlay).toContain('Kimi K2.6');
   });
 

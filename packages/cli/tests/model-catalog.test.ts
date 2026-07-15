@@ -1,6 +1,13 @@
 import { describe, test, expect } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
-import { contextWindowForSpec, dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from '../src/model-catalog.js';
+import {
+  contextWindowForSpec,
+  dedupeModelEntries,
+  filterModels,
+  normalizeModelEntries,
+  validateModelSpec,
+  type AgentModelEntry,
+} from '../src/model-catalog.js';
 
 const FEED: AgentModelEntry[] = [
   { spec: 'workers-ai/@cf/meta/llama-4', label: 'Llama 4', provider: 'workers-ai' },
@@ -61,5 +68,45 @@ describe('normalizeModelEntries + contextWindowForSpec', () => {
         capabilities: undefined, contextWindow: 1047576,
       },
     ]);
+  });
+});
+
+describe('filterModels', () => {
+  test('an empty query keeps the full model list', () => {
+    expect(filterModels(FEED, '')).toEqual(FEED);
+    expect(filterModels(FEED, '   ')).toEqual(FEED);
+  });
+
+  test('filters case-insensitively across labels, providers, specs, and capabilities', () => {
+    const models: AgentModelEntry[] = [
+      { spec: 'workers-ai/@cf/meta/llama-4', label: 'Llama 4', provider: 'workers-ai', capabilities: ['tools'] },
+      { spec: 'anthropic/claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'anthropic', capabilities: ['vision'] },
+    ];
+
+    expect(filterModels(models, 'OPUS')).toEqual([models[1]]);
+    expect(filterModels(models, 'anthropic')).toEqual([models[1]]);
+    expect(filterModels(models, '@CF/META')).toEqual([models[0]]);
+    expect(filterModels(models, 'VISION')).toEqual([models[1]]);
+  });
+});
+
+describe('validateModelSpec', () => {
+  test('distinguishes catalog models, uncatalogued models, and unknown providers', () => {
+    expect(validateModelSpec(FEED, 'anthropic/claude-opus-4-7')).toEqual({ status: 'known' });
+    expect(validateModelSpec(FEED, 'anthropic/claude-opus-4-8')).toEqual({
+      status: 'unknown-model',
+      provider: 'anthropic',
+      suggestions: ['anthropic/claude-opus-4-7', 'anthropic/claude-haiku-4-5'],
+    });
+    expect(validateModelSpec(FEED, 'unknown/model')).toEqual({
+      status: 'unknown-provider',
+      provider: 'unknown',
+      providers: ['anthropic', 'groq', 'workers-ai'],
+    });
+    expect(validateModelSpec(FEED, 'bare-model')).toEqual({
+      status: 'unknown-provider',
+      provider: 'bare-model',
+      providers: ['anthropic', 'groq', 'workers-ai'],
+    });
   });
 });

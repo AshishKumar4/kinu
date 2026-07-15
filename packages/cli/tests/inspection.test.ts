@@ -159,4 +159,35 @@ describe("CLI inspection commands", () => {
     const stored = runCli(home, ["model", "localtest"], llmEnv);
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
   });
+
+  test("proteus model validates known, uncatalogued, and unknown-provider specs", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-validation-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+    const knownSpec = "workers-ai/@cf/moonshotai/kimi-k2.6";
+    const llmEnv = {
+      PROTEUS_BASE_URL: "http://localhost:1/v1",
+      PROTEUS_AUTH: "Bearer x",
+      PROTEUS_MODEL: "@cf/moonshotai/kimi-k2.6",
+    };
+
+    const known = runCli(home, ["model", "localtest", knownSpec], llmEnv);
+    expect(known.exitCode).toBe(0);
+    expect(known.stdout.toString()).toContain(`set ${knownSpec}`);
+    expect(known.stdout.toString()).not.toContain("not in the model catalog");
+
+    const uncatalogued = runCli(home, ["model", "localtest", "workers-ai/@cf/meta/not-real"], llmEnv);
+    expect(uncatalogued.exitCode).toBe(0);
+    expect(uncatalogued.stdout.toString()).toContain("not in the model catalog");
+    expect(uncatalogued.stdout.toString()).toContain("Close matches: workers-ai/");
+    expect(uncatalogued.stdout.toString()).toContain("proteus chat localtest");
+    expect(uncatalogued.stdout.toString()).toContain("/model");
+    expect(uncatalogued.stdout.toString()).toContain("set workers-ai/@cf/meta/not-real");
+
+    const unknownProvider = runCli(home, ["model", "localtest", "unknown/model"], llmEnv);
+    expect(unknownProvider.exitCode).toBe(1);
+    expect(unknownProvider.stderr.toString()).toContain('Unknown model provider "unknown"');
+    expect(unknownProvider.stderr.toString()).toContain("workers-ai");
+    expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
+  });
 });
