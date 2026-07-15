@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { reconcileAgentRefs } from '../src/agent-list.js';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -11,6 +12,40 @@ afterEach(() => {
 });
 
 describe('CLI cloud agent registry sync', () => {
+  test('merges local and server workspaces while dropping stale cloud refs', () => {
+    const reconciled = reconcileAgentRefs(
+      ['localbot', 'localbot'],
+      [
+        {
+          name: 'localbot',
+          mode: 'local',
+          displayName: 'Local Bot',
+          localName: 'localbot',
+          createdAt: '2026-06-08T00:00:00.000Z',
+          updatedAt: '2026-06-08T00:00:00.000Z',
+        },
+        {
+          name: 'stale',
+          mode: 'cloud',
+          displayName: 'Stale',
+          cloudName: 'stale',
+          createdAt: '2026-06-08T00:00:00.000Z',
+          updatedAt: '2026-06-08T00:00:00.000Z',
+        },
+      ],
+      [
+        { name: 'web-agent', displayName: 'Web Agent', createdAt: 1, lastVisited: 1, archivedAt: null },
+        { name: 'web-agent', displayName: 'Web Agent', createdAt: 1, lastVisited: 1, archivedAt: null },
+      ],
+    );
+
+    expect(reconciled.map(({ name, label, mode }) => ({ name, label, mode }))).toEqual([
+      { name: 'localbot', label: 'Local Bot', mode: 'local' },
+      { name: 'web-agent', label: 'Web Agent', mode: 'cloud' },
+    ]);
+    expect(reconciled.some((agent) => agent.name === 'stale')).toBeFalse();
+  });
+
   test('uses the cloud agent list as the source of truth for cloud refs', () => {
     const home = mkdtempSync(join(tmpdir(), 'proteus-agent-list-'));
     tempDirs.push(home);

@@ -6,7 +6,7 @@ import {
   type AgentMode,
   type ProteusAgentConfig,
 } from './config.js';
-import { listCloudAgents } from './cloud-api.js';
+import { listCloudAgents, type CloudAgent } from './cloud-api.js';
 
 export interface ListedAgent {
   name: string;
@@ -14,6 +14,42 @@ export interface ListedAgent {
   mode: AgentMode;
   localName?: string;
   cloudName?: string;
+}
+
+export function reconcileAgentRefs(
+  localAgentNames: readonly string[],
+  configuredAgents: readonly ProteusAgentConfig[],
+  cloudAgents: readonly CloudAgent[],
+): ListedAgent[] {
+  const localConfig = new Map(
+    configuredAgents
+      .filter((agent) => agent.mode === 'local')
+      .map((agent) => [agent.localName ?? agent.name, agent]),
+  );
+  const local = [...new Set(localAgentNames)].map((name) => {
+    const configured = localConfig.get(name);
+    return {
+      name,
+      label: configured?.displayName ?? name,
+      mode: 'local' as const,
+      localName: name,
+      cloudName: configured?.cloudName,
+    };
+  });
+
+  const seenCloudNames = new Set<string>();
+  const cloud = cloudAgents.flatMap((agent) => {
+    if (seenCloudNames.has(agent.name)) return [];
+    seenCloudNames.add(agent.name);
+    return [{
+      name: agent.name,
+      label: agent.displayName,
+      mode: 'cloud' as const,
+      cloudName: agent.name,
+    }];
+  });
+
+  return [...local, ...cloud];
 }
 
 export function listKnownAgents(): ListedAgent[] {

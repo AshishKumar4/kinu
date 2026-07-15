@@ -164,9 +164,11 @@ export async function listCloudAvailableModels(origin: string, token: string): P
   return cloudJson(origin, '/api/cli/models', { token });
 }
 
-export async function createCloudAgent(origin: string, token: string, input: {
+export interface CreateCloudAgentInput {
   name?: string; displayName?: string; purpose?: string;
-}): Promise<CloudAgent> {
+}
+
+export async function createCloudAgent(origin: string, token: string, input: CreateCloudAgentInput): Promise<CloudAgent> {
   return cloudJson(origin, '/api/cli/workspaces', { method: 'POST', token, body: input });
 }
 

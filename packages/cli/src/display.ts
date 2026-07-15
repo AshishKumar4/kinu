@@ -156,6 +156,7 @@ export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
 
 export function printAgentList(agents: Array<{
   name: string;
+  mode: 'local' | 'cloud';
   purpose: string;
   scaffoldVersion: number;
   toolCount: number;
@@ -174,18 +175,20 @@ export function printAgentList(agents: Array<{
   // Adaptive column widths
   const maxName = Math.max(4, ...agents.map(a => a.name.length));
   const nameW = Math.min(maxName + 2, 22);
-  const purposeW = Math.max(20, termWidth() - nameW - 24);
+  const modeW = 8;
+  const purposeW = Math.max(20, termWidth() - nameW - modeW - 24);
 
-  const hdr = `  ${MUTED('NAME'.padEnd(nameW))}${MUTED('PURPOSE'.padEnd(purposeW))} ${MUTED('VER')}  ${MUTED('SIZE')}`;
+  const hdr = `  ${MUTED('NAME'.padEnd(nameW))}${MUTED('MODE'.padEnd(modeW))}${MUTED('PURPOSE'.padEnd(purposeW))} ${MUTED('VER')}  ${MUTED('SIZE')}`;
   console.log(hdr);
   console.log(`  ${DIM('─'.repeat(termWidth() - 4))}`);
 
   for (const a of agents) {
     const name = ACCENT(a.name.padEnd(nameW));
+    const mode = DIM(a.mode.padEnd(modeW));
     const purpose = DIM(a.purpose.slice(0, purposeW - 2).padEnd(purposeW));
     const ver = `v${a.scaffoldVersion}`.padEnd(4);
     const size = a.dbSize ? DIM(formatBytes(a.dbSize).padStart(8)) : DIM('    —   ');
-    console.log(`  ${name}${purpose} ${ver}  ${size}`);
+    console.log(`  ${name}${mode}${purpose} ${ver}  ${size}`);
   }
   console.log('');
 }

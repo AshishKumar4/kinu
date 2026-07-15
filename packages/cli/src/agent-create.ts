@@ -27,14 +27,18 @@ import {
   writeAliasShim,
   type AgentMode,
 } from './config.js';
-import { createCloudAgent } from './cloud-api.js';
+import {
+  createCloudAgent,
+  type CloudAgent,
+  type CreateCloudAgentInput,
+} from './cloud-api.js';
 import { authCommand } from './commands/auth.js';
 import { ensureLocalDaemonRunning } from './commands/daemon.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 export interface CreateCliAgentInput {
-  /** Required for local agents. Omit for cloud agents to let the server
-   *  generate the name (cloud naming is server-side). */
+  /** Required for local agents. Cloud agents are named from their mission
+   *  when this is omitted. */
   name?: string;
   displayName?: string;
   nameOrigin?: 'user' | 'auto';
@@ -88,6 +92,33 @@ export async function suggestAgentIdentityFromMission(
   }
 }
 
+export interface CreateCloudAgentFromMissionOptions {
+  id?: string;
+  generate?: (mission: string) => Promise<string>;
+  create: (input: CreateCloudAgentInput) => Promise<CloudAgent>;
+}
+
+export async function createCloudAgentFromMission(
+  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth'>,
+  options: CreateCloudAgentFromMissionOptions,
+): Promise<CloudAgent> {
+  const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
+  const identity = userNamed
+    ? { name: input.name, displayName: input.displayName ?? input.name }
+    : await suggestAgentIdentityFromMission(input.purpose, {
+        id: options.id,
+        model: input.model,
+        baseUrl: input.baseUrl,
+        auth: input.auth,
+        generate: options.generate,
+      });
+  return options.create({
+    name: identity.name,
+    displayName: identity.displayName,
+    purpose: input.purpose,
+  });
+}
+
 export function isCloudAuthConfigured(): boolean {
   return Boolean(loadConfigFile().accessToken);
 }
@@ -112,11 +143,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-    const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
-    const agent = await createCloudAgent(auth.origin, auth.token, {
-      name: userNamed ? input.name : undefined,
-      displayName: userNamed ? input.displayName ?? input.name : undefined,
-      purpose,
+    const agent = await createCloudAgentFromMission({ ...input, purpose }, {
+      create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
     });
     upsertAgentConfig({
       name: agent.name,

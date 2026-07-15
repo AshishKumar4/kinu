@@ -377,6 +377,7 @@ export function createLocalTimerTrigger(name: string, input: { cron?: string; at
     const nextFireAt = input.cron
       ? nextCronFire(input.cron, now)
       : input.atMs;
+    if (input.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${input.cron}`);
     if (!nextFireAt) throw new Error('A future trigger time is required.');
     const id = registry.register({
       kind: input.cron ? 'timer_cron' : 'timer_oneshot',

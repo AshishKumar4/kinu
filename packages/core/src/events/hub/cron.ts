@@ -19,39 +19,45 @@ export function nextAlarmTime(
   return candidates.length === 0 ? null : Math.min(...candidates);
 }
 
-// Minimal cron next-fire computation for the trigger registry. Supports:
-// - every-N-minutes expressions such as "*/5 * * * *"
-// - daily UTC expressions such as "30 2 * * *"
+// Minimal cron next-fire computation for the trigger registry. The minute and
+// hour fields accept wildcards, wildcard steps, or integer values. All other
+// fields must be wildcards.
 // Returns the next fire time (epoch ms) strictly after `from`, or null for an
 // unsupported/malformed expression.
 export function nextCronFire(cron: string, from: number): number | null {
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return null;
-  const [min, hour] = parts;
-  const d = new Date(from);
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+  if (dayOfMonth !== '*' || month !== '*' || dayOfWeek !== '*') return null;
 
-  // every-n-minutes: `*/n * * * *`
-  if (min.startsWith('*/')) {
-    const n = parseInt(min.slice(2), 10);
-    if (Number.isFinite(n) && n > 0) {
-      const cur = d.getUTCMinutes();
-      const next = (Math.floor(cur / n) + 1) * n;
-      const nd = new Date(d);
-      // setUTCMinutes normalizes 60+ into the next hour; do not also roll the
-      // hour manually or boundary firings move an hour late.
-      nd.setUTCMinutes(next, 0, 0);
-      return nd.getTime();
+  const minuteMatches = parseCronField(minute, 59);
+  const hourMatches = parseCronField(hour, 23);
+  if (!minuteMatches || !hourMatches) return null;
+
+  const candidate = new Date(from);
+  candidate.setUTCSeconds(0, 0);
+  // setUTCMinutes normalizes 60+ into the next hour; do not also roll the
+  // hour manually or boundary firings move an hour late.
+  candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
+  for (let elapsedMinutes = 0; elapsedMinutes < 24 * 60; elapsedMinutes++) {
+    if (minuteMatches(candidate.getUTCMinutes()) && hourMatches(candidate.getUTCHours())) {
+      return candidate.getTime();
     }
-  }
-
-  // daily at hh:mm UTC
-  const m = parseInt(min, 10);
-  const h = parseInt(hour, 10);
-  if (Number.isFinite(m) && Number.isFinite(h)) {
-    const nd = new Date(d);
-    nd.setUTCHours(h, m, 0, 0);
-    if (nd.getTime() <= from) nd.setUTCDate(nd.getUTCDate() + 1);
-    return nd.getTime();
+    candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
   }
   return null;
+}
+
+function parseCronField(field: string, max: number): ((value: number) => boolean) | null {
+  if (field === '*') return () => true;
+
+  const stepMatch = /^\*\/(\d+)$/.exec(field);
+  if (stepMatch) {
+    const step = Number(stepMatch[1]);
+    return Number.isFinite(step) && step > 0 ? (value) => value % step === 0 : null;
+  }
+
+  if (!/^\d+$/.test(field)) return null;
+  const expected = Number(field);
+  return expected <= max ? (value) => value === expected : null;
 }
