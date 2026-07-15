@@ -1,7 +1,11 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
+import {
+  createOpenCodeProvider,
+  OPENCODE_PROVIDER_ID,
+  rewriteOpenCodeResponsesBody,
+} from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
 
 // ─── Helpers: fake spawn + fake fetch ────────────────────────────────────────
@@ -102,7 +106,8 @@ function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): Ope
 
 function makeRoutingFetch() {
   const requests: string[] = [];
-  const fetchImpl = mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
+  const requestBodies: string[] = [];
+  const fetchImpl = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     if (url.endsWith('/.well-known/opencode')) {
       return new Response(FAKE_WELLKNOWN, { status: 200 });
@@ -111,14 +116,18 @@ function makeRoutingFetch() {
       return new Response(FAKE_CONFIG, { status: 200 });
     }
     requests.push(url);
+    if (typeof init?.body === 'string') requestBodies.push(init.body);
     return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as unknown as typeof fetch;
-  return { fetchImpl, requests };
+  return { fetchImpl, requests, requestBodies };
 }
 
-async function tryCall(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
+async function tryCall(
+  model: Parameters<typeof generateText>[0]['model'],
+  providerOptions?: Parameters<typeof generateText>[0]['providerOptions'],
+): Promise<void> {
   try {
-    await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
+    await generateText({ model, prompt: 'hello', maxOutputTokens: 16, providerOptions });
   } catch { /* minimal mock bodies may not parse — endpoint routing is the assertion */ }
 }
 
@@ -260,8 +269,78 @@ describe('OpenCode provider', () => {
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
   });
 
+  test('Responses requests disable storage and request encrypted reasoning', async () => {
+    const { fetchImpl, requestBodies } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const model = provider.createModel('openai/gpt-5.6-sol', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+    await tryCall(model, {
+      openai: {
+        include: [
+          'file_search_call.results',
+          'reasoning.encrypted_content',
+          'reasoning.encrypted_content',
+        ],
+      },
+    });
+
+    const body = JSON.parse(requestBodies[0]) as Record<string, unknown>;
+    expect(body.store).toBe(false);
+    expect(body.include).toEqual([
+      'file_search_call.results',
+      'reasoning.encrypted_content',
+    ]);
+  });
+
+  test('Responses requests remove persisted references and unsafe reasoning ids', () => {
+    const reasoningWithoutEncryptedContent = {
+      type: 'reasoning',
+      id: 'rs_missing',
+      summary: [{ type: 'summary_text', text: 'summary' }],
+    };
+    const reasoningWithEncryptedContent = {
+      type: 'reasoning',
+      id: 'rs_encrypted',
+      encrypted_content: 'encrypted-payload',
+      summary: [],
+    };
+    const nonReasoningItem = {
+      type: 'message',
+      id: 'msg_inline',
+      role: 'assistant',
+      content: [],
+    };
+    const nonPersistedReference = { type: 'item_reference', id: 'call_local' };
+
+    const body: Record<string, unknown> = {
+      model: 'openai/gpt-5.6-sol',
+      input: [
+        reasoningWithoutEncryptedContent,
+        reasoningWithEncryptedContent,
+        { type: 'item_reference', id: 'rs_reference' },
+        { type: 'item_reference', id: 'msg_reference' },
+        nonReasoningItem,
+        nonPersistedReference,
+      ],
+    };
+    rewriteOpenCodeResponsesBody(body);
+
+    expect(body.input).toEqual([
+      {
+        type: 'reasoning',
+        summary: [{ type: 'summary_text', text: 'summary' }],
+      },
+      reasoningWithEncryptedContent,
+      nonReasoningItem,
+      nonPersistedReference,
+    ]);
+  });
+
   test('non-reasoning models use the Chat Completions API route', async () => {
-    const { fetchImpl, requests } = makeRoutingFetch();
+    const { fetchImpl, requests, requestBodies } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
@@ -271,6 +350,12 @@ describe('OpenCode provider', () => {
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
+    const body = JSON.parse(requestBodies[0]) as Record<string, unknown>;
+    expect(body.model).toBe('gpt-5.4-nano');
+    expect(body.max_completion_tokens).toBe(16);
+    expect(Object.hasOwn(body, 'max_tokens')).toBe(false);
+    expect(Object.hasOwn(body, 'store')).toBe(false);
+    expect(Object.hasOwn(body, 'include')).toBe(false);
   });
 
   test('@ai-sdk/openai model metadata selects the Responses API route', async () => {

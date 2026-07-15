@@ -34,6 +34,10 @@ const CONFIG_TTL_MS = 60_000;
 const INSTALL_HINT = 'Install opencode: https://opencode.ai';
 const LOGIN_HINT = 'Run `opencode auth login` to authenticate, then run `proteus setup` again.';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export interface OpenCodeProviderOptions {
   /** Path to opencode's auth.json. Defaults to ~/.local/share/opencode/auth.json. */
   authPath?: string;
@@ -305,14 +309,17 @@ function createOpenCodeModel(
     let body = init?.body;
     if (typeof body === 'string') {
       try {
-        const parsed = JSON.parse(body);
-        parsed.model = upstreamModel;
-        // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
-        if (!useResponsesAPI && providerId === 'openai' && typeof parsed.max_tokens === 'number') {
-          parsed.max_completion_tokens = parsed.max_tokens;
-          delete parsed.max_tokens;
+        const parsed: unknown = JSON.parse(body);
+        if (isRecord(parsed)) {
+          parsed.model = upstreamModel;
+          if (useResponsesAPI) rewriteOpenCodeResponsesBody(parsed);
+          // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
+          if (!useResponsesAPI && providerId === 'openai' && typeof parsed.max_tokens === 'number') {
+            parsed.max_completion_tokens = parsed.max_tokens;
+            delete parsed.max_tokens;
+          }
+          body = JSON.stringify(parsed);
         }
-        body = JSON.stringify(parsed);
       } catch {
         // Body is not JSON — leave as-is.
       }
@@ -351,6 +358,37 @@ function createOpenCodeModel(
     baseURL: placeholder,
     fetch: customFetch,
   }).chatModel(modelId);
+}
+
+export function rewriteOpenCodeResponsesBody(body: Record<string, unknown>): void {
+  // The SDK forwards providerOptions.openai.store/include per call, but a
+  // ModelProvider does not own turn call options, so enforce ZDR here.
+  body.store = false;
+  const include = Array.isArray(body.include) ? body.include : [];
+  body.include = [...new Set([...include, 'reasoning.encrypted_content'])];
+
+  if (!Array.isArray(body.input)) return;
+  const input: unknown[] = [];
+  for (const item of body.input) {
+    if (!isRecord(item)) {
+      input.push(item);
+      continue;
+    }
+    if (
+      item.type === 'item_reference'
+      && typeof item.id === 'string'
+      && (item.id.startsWith('rs_') || item.id.startsWith('msg_'))
+    ) {
+      continue;
+    }
+    if (item.type === 'reasoning' && item.encrypted_content == null) {
+      const { id: _id, ...reasoning } = item;
+      input.push(reasoning);
+      continue;
+    }
+    input.push(item);
+  }
+  body.input = input;
 }
 
 // ─── Model discovery ─────────────────────────────────────────────────────────
