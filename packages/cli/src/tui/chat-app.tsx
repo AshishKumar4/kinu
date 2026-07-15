@@ -101,6 +101,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
 
   const msgIdRef = useRef(0);
   const inputRef = useRef<TextareaRenderable | null>(null);
+  // Mirrors the input's declarative `focused` condition so the mouse handler can
+  // reassert focus imperatively — a click moves OpenTUI's native focus without
+  // re-rendering React, so the declarative prop alone never wins it back.
+  const inputShouldFocusRef = useRef(false);
   const initialPromptSentRef = useRef(false);
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
@@ -682,6 +686,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           rendererInstance.copyToClipboardOSC52(text);
           copied = true;
         }
+        // A click (to scroll, or to select+copy) moves native focus off the
+        // input; reclaim it so the user can keep typing without a manual click.
+        if (inputShouldFocusRef.current) inputRef.current?.focus();
       }, 10);
     };
     return () => { rendererInstance.root.onMouseUp = undefined; };
@@ -755,6 +762,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const contextTokens = estimateContextTokens(messages);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
+  const inputFocused = ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen;
+  inputShouldFocusRef.current = inputFocused;
 
   return (
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
@@ -820,7 +829,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
-          focused={ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen}
+          focused={inputFocused}
           placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues · Ctrl+B branches)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
