@@ -157,7 +157,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       <box style={{ width: panelWidth, marginBottom: 1 }}>
         <text>
           <strong fg={tuiColors.accentStrong}>Proteus</strong>{' '}
-          <span fg={tuiColors.muted}>agent workspace</span>
+          <span fg={tuiColors.muted}>workspaces</span>
         </text>
       </box>
 

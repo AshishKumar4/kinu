@@ -263,7 +263,7 @@ export function printError(message: string, hint?: string): void {
 export function printHelp(): void {
   console.log('');
   console.log(`${BRAND} ${DIM(`v${VERSION}`)}`);
-  console.log(`${DIM('Self-evolving agent workspaces with MCTS exploration')}\n`);
+  console.log(`${DIM('Self-evolving workspaces with MCTS exploration')}\n`);
   console.log(`${chalk.bold('Usage:')}  proteus <command> [options]\n`);
   console.log(`${chalk.bold('Commands:')}`);
   console.log(`  ${ACCENT('setup')}              Connect your account; optionally configure local models`);

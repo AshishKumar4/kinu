@@ -17,18 +17,16 @@ describe('shared workspace identity naming', () => {
     });
   });
 
-  test('fallback identity is a deterministic memorable name from the workspace id', () => {
+  test('fallback identity derives from the mission text, not a random pair', () => {
     const id = '7f159a00-1234-4567-89ab-cdef01234567';
 
-    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', id))
-      .toBe('brisk-heron-7f15');
-    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', id))
-      .toBe('brisk-heron-7f15');
     expect(fallbackWorkspaceIdentity('Build a durable benchmark runner', id)).toEqual({
-      name: 'brisk-heron-7f15',
-      displayName: 'Brisk Heron',
+      name: 'build-a-durable-benchmar-7f159a',
+      displayName: 'Build a durable benchmark runner',
       nameOrigin: 'auto',
     });
+    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', id))
+      .toBe('build-a-durable-benchmar-7f159a');
   });
 
   test('blank missions never fall back to a generic workspace slug', () => {

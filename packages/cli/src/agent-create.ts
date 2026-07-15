@@ -200,7 +200,9 @@ async function generateIdentityJson(mission: string, opts: SuggestAgentIdentityO
     model: resolver.resolveModel(opts.model ?? null),
     system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
     prompt: workspaceIdentityPrompt(mission),
-    maxOutputTokens: 80,
+    // No output cap: reasoning models spend budget on thinking before the
+    // JSON, so a cap starves them into empty text (the fallback-name bug).
+    // Cheapness comes from low reasoning effort, not output caps.
   });
   return result.text;
 }

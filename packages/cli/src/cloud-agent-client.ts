@@ -170,7 +170,7 @@ export class CloudAgentClient implements AgentClient {
     if (!text && files.length === 0) throw new Error('prompt required');
     await this.ensureOpen();
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud agent connection is not open.');
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
 
     // The JSONL log records attachment names, never the data-URL payloads.
     this.activeCliSession.append('user', {
@@ -225,7 +225,7 @@ export class CloudAgentClient implements AgentClient {
     const rows = await this.callHttp<CloudChatMessage[]>('getChatHistory');
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) throw new Error('Could not locate that message in the agent’s chat history.');
-    if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud agent.');
+    if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
     const untilId = rows[pivot - 1]!.id;
     const result = await this.callRpc('forkAgent', [untilId]);
     const forkName = (result as { name?: unknown } | null)?.name;
@@ -255,7 +255,7 @@ export class CloudAgentClient implements AgentClient {
   private async callRpc(method: string, args: unknown[]): Promise<unknown> {
     await this.ensureOpen();
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud agent connection is not open.');
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
     const id = randomRequestId();
     return await new Promise<unknown>((resolve, reject) => {
       this.pendingRpcs.set(id, { resolve, reject });
@@ -285,7 +285,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async close(): Promise<void> {
-    this.failInFlight(new Error('Cloud agent connection closed.'));
+    this.failInFlight(new Error('Cloud workspace connection closed.'));
     this.ws?.close();
     this.ws = null;
     this.connectPromise = null;
@@ -438,14 +438,14 @@ export class CloudAgentClient implements AgentClient {
     ws.addEventListener('message', (event) => this.handleMessage(event));
     ws.addEventListener('close', () => {
       if (this.ws === ws) this.ws = null;
-      this.failInFlight(new Error('Cloud agent connection closed.'));
+      this.failInFlight(new Error('Cloud workspace connection closed.'));
     });
     ws.addEventListener('error', () => {
-      this.failInFlight(new Error('Cloud agent connection failed.'));
+      this.failInFlight(new Error('Cloud workspace connection failed.'));
     });
 
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud agent.')), 15_000);
+      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
         resolve();
@@ -466,7 +466,7 @@ export class CloudAgentClient implements AgentClient {
       if (!pending) return;
       this.pendingRpcs.delete(payload.id);
       if (payload.success === true) pending.resolve(payload.result);
-      else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud agent RPC failed.'));
+      else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud workspace RPC failed.'));
       return;
     }
 

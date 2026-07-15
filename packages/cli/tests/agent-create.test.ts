@@ -6,9 +6,9 @@ import {
 } from '../src/agent-create';
 
 describe('CLI mission workspace names', () => {
-  test('uses the shared memorable fallback and a stable id suffix', () => {
+  test('derives the name from the mission, memorable pair only for unusable missions', () => {
     expect(createWorkspaceNameFromMission('Research Rust web frameworks', 'abcdef123456'))
-      .toBe('evergreen-birch-abcd');
+      .toBe('research-rust-web-framew-abcdef');
     expect(createWorkspaceNameFromMission('!!!', '123456abcdef'))
       .toBe('ironwood-elm-1234');
   });
@@ -32,15 +32,17 @@ describe('CLI mission workspace names', () => {
     });
   });
 
-  test('falls back without deriving names from prompt words when model naming is unavailable', async () => {
+  test('derives the fallback from the mission when model naming is unavailable', async () => {
+    // Owner-reversed contract (2026-07-15): fallback names must come from the
+    // prompt/context, never a random pair, whenever the mission has words.
     const identity = await suggestAgentIdentityFromMission(
       'Review the OAuth callback flow',
       { id: '123456abcdef', generate: async () => { throw new Error('offline'); } },
     );
 
     expect(identity).toEqual({
-      name: 'ironwood-elm-1234',
-      displayName: 'Ironwood Elm',
+      name: 'review-the-oauth-callbac-123456',
+      displayName: 'Review the OAuth callback flow',
       nameOrigin: 'auto',
     });
   });

@@ -424,7 +424,7 @@ describe('CloudAgentClient protocol', () => {
 
     const result = await turn;
     expect(result.hadError).toBe(true);
-    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Cloud agent connection closed.' });
+    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Cloud workspace connection closed.' });
     expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
     await client.close();
   });

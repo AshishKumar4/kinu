@@ -196,7 +196,7 @@ export async function webhookCommand(name: string, label: string | undefined, op
 } = {}): Promise<void> {
   if (!label) throw new Error('webhook label required');
   const target = resolveAgentTarget(name);
-  if (target.mode !== 'cloud') throw new Error('Webhook triggers require a cloud agent.');
+  if (target.mode !== 'cloud') throw new Error('Webhook triggers require a cloud workspace.');
   const auth = requireAuthConfig();
   const authMode = normalizeWebhookAuthMode(opts.authMode);
   const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, {

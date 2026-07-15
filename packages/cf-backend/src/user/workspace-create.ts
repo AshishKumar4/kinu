@@ -2,6 +2,7 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_IDENTITY_SYSTEM_PROMPT,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
+  effortFor,
   workspaceIdentityPrompt,
   createWorkspaceNameFromMission,
   deriveWorkspaceTitle,
@@ -131,7 +132,9 @@ async function suggestCloudAgentDisplayName(
     model: provider.resolveModel(modelSpec),
     system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
     prompt: workspaceIdentityPrompt(mission),
-    maxOutputTokens: 80,
+    // No output cap: reasoning models spend budget on thinking before the
+    // JSON, so a cap starves them into empty text and the generic name wins.
+    ...effortFor('reflection'),
   });
   return parseWorkspaceIdentityOutput(result.text, id)?.displayName ?? null;
 }

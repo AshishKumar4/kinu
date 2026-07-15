@@ -5,7 +5,8 @@ export function slugifyName(text: string): string {
   return text.toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 24);
+    .slice(0, 24)
+    .replace(/-+$/, '');
 }
 
 export interface SuggestedWorkspaceIdentity {
@@ -119,23 +120,27 @@ export function resolveWorkspaceTitle(opts: {
 }
 
 export function createWorkspaceNameFromMission(mission: string, id: string): string {
-  const persona = extractPersonaName(mission);
-  if (persona) return `${cleanSlug(persona)}-${id.slice(0, 6)}`;
-  return memorableFallbackIdentity(id).name;
+  return fallbackWorkspaceIdentity(mission, id).name;
 }
 
+/** Deterministic identity when LLM titling is unavailable: a stated persona
+ *  name wins, then a title derived from the mission text itself; the random
+ *  adjective-noun pair is the last resort for an empty/unusable mission. */
 export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
   const persona = extractPersonaName(mission);
-  if (!persona) {
-    const fallback = memorableFallbackIdentity(id);
-    return { ...fallback, nameOrigin: 'auto' };
+  if (persona) {
+    return {
+      name: `${cleanSlug(persona)}-${id.slice(0, 6)}`,
+      displayName: cleanTitle(persona),
+      nameOrigin: 'auto',
+    };
   }
-  const title = cleanTitle(persona);
-  return {
-    name: `${cleanSlug(persona)}-${id.slice(0, 6)}`,
-    displayName: title,
-    nameOrigin: 'auto',
-  };
+  const title = cleanTitle(deriveWorkspaceTitle(mission));
+  const slug = cleanSlug(title);
+  if (title && slug) {
+    return { name: `${slug}-${id.slice(0, 6)}`, displayName: title, nameOrigin: 'auto' };
+  }
+  return { ...memorableFallbackIdentity(id), nameOrigin: 'auto' };
 }
 
 /** System prompt paired with workspaceIdentityPrompt — shared by the CLI's
