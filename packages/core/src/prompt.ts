@@ -285,7 +285,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
     // prompt-only operational doctrine the per-tool schema can't carry.
     parts.push([
       '## Research and experimentation',
-      'When a task needs breadth-first investigation or comparing competing approaches, do not answer inline — fan out, escalating (answer directly → heads → mcts) as uncertainty rises:',
+      'When a task needs breadth-first investigation, comparing competing approaches, or independent review/verification passes over separate components, do not work through it inline — fan out, escalating (answer directly → heads → mcts) as uncertainty rises:',
       `- ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
       'Heads recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.',
     ].join('\n'));

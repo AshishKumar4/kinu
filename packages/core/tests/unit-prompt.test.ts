@@ -457,7 +457,9 @@ describe('buildSystemPromptSync', () => {
       // Research doctrine now renders both strategy triggers from the registry
       // (single source) plus the always-on fan-out workflow — a deliberate,
       // load-bearing growth over the old heads-only blurb.
-      'Research and experimentation': 840,
+      // 2026-07-15: +positive fan-out triggers (parallel review/verification,
+      // pre-implementation investigation) — owner-directed delegation steering.
+      'Research and experimentation': 1080,
       'Background work': 260,
       // Team doctrine now adds the direct → heads → subordinate ladder and
       // coordination loop alongside the three gated team roles (2026-07).
