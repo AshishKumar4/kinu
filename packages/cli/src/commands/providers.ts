@@ -115,7 +115,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
     console.log(`${WARN('!')} opencode CLI not found.`);
     console.log(DIM(INSTALL_HINT_OPENCODE));
   }
-  console.log(DIM('Cloud agents cannot use opencode — they need their own provider credentials.'));
+  console.log(DIM('Cloud workspaces cannot use opencode — they need their own provider credentials.'));
 }
 
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
