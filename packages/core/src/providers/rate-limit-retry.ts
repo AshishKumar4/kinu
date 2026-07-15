@@ -64,7 +64,7 @@ export function withRateLimitRetry(
 }
 
 function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
-  if (init?.body !== undefined && init.body !== null) return typeof init.body === 'string';
+  if (init?.body !== undefined) return typeof init.body === 'string';
   return !(input instanceof Request) || input.body === null;
 }
 

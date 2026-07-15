@@ -69,4 +69,27 @@ describe('Workers AI session affinity (REST path)', () => {
     const req = await captureWorkersAIRequest(undefined);
     expect(req.headers.get('x-session-affinity')).toBeNull();
   });
+
+  test('agent-registry model fetches use the patient rate-limit retry', async () => {
+    let calls = 0;
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDOStub: fakeUserDOStub(),
+      fetch: (async () => {
+        calls++;
+        return calls === 1
+          ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
+          : chatCompletionResponse();
+      }) as typeof fetch,
+    });
+
+    const result = await generateText({
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+      prompt: 'ping',
+      maxRetries: 0,
+    });
+
+    expect(result.text).toBe('ok');
+    expect(calls).toBe(2);
+  });
 });

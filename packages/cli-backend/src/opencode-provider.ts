@@ -15,7 +15,7 @@
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
-import { asFetchFunction } from '@proteus/core';
+import { asFetchFunction, withRateLimitRetry } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
 import { existsSync, readFileSync } from 'node:fs';
@@ -281,6 +281,7 @@ function createOpenCodeModel(
   const upstreamModel = modelId.slice(slash + 1);
 
   const placeholder = 'https://opencode.invalid';
+  const modelFetch = withRateLimitRetry(fetchImpl);
 
   const customFetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const config = await resolveConfig();
@@ -325,7 +326,7 @@ function createOpenCodeModel(
       }
     }
 
-    const response = await fetchImpl(url, { ...init, headers, body, signal: init?.signal });
+    const response = await modelFetch(url, { ...init, headers, body, signal: init?.signal });
 
     // Invalidate cache on auth failure so the next request re-reads auth.json
     // and re-fetches the remote config (the user may have refreshed tokens).

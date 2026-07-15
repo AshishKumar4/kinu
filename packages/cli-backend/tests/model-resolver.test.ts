@@ -169,7 +169,7 @@ function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
         { spec: 'codex/gpt-5.3-codex', label: 'Codex', provider: 'codex' },
       ]);
     }
-    throw new Error(`unexpected fetch: ${url}`);
+    return fetch(input, init);
   }) as typeof fetch;
 }
 
@@ -210,11 +210,16 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
   test('resolved models call the proxy with the CLI bearer and the wire model id', async () => {
     const seen: Array<{ path: string; auth: string | null; affinity: string | null; model: unknown }> = [];
+    let wireCalls = 0;
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
+        wireCalls++;
         const body = await request.json() as { model?: unknown };
+        if (wireCalls === 1) {
+          return new Response('limited', { status: 429, headers: { 'Retry-After': '0' } });
+        }
         seen.push({
           path: new URL(request.url).pathname,
           auth: request.headers.get('authorization'),
@@ -237,12 +242,17 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         fetch: cloudMenuFetch(origin),
       });
 
-      const viaWorkersAI = await generateText({ model: resolver.resolveModel(null), prompt: 'ping' });
+      const viaWorkersAI = await generateText({
+        model: resolver.resolveModel(null),
+        prompt: 'ping',
+        maxRetries: 0,
+      });
       expect(viaWorkersAI.text).toBe('ok');
       const viaGateway = await generateText({ model: resolver.resolveModel('my-gateway/openai/gpt-4.1'), prompt: 'ping' });
       expect(viaGateway.text).toBe('ok');
 
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/chat/completions']);
+      expect(wireCalls).toBe(3);
       expect(seen.map((s) => s.model)).toEqual(['@cf/moonshotai/kimi-k2.6', 'openai/gpt-4.1']);
       for (const request of seen) {
         expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);

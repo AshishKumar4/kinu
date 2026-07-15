@@ -17,6 +17,7 @@ import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ModelInputModality } from './types.js';
 import { MODEL_INPUT_MODALITIES } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
+import { withRateLimitRetry } from './rate-limit-retry.js';
 import { authCacheKey, cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
@@ -78,7 +79,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = deps.fetch ?? fetch;
+      const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
       const customFetch = asFetchFunction(async (input, init) => {
         const urlStr = typeof input === 'string' ? input
                       : input instanceof URL ? input.toString()

@@ -65,6 +65,26 @@ describe('OpenAI provider contract', () => {
     await tryCall(model);
     expect(mock.requests.length).toBe(0);
   });
+
+  test('routes model requests through the patient rate-limit fetch', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return calls === 1
+        ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
+        : Response.json({ id: 'r', output: [] });
+    }) as typeof fetch;
+    const deps = makeDeps({
+      [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
+    }, fetchImpl);
+    const model = createOpenAIProvider().createModel('gpt-5.5', deps);
+
+    try {
+      await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
+    } catch { /* minimal success body may not parse; the fetch route is the assertion */ }
+
+    expect(calls).toBe(2);
+  });
 });
 
 // ── OpenRouter ─────────────────────────────────────────────────────────

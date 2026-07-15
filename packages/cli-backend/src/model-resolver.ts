@@ -159,6 +159,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       defaultModel: localEndpoint.model,
       llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
+      fetch: opts.fetch,
     }));
     registry.register(createGatewayBackedProvider({
       id: 'ai-gateway',
@@ -167,6 +168,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
+      fetch: opts.fetch,
     }));
   }
 
@@ -180,6 +182,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         menu,
         defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
         unavailableReason: 'Connect Cloudflare in your Proteus user settings to use Workers AI.',
+        fetch: opts.fetch,
       }));
     }
     registry.register(createCloudProxyProvider({
@@ -188,6 +191,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       cloud,
       menu,
       unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Proteus user settings.',
+      fetch: opts.fetch,
     }));
   } else {
     if (!registry.get('workers-ai')) {
@@ -266,6 +270,7 @@ function createGatewayBackedProvider(opts: {
   llm: LLMProviderConfig;
   catalogProviderId?: 'cloudflare-workers-ai';
   catalogModelPrefix?: string;
+  fetch?: typeof fetch;
 }): ModelProvider {
   return {
     id: opts.id,
@@ -295,6 +300,7 @@ function createGatewayBackedProvider(opts: {
         baseURL: opts.llm.baseURL,
         headers: opts.llm.headers,
         modelId,
+        fetch: opts.fetch,
       });
     },
   };
@@ -360,6 +366,7 @@ function createCloudProxyProvider(opts: {
   menu: () => Promise<CloudMenuEntry[]>;
   defaultModel?: string;
   unavailableReason: string;
+  fetch?: typeof fetch;
 }): ModelProvider {
   const baseURL = cloudProxyBaseURL(opts.cloud.origin);
   const headers: Record<string, string> = {
@@ -386,7 +393,14 @@ function createCloudProxyProvider(opts: {
         }));
     },
     createModel(modelId): LanguageModel {
-      return createChatModel({ kind: 'openai-compat', name: opts.id, baseURL, headers, modelId });
+      return createChatModel({
+        kind: 'openai-compat',
+        name: opts.id,
+        baseURL,
+        headers,
+        modelId,
+        fetch: opts.fetch,
+      });
     },
   };
 }

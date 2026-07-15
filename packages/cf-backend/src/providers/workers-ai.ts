@@ -1,4 +1,8 @@
 // Workers AI provider — uses the logged-in user's Cloudflare OAuth credential.
+// Chat inference always uses the account-scoped REST endpoint below, not
+// env.AI.run. The installed workers-ai-provider binding path directly awaits
+// binding.run and exposes no typed/status-bearing capacity error to intercept;
+// env.AI remains limited to non-chat features such as embeddings/HTML repair.
 // The model is constructed synchronously; the account-scoped base URL and
 // bearer token are resolved from UserDO inside customFetch on each request.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';

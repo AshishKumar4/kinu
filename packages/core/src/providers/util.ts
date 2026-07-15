@@ -3,6 +3,7 @@
 // small parse helpers the catalog adapters share.
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
+import { withRateLimitRetry } from './rate-limit-retry.js';
 
 export interface AuthedFetchOptions {
   /** Credential key passed to the AuthResolver on every request. */
@@ -28,7 +29,7 @@ export interface AuthedFetchOptions {
  * changes take effect without rebuilding the model.
  */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
-  const baseFetch = deps.fetch ?? fetch;
+  const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
   return asFetchFunction(async (input, init) => {
     const resolved = await deps.getAuth(opts.credKey);
     if (!resolved || (opts.requireBaseURL && !resolved.baseURL)) {

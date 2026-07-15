@@ -269,6 +269,30 @@ describe('OpenCode provider', () => {
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
   });
 
+  test('routes model requests through the patient rate-limit fetch', async () => {
+    let modelCalls = 0;
+    const fetchImpl = mock(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith('/.well-known/opencode')) return new Response(FAKE_WELLKNOWN);
+      if (url.includes('/config/opencode.json')) return new Response(FAKE_CONFIG);
+      modelCalls++;
+      return modelCalls === 1
+        ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
+        : Response.json({ id: 'r', output: [] });
+    }) as unknown as typeof fetch;
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const model = provider.createModel('openai/gpt-5.6-sol', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+
+    try {
+      await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
+    } catch { /* minimal success body may not parse; the fetch route is the assertion */ }
+
+    expect(modelCalls).toBe(2);
+  });
+
   test('Responses requests disable storage and request encrypted reasoning', async () => {
     const { fetchImpl, requestBodies } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));

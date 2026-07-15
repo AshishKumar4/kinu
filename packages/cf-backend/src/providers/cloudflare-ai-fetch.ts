@@ -5,7 +5,7 @@
 // refresh-on-401 retry → error mapping, so the request shape cannot drift
 // between the three consumers.
 import type { AuthResolution, AuthResolver } from '@proteus/core';
-import { asFetchFunction } from '@proteus/core';
+import { asFetchFunction, withRateLimitRetry } from '@proteus/core';
 import { repairSseCachedUsage } from './stream-usage-repair.js';
 
 export interface CloudflareAIFetchOptions {
@@ -28,7 +28,9 @@ export interface CloudflareAIFetchOptions {
 }
 
 export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof globalThis.fetch {
-  const baseFetch = opts.fetch ?? fetch;
+  // Retry the raw provider response before auth/error/stream processing so
+  // usage repair only ever sees the final response selected by this layer.
+  const baseFetch = withRateLimitRetry(opts.fetch ?? fetch);
   return asFetchFunction(async (input, init) => {
     const auth = await opts.getAuth(opts.credKey);
     if (!auth?.baseURL) return errorResponse(401, opts.missingCredentialMessage);
