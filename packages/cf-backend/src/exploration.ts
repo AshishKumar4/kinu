@@ -19,9 +19,9 @@
  *                           virtual-bash for scratch work; siblings can't
  *                           see each other.
  *
- * Both modes share: Facet class, getModel() helper, lifecycle, parallel-
- * spawn infrastructure (rt.spawnBranch). Heads are a mode of this Facet, not
- * a separate agent class.
+ * Both modes share: Facet class, composed owner/model services, lifecycle,
+ * and parallel-spawn infrastructure. Heads are a mode of this Facet, not a
+ * separate agent class.
  *
  * Constraints (Agent SDK facets, verified against agents 0.14.1 dist):
  *   • schedule()/keepAlive()/runFiber() WORK in facets — each delegates to
@@ -35,11 +35,8 @@
 
 import { Agent, callable } from "agents";
 import { generateText, tool, jsonSchema } from "ai";
-import type { LanguageModel } from "ai";
-import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
+import { diversityDirective, formatInheritedContext } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
-import type { UserDO } from "./user/user-do.js";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -61,9 +58,8 @@ import {
   buildHeadAccumulatorTools,
   buildHeadSandboxTools,
   buildHeadWebTools,
-  type WebSearchProvider,
 } from "@proteus/core";
-import { buildCfWebSearchProvider } from "./lib/web-provider.js";
+import { OwnedModelServices } from "./owned-model-services.js";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
@@ -78,6 +74,14 @@ export class ExplorationAgent extends Agent<Env> {
   private headCapture: HeadCapture | null = null;
   private headAborted = false;
   private headAbortReason: string | null = null;
+
+  private readonly ownedModelServices = new OwnedModelServices({
+    env: this.env,
+    agentName: () => this.name,
+    appTitle: 'Proteus (exploration)',
+    ownerRequired: false,
+    getOwnerUserId: () => this.getOwnerUserId(),
+  });
 
   // Lazy per-facet VFS + shell — only built when head mode runs.
   private _vfs: SqliteFS | null = null;
@@ -95,22 +99,6 @@ export class ExplorationAgent extends Agent<Env> {
     return this._shell;
   }
 
-  private _providerRegistry: AgentProviderRegistry | null = null;
-  private providerRegistry(): AgentProviderRegistry {
-    if (this._providerRegistry) return this._providerRegistry;
-    const userId = this.getOwnerUserId();
-    const userDOStub = userId
-      ? (this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>)
-      : null;
-    this._providerRegistry = createAgentProviderRegistry({
-      env: this.env,
-      userDOStub,
-      appTitle: 'Proteus (exploration)',
-      workersAI: { sessionAffinity: agentAffinityKey(this.name) },
-    });
-    return this._providerRegistry;
-  }
-
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
    *  them; the parent calls setOwner immediately after subAgent() returns
    *  the stub. Persisted to SQL so hibernation between spawn + run is safe. */
@@ -124,7 +112,7 @@ export class ExplorationAgent extends Agent<Env> {
       `INSERT INTO facet_owner (id, user_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id`,
       userId,
     );
-    this._providerRegistry = null;   // rebuild against the new owner
+    this.ownedModelServices.invalidate();
     return { ok: true };
   }
 
@@ -170,28 +158,6 @@ export class ExplorationAgent extends Agent<Env> {
     return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)) as DurableObjectStub<OrchestratorAgent>;
   }
 
-  /** Resolve the LanguageModel for this facet. `modelId` is whatever the
-   *  parent passed (could be a bare modelId or a full spec); the registry
-   *  normalizes it (handles BC `@cf/...` form). */
-  getModel(modelId?: string): LanguageModel {
-    const reg = this.providerRegistry();
-    return reg.resolveModel(reg.normalizeSpecSync(modelId));
-  }
-
-  private _webSearchProvider: WebSearchProvider | null = null;
-  /** The head's web research provider — same key-less-by-default seam the
-   *  orchestrator's main loop uses (DuckDuckGo + Markdown-for-Agents; a stored
-   *  `tavily` credential upgrades search). Built per-facet so a head can gather
-   *  live information rather than reason from clipped inherited context. */
-  private getWebSearchProvider(): WebSearchProvider {
-    if (this._webSearchProvider) return this._webSearchProvider;
-    // Ownership resolves PER CALL: the cached provider must not bake
-    // getAuth=undefined when a first web call precedes owner claim.
-    this._webSearchProvider = buildCfWebSearchProvider(this.env,
-      () => this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined);
-    return this._webSearchProvider;
-  }
-
   async onStart() {
     // MCTS mode trace table — pre-existing.
     this.ctx.storage.sql.exec(`
@@ -213,7 +179,7 @@ export class ExplorationAgent extends Agent<Env> {
     craftedTools: CraftedTool[],
     siblings: readonly string[] = [],
   ): Promise<{ text: string; codeUsed: string | null }> {
-    const model = this.getModel();
+    const model = this.ownedModelServices.resolveModel();
     const context = formatInheritedContext(priorHistory);
     const toolHints = craftedTools.length > 0
       ? `\nKnown patterns:\n${craftedTools.map(t => `- ${t.name}: ${t.description}`).join("\n")}`
@@ -237,7 +203,7 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async generateReflection(task: string): Promise<string> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
-    const model = this.getModel();
+    const model = this.ownedModelServices.resolveModel();
     const { text } = await generateText({
       model,
       messages: [{
@@ -286,7 +252,7 @@ export class ExplorationAgent extends Agent<Env> {
     // supplies its model + scratch tools (sandbox/shared/recursive-split). Abort
     // is driven by abortHead() flipping this.headAborted.
     return runHeadInference(input, {
-      model: this.getModel(input.model),
+      model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
       capture,
       isAborted: () => this.headAborted,
@@ -313,7 +279,7 @@ export class ExplorationAgent extends Agent<Env> {
       ...buildHeadSandboxTools(shell, vfs, capture),
 
       // web_search / web_fetch — live research over the shared provider seam.
-      ...buildHeadWebTools(this.getWebSearchProvider(), capture),
+      ...buildHeadWebTools(this.ownedModelServices.getWebSearchProvider(), capture),
 
       shared_write: tool({
         description:
@@ -467,7 +433,7 @@ export class ExplorationAgent extends Agent<Env> {
       },
       async mergeLLM(prompt: string): Promise<MergeOutput> {
         return generateJson({
-          model: facet.getModel(parentInput.model),
+          model: facet.ownedModelServices.resolveModel(parentInput.model),
           schema: MergeOutputSchema,
           prompt,
           maxOutputTokens: 2048,

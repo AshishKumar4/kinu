@@ -34,7 +34,6 @@ import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
-import { buildCfWebSearchProvider } from "./lib/web-provider.js";
 import { contextWindowForModel } from "./lib/context-window.js";
 import type {
   TurnContext, TurnConfig,
@@ -106,9 +105,9 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
-import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import type { AgentProviderRegistry } from "./providers/agent-registry.js";
+import { OwnedModelServices } from "./owned-model-services.js";
 import {
-  agentAffinityKey,
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
   resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
   hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
@@ -280,6 +279,14 @@ export abstract class ActorAgent extends Think<Env> {
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
 
   override maxSteps = resolveMaxSteps();
+
+  private readonly ownedModelServices = new OwnedModelServices({
+    env: this.env,
+    agentName: () => this.name,
+    appTitle: 'Proteus',
+    ownerRequired: true,
+    getOwnerUserId: () => this.getOwnerUserId(),
+  });
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -1007,21 +1014,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Model resolution ───────────────────────────────────────────
 
-  private _providerRegistry: AgentProviderRegistry | null = null;
   protected providerRegistry(): AgentProviderRegistry {
-    if (this._providerRegistry) return this._providerRegistry;
-    const userId = this.getOwnerUserId();
-    if (!userId) {
-      throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
-    }
-    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-    this._providerRegistry = createAgentProviderRegistry({
-      env: this.env,
-      userDOStub,
-      appTitle: 'Proteus',
-      workersAI: { sessionAffinity: agentAffinityKey(this.name) },
-    });
-    return this._providerRegistry;
+    return this.ownedModelServices.providerRegistry();
   }
 
   protected getOwnerUserDO(): DurableObjectStub<UserDO> | null {
@@ -1095,18 +1089,12 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  private _webSearchProvider: WebSearchProvider | null = null;
   /** The web search + fetch provider — built once per DO lifetime. Key-less by
    *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
    *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
    *  routes through env.AI.toMarkdown when the AI binding is present. */
   private getWebSearchProvider(): WebSearchProvider {
-    if (this._webSearchProvider) return this._webSearchProvider;
-    // Ownership resolves PER CALL: the provider is cached for the DO lifetime,
-    // so a first web call before owner claim must not bake getAuth=undefined.
-    this._webSearchProvider = buildCfWebSearchProvider(this.env,
-      () => this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined);
-    return this._webSearchProvider;
+    return this.ownedModelServices.getWebSearchProvider();
   }
 
   /** Stored model spec, or null when unset (registry will pick the default). */
@@ -1124,8 +1112,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.logActivity("getmodel");
     const stored = this.getStoredModelId();
     if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
-    const reg = this.providerRegistry();
-    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
+    const model = this.ownedModelServices.resolveModel(stored);
     this._cachedModel = model; this._cachedModelSpec = stored;
     return model;
   }
@@ -1809,7 +1796,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._turnCachePlan = hasCacheMarkers(cacheStrategy)
       ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
       : null;
-    const cacheOptions = promptCacheOptions(cacheStrategy, agentAffinityKey(this.name));
+    const cacheOptions = promptCacheOptions(cacheStrategy, this.ownedModelServices.affinityKey);
     if (cacheOptions) cfg.providerOptions = cacheOptions;
 
     // Shadow-eval context parity + the evolved-scaffold task source (see the
@@ -1943,8 +1930,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
    *  the user's chosen model so quality assessments stay consistent. */
   protected getModelForReview(): import('ai').LanguageModel {
-    const reg = this.providerRegistry();
-    return reg.resolveModel(reg.normalizeSpecSync(this.getStoredModelId()));
+    return this.ownedModelServices.resolveModel(this.getStoredModelId());
   }
 
   // ── Fiber recovery — durable execution surviving DO eviction ──
@@ -2004,7 +1990,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._thinkTool = null;
     // Provider registry caches per-agent OAuth refreshers; rebuild so a
     // disconnected provider stops being marked available.
-    this._providerRegistry = null;
+    this.ownedModelServices.invalidate();
   }
 
   // ── Credentials & Codex OAuth ─────────────────────────────────────
