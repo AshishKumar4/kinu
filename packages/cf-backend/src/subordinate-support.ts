@@ -1,6 +1,7 @@
 import {
   type EventLog,
   type PublishResult,
+  type SerializedMessage,
   type SubordinateReportStatus,
   type SubordinateRosterEntry,
   type SubordinateStatus,
@@ -9,6 +10,42 @@ import {
 
 interface SqlExec {
   exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
+}
+
+export interface SubordinateLiveStatus {
+  lastActivity: number | null;
+  recentSteps: Array<{
+    event: string;
+    summary: string;
+    elapsedMs: number;
+    createdAt: number;
+  }>;
+}
+
+export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
+  const recentSteps = sql.exec(
+    `SELECT event, detail, elapsed_ms, created_at
+     FROM activity_log
+     ORDER BY created_at DESC, id DESC
+     LIMIT 5`,
+  ).toArray().flatMap((row) => {
+    const event = readString(row, 'event');
+    const detail = row.detail;
+    const elapsedMs = row.elapsed_ms;
+    const createdAt = row.created_at;
+    if (event === null || (detail !== null && typeof detail !== 'string')
+      || typeof elapsedMs !== 'number' || typeof createdAt !== 'number') return [];
+    return [{
+      event,
+      summary: detail?.trim() || event,
+      elapsedMs,
+      createdAt,
+    }];
+  });
+  return {
+    lastActivity: recentSteps[0]?.createdAt ?? null,
+    recentSteps,
+  };
 }
 
 export interface SubordinateIdentity {
@@ -350,18 +387,61 @@ function optionalText(value: string | undefined): string | undefined {
   return text ? text : undefined;
 }
 
+const SUBORDINATE_CONTEXT_MAX_CHARS = 2400;
+const SUBORDINATE_CONTEXT_MAX_MESSAGES = 8;
+const SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS = 500;
+
+/** A bounded conversational handoff, not a fork of the parent's history. */
+export function renderSubordinateInheritedContext(
+  messages: readonly SerializedMessage[],
+): string | undefined {
+  const relevant = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message) => ({
+      role: message.role,
+      content: message.content.replace(/\s+/g, ' ').trim(),
+    }))
+    .filter((message) => message.content.length > 0)
+    .slice(-SUBORDINATE_CONTEXT_MAX_MESSAGES);
+  if (relevant.length === 0) return undefined;
+
+  const header = '<inherited_context>\nRecent relevant parent conversation (digest only; subordinate history remains separate):\n';
+  const footer = '\n</inherited_context>';
+  let remaining = SUBORDINATE_CONTEXT_MAX_CHARS - header.length - footer.length;
+  const lines: string[] = [];
+  for (let index = relevant.length - 1; index >= 0 && remaining > 0; index--) {
+    const message = relevant[index];
+    if (!message) continue;
+    const prefix = `[${message.role}] `;
+    const available = Math.min(
+      SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS,
+      remaining - prefix.length - (lines.length > 0 ? 1 : 0),
+    );
+    if (available <= 0) break;
+    const clipped = message.content.length > available
+      ? `${message.content.slice(0, Math.max(0, available - 1)).trimEnd()}…`
+      : message.content;
+    const line = `${prefix}${clipped}`;
+    lines.unshift(line);
+    remaining -= line.length + (lines.length > 1 ? 1 : 0);
+  }
+  return lines.length > 0 ? `${header}${lines.join('\n')}${footer}` : undefined;
+}
+
 export function admitSubordinateTask(log: EventLog, input: {
   fromWorkspace: string;
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
   deadlineHint?: string;
+  inheritedContext?: string;
   now: number;
 }): PublishResult {
   const fromWorkspace = requiredText(input.fromWorkspace, 'fromWorkspace');
   const body = requiredText(input.body, 'body');
   const deliverable = optionalText(input.deliverable);
   const deadlineHint = optionalText(input.deadlineHint);
+  const inheritedContext = optionalText(input.inheritedContext);
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
@@ -372,6 +452,7 @@ export function admitSubordinateTask(log: EventLog, input: {
         body,
         ...(deliverable ? { deliverable } : {}),
         ...(deadlineHint ? { deadline_hint: deadlineHint } : {}),
+        ...(inheritedContext ? { inherited_context: inheritedContext } : {}),
       },
     },
     now: input.now,
@@ -411,7 +492,12 @@ export interface SubordinateRuntime {
     mission: string;
     model?: string;
   }): Promise<void>;
-  assign(name: string, input: { body: string; deliverable?: string; deadlineHint?: string }): Promise<void>;
+  assign(name: string, input: {
+    body: string;
+    deliverable?: string;
+    deadlineHint?: string;
+    inheritedContext?: string;
+  }): Promise<void>;
   status(name: string): Promise<unknown>;
   message(name: string, content: string): Promise<void>;
   dismiss(name: string, keepHistory: boolean): Promise<void>;
@@ -497,6 +583,7 @@ export function createTeamToolDeps(deps: {
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
+  inheritedContext(): SerializedMessage[];
   broadcast(event: SubordinatesChangedEvent): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
 }): TeamToolDeps {
@@ -540,7 +627,11 @@ export function createTeamToolDeps(deps: {
           dismissedAt: null,
         });
         rosterCreated = true;
-        await deps.runtime.assign(name, { body: mission });
+        const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+        await deps.runtime.assign(name, {
+          body: mission,
+          ...(inheritedContext ? { inheritedContext } : {}),
+        });
       } catch (error) {
         await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
       }
@@ -556,10 +647,12 @@ export function createTeamToolDeps(deps: {
       try {
         const deliverable = optionalText(input.deliverable);
         const deadlineHint = optionalText(input.deadlineHint);
+        const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
         await deps.runtime.assign(input.name, {
           body: task,
           ...(deliverable ? { deliverable } : {}),
           ...(deadlineHint ? { deadlineHint } : {}),
+          ...(inheritedContext ? { inheritedContext } : {}),
         });
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');

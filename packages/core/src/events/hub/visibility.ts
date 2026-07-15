@@ -219,9 +219,15 @@ function briefForVariant(event: ProteusEvent): string {
     case 'subordinate_task': {
       // Assignments are the subordinate's whole turn input — chat-scale
       // budget, same as peer messages.
-      const p = event.payload as { kind: string; body: string; deliverable?: string };
+      const p = event.payload as {
+        kind: string;
+        body: string;
+        deliverable?: string;
+        inherited_context?: string;
+      };
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
-      return `${p.kind}: ${p.body.slice(0, 600)}${deliverable}`;
+      const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
+      return `${inheritedContext}${p.kind}: ${p.body.slice(0, 600)}${deliverable}`;
     }
     case 'subordinate_report': {
       const p = event.payload as { status: string; content: string; task?: string };

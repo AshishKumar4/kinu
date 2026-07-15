@@ -559,6 +559,7 @@ export class OrchestratorAgent extends ActorAgent {
     return createTeamToolDeps({
       roster: this.subordinateRoster,
       now: () => Date.now(),
+      inheritedContext: () => orchestrator.readInheritedContext(),
       createName: (role) => {
         const base = slugifyName(role).slice(0, 48) || 'subordinate';
         return `${base}-${nanoid(6)}`;
@@ -593,6 +594,7 @@ export class OrchestratorAgent extends ActorAgent {
             body: input.body,
             ...(input.deliverable ? { deliverable: input.deliverable } : {}),
             ...(input.deadlineHint ? { deadlineHint: input.deadlineHint } : {}),
+            ...(input.inheritedContext ? { inheritedContext: input.inheritedContext } : {}),
           });
         },
         async status(name) {

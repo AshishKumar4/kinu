@@ -42,6 +42,42 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
+  test('renders one imperative delegation ladder when team staffing is available', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      availableTools: ['think', 'team'],
+      registeredExecutors: [],
+    });
+
+    expect(prompt).toContain('## Team');
+    expect(prompt).toMatch(/single short coherent change/);
+    expect(prompt).toMatch(/think\(heads\).*ephemeral breadth-first/);
+    expect(prompt).toMatch(/team subordinate.*durable.*own turn loop/i);
+    expect(prompt).toMatch(/2\+ independent parts/);
+    expect(prompt).toMatch(/Decompose and STAFF it/);
+    expect(prompt).toMatch(/spawn.*assign.*poll.*status.*await reports.*integrate/i);
+    expect(prompt).toMatch(/staffing subordinates for multi-part or long-running work/);
+    expect(prompt.indexOf('delegation ladder')).toBeLessThan(prompt.indexOf('## Tools available this turn'));
+
+    const withoutTeam = buildSystemPromptSync(rt, {
+      availableTools: ['think'],
+      registeredExecutors: [],
+    });
+    expect(withoutTeam).not.toContain('Decompose and STAFF it');
+    expect(withoutTeam).not.toContain('delegation ladder');
+  });
+
+  test('team and peers schema descriptions lead with positive delegation triggers', () => {
+    expect(BUILTIN_TOOL_DESCRIPTIONS.team).toMatch(
+      /Use when: Use whenever the user asks for several fixes or features at once, or a long-running effort/,
+    );
+    expect(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('create one subordinate per independent workstream'))
+      .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('full agent turn'));
+    expect(BUILTIN_TOOL_DESCRIPTIONS.peers).toMatch(/Use when: Use for cross-workspace collaboration or handoff/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.peers.indexOf('cross-workspace collaboration'))
+      .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.peers.indexOf('full agent turn'));
+  });
+
   test('the research doctrine is single-sourced: the registry think spec is the only doctrine string', () => {
     // The prompt renders the registry's whenToUse verbatim — no parallel
     // hardcoded strategy doctrine. Editing registry.ts is the only place that
@@ -406,7 +442,8 @@ describe('buildSystemPromptSync', () => {
     // sizes — raise one ONLY alongside an intentional content change.
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
-      'Operating guidance': 560,
+      // Static pointer to the load-bearing delegation ladder (2026-07).
+      'Operating guidance': 640,
       // +2 summary lines for the team/peers split + the subordinate report
       // tool (2026-07, Subordinates A2). Real actors advertise a
       // deps-filtered subset; this representative surface carries all three.
@@ -422,11 +459,9 @@ describe('buildSystemPromptSync', () => {
       // load-bearing growth over the old heads-only blurb.
       'Research and experimentation': 840,
       'Background work': 260,
-      // Team doctrine now covers all three roles — subordinates (team),
-      // cross-workspace peers, and the subordinate's report spine — each line
-      // gated on its tool; the representative surface renders all three
-      // (2026-07, Subordinates A2).
-      'Team': 820,
+      // Team doctrine now adds the direct → heads → subordinate ladder and
+      // coordination loop alongside the three gated team roles (2026-07).
+      'Team': 1500,
       'Proteus product changes': 290,
       'Output format': 180,
     };

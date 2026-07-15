@@ -82,6 +82,10 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
   ];
 
+  if (hasTool(surface.builtinTools, 'team')) {
+    lines.push('- For multi-part or long-running work, use the delegation ladder below to decompose and staff independent workstreams.');
+  }
+
   if (family === 'kimi') {
     lines.push(
       '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context, continue from observations, and avoid re-planning after every tool result.',
@@ -297,7 +301,12 @@ function renderAgentStateSection(surface: PromptSurface): string {
   if (hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
     const lines = ['## Team'];
     if (hasTool(tools, 'team')) {
-      lines.push("You can staff this workspace: `team` spawns durable subordinate agents (role + mission), assigns tasks, messages them, checks status, and dismisses them. Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.");
+      lines.push(
+        'Delegation ladder: do it yourself = a single short coherent change; think(heads) = ephemeral breadth-first research or comparison that merges back this turn; team subordinate = a durable, long-running, independent workstream with its own turn loop.',
+        "For work with 2+ independent parts, or work that will span many turns or hours, don't execute it all inline. Decompose and STAFF it: spawn one subordinate per independent workstream with `team`, assign each its task, and keep the coordination + integration turn for yourself. A subordinate is cheap to create and dismiss — prefer delegating an independent multi-step workstream over grinding through everything yourself in one long turn.",
+        'Run the coordination loop: spawn the needed roles → assign several independent workstreams → poll team status / await reports → integrate the results yourself.',
+        "Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.",
+      );
     }
     if (hasTool(tools, 'peers')) {
       lines.push("Beyond this workspace, `peers` reaches the owner's other agents: delegate a subtask (ask waits for the answer, send does not), spawn a specialist workspace, or answer a peer message event via reply with its event_id.");

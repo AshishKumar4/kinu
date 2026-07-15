@@ -32,6 +32,8 @@ import { OrchestratorAgent } from './orchestrator.js';
 import {
   SubordinateIdentityStore,
   admitSubordinateTask,
+  readSubordinateLiveStatus,
+  type SubordinateLiveStatus,
 } from './subordinate-support.js';
 
 export interface SetSubordinateIdentityInput {
@@ -186,6 +188,7 @@ export class SubordinateAgent extends ActorAgent {
     body: string;
     deliverable?: string;
     deadlineHint?: string;
+    inheritedContext?: string;
   }): Promise<{ id: string; admitted: boolean }> {
     this.ensureSchema();
     const result = admitSubordinateTask(this.eventLog, {
@@ -194,18 +197,16 @@ export class SubordinateAgent extends ActorAgent {
       body: input.body,
       ...(input.deliverable ? { deliverable: input.deliverable } : {}),
       ...(input.deadlineHint ? { deadlineHint: input.deadlineHint } : {}),
+      ...(input.inheritedContext ? { inheritedContext: input.inheritedContext } : {}),
       now: Date.now(),
     });
     if (result.admitted) this.orch.scheduleDrain();
     return result;
   }
 
-  async getSubordinateStatus(): Promise<{ lastActivity: number | null }> {
+  async getSubordinateStatus(): Promise<SubordinateLiveStatus> {
     this.ensureSchema();
-    const row = this.ctx.storage.sql.exec(
-      `SELECT MAX(created_at) AS last_activity FROM activity_log`,
-    ).toArray()[0];
-    return { lastActivity: typeof row?.last_activity === 'number' ? row.last_activity : null };
+    return readSubordinateLiveStatus(this.ctx.storage.sql);
   }
 
   @callable()

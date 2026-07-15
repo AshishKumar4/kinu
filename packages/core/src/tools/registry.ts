@@ -125,18 +125,18 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   },
   team: {
     name: 'team',
-    summary: "Manage this workspace's subordinate agents: spawn a role-holder, assign it a task, message it, check its status, or dismiss it.",
+    summary: "Staff this workspace's independent workstreams with durable subordinate agents that can run in parallel.",
     whenToUse:
-      'Use to delegate long-duration or parallel work to a durable subordinate inside this workspace: create one with a role and mission (action=spawn), hand it a task (action=assign), add context or steer it conversationally (action=message), check progress (action=status), and retire it when its role is done (action=dismiss).',
-    whenNotToUse: 'Do not use for quick work you can do directly this turn (every subordinate turn is a full agent turn), and not for agents in the owner\'s OTHER workspaces — that is the peers tool.',
+      'Use whenever the user asks for several fixes or features at once, or a long-running effort — create one subordinate per independent workstream and run them in parallel. Create each with a role and mission (action=spawn), hand it further tasks (action=assign), steer it (action=message), check progress (action=status), and retire it when done (action=dismiss).',
+    whenNotToUse: 'Do not use for a single short coherent change or for agents in the owner\'s OTHER workspaces — that is the peers tool. Caution: every subordinate turn is a full agent turn.',
     result: 'Returns the subordinate roster, spawn/assign/message/dismiss confirmations, or a status snapshot. Subordinates report progress back as events that wake you.',
   },
   peers: {
     name: 'peers',
-    summary: "Work with the owner's other workspaces' agents: list peers, delegate and await an answer, fire-and-forget a task, spawn a new workspace, or reply to a peer's message.",
+    summary: "Collaborate or hand work off across the owner's other workspaces and specialist agents.",
     whenToUse:
-      'Use to delegate a subtask to a better-suited peer agent in another workspace, consult one and wait for its answer (action=ask), hand off work without waiting (action=send), create a fresh specialist workspace for a focused role (action=spawn_workspace), or answer a peer message event (action=reply with its event_id).',
-    whenNotToUse: 'Do not use for work you can do directly this turn, nor for helpers inside THIS workspace — spawn a subordinate with the team tool instead. Do not message peers speculatively — every message wakes that agent for a full turn.',
+      'Use for cross-workspace collaboration or handoff — delegate to a better-suited peer agent, consult one and await its answer (action=ask), hand off work without waiting (action=send), create a specialist workspace (action=spawn_workspace), or answer a peer message event (action=reply with its event_id).',
+    whenNotToUse: 'Do not use for a single short coherent change or for helpers inside THIS workspace — spawn a subordinate with the team tool instead. Caution: every peer message wakes that agent for a full agent turn, so send purposeful handoffs.',
     result: "Returns the peer roster, delivery status, the peer's reply, or a timeout notice — a late reply still arrives as an event that wakes you.",
   },
   report: {

@@ -26,7 +26,7 @@ export const DEFAULT_SOUL_MD = [
   '',
   '## Mission',
   '',
-  'Help the user by reading real context, using available tools, coordinating parallel heads when useful, saving durable facts and memory, and improving reusable capabilities over time.',
+  'Help the user by reading real context, using available tools, coordinating parallel heads for breadth and staffing subordinates for multi-part or long-running work, saving durable facts and memory, and improving reusable capabilities over time.',
 ].join('\n');
 
 function normalizeName(name: string): string {

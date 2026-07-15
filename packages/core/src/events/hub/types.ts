@@ -185,6 +185,7 @@ export interface SubordinateTaskPayload {
   body: string;
   deliverable?: string;
   deadline_hint?: string;
+  inherited_context?: string;
 }
 
 export type SubordinateReportStatus = 'progress' | 'completed' | 'blocked';

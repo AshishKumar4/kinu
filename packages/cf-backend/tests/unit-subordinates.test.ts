@@ -3,8 +3,10 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  buildDrainBatch,
   EventLog,
   initEventsHubTables,
+  type SerializedMessage,
   type SubordinateRosterEntry,
 } from '@proteus/core';
 import {
@@ -13,6 +15,7 @@ import {
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
+  readSubordinateLiveStatus,
   type SubordinateRuntime,
 } from '../src/subordinate-support.js';
 
@@ -82,12 +85,14 @@ describe('subordinate identity', () => {
   test('all user-level gates present the parent workspace name, never the facet name', () => {
     const actor = source('actor-agent.ts');
     const runtime = source('runtime.ts');
+    const orchestrator = source('orchestrator.ts');
     const subordinate = source('subordinate-agent.ts');
     expect(actor).toContain('const callerAgentName = this.workspaceName();');
     expect(runtime).toContain('agentName: actor.workspaceName');
     expect(subordinate).toContain('const bootstrap = await parent.getSubordinateBootstrapIdentity();');
     expect(subordinate).toContain('parentWorkspace: bootstrap.parentWorkspace');
     expect(subordinate).toContain('ownerUserId: bootstrap.ownerUserId');
+    expect(orchestrator).toContain('inheritedContext: () => orchestrator.readInheritedContext()');
   });
 
   test('subordinate tools are structurally confined to report, without team, peers, or product changes', () => {
@@ -167,19 +172,56 @@ describe('workspace subordinate roster', () => {
   });
 });
 
+describe('subordinate live status', () => {
+  test('returns the latest activity and bounded recent step summaries', () => {
+    const sql = makeSql();
+    sql.exec(`CREATE TABLE activity_log (
+      id TEXT PRIMARY KEY,
+      event TEXT NOT NULL,
+      detail TEXT,
+      elapsed_ms INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
+    for (let index = 1; index <= 7; index++) {
+      sql.exec(
+        `INSERT INTO activity_log (id, event, detail, elapsed_ms, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        `id-${index}`,
+        `step-${index}`,
+        index === 7 ? 'Integrated auth findings' : `detail-${index}`,
+        index * 10,
+        index * 100,
+      );
+    }
+
+    expect(readSubordinateLiveStatus(sql)).toEqual({
+      lastActivity: 700,
+      recentSteps: [
+        { event: 'step-7', summary: 'Integrated auth findings', elapsedMs: 70, createdAt: 700 },
+        { event: 'step-6', summary: 'detail-6', elapsedMs: 60, createdAt: 600 },
+        { event: 'step-5', summary: 'detail-5', elapsedMs: 50, createdAt: 500 },
+        { event: 'step-4', summary: 'detail-4', elapsedMs: 40, createdAt: 400 },
+        { event: 'step-3', summary: 'detail-3', elapsedMs: 30, createdAt: 300 },
+      ],
+    });
+  });
+});
+
 interface TeamHarness {
   roster: SubordinateRosterStore;
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
+  assignments: Array<{ body: string; inheritedContext?: string }>;
   broadcasts: number[];
   tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
   failures: Set<keyof SubordinateRuntime>;
 }
 
-function makeTeamHarness(): TeamHarness {
+function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarness {
   const roster = new SubordinateRosterStore(makeSql());
   roster.ensureSchema();
   const calls: string[] = [];
+  const assignments: Array<{ body: string; inheritedContext?: string }> = [];
   const broadcasts: number[] = [];
   const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
   const failures = new Set<keyof SubordinateRuntime>();
@@ -188,8 +230,18 @@ function makeTeamHarness(): TeamHarness {
   };
   const runtime: SubordinateRuntime = {
     async spawn(input) { calls.push(`spawn:${input.name}:${input.mission}`); fail('spawn'); },
-    async assign(name, input) { calls.push(`assign:${name}:${input.body}`); fail('assign'); },
-    async status(name) { fail('status'); return { lastActivity: name.length }; },
+    async assign(name, input) {
+      calls.push(`assign:${name}:${input.body}`);
+      assignments.push(input);
+      fail('assign');
+    },
+    async status(name) {
+      fail('status');
+      return {
+        lastActivity: name.length,
+        recentSteps: [{ event: 'beforeturn', summary: 'streamText() called next', elapsedMs: 12, createdAt: 34 }],
+      };
+    },
     async message(name, content) { calls.push(`message:${name}:${content}`); fail('message'); },
     async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss'); },
   };
@@ -198,13 +250,49 @@ function makeTeamHarness(): TeamHarness {
     runtime,
     createName: () => 'researcher-a1b2c3',
     now: () => 1_700_000_000_000,
+    inheritedContext: () => inheritedContext,
     broadcast: () => { broadcasts.push(Date.now()); },
     broadcastTask: (event) => { tasks.push(event); },
   });
-  return { roster, team, calls, broadcasts, tasks, failures };
+  return { roster, team, calls, assignments, broadcasts, tasks, failures };
 }
 
 describe('team action routing', () => {
+  test('spawn gives the subordinate a filtered inherited-context digest before its first mission', async () => {
+    const inheritedContext: SerializedMessage[] = [
+      { id: 's1', role: 'system', content: 'Internal system policy', createdAt: 1 },
+      { id: 'u1', role: 'user', content: 'Fix auth and billing in parallel.', createdAt: 2 },
+      { id: 't1', role: 'tool', content: 'Very noisy tool output', createdAt: 3 },
+      { id: 'a1', role: 'assistant', content: 'I will split the independent workstreams.', createdAt: 4 },
+    ];
+    const h = makeTeamHarness(inheritedContext);
+
+    await h.team.spawn({ role: 'auth engineer', mission: 'Repair the auth flow.' });
+
+    const digest = h.assignments[0]?.inheritedContext;
+    expect(digest).toContain('<inherited_context>');
+    expect(digest).toContain('[user] Fix auth and billing in parallel.');
+    expect(digest).toContain('[assistant] I will split the independent workstreams.');
+    expect(digest).not.toContain('Internal system policy');
+    expect(digest).not.toContain('Very noisy tool output');
+    expect(digest?.length).toBeLessThanOrEqual(2400);
+
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    admitSubordinateTask(log, {
+      fromWorkspace: 'proteus-main',
+      kind: 'task',
+      body: 'Repair the auth flow.',
+      inheritedContext: digest,
+      now: 10,
+    });
+    const turn = buildDrainBatch(log.pending({ variant: 'subordinate_task' }));
+    expect(turn?.text.indexOf('<inherited_context>')).toBeLessThan(
+      turn?.text.indexOf('task: Repair the auth flow.') ?? -1,
+    );
+  });
+
   test('successful actions expose one canonical roster and nested live status', async () => {
     const h = makeTeamHarness();
 
@@ -230,7 +318,10 @@ describe('team action routing', () => {
     });
     expect(await h.team.status({ name: 'researcher-a1b2c3' })).toEqual({
       roster: h.roster.requireActive('researcher-a1b2c3'),
-      live: { lastActivity: 'researcher-a1b2c3'.length },
+      live: {
+        lastActivity: 'researcher-a1b2c3'.length,
+        recentSteps: [{ event: 'beforeturn', summary: 'streamText() called next', elapsedMs: 12, createdAt: 34 }],
+      },
     });
 
     h.roster.applyReport('researcher-a1b2c3', 'blocked');
@@ -316,6 +407,7 @@ describe('team action routing', () => {
       runtime,
       createName: () => 'researcher-a1b2c3',
       now: () => 123,
+      inheritedContext: () => [],
       broadcast: () => {},
       broadcastTask: () => {},
     });
