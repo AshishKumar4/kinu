@@ -14,6 +14,7 @@
 // cf-backend.
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createOpenAI } from '@ai-sdk/openai';
 import { asFetchFunction } from '@proteus/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@proteus/core';
@@ -79,6 +80,10 @@ export interface OpenCodeModelInfo {
   name: string;
   /** Context window in tokens, if known. */
   contextWindow?: number;
+  /** Whether opencode identifies the model as a reasoning model. */
+  reasoning?: boolean;
+  /** AI SDK package opencode uses for the model's API surface. */
+  apiNpm?: string;
 }
 
 interface OpenCodeCredential {
@@ -125,10 +130,15 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
 
   let availabilityCache: Promise<OpenCodeAvailability> | null = null;
   let configCache: { signature: string; loadedAt: number; config: ResolvedConfig } | null = null;
+  let modelMetadata = new Map<string, OpenCodeModelInfo>();
 
   const availability = () => (availabilityCache ??= probeFn());
 
   function readCredential(): OpenCodeCredential {
+    // OAuth entries need a separate provider-native path: select the requested
+    // provider's credential, refresh or exchange it, resolve its API base URL,
+    // and use that provider's SDK and required headers (including account IDs).
+    // They cannot supply the hosted route map consumed by this well-known path.
     if (!existsSync(authPath)) {
       throw new Error(`opencode auth not found at ${authPath}. Run: opencode auth login`);
     }
@@ -204,6 +214,7 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     // 4. Discover models via `opencode models --verbose`.
     const models = await discoverModels(spawnFn);
     if (models.length === 0) throw new Error('opencode reports no available models');
+    modelMetadata = new Map(models.map((model) => [model.id, model]));
 
     const configuredDefault = typeof config.model === 'string' ? config.model : '';
     const defaultModel = models.some((m) => m.id === configuredDefault) ? configuredDefault : models[0].id;
@@ -241,7 +252,9 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       return undefined; // resolved lazily via loadConfig in setup
     },
     createModel(modelId: string): LanguageModel {
-      return createOpenCodeModel(modelId, () => loadConfig(), invalidateCache);
+      const metadata = modelMetadata.get(modelId);
+      const useResponsesAPI = metadata?.reasoning === true || metadata?.apiNpm === '@ai-sdk/openai';
+      return createOpenCodeModel(modelId, () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI);
     },
   };
 }
@@ -252,6 +265,8 @@ function createOpenCodeModel(
   modelId: string,
   resolveConfig: () => Promise<ResolvedConfig>,
   invalidateCache: () => void,
+  fetchImpl: typeof fetch,
+  useResponsesAPI: boolean,
 ): LanguageModel {
   // The modelId is the opencode model id, e.g. "openai/gpt-5.6-sol".
   // We split on the first slash to get the provider prefix and the
@@ -292,8 +307,8 @@ function createOpenCodeModel(
       try {
         const parsed = JSON.parse(body);
         parsed.model = upstreamModel;
-        // OpenAI's newer API uses max_completion_tokens instead of max_tokens.
-        if (providerId === 'openai' && typeof parsed.max_tokens === 'number') {
+        // OpenAI Chat Completions uses max_completion_tokens instead of max_tokens.
+        if (!useResponsesAPI && providerId === 'openai' && typeof parsed.max_tokens === 'number') {
           parsed.max_completion_tokens = parsed.max_tokens;
           delete parsed.max_tokens;
         }
@@ -303,7 +318,7 @@ function createOpenCodeModel(
       }
     }
 
-    const response = await fetch(url, { ...init, headers, body, signal: init?.signal });
+    const response = await fetchImpl(url, { ...init, headers, body, signal: init?.signal });
 
     // Invalidate cache on auth failure so the next request re-reads auth.json
     // and re-fetches the remote config (the user may have refreshed tokens).
@@ -321,6 +336,15 @@ function createOpenCodeModel(
       headers: responseHeaders,
     });
   });
+
+  if (useResponsesAPI) {
+    return createOpenAI({
+      name: OPENCODE_PROVIDER_ID,
+      baseURL: placeholder,
+      apiKey: 'placeholder',
+      fetch: customFetch,
+    }).responses(modelId);
+  }
 
   return createOpenAICompatible({
     name: OPENCODE_PROVIDER_ID,
@@ -357,8 +381,8 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
       const metadata = JSON.parse(stdout.slice(start, end)) as {
         name?: string;
         limit?: { context?: number };
-        capabilities?: { output?: { text?: boolean }; toolcall?: boolean };
-        api?: { id?: string };
+        capabilities?: { output?: { text?: boolean }; toolcall?: boolean; reasoning?: boolean };
+        api?: { id?: string; npm?: string };
       };
       // Skip models that can't do text output or tool calls.
       if (metadata?.capabilities?.output?.text === false) continue;
@@ -376,6 +400,12 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
         upstreamModel,
         name: typeof metadata?.name === 'string' && metadata.name ? metadata.name : id,
         contextWindow: typeof context === 'number' && context > 0 ? Math.floor(context) : undefined,
+        reasoning: typeof metadata?.capabilities?.reasoning === 'boolean'
+          ? metadata.capabilities.reasoning
+          : undefined,
+        apiNpm: typeof metadata?.api?.npm === 'string' && metadata.api.npm
+          ? metadata.api.npm
+          : undefined,
       });
     } catch {
       // Skip malformed JSON entries.

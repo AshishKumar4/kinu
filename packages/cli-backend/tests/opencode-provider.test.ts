@@ -1,4 +1,5 @@
 import { describe, test, expect, mock } from 'bun:test';
+import { generateText } from 'ai';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
@@ -49,7 +50,7 @@ const FAKE_CONFIG = JSON.stringify({
   provider: {
     openai: {
       options: {
-        baseURL: 'https://opencode.example.com/openai',
+        baseURL: 'https://opencode.example.com/openai/v1',
         headers: { 'Authorization': 'Bearer {env:TOKEN}' },
       },
     },
@@ -61,7 +62,7 @@ const FAKE_MODELS_OUTPUT = [
   JSON.stringify({
     name: 'GPT 5.6 Sol',
     limit: { context: 1050000 },
-    capabilities: { output: { text: true }, toolcall: true },
+    capabilities: { output: { text: true }, toolcall: true, reasoning: true },
     api: { id: 'gpt-5.6-sol' },
   }),
   '',
@@ -69,8 +70,8 @@ const FAKE_MODELS_OUTPUT = [
   JSON.stringify({
     name: 'GPT 5.4 Nano',
     limit: { context: 200000 },
-    capabilities: { output: { text: true }, toolcall: true },
-    api: { id: 'gpt-5.4-nano' },
+    capabilities: { output: { text: true }, toolcall: true, reasoning: false },
+    api: { id: 'gpt-5.4-nano', npm: '@ai-sdk/openai-compatible' },
   }),
   '',
 ].join('\n');
@@ -97,6 +98,28 @@ function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): Ope
     probe: undefined, // use real probe
     ...overrides,
   };
+}
+
+function makeRoutingFetch() {
+  const requests: string[] = [];
+  const fetchImpl = mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith('/.well-known/opencode')) {
+      return new Response(FAKE_WELLKNOWN, { status: 200 });
+    }
+    if (url.includes('/config/opencode.json')) {
+      return new Response(FAKE_CONFIG, { status: 200 });
+    }
+    requests.push(url);
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  return { fetchImpl, requests };
+}
+
+async function tryCall(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
+  try {
+    await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
+  } catch { /* minimal mock bodies may not parse — endpoint routing is the assertion */ }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -222,6 +245,66 @@ describe('OpenCode provider', () => {
     });
     expect(model).toBeDefined();
     expect(model.modelId).toBe('openai/gpt-5.6-sol');
+  });
+
+  test('reasoning models use the Responses API route', async () => {
+    const { fetchImpl, requests } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const model = provider.createModel('openai/gpt-5.6-sol', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+    await tryCall(model);
+
+    expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
+  });
+
+  test('non-reasoning models use the Chat Completions API route', async () => {
+    const { fetchImpl, requests } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const model = provider.createModel('openai/gpt-5.4-nano', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+    await tryCall(model);
+
+    expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
+  });
+
+  test('@ai-sdk/openai model metadata selects the Responses API route', async () => {
+    const output = [
+      'openai/sdk-routed-model',
+      JSON.stringify({
+        name: 'SDK-routed model',
+        capabilities: { output: { text: true }, toolcall: true, reasoning: false },
+        api: { id: 'sdk-routed-model', npm: '@ai-sdk/openai' },
+      }),
+      '',
+    ].join('\n');
+    const { fetchImpl, requests } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(output) }));
+
+    await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const model = provider.createModel('openai/sdk-routed-model', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+    await tryCall(model);
+
+    expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
+  });
+
+  test('models created before metadata loads default to Chat Completions', async () => {
+    const { fetchImpl, requests } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+
+    const model = provider.createModel('openai/gpt-5.6-sol', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+    await tryCall(model);
+
+    expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
   });
 
   test('createModel throws on invalid model id (no slash)', () => {
