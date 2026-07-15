@@ -42,11 +42,17 @@ function classifierResponses(outcome: 'accepted' | 'corrected' | 'frustrated', e
 describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('corrected follow-up: records outcome, populates feedback, reflects into MEMORY.md', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
+    const prompts: string[] = [];
+    const complete = rt.llm.complete.bind(rt.llm);
+    rt.llm.complete = async (prompt: string) => {
+      prompts.push(prompt);
+      return complete(prompt);
+    };
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
-    const turn = makeTurn();
+    const turn = makeTurn({ steps: 41, durationMs: 372_000 });
     await engine.reviewTurn(turn, 'No — that rotates production keys. I said STAGING.');
 
     expect(turn.feedback).toBe('negative'); // the hardcoded null is dead
@@ -59,6 +65,15 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     // Real negative outcome ⇒ the lesson is corroborated and durable.
     expect(listLessons(rt.storage.sql, { status: 'corroborated' })).toHaveLength(1);
     expect(await rt.memory.read('memory/MEMORY.md')).toContain('Lesson');
+    const reflectionPrompt = prompts.find((prompt) => prompt.includes('In one sentence')) ?? '';
+    expect(reflectionPrompt).toContain(
+      'Turn process: 41 sequential steps, 0 team, 0 think, 0 peers, 0 execute_tools, 6.2min wall clock',
+    );
+    expect(reflectionPrompt).toContain(
+      'On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero team/think',
+    );
+    expect(reflectionPrompt).toContain('credit effective team/think on accepted turns');
+    expect(reflectionPrompt).toContain('flag delegation overhead when spawned subordinates contributed nothing');
   });
 
   test('accepted follow-up: positive feedback, no reflection, extracts a pattern from tool use', async () => {

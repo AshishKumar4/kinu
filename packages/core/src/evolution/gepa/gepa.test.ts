@@ -177,7 +177,10 @@ describe('renderReflectionPrompt', () => {
     const parent = mkCandidate('SEED-SOURCE', { i1: 0.4 });
     const prompt = renderReflectionPrompt({
       parent,
-      minibatch: [mkInstance('i1', 'task input')],
+      minibatch: [{
+        ...mkInstance('i1', 'task input'),
+        evidence: 'Outcome: corrected\nTurn process: 41 sequential steps, 0 team, 0 think, 0 peers, 0 execute_tools, 6.2min wall clock',
+      }],
       rollout: {
         outcomes: [{ instanceId: 'i1', outcome: { score: 0.4, feedback: 'too verbose' } }],
         metricCalls: 1,
@@ -188,7 +191,27 @@ describe('renderReflectionPrompt', () => {
     expect(prompt).toContain('SEED-SOURCE');
     expect(prompt).toContain('task input');
     expect(prompt).toContain('too verbose');
+    expect(prompt).toContain('Turn process: 41 sequential steps, 0 team, 0 think');
+    expect(prompt).toContain(
+      'For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds',
+    );
+    expect(prompt).toContain('reinforce effective team/think on accepted turns');
+    expect(prompt).toContain('treat non-contributing spawns as delegation overhead');
     expect(prompt).toContain('Return ONLY the revised');
+  });
+
+  test('keeps the delegation rubric scoped to scaffold reflection', () => {
+    const parent = mkCandidate('tool-source', { i1: 0.4 });
+    const prompt = renderReflectionPrompt({
+      parent,
+      minibatch: [mkInstance('i1', 'task input')],
+      rollout: {
+        outcomes: [{ instanceId: 'i1', outcome: { score: 0.4, feedback: 'too slow' } }],
+        metricCalls: 1,
+      },
+      artifactDescription: 'crafted tool source',
+    });
+    expect(prompt).not.toContain('Process rubric:');
   });
 });
 

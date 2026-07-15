@@ -50,6 +50,7 @@ import {
 } from './outcomes.js';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
 import { buildChangelog } from './changelog.js';
+import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
@@ -283,7 +284,7 @@ export class EvolutionEngine {
     // provisional until an outcome corroborates it.
     const corroborated = outcome === 'corrected' || outcome === 'frustrated';
     if (corroborated || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
-      const reflection = await this.generateTurnReflection(turn, quality, followup);
+      const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
       recordLesson(this.rt.storage.sql, {
         turnIds: turn.turnId ? [turn.turnId] : [],
         text: reflection,
@@ -681,7 +682,7 @@ export class EvolutionEngine {
   /** Generate a reflection on a turn that went wrong. The user's follow-up
    *  (the correction) is the strongest available context when present. */
   private async generateTurnReflection(
-    turn: CompletedTurn, quality: number, followup: string | null,
+    turn: CompletedTurn, outcome: TurnOutcome | null, quality: number, followup: string | null,
   ): Promise<string> {
     const summary = turn.assistantResponse.slice(0, 300);
     const toolSummary = turn.toolCalls.length > 0
@@ -689,10 +690,12 @@ export class EvolutionEngine {
       : 'No tools used';
 
     return this.rt.llm.complete(
-      `A recent interaction scored ${quality.toFixed(2)}/1.0 quality.\n` +
+      `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
       `User asked: "${turn.userMessage.slice(0, 200)}"\n` +
       `Response: "${summary}"\n` +
       `${toolSummary}\n` +
+      `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
+      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero team/think a lesson to decompose and staff subordinates or fan out heads; credit effective team/think on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
       `${turn.hadError ? 'An error occurred.\n' : ''}` +
       `${followup ? `The user then replied: "${followup.slice(0, 300)}"\n` : ''}\n` +
       `In one sentence, what specifically should be done differently next time?`,

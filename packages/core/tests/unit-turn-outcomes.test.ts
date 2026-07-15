@@ -13,6 +13,7 @@ import {
   recordLesson, listLessons, corroborateLessonsForTurn,
 } from '../src/evolution/outcomes.js';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive.js';
+import { initRunEventTables, RunEventRecorder } from '../src/events/recorder.js';
 
 function setup() {
   const db = new Database(':memory:');
@@ -258,6 +259,33 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline', () => {
     expect(split.val.filter((i) => i.expected?.outcome === 'accepted')).toHaveLength(4);
     // The negative instances carry the user's correction for the metric.
     expect(split.train[0].expected?.followup).toContain('correction');
+  });
+
+  test('instances carry process evidence reconstructed from the existing run ledger', () => {
+    const { db, sql } = setup();
+    initRunEventTables(makeExecRaw(db));
+    db.exec(`CREATE TABLE messages (
+      id TEXT PRIMARY KEY, parent_id TEXT, content TEXT NOT NULL, created_at INTEGER NOT NULL
+    )`);
+    const now = Date.now();
+    sql`INSERT INTO messages (id, parent_id, content, created_at)
+        VALUES (${'u0'}, ${null}, ${'fix task 0'}, ${now - 1_000})`;
+    sql`INSERT INTO messages (id, parent_id, content, created_at)
+        VALUES (${'n0'}, ${'u0'}, ${'bad answer 0'}, ${now + 1_000})`;
+    const recorder = new RunEventRecorder(sql);
+    recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1 });
+    recorder.emit('run-1', { type: 'tool_call_end', name: 'team', toolCallId: 'tc-1', result: 'spawned' });
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 2 });
+    recorder.emit('run-1', { type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc-2', result: 'done' });
+    recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
+    seed(sql, 1, 0);
+
+    const instance = buildOutcomeEvalSplit(sql, 2).train[0];
+    expect(instance.evidence).toContain('Outcome: corrected');
+    expect(instance.evidence).toContain(
+      'Turn process: 2 sequential steps, 1 team, 0 think, 0 peers, 1 execute_tools',
+    );
   });
 
   test('negatives backfill when accepted turns are scarce (and vice versa)', () => {

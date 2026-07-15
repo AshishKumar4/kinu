@@ -30,6 +30,8 @@ export interface EvalInstance<I = unknown, E = unknown> {
   id: string;
   /** Task input the candidate is executed against. */
   input: I;
+  /** Optional non-scoring context shown to the reflection LM. */
+  evidence?: string;
   /** Optional ground-truth or expected-shape hint the metric may consult. */
   expected?: E;
 }

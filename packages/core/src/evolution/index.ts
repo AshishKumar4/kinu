@@ -9,6 +9,10 @@ export {
   type ToolCallRecord,
 } from './types.js';
 export {
+  delegationFeatures, renderDelegationFeatures,
+  type DelegationFeatures,
+} from './delegation-features.js';
+export {
   feedbackToQuality, outcomeToFeedback, outcomeQuality,
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
