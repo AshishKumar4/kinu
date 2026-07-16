@@ -5,11 +5,12 @@
 
 import chalk from 'chalk';
 import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
+import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
 
 const BRAND = chalk.bold.cyan('🔱 Proteus');
-const VERSION = '0.1.0';
+const VERSION = cliPackage.version;
 const DIM = chalk.dim;
 const ACCENT = chalk.cyan;
 const OK = chalk.green;

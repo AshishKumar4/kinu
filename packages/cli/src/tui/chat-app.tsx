@@ -15,7 +15,12 @@
  * with that message pre-filled for editing.
  */
 
-import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
+import {
+  createCliRenderer,
+  type KeyEvent,
+  type ScrollBoxRenderable,
+  type TextareaRenderable,
+} from '@opentui/core';
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
@@ -101,6 +106,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
 
   const msgIdRef = useRef(0);
+  const historyRef = useRef<ScrollBoxRenderable | null>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
   // Mirrors the input's declarative `focused` condition so the mouse handler can
   // reassert focus imperatively — a click moves OpenTUI's native focus without
@@ -793,6 +799,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       />
 
       <scrollbox
+        ref={(value) => { historyRef.current = value; }}
         focused={!isProcessing}
         stickyScroll={true}
         stickyStart="bottom"
@@ -850,6 +857,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
             { name: 'return', meta: true, action: 'newline' },
             { name: 'j', ctrl: true, action: 'newline' },
           ]}
+          onKeyDown={(event) => {
+            handleHistoryScrollKey(event, inputRef.current?.plainText ?? '', historyRef.current);
+          }}
           onContentChange={() => setDraft(inputRef.current?.plainText ?? '')}
           onSubmit={onInputSubmit}
         />
@@ -889,6 +899,29 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
     </box>
   );
+}
+
+interface HistoryScrollTarget {
+  scrollTop: number;
+  viewport: { height: number };
+  scrollTo(position: number): void;
+}
+
+export function handleHistoryScrollKey(
+  event: Pick<KeyEvent, 'name' | 'preventDefault'>,
+  draft: string,
+  history: HistoryScrollTarget | null,
+): boolean {
+  const isPageKey = event.name === 'pageup' || event.name === 'pagedown';
+  const isEmptyDraftArrow = draft.length === 0 && (event.name === 'up' || event.name === 'down');
+  if (!history || (!isPageKey && !isEmptyDraftArrow)) return false;
+
+  const direction = event.name === 'up' || event.name === 'pageup' ? -1 : 1;
+  const viewportFraction = isPageKey ? 0.5 : 0.2;
+  const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));
+  history.scrollTo(history.scrollTop + direction * delta);
+  event.preventDefault();
+  return true;
 }
 
 /** Extract the last URL from assistant message content. */

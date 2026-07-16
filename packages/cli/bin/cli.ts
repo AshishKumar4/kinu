@@ -35,14 +35,14 @@ import {
 import { exportCommand, importCommand } from '../src/commands/export-import.js';
 import { tokensCommand } from '../src/commands/tokens.js';
 import { workspaceDeleteCommand } from '../src/commands/workspace.js';
-import { printHelp, printError } from '../src/display.js';
+import { printHelp, printError, VERSION } from '../src/display.js';
 
 const program = new Command();
 
 program
   .name('proteus')
   .description('Create and chat with self-evolving agent workspaces')
-  .version('0.1.0', '-v, --version')
+  .version(VERSION, '-v, --version')
   .addHelpCommand(false);
 
 // Shared LLM options
