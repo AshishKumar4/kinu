@@ -352,14 +352,42 @@ describe('OpenCode provider', () => {
     };
     rewriteOpenCodeResponsesBody(body);
 
+    // With store:false NOTHING is persisted server-side, so every
+    // server-assigned id (rs_, msg_, fc_) must be stripped and the item passed
+    // by value — an id-bearing item 404s ("Items are not persisted when
+    // `store` is set to false"), which is exactly the bug this regressed on.
     expect(body.input).toEqual([
       {
         type: 'reasoning',
         summary: [{ type: 'summary_text', text: 'summary' }],
       },
-      reasoningWithEncryptedContent,
-      nonReasoningItem,
+      {
+        type: 'reasoning',
+        encrypted_content: 'encrypted-payload',
+        summary: [],
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [],
+      },
       nonPersistedReference,
+    ]);
+  });
+
+  test('Responses requests strip tool-call server ids but keep call_id', () => {
+    const body: Record<string, unknown> = {
+      model: 'openai/gpt-5.6-sol',
+      input: [
+        { type: 'function_call', id: 'fc_server', call_id: 'call_abc', name: 'run', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
+      ],
+    };
+    rewriteOpenCodeResponsesBody(body);
+
+    expect(body.input).toEqual([
+      { type: 'function_call', call_id: 'call_abc', name: 'run', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
     ]);
   });
 
@@ -404,11 +432,26 @@ describe('OpenCode provider', () => {
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
   });
 
-  test('models created before metadata loads default to Chat Completions', async () => {
+  test('cold metadata routes OpenAI reasoning families to Responses (resumed sessions)', async () => {
+    // A resumed session resolves its stored model BEFORE any listModels call,
+    // so the metadata map is cold. Defaulting gpt-5.x to Chat Completions
+    // breaks it outright ("use /v1/responses") — the family fallback must win.
     const { fetchImpl, requests } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
     const model = provider.createModel('openai/gpt-5.6-sol', {
+      env: {}, getAuth: async () => null, hasCredential: async () => false,
+    });
+    await tryCall(model);
+
+    expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
+  });
+
+  test('cold metadata keeps non-reasoning families on Chat Completions', async () => {
+    const { fetchImpl, requests } = makeRoutingFetch();
+    const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
+
+    const model = provider.createModel('openai/gpt-4.1-mini', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
     await tryCall(model);

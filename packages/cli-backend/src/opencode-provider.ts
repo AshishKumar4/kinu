@@ -257,7 +257,16 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     },
     createModel(modelId: string): LanguageModel {
       const metadata = modelMetadata.get(modelId);
-      const useResponsesAPI = metadata?.reasoning === true || metadata?.apiNpm === '@ai-sdk/openai';
+      // The metadata map is cold until loadConfig() runs (a resumed session
+      // resolves its stored model before ever listing models), and defaulting
+      // an unknown reasoning model to Chat Completions breaks it outright
+      // (gpt-5.6: "use /v1/responses"). Metadata is authoritative when
+      // present; otherwise fall back to the model family, and warm the map
+      // for subsequent creates.
+      if (!metadata) void loadConfig().catch(() => {});
+      const useResponsesAPI = metadata
+        ? metadata.reasoning === true || metadata.apiNpm === '@ai-sdk/openai'
+        : isOpenAIReasoningFamily(modelId);
       return createOpenCodeModel(modelId, () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI);
     },
   };
@@ -361,6 +370,16 @@ function createOpenCodeModel(
   }).chatModel(modelId);
 }
 
+/** Cold-map fallback only (metadata wins when loaded): OpenAI's gpt-5.x and
+ *  o-series are Responses-API reasoning models; chat-completions rejects them. */
+export function isOpenAIReasoningFamily(modelId: string): boolean {
+  const upstream = modelId.slice(modelId.indexOf('/') + 1);
+  return /^(gpt-[5-9]|o[0-9])/.test(upstream);
+}
+
+/** Server-assigned Responses item ids: reasoning, message, function/tool call. */
+const SERVER_ITEM_ID = /^(rs_|msg_|fc_|item_)/;
+
 export function rewriteOpenCodeResponsesBody(body: Record<string, unknown>): void {
   // The SDK forwards providerOptions.openai.store/include per call, but a
   // ModelProvider does not own turn call options, so enforce ZDR here.
@@ -378,13 +397,17 @@ export function rewriteOpenCodeResponsesBody(body: Record<string, unknown>): voi
     if (
       item.type === 'item_reference'
       && typeof item.id === 'string'
-      && (item.id.startsWith('rs_') || item.id.startsWith('msg_'))
+      && SERVER_ITEM_ID.test(item.id)
     ) {
       continue;
     }
-    if (item.type === 'reasoning' && item.encrypted_content == null) {
-      const { id: _id, ...reasoning } = item;
-      input.push(reasoning);
+    // With store:false the server persists nothing, so ANY server-assigned id
+    // in the replayed input (reasoning rs_, assistant message msg_, tool call
+    // fc_) 404s on lookup. Pass every item by value: strip the id, keep the
+    // payload (encrypted_content, call_id, content) intact.
+    if (typeof item.id === 'string' && SERVER_ITEM_ID.test(item.id)) {
+      const { id: _id, ...byValue } = item;
+      input.push(byValue);
       continue;
     }
     input.push(item);
