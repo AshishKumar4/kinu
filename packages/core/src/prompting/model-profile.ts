@@ -31,7 +31,9 @@ const GPT_REASONING_CAPABILITIES: PromptModelCapability[] = [
   'structured-outputs',
   'json-mode',
 ];
-const KIMI_K26_CAPABILITIES: PromptModelCapability[] = [
+/** Shared by the reasoning-era Kimi line (k2.6, k2.7-code, k3): all report
+ *  tools + reasoning + image input + a cached-input rate. */
+const KIMI_CAPABILITIES: PromptModelCapability[] = [
   'tools',
   'streaming',
   'reasoning',
@@ -82,7 +84,9 @@ function inferredCapabilities(model: PromptModelContext | undefined, family: Pro
   if (text.includes('o4-mini') || text.includes('deepseek-r1')) {
     return ['streaming', 'reasoning'];
   }
-  if (text.includes('kimi-k2.6')) return KIMI_K26_CAPABILITIES;
+  // Whole family, not one pinned version — a new Kimi release must not silently
+  // drop to bare tools+streaming when the catalog is unreachable.
+  if (family === 'kimi') return KIMI_CAPABILITIES;
   if (family === 'gpt') return GPT_REASONING_CAPABILITIES;
   return TOOL_CAPABILITIES;
 }
