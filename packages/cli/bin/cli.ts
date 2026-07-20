@@ -35,7 +35,8 @@ import {
 import { exportCommand, importCommand } from '../src/commands/export-import.js';
 import { tokensCommand } from '../src/commands/tokens.js';
 import { workspaceDeleteCommand } from '../src/commands/workspace.js';
-import { printHelp, printError, VERSION } from '../src/display.js';
+import { printHelp, printError, DIM, VERSION } from '../src/display.js';
+import { runStartupUpdateCheck } from '../src/version-check.js';
 
 const program = new Command();
 
@@ -380,6 +381,11 @@ if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0
 }
 
 program.parse();
+
+// Once-a-day "newer Proteus available" notice. Fire-and-forget and fail-soft:
+// it never blocks the command, and shouldCheckForUpdate suppresses it in
+// non-TTY runs (CI, pipes, --json), when opted out, and within 24h.
+void runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) });
 
 // Wrap async actions with consistent error handling
 function wrapAction(fn: (...args: any[]) => Promise<void>) {

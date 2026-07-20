@@ -50,6 +50,15 @@ node -e "
 tar -czf "$tmp/proteus-source.tar.gz" -C "$tmp" proteus
 mv "$tmp/proteus-source.tar.gz" "$OUT"
 
+# Publish the served build's version alongside the archive so an installed CLI
+# can ask "is there anything newer?" without downloading it. Written from the
+# SAME stamped package.json the archive ships — one stamping site, one source.
+node -e "
+  const { version } = require('$stage/packages/cli/package.json');
+  const out = JSON.stringify({ version, sha: process.argv[1], builtAt: new Date().toISOString() });
+  require('fs').writeFileSync(process.argv[2], out + '\n');
+" "$sha" "$(dirname "$OUT")/proteus-version.json"
+
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")
 elif command -v shasum >/dev/null 2>&1; then

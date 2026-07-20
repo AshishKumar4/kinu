@@ -18,6 +18,10 @@ import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
+/** `{ version, sha, builtAt }` for the served build — emitted by
+ *  scripts/build-cli-source-archive.sh from the same stamped package.json the
+ *  archive ships, so an installed CLI can check for updates cheaply. */
+const CLI_VERSION_PATH = '/downloads/proteus-version.json';
 
 export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -37,6 +41,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
   if (url.pathname === CLI_SOURCE_TARBALL_SHA256_PATH && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, CLI_SOURCE_TARBALL_SHA256_PATH, 'text/plain; charset=utf-8', method === 'HEAD');
+  }
+  if (url.pathname === CLI_VERSION_PATH && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, CLI_VERSION_PATH, 'application/json; charset=utf-8', method === 'HEAD');
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {

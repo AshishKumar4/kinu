@@ -90,6 +90,11 @@ export interface ProteusConfig {
   aliases?: Record<string, string>;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  /** Set false to silence the once-a-day "newer Proteus available" notice. */
+  updateCheck?: boolean;
+  /** Throttle state for that notice — never a version source, just a cache. */
+  updateCheckedAt?: number;
+  updateLatestSeen?: string;
   providers?: {
     openai?: { apiKey?: string };
     anthropic?: { apiKey?: string };
