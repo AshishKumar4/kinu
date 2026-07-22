@@ -26,6 +26,7 @@ graph TB
     end
 
     Heads["ExplorationAgent facets<br/>MCTS branches / heads"]
+    Subs["SubordinateAgent facets<br/>durable teammates (team tool)"]
     UserDO["UserDO<br/>MCP once-auth · devices · registry"]
     Model["Models<br/>Workers AI (kimi-k2.6 default)<br/>+ bring-your-own providers"]
 
@@ -36,6 +37,7 @@ graph TB
     Turn --> Evo
     Events --> Turn
     Evo -->|subAgent| Heads
+    Turn -->|team.spawn| Subs
     Turn -->|capability-proxied callTool| UserDO
     Turn -->|streamText| Model
 ```
@@ -43,6 +45,7 @@ graph TB
 ## Key Features
 
 - **MCTS parallel exploration** — score-based selection, backpropagation, pruning, and winner selection. Each branch is an isolated Durable Object via Facets.
+- **Subordinate agents** — the orchestrator can staff a workspace with durable subordinates through the `team` tool: each is its own Durable Object facet running the full turn loop on an independent workstream, sharing the workspace's files and reporting back as an event. `peers` reaches the owner's *other* workspaces.
 - **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (full MCTS exploration)
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
@@ -104,7 +107,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 - **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `proteus providers connect <name>`.
 - **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly — the binary is the auth boundary, which is what keeps this compliant. It is **local only**: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
 
-`proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker.
+`proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort — low, medium, high — with `/effort` or `proteus effort`, mapped to each provider's native knob.
 
 ## Documentation
 
@@ -123,10 +126,10 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 | Package | Description |
 |---------|-------------|
-| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, CompositeVFS + ExecutionRouter, MCTS engine, EvolutionEngine, CraftStore, scaffold, the 10 builtin tools, EventLog, types |
+| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, CompositeVFS + ExecutionRouter, MCTS engine, EvolutionEngine, CraftStore, scaffold, the 12 builtin tools, EventLog, types |
 | `agent-utils/` | SqliteFS (chunked VFS), MemoryStore (FTS5), CraftStore (FTS5), POSIX shell emulator |
 | `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Proteus AI-SDK⇄ladder codec |
-| `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent (Facets), UserDO, React UI |
+| `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent + SubordinateAgent (Facets), UserDO, React UI |
 | `cli/` | CLI commands: create, chat, exec, evolve, status, list, export, import |
 | `cli-backend/` | Local runtime: `LocalAgentSession`, bun:sqlite, subprocess sandbox, child_process MCTS branches |
 | `pc-agent/` | The device agent that mounts a user's own machine as `/pc` (connect + consent) |
