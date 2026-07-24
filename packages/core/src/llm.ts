@@ -36,7 +36,11 @@ export interface LLMProviderConfig {
  */
 export function createVercelAILLM(config: LLMProviderConfig): LLM {
   const model = createModelFromLLMConfig(config);
-  const maxOutputTokens = config.maxTokens ?? 2048;
+  // No default output cap: a reasoning model spends its budget thinking before
+  // it emits anything, so a cap truncates the answer (or starves it entirely).
+  // Cost is controlled by reasoning effort. A cap applies only when the caller
+  // explicitly configured one.
+  const cap = config.maxTokens !== undefined ? { maxOutputTokens: config.maxTokens } : {};
 
   return {
     async *stream(opts) {
@@ -47,7 +51,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
           role: m.role as 'user' | 'assistant',
           content: m.content,
         })),
-        maxOutputTokens,
+        ...cap,
       });
       for await (const chunk of result.textStream) {
         yield chunk;
@@ -58,7 +62,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       const { text } = await generateText({
         model,
         prompt,
-        maxOutputTokens,
+        ...cap,
       });
       return text.trim();
     },

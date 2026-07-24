@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // The turn pipeline is split across the actor substrate (actor-agent.ts —
@@ -83,6 +83,34 @@ describe('turn-pipeline correctness wiring', () => {
     expect(shadowJudge).not.toContain('maxOutputTokens');
     expect(shadowJudge).toContain("reasoningEffortOptions('low', this.effectiveModelProviderFamily())");
     expect(generateJson).not.toContain('opts.maxOutputTokens ??');
+  });
+
+  // Owner directive: output caps are the wrong mechanism entirely — a reasoning
+  // model spends its budget thinking before it emits anything, so a cap
+  // truncates or starves the answer. Cost is controlled by reasoning effort.
+  // An explicitly configured cap is still honoured; a hardcoded literal is not.
+  test('no production source hardcodes an output-token cap', () => {
+    const root = join(import.meta.dir, '..', '..');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules') walk(path);
+        } else if (/\.tsx?$/.test(entry.name)) {
+          const text = readFileSync(path, 'utf8');
+          for (const [line] of text.matchAll(/maxOutputTokens:\s*\d+/g)) {
+            offenders.push(`${path.slice(root.length + 1)}: ${line}`);
+          }
+        }
+      }
+    };
+    for (const pkg of readdirSync(root, { withFileTypes: true })) {
+      if (!pkg.isDirectory()) continue;
+      const src = join(root, pkg.name, 'src');
+      if (existsSync(src)) walk(src);
+    }
+    expect(offenders).toEqual([]);
   });
 
   test('CHAT_CLEAR resets the ephemeral ledger and durable compaction plan after Think handles it', () => {

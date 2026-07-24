@@ -523,7 +523,7 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
         });
         const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
         const result = await generateText({
-          model, prompt, maxOutputTokens: 512,
+          model, prompt,
           ...effortFor('reflection'),
         });
         return result.text.trim();
@@ -557,7 +557,7 @@ function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
       const spec = config.getReviewModel() ?? config.getModel();
       const model = reg.resolveModel(reg.normalizeSpecSync(spec));
       const result = await generateText({
-        model, prompt, maxOutputTokens: 1024,
+        model, prompt,
         ...effortFor('judge'),
       });
       return result.text.trim();
@@ -645,7 +645,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
         model: getModel(),
         system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
         messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
-        maxOutputTokens: 4096,
+        ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
       const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
@@ -655,7 +655,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
       const result = await generateText({
         model: getModel(),
         messages: [{ role: "user" as const, content: `What went wrong? ${task.slice(0, 500)}\nOne sentence.` }],
-        maxOutputTokens: 200,
+        ...effortFor('reflection'),
       });
       return result.text.trim();
     },
