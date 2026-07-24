@@ -26,14 +26,14 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
   const userDO = {
-    async verifyCliToken(bearer: string) {
+    async verifyCliToken(_caller: unknown, bearer: string) {
       return {
         ok: bearer === SESSION_TOKEN,
         tokenHash: 'session-hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async verifyAccessToken(bearer: string) {
+    async verifyAccessToken(_caller: unknown, bearer: string) {
       const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
       if (!scopes) return { ok: false, error: 'invalid token' };
       return {
@@ -43,7 +43,7 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async getAuthHeaders(key: string, o?: { forceRefresh?: boolean }) {
+    async getAuthHeaders(_caller: unknown, key: string, o?: { forceRefresh?: boolean }) {
       const bearer = o?.forceRefresh ? (opts.freshToken ?? token) : token;
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${bearer}` };
       if (key === 'cloudflare.ai-gateway') {
@@ -51,10 +51,10 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
       }
       return null;
     },
-    async getCredentialBaseURL(key: string) {
+    async getCredentialBaseURL(_caller: unknown, key: string) {
       return (key === 'cloudflare.oauth' || key === 'cloudflare.ai-gateway') ? AI_BASE_URL : null;
     },
-    async listCredentials() {
+    async listCredentials(_caller: unknown) {
       return [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }];
     },
   };

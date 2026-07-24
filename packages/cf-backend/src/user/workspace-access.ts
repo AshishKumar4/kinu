@@ -6,6 +6,7 @@ import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from './user-do.js';
 import { createCloudWorkspaceForUser } from './workspace-create.js';
 import { err, json, safeJson } from '../lib/http.js';
+import { OWNER_SESSION } from './workspace-capability.js';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
 export async function handleCreateWorkspaceRequest(
@@ -19,7 +20,7 @@ export async function handleCreateWorkspaceRequest(
   if (!body) return err(400, 'Body must be JSON');
   if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
   try {
-    const entry = await createCloudWorkspaceForUser(env, userId, userDO, body, {
+    const entry = await createCloudWorkspaceForUser(env, userId, userDO, OWNER_SESSION, body, {
       waitUntil: (promise) => ctx?.waitUntil(promise),
     });
     return json(entry, { status: 201 });
@@ -42,7 +43,7 @@ export function notifyWorkspacesCredentialsChanged(
   ctx?: ExecutionContext,
 ): void {
   const task = (async () => {
-    const workspaces = await userDO.listWorkspaces();
+    const workspaces = await userDO.listWorkspaces(OWNER_SESSION);
     await Promise.allSettled(workspaces
       .filter((a) => a.archivedAt === null)
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
@@ -67,7 +68,7 @@ export async function claimOwnedWorkspace(
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  if (!(await userDO.hasWorkspace(workspaceName))) {
+  if (!(await userDO.hasWorkspace(OWNER_SESSION, workspaceName))) {
     return {
       ok: false,
       status: 404,
@@ -75,13 +76,25 @@ export async function claimOwnedWorkspace(
     };
   }
   const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
+  let claim: { owner: string; capabilityHash: string | null };
   try {
-    await agent.claimOwner(userId);
+    claim = await agent.claimOwner(userId);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const status = /owned by a different user/i.test(message) ? 403 : 500;
     if (status === 500) console.error(`[workspace-access] claimOwner(${workspaceName}) failed:`, message);
     return { ok: false, status, error: message };
+  }
+  // Reconcile the workspace's identity with the registry on every touch. The
+  // UserDO owns the whole decision (and serializes concurrent ones) because it
+  // is the only place that can see both sides; it returns immediately when they
+  // already agree, which is every request after the first.
+  try {
+    await userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[workspace-access] capability provisioning for ${workspaceName} failed:`, message);
+    return { ok: false, status: 500, error: `Could not issue this workspace's capability token: ${message}` };
   }
   return { ok: true, agent };
 }

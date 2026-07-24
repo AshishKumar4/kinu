@@ -6,7 +6,7 @@ function setupEnv() {
   const db = createAuthDatabase();
   const ensuredProfiles: string[] = [];
   const userDO = {
-    async ensureProfile(email: string, displayName?: string) {
+    async ensureProfile(_caller: unknown, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
       return { email, displayName };
     },

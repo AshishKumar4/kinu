@@ -360,13 +360,13 @@ describe('auth and desktop security invariants', () => {
   test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
     const cliRoutes = source('src/cli/routes.ts');
     expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
-    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId)');
+    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId, OWNER_SESSION)');
   });
 
   test('web agent creation requires an available model and stores the selected initial model', () => {
     const routes = source('src/user/routes.ts');
     const createAgent = source('src/user/workspace-create.ts');
-    expect(routes).toContain('listAvailableModels(env, identity.userId)');
+    expect(routes).toContain('listAvailableModels(env, identity.userId, OWNER_SESSION)');
     expect(createAgent).toContain('Cloudflare Workers AI is not connected');
     expect(createAgent).toContain('pickInitialModel');
     expect(createAgent).toContain('await orchestrator.setModel(model)');

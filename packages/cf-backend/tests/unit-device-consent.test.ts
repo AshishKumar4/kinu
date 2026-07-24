@@ -62,13 +62,13 @@ function consentRoutesSetup() {
   const calls: Array<{ agentName: string; deviceId: string; scope: string }> = [];
   const stub = {
     async ensureProfile() {},
-    async listDeviceConsents() {
+    async listDeviceConsents(_caller: unknown) {
       return [...scopes.entries()].map(([key, scope]) => {
         const [agentName, deviceId] = key.split('|');
         return { agentName, deviceId, policy: 'allow', scope, lastMethod: null, lastSummary: null };
       });
     },
-    async setDeviceConsentScope(agentName: string, deviceId: string, scope: string) {
+    async setDeviceConsentScope(_caller: unknown, agentName: string, deviceId: string, scope: string) {
       calls.push({ agentName, deviceId, scope });
       if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) return { ok: false };
       scopes.set(`${agentName}|${deviceId}`, scope);

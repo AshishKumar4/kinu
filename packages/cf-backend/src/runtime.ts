@@ -44,7 +44,8 @@ import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
 import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
-import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
+import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
+import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
 import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
@@ -85,12 +86,31 @@ export interface ActorRuntimeIdentity {
   /** The workspace whose exec planes (sandbox, nimbus, /pc consent) this
    *  actor rides. */
   workspaceName: string;
+  /** The workspace capability token this actor presents to the UserDO — its
+   *  own for a workspace DO, its parent's for a facet. Null until claimed. */
+  capabilityToken(): Promise<string | null>;
 }
 
 function userDOStubFor(agent: AgentHost, actor: ActorRuntimeIdentity): DurableObjectStub<UserDO> | null {
   const userId = actor.ownerUserId();
   if (!userId) return null;
   return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+}
+
+/** This actor's identity for a privileged UserDO call. Rejects — rather than
+ *  degrading to some weaker principal — when the workspace has no token. */
+async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
+  const workspaceToken = await actor.capabilityToken();
+  if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
+  return { workspaceToken };
+}
+
+/** The credential source for a provider registry built inside an actor. Null
+ *  when the workspace is unclaimed, leaving only env-bound providers usable —
+ *  the pre-existing behaviour for an ownerless agent. */
+function userCredentialSourceFor(agent: AgentHost, actor: ActorRuntimeIdentity): UserCredentialSource | null {
+  const stub = userDOStubFor(agent, actor);
+  return stub ? { stub, caller: () => userCallerFor(actor) } : null;
 }
 
 /** Extended runtime that exposes the raw SqliteFS for shell emulation, the
@@ -260,6 +280,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
       : null;
   const deviceTransport = createHubDeviceTransport({
     hub: () => userDOStubFor(agent, actor),
+    caller: () => userCallerFor(actor),
     agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => {
@@ -280,7 +301,9 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
       hasFullFilesystem: async () => {
         const hub = userDOStubFor(agent, actor);
         if (!hub) return false;
-        try { return (await hub.getDeviceFsConsent(actor.workspaceName)).fullFilesystem; }
+        try {
+          return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
+        }
         catch { return false; } // consent unverifiable → subtree scope (fail closed)
       },
     }),
@@ -517,7 +540,7 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
       try {
         const reg = createAgentProviderRegistry({
           env: agent.env,
-          userDOStub: userDOStubFor(agent, actor),
+          userDO: userCredentialSourceFor(agent, actor),
           appTitle: 'Proteus',
           workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
@@ -550,7 +573,7 @@ function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
       );
       const reg = createAgentProviderRegistry({
         env: agent.env,
-        userDOStub: userDOStubFor(agent, actor),
+        userDO: userCredentialSourceFor(agent, actor),
         appTitle: 'Proteus (judge)',
         workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
       });
@@ -600,7 +623,10 @@ function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): I
 function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
-      return await spawnBranchFacet(agent, branchId, { ownerUserId: actor.ownerUserId() });
+      return await spawnBranchFacet(agent, branchId, {
+        ownerUserId: actor.ownerUserId(),
+        capabilityToken: await actor.capabilityToken(),
+      });
     } catch (err) {
       console.warn(`[proteus] subAgent failed for branch ${branchId}: ${(err as Error).message}. Using inline fallback.`);
       return createInlineBranch(agent);
@@ -628,7 +654,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
   // needs no credential reads.
   const reg = createAgentProviderRegistry({
     env: agent.env,
-    userDOStub: null,
+    userDO: null,
     appTitle: 'Proteus (inline branch)',
     workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });

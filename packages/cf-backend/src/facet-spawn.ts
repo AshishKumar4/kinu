@@ -33,6 +33,10 @@ export type FacetHost = Pick<Agent<Env>, "subAgent" | "abortSubAgent">;
 export interface ExplorationFacetIdentity {
   /** Owner userId, or null while the workspace is unclaimed. */
   readonly ownerUserId: string | null;
+  /** The SPAWNER's workspace capability token, handed down so a head reaches
+   *  the owner's credentials as its workspace and is attenuated with it. Null
+   *  while the workspace is unclaimed. */
+  readonly capabilityToken: string | null;
   /** The ROOT orchestrator's workspace name — the shared findings scratch every
    *  head in a tree writes to, propagated UNCHANGED through recursive splits so
    *  an intermediate head never becomes the tree's scratch. Absent for MCTS
@@ -44,7 +48,7 @@ async function seedExplorationIdentity(
   stub: Pick<ExplorationAgent, "setOwner" | "setSharedParent">,
   identity: ExplorationFacetIdentity,
 ): Promise<void> {
-  if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId);
+  if (identity.ownerUserId) await stub.setOwner(identity.ownerUserId, identity.capabilityToken);
   if (identity.sharedParent) await stub.setSharedParent(identity.sharedParent);
 }
 

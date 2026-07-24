@@ -44,6 +44,7 @@ import {
 } from "./auth/session.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
+import { OWNER_SESSION } from "./user/workspace-capability.js";
 import { CLI_SCOPES_HEADER } from "./cli/rpc-gate.js";
 import { claimOwnedWorkspace } from "./user/workspace-access.js";
 import { err } from "./lib/http.js";
@@ -136,7 +137,7 @@ async function authenticateCliAgentTicketRequest(
   }
   try {
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    const verified = await userDO.verifyCliAgentConnectTicket(ticket, {
+    const verified = await userDO.verifyCliAgentConnectTicket(OWNER_SESSION, ticket, {
       userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,

@@ -19,14 +19,14 @@ const ACCESS_TOKENS: Record<string, { hash: string; scopes: string[] }> = {
 function setupEnv(opts: { sessionMintedAt?: number } = {}) {
   const calls: string[] = [];
   const userDO = {
-    async verifyCliToken(token: string) {
+    async verifyCliToken(_caller: unknown, token: string) {
       return {
         ok: token === SESSION_TOKEN,
         tokenHash: 'session-hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async verifyAccessToken(token: string) {
+    async verifyAccessToken(_caller: unknown, token: string) {
       const entry = ACCESS_TOKENS[token];
       if (!entry) return { ok: false, error: 'invalid token' };
       return {
@@ -36,7 +36,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async listCliTokens() {
+    async listCliTokens(_caller: unknown) {
       return [{
         tokenHash: 'session-hash',
         label: 'terminal',
@@ -45,7 +45,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         lastUsedAt: null,
       }];
     },
-    async mintAccessToken(userId: string, name: string, scopes: string[]) {
+    async mintAccessToken(_caller: unknown, userId: string, name: string, scopes: string[]) {
       calls.push(`tokens:mint:${userId}:${name}:${scopes.join('+')}`);
       if (name === 'dup') return { ok: false as const, error: 'An active access token named "dup" already exists.' };
       return {
@@ -54,33 +54,34 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         record: { tokenHash: 'new-hash', name, scopes, createdAt: 123, lastUsedAt: null },
       };
     },
-    async listAccessTokens() {
+    async listAccessTokens(_caller: unknown) {
       calls.push('tokens:list');
       return [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }];
     },
-    async revokeAccessToken(ref: string) {
+    async revokeAccessToken(_caller: unknown, ref: string) {
       calls.push(`tokens:revoke:${ref}`);
       return { ok: true as const, revoked: ref === 'ci' };
     },
-    async hasWorkspace(name: string) {
+    async hasWorkspace(_caller: unknown, name: string) {
       return name === 'jarvis';
     },
-    async issueCliAgentConnectTicket(input: { cliTokenHash: string }) {
+    async ensureWorkspaceCapability() {},
+    async issueCliAgentConnectTicket(_caller: unknown, input: { cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.cliTokenHash}`);
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
-    async listDevices() {
+    async listDevices(_caller: unknown) {
       calls.push('devices:list');
       return [];
     },
-    async registerDevice() {
+    async registerDevice(_caller: unknown) {
       calls.push('devices:register');
       return { deviceId: 'dev_1', token: 'raw-device-token' };
     },
   };
   const agent = {
     async claimOwner(userId: string) {
-      return { owner: userId };
+      return { owner: userId, capabilityHash: 'sha-existing' };
     },
     async getAgentStatus() {
       calls.push('status');

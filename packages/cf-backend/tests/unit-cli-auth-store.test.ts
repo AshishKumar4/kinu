@@ -15,7 +15,7 @@ function setupEnv() {
   const minted: string[] = [];
   const userDO = {
     async ensureProfile() {},
-    async mintCliToken(userId: string, label?: string) {
+    async mintCliToken(_caller: unknown, userId: string, label?: string) {
       const token = `ptc_${userId}_testtoken`;
       minted.push(`${label ?? ''}:${token}`);
       return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };

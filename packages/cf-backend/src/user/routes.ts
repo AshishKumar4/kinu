@@ -40,6 +40,7 @@ import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, norm
 import { listAvailableModels, listProviderCatalog } from './available-models.js';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access.js';
 import { err, json, safeJson } from '../lib/http.js';
+import { OWNER_SESSION } from './workspace-capability.js';
 
 function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
   return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
@@ -63,17 +64,22 @@ export async function handleUserRequest(
 
   const stub = getUserDOStub(env, identity.userId);
   // Bootstrap profile on every request — cheap UPDATE if exists, INSERT once.
-  await stub.ensureProfile(identity.email, identity.displayName ?? undefined);
+  await stub.ensureProfile(OWNER_SESSION, identity.email, identity.displayName ?? undefined);
 
-  // Fire-and-forget MCP warmup on the first hit for this user this isolate.
+  // Fire-and-forget on the first hit for this user this isolate: warm MCP, and
+  // repair workspaces that predate the capability boundary. The backfill is
+  // one-shot per user inside the UserDO — a workspace runs on an alarm, an
+  // inbound email or a peer's task without anyone opening it, so waiting for a
+  // human to visit each one would fail those turns.
   if (ctx && !warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
-    ctx.waitUntil(stub.userMcp_warmConnections().then(() => {}, () => {}));
+    ctx.waitUntil(stub.userMcp_warmConnections(OWNER_SESSION).then(() => {}, () => {}));
+    ctx.waitUntil(stub.backfillWorkspaceCapabilities(OWNER_SESSION).then(() => {}, () => {}));
   }
 
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {
-    return json(await stub.getProfile());
+    return json(await stub.getProfile(OWNER_SESSION));
   }
   if (path === '/cli' && method === 'GET') {
     const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
@@ -87,25 +93,25 @@ export async function handleUserRequest(
 
   // ── Agents ─────────────────────────────────────────────────────────
   if (path === '/workspaces' && method === 'GET') {
-    return json(await stub.listWorkspaces());
+    return json(await stub.listWorkspaces(OWNER_SESSION));
   }
   if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);
   }
   const agentTouchMatch = path.match(/^\/workspaces\/([^/]+)\/touch$/);
   if (agentTouchMatch && method === 'POST') {
-    try { await stub.touchWorkspace(decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
+    try { await stub.touchWorkspace(OWNER_SESSION, decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
   const agentMatch = path.match(/^\/workspaces\/([^/]+)$/);
   if (agentMatch && method === 'DELETE') {
-    try { await stub.removeWorkspace(decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
+    try { await stub.removeWorkspace(OWNER_SESSION, decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
 
   // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
   if (path === '/devices' && method === 'GET') {
-    return json(await stub.listDevices());
+    return json(await stub.listDevices(OWNER_SESSION));
   }
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson<{ label?: string }>(request);
@@ -120,13 +126,13 @@ export async function handleUserRequest(
   }
   const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
   if (deviceMatch && method === 'DELETE') {
-    try { await stub.revokeDevice(decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
+    try { await stub.revokeDevice(OWNER_SESSION, decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
     catch (e) { return err(400, (e as Error).message); }
   }
 
   // ── Device consents (per-(agent, device) tier: base vs full filesystem) ──
   if (path === '/devices/consents' && method === 'GET') {
-    return json(await stub.listDeviceConsents());
+    return json(await stub.listDeviceConsents(OWNER_SESSION));
   }
   const consentMatch = path.match(/^\/devices\/([^/]+)\/consent$/);
   if (consentMatch && method === 'PUT') {
@@ -136,14 +142,14 @@ export async function handleUserRequest(
     if (!agentName || (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS)) {
       return err(400, `Body must be { agentName, scope: '${DEVICE_CONSENT_SCOPE}' | '${DEVICE_CONSENT_SCOPE_FULL_FS}' }`);
     }
-    const result = await stub.setDeviceConsentScope(agentName, decodeURIComponent(consentMatch[1]), scope);
+    const result = await stub.setDeviceConsentScope(OWNER_SESSION, agentName, decodeURIComponent(consentMatch[1]), scope);
     if (!result.ok) return err(400, 'consent scope not updated');
     return json({ ok: true });
   }
 
   // ── Credentials ────────────────────────────────────────────────────
   if (path === '/credentials' && method === 'GET') {
-    return json(await stub.listCredentials());
+    return json(await stub.listCredentials(OWNER_SESSION));
   }
   const credMatch = path.match(/^\/credentials\/([^/]+)$/);
   if (credMatch) {
@@ -151,13 +157,13 @@ export async function handleUserRequest(
     if (method === 'POST') {
       const body = await safeJson(request);
       if (body === null) return err(400, 'Body must be JSON');
-      try { await stub.setCredential(key, body); }
+      try { await stub.setCredential(OWNER_SESSION, key, body); }
       catch (e) { return err(400, (e as Error).message); }
       notifyWorkspacesCredentialsChanged(env, stub, ctx);
       return json({ ok: true });
     }
     if (method === 'DELETE') {
-      try { await stub.deleteCredential(key); }
+      try { await stub.deleteCredential(OWNER_SESSION, key); }
       catch (e) { return err(400, (e as Error).message); }
       notifyWorkspacesCredentialsChanged(env, stub, ctx);
       return json({ ok: true });
@@ -166,20 +172,20 @@ export async function handleUserRequest(
 
   // ── Codex device flow ──────────────────────────────────────────────
   if (path === '/codex' && method === 'GET') {
-    return json(await stub.getCodexStatus());
+    return json(await stub.getCodexStatus(OWNER_SESSION));
   }
   if (path === '/codex' && method === 'DELETE') {
-    await stub.disconnectCodex();
+    await stub.disconnectCodex(OWNER_SESSION);
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
     return json({ ok: true });
   }
   if (path === '/codex/start' && method === 'POST') {
-    try { return json(await stub.startCodexDeviceFlow()); }
+    try { return json(await stub.startCodexDeviceFlow(OWNER_SESSION)); }
     catch (e) { return err(502, (e as Error).message); }
   }
   if (path === '/codex/poll' && method === 'POST') {
     try {
-      const status = await stub.pollCodexDeviceFlow();
+      const status = await stub.pollCodexDeviceFlow(OWNER_SESSION);
       if (status.connected) notifyWorkspacesCredentialsChanged(env, stub, ctx);
       return json(status);
     } catch (e) { return err(502, (e as Error).message); }
@@ -187,43 +193,43 @@ export async function handleUserRequest(
 
   // ── Config (defaults) ──────────────────────────────────────────────
   if (path === '/config' && method === 'GET') {
-    return json(await stub.listConfig());
+    return json(await stub.listConfig(OWNER_SESSION));
   }
   const cfgMatch = path.match(/^\/config\/([^/]+)$/);
   if (cfgMatch) {
     const key = decodeURIComponent(cfgMatch[1]);
     if (method === 'GET') {
-      return json({ key, value: await stub.getConfig(key) });
+      return json({ key, value: await stub.getConfig(OWNER_SESSION, key) });
     }
     if (method === 'PUT') {
       const body = await safeJson<{ value?: string }>(request);
       if (!body || typeof body.value !== 'string') return err(400, 'value (string) required');
-      await stub.setConfig(key, body.value);
+      await stub.setConfig(OWNER_SESSION, key, body.value);
       return json({ ok: true });
     }
   }
 
   // ── Models + providers ─────────────────────────────────────────────
   if (path === '/providers' && method === 'GET') {
-    return json(await stub.listConnectedProviders());
+    return json(await stub.listConnectedProviders(OWNER_SESSION));
   }
   if (path === '/providers/catalog' && method === 'GET') {
-    return json(await listProviderCatalog(env, identity.userId));
+    return json(await listProviderCatalog(env, identity.userId, OWNER_SESSION));
   }
   if (path === '/models' && method === 'GET') {
-    return json(await listAvailableModels(env, identity.userId));
+    return json(await listAvailableModels(env, identity.userId, OWNER_SESSION));
   }
 
   // ── Cloudflare AI Gateway (the user's own gateway) ──────────────────
   if (path === '/cloudflare/gateways' && method === 'GET') {
-    return json(await stub.listAIGateways());
+    return json(await stub.listAIGateways(OWNER_SESSION));
   }
   if (path === '/cloudflare/gateway' && method === 'PUT') {
     const body = await safeJson<{ id?: string | null }>(request);
     if (!body || (body.id !== null && typeof body.id !== 'string')) {
       return err(400, 'id (string | null) required');
     }
-    try { await stub.selectAIGateway(body.id); }
+    try { await stub.selectAIGateway(OWNER_SESSION, body.id); }
     catch (e) { return err(400, (e as Error).message); }
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
     return json({ ok: true });
@@ -231,27 +237,27 @@ export async function handleUserRequest(
 
   // ── MCP servers ────────────────────────────────────────────────────
   if (path === '/mcp/servers' && method === 'GET') {
-    try { return json(await stub.userMcp_list()); }
+    try { return json(await stub.userMcp_list(OWNER_SESSION)); }
     catch (e) { return err(500, (e as Error).message); }
   }
   if (path === '/mcp/servers' && method === 'POST') {
     const body = await safeJson(request);
     if (body === null) return err(400, 'Body must be JSON');
     const origin = publicOrigin(request);
-    try { return json(await stub.userMcp_add(body, origin), { status: 201 }); }
+    try { return json(await stub.userMcp_add(OWNER_SESSION, body, origin), { status: 201 }); }
     catch (e) { return err(400, (e as Error).message); }
   }
   const mcpIdMatch = path.match(/^\/mcp\/servers\/([^/]+)$/);
   if (mcpIdMatch) {
     const id = decodeURIComponent(mcpIdMatch[1]);
     if (method === 'DELETE') {
-      try { await stub.userMcp_remove(id); return json({ ok: true }); }
+      try { await stub.userMcp_remove(OWNER_SESSION, id); return json({ ok: true }); }
       catch (e) { return err(400, (e as Error).message); }
     }
     if (method === 'PATCH') {
       const body = await safeJson(request);
       if (body === null) return err(400, 'Body must be JSON');
-      try { await stub.userMcp_update(id, body); return json({ ok: true }); }
+      try { await stub.userMcp_update(OWNER_SESSION, id, body); return json({ ok: true }); }
       catch (e) { return err(400, (e as Error).message); }
     }
   }
@@ -260,7 +266,7 @@ export async function handleUserRequest(
     // need to extract it here — `userMcp_handleOAuthCallback` does the validation
     // inside UserDO. The Worker's browser auth middleware (above) already
     // resolved the caller's identity, so we know which UserDO to dispatch to.
-    const result = await stub.userMcp_handleOAuthCallback(request.url);
+    const result = await stub.userMcp_handleOAuthCallback(OWNER_SESSION, request.url);
     // Redirect the browser back to the settings page regardless of outcome.
     // The page polls userMcp_list and the per-server status surfaces the
     // result. We include `?mcp_auth=ok|failed&error=...` for UX clarity.

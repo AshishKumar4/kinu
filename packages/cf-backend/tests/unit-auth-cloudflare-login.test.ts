@@ -16,13 +16,13 @@ function setupEnv() {
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
   const config = new Map<string, string>();
   const userDO = {
-    async ensureProfile() {},
-    async setCredential(key: string, credential: OAuthCredential) {
+    async ensureProfile(_caller: unknown) {},
+    async setCredential(_caller: unknown, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },
-    async getConfig(key: string) { return config.get(key) ?? null; },
-    async setConfig(key: string, value: string) { config.set(key, value); },
-    async listWorkspaces() { return []; },
+    async getConfig(_caller: unknown, key: string) { return config.get(key) ?? null; },
+    async setConfig(_caller: unknown, key: string, value: string) { config.set(key, value); },
+    async listWorkspaces(_caller: unknown) { return []; },
   };
   const env = {
     AUTH_DB: makeD1(createAuthDatabase()),

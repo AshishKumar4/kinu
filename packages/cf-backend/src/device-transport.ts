@@ -15,15 +15,18 @@ import {
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport,
 } from '@proteus/core';
 import { shellQuote } from './cli/install-command.js';
+import type { UserCaller } from './user/workspace-capability.js';
 
 /** How long the cached device-status snapshot stays fresh before status()
  *  kicks a background re-check against the user hub. */
 const DEVICE_STATUS_TTL_MS = 5_000;
 
-/** The UserDO surface the device transport needs (a DO-to-DO RPC stub view). */
+/** The UserDO surface the device transport needs (a DO-to-DO RPC stub view).
+ *  Both methods are attenuated at the hub, so both carry the caller identity. */
 export interface DeviceHubClient {
-  listDevices(): Promise<Array<{ connected: boolean }>>;
+  listDevices(caller: UserCaller): Promise<Array<{ connected: boolean }>>;
   deviceRpc(
+    caller: UserCaller,
     method: string,
     params: unknown[],
     opts?: { agentName?: string; checkpoint?: DeviceCheckpointHint },
@@ -33,6 +36,10 @@ export interface DeviceHubClient {
 export interface HubDeviceTransportOpts {
   /** Fresh hub stub per call; null when the agent has no owner user yet. */
   hub(): DeviceHubClient | null;
+  /** This actor's proof of workspace identity to the hub. Rejects when the
+   *  workspace has no capability token — the device plane then reads as
+   *  disconnected, which is the fail-closed direction. */
+  caller(): Promise<UserCaller>;
   /** Passed with every RPC so the hub can enforce per-agent consent. */
   agentName: string;
   /** CLI-forwarded working directory for laptop exec calls, when present. */
@@ -57,7 +64,8 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
       checkedAt = now();
       return Promise.resolve(snapshot);
     }
-    inFlight = hub.listDevices()
+    inFlight = opts.caller()
+      .then((caller) => hub.listDevices(caller))
       .then((devices) => {
         snapshot = { connected: devices.some((d) => d.connected), registered: devices.length > 0 };
         return snapshot;
@@ -94,7 +102,9 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           sessionId: meta.sessionId,
           dir: method === 'exec' ? cwd : null,
         } : undefined;
-        const result = await hub.deviceRpc(method, effectiveParams, { agentName: opts.agentName, checkpoint });
+        const result = await hub.deviceRpc(
+          await opts.caller(), method, effectiveParams, { agentName: opts.agentName, checkpoint },
+        );
         snapshot = { connected: true, registered: true };
         checkedAt = now();
         return result;

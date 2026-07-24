@@ -87,12 +87,44 @@ describe('subordinate identity', () => {
     const runtime = source('runtime.ts');
     const orchestrator = source('orchestrator.ts');
     const subordinate = source('subordinate-agent.ts');
-    expect(actor).toContain('const callerAgentName = this.workspaceName();');
+    // MCP now identifies its caller by the workspace capability token rather
+    // than by a name argument, so a facet dispatches as its parent workspace
+    // and there is no name left to spoof.
+    expect(actor).toContain('userDOStub.userMcp_callTool(caller, serverId, mcpName, args)');
+    expect(actor).not.toContain('callerAgentName');
     expect(runtime).toContain('agentName: actor.workspaceName');
     expect(subordinate).toContain('const bootstrap = await parent.getSubordinateBootstrapIdentity();');
     expect(subordinate).toContain('parentWorkspace: bootstrap.parentWorkspace');
     expect(subordinate).toContain('ownerUserId: bootstrap.ownerUserId');
     expect(orchestrator).toContain('inheritedContext: () => orchestrator.readInheritedContext()');
+  });
+
+  test('a subordinate holds the parent workspace capability token, pushed never pulled', () => {
+    const actor = source('actor-agent.ts');
+    const orchestrator = source('orchestrator.ts');
+    const subordinate = source('subordinate-agent.ts');
+
+    // One store, inherited by both actor classes: a facet's token IS the
+    // parent's, so §B6 taint inheritance needs no per-facet bookkeeping.
+    expect(actor).toContain('protected async workspaceCapabilityToken(): Promise<string | null>');
+    expect(actor).toContain('async installWorkspaceCapability(token: string)');
+
+    // Push, both at spawn and whenever the parent's token is (re)issued.
+    expect(orchestrator).toContain('const capabilityToken = await orchestrator.workspaceCapabilityToken();');
+    expect(orchestrator).toContain('await stub.installWorkspaceCapability(token);');
+    expect(subordinate).toContain('if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);');
+
+    // Never pull: the bootstrap RPC any stub-holder can reach must not carry a
+    // secret, and nothing reads the token back out of a workspace DO.
+    const bootstrap = orchestrator.slice(
+      orchestrator.indexOf('async getSubordinateBootstrapIdentity()'),
+      orchestrator.indexOf('async receiveSubordinateEvent('),
+    );
+    expect(bootstrap).not.toContain('capabilityToken');
+    expect(actor).not.toMatch(/@callable\(\)\s*\n\s*async (installWorkspaceCapability|workspaceCapabilityToken)/);
+    for (const file of ['actor-agent.ts', 'orchestrator.ts', 'subordinate-agent.ts']) {
+      expect(source(file)).not.toMatch(/async get\w*CapabilityToken\w*\(\)/);
+    }
   });
 
   test('subordinate tools are structurally confined to report, without team, peers, or product changes', () => {

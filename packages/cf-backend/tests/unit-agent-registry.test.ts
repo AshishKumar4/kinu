@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test';
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSystemPromptSync, parseModelSpec } from '@proteus/core';
@@ -14,19 +15,19 @@ function fakeUserDOStub(
     key, kind: headers['x-api-key'] ? 'bearer' : 'oauth' as const,
     createdAt: 0, updatedAt: 0,
   }));
-  return {
+  return userCredentialSource({
     getAuthHeaders: async (key: string) => creds[key] ?? null,
     hasCredential: async (key: string) => !!creds[key],
     listCredentials: async () => list,
     getCredentialBaseURL: async (key: string) => baseURLs[key] ?? null,
-  } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
+  });
 }
 
 describe('AgentProviderRegistry composition', () => {
   test('registers all 8 providers in preference order', () => {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: fakeUserDOStub(),
+      userDO: fakeUserDOStub(),
     });
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
@@ -36,19 +37,19 @@ describe('AgentProviderRegistry composition', () => {
   });
 
   test('normalizeSpecSync — bare @cf/... prefixes workers-ai', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     expect(reg.normalizeSpecSync('@cf/moonshotai/kimi-k2.6'))
       .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('normalizeSpecSync — canonical provider/modelId passes through', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     expect(reg.normalizeSpecSync('codex/gpt-5.5')).toBe('codex/gpt-5.5');
     expect(reg.normalizeSpecSync('anthropic/claude-opus-4-7')).toBe('anthropic/claude-opus-4-7');
   });
 
   test('normalizeSpecSync — null returns workers-ai default without owner-billed env.AI', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
     expect(reg.normalizeSpecSync('')).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
@@ -56,13 +57,13 @@ describe('AgentProviderRegistry composition', () => {
   test('normalizeSpecSync — workers-ai remains the sync default even when env ai-gateway is configured', () => {
     const reg = createAgentProviderRegistry({
       env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
-      userDOStub: fakeUserDOStub(),
+      userDO: fakeUserDOStub(),
     });
     expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('normalizeSpecSync — catalog-shaped ids pass through, malformed ids throw', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     // models.dev-shaped ids are accepted optimistically (the catalog cannot be
     // consulted synchronously); membership is enforced at request time.
     expect(reg.normalizeSpecSync('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');
@@ -72,7 +73,7 @@ describe('AgentProviderRegistry composition', () => {
   test('async resolveSpec — picks workers-ai when Cloudflare OAuth has an account base URL', async () => {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: fakeUserDOStub(
+      userDO: fakeUserDOStub(
         { 'cloudflare.oauth': { Authorization: 'Bearer cf-user-token' } },
         { 'cloudflare.oauth': 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1' },
       ),
@@ -85,7 +86,7 @@ describe('AgentProviderRegistry composition', () => {
     // Only codex creds available; workers-ai binding absent.
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: fakeUserDOStub({
+      userDO: fakeUserDOStub({
         'codex.oauth': { Authorization: 'Bearer codex-token', originator: 'codex_cli_rs' },
       }),
     });
@@ -93,10 +94,10 @@ describe('AgentProviderRegistry composition', () => {
     expect(spec).toBe('codex/gpt-5.5');
   });
 
-  test('null userDOStub → user credential providers unavailable', async () => {
+  test('null userDO → user credential providers unavailable', async () => {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: null,
+      userDO: null,
     });
     const list = await reg.registry.listProviders(reg.deps);
     const credGated = list.filter((p) =>
@@ -113,19 +114,19 @@ describe('sync default provider with a null UserDO stub (inline-branch context)'
   test('falls back to ai-gateway when env-bound gateway is configured', () => {
     const reg = createAgentProviderRegistry({
       env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
-      userDOStub: null,
+      userDO: null,
     });
     expect(reg.normalizeSpecSync(null))
       .toBe('ai-gateway/workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 
   test('throws loudly when no sync-usable provider exists', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: null });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: null });
     expect(() => reg.normalizeSpecSync(null)).toThrow(/No sync-resolvable provider/);
   });
 
   test('explicit workers-ai specs still pass through unchanged', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: null });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: null });
     expect(reg.normalizeSpecSync('workers-ai/@cf/moonshotai/kimi-k2.6'))
       .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
@@ -137,7 +138,7 @@ describe('default-agent prompt model context (Kimi family gating)', () => {
   // and the Kimi bare tool-name index never rendered on the primary hosted
   // path. The prompt context must come from the RESOLVED spec.
   test('an unset stored model resolves to a spec whose prompt renders the kimi index', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: fakeUserDOStub() });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     const storedModelId: string | null = null; // default-configured agent
     const spec = reg.normalizeSpecSync(storedModelId);
     const { provider, modelId } = parseModelSpec(spec);

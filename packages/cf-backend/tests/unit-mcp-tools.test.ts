@@ -21,20 +21,21 @@ function mcpEnv() {
   const calls: AgentCall[] = [];
   const record = (method: string, ...args: unknown[]) => { calls.push({ method, args }); };
   const userDO = {
-    async verifyCliToken(token: string) {
+    async verifyCliToken(_caller: unknown, token: string) {
       return token === SESSION_TOKEN
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async verifyAccessToken(token: string) {
+    async verifyAccessToken(_caller: unknown, token: string) {
       return token === ACCESS_TOKEN
         ? { ok: true, tokenHash: 'ahash', scopes: ['workspace.exec'], user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasWorkspace(name: string) { return name === 'jarvis'; },
+    async hasWorkspace(_caller: unknown, name: string) { return name === 'jarvis'; },
+    async ensureWorkspaceCapability() {},
   };
   const agent = {
-    async claimOwner(userId: string) { record('claimOwner', userId); return { owner: userId }; },
+    async claimOwner(userId: string) { record('claimOwner', userId); return { owner: userId, capabilityHash: 'sha-existing' }; },
     async runTaskFromMcp(text: string) { record('runTaskFromMcp', text); return { status: 'queued' }; },
     async sendPeerFromMcp(input: { agent: string; message: string; topic?: string }) {
       record('sendPeerFromMcp', input);

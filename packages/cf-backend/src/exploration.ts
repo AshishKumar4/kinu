@@ -83,6 +83,11 @@ export class ExplorationAgent extends Agent<Env> {
     appTitle: 'Proteus (exploration)',
     ownerRequired: false,
     getOwnerUserId: () => this.getOwnerUserId(),
+    getUserCaller: async () => {
+      const workspaceToken = this.getCapabilityToken();
+      if (!workspaceToken) throw new Error('This exploration facet was seeded without a workspace capability token.');
+      return { workspaceToken };
+    },
   });
 
   private resolveLowEffortModel(spec?: string | null) {
@@ -112,28 +117,57 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
    *  them; the parent calls setOwner immediately after subAgent() returns
-   *  the stub. Persisted to SQL so hibernation between spawn + run is safe. */
+   *  the stub. The workspace capability token comes down with it, so a head's
+   *  model calls reach the owner's credentials as the PARENT workspace and are
+   *  attenuated exactly as it is. Persisted to SQL so hibernation between spawn
+   *  + run is safe. */
   @callable()
-  async setOwner(userId: string): Promise<{ ok: true }> {
+  async setOwner(userId: string, capabilityToken: string | null): Promise<{ ok: true }> {
     if (!userId) throw new Error('userId required');
+    this.ensureFacetOwnerTable();
     this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS facet_owner (id INTEGER PRIMARY KEY CHECK (id = 1), user_id TEXT NOT NULL)`,
-    );
-    this.ctx.storage.sql.exec(
-      `INSERT INTO facet_owner (id, user_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id`,
-      userId,
+      `INSERT INTO facet_owner (id, user_id, capability_token) VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, capability_token = excluded.capability_token`,
+      userId, capabilityToken,
     );
     this.ownedModelServices.invalidate();
     return { ok: true };
   }
 
-  private getOwnerUserId(): string | null {
+  private ensureFacetOwnerTable(): void {
+    const sql = this.ctx.storage.sql;
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS facet_owner (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         user_id TEXT NOT NULL,
+         capability_token TEXT
+       )`,
+    );
+    const columns = sql.exec(`PRAGMA table_info(facet_owner)`).toArray();
+    if (!columns.some((c) => c.name === 'capability_token')) {
+      sql.exec(`ALTER TABLE facet_owner ADD COLUMN capability_token TEXT`);
+    }
+  }
+
+  /** Migrate on READ as well as on write: a facet seeded before the token
+   *  column existed and resumed without a fresh setOwner would otherwise lose
+   *  its OWNER too, not merely its token, on the missing-column error. */
+  private facetOwnerRow(): { user_id: string; capability_token: string | null } | null {
     try {
+      this.ensureFacetOwnerTable();
       const rows = this.ctx.storage.sql.exec(
-        `SELECT user_id FROM facet_owner WHERE id = 1`,
-      ).toArray() as Array<{ user_id: string }>;
-      return rows[0]?.user_id ?? null;
+        `SELECT user_id, capability_token FROM facet_owner WHERE id = 1`,
+      ).toArray() as Array<{ user_id: string; capability_token: string | null }>;
+      return rows[0] ?? null;
     } catch { return null; }
+  }
+
+  private getOwnerUserId(): string | null {
+    return this.facetOwnerRow()?.user_id ?? null;
+  }
+
+  private getCapabilityToken(): string | null {
+    return this.facetOwnerRow()?.capability_token ?? null;
   }
 
   /** The ROOT orchestrator agent name — the shared point every head in a split
@@ -427,6 +461,7 @@ export class ExplorationAgent extends Agent<Env> {
       spawnHead(childInput: HeadInput) {
         return spawnHeadFacet(facet, childInput, {
           ownerUserId: facet.getOwnerUserId(),
+          capabilityToken: facet.getCapabilityToken(),
           // The ROOT orchestrator, propagated unchanged so the whole subtree
           // shares one findings scratch (not this intermediate head).
           sharedParent: facet.getSharedParent(),

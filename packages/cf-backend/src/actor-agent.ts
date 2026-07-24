@@ -115,6 +115,8 @@ import {
 } from "@proteus/core";
 import { createRLMProvider, type CodemodeProvider } from "./rlm.js";
 import type { UserDO } from "./user/user-do.js";
+import type { UserCaller } from "./user/workspace-capability.js";
+import { sha256Hex } from "./lib/crypto.js";
 
 const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
 
@@ -257,6 +259,51 @@ export abstract class ActorAgent extends Think<Env> {
    *  own workspace; a facet actor overrides with its parent's name. */
   protected workspaceName(): string { return this.name; }
 
+  /** This actor's proof of workspace identity to the owner's UserDO. A
+   *  top-level workspace DO holds its own token; a facet actor holds a pushed
+   *  copy of its PARENT's, which is why every facet of a workspace is
+   *  attenuated exactly as the workspace is, with no per-facet bookkeeping to
+   *  forget. Null before the Worker has claimed the workspace and issued one.
+   *
+   *  Stored in its own table rather than agent_config: it is identity, not
+   *  configuration, and must not be reachable through any config or snapshot
+   *  surface. There is deliberately no RPC that reads it back out — the token
+   *  only ever travels parent -> facet, so nothing name-addressable can be
+   *  asked for another workspace's secret. */
+  protected async workspaceCapabilityToken(): Promise<string | null> {
+    try {
+      this.ensureCapabilityTable();
+      const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+      return rows[0]?.token || null;
+    } catch { return null; }
+  }
+
+  /** The hash of the token this workspace holds, or null when it holds none.
+   *  Safe to hand out — it is what lets the owner's UserDO detect that the two
+   *  sides disagree without either of them exchanging the secret. */
+  protected async workspaceCapabilityHash(): Promise<string | null> {
+    const token = await this.workspaceCapabilityToken();
+    return token ? sha256Hex(token) : null;
+  }
+
+  /** Install the capability token the owner's UserDO minted for this
+   *  workspace. Worker-side DO RPC only — deliberately not `@callable`. */
+  async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
+    if (!token) throw new Error('capability token required');
+    this.ensureCapabilityTable();
+    this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
+             ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  private ensureCapabilityTable(): void {
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
+      id    INTEGER PRIMARY KEY CHECK (id = 1),
+      token TEXT NOT NULL
+    )`);
+  }
+
   /** Tool deps only this actor class wires. Structural absence is the gating
    *  mechanism (the same way `team` is absent on the CLI backend): an actor
    *  that returns {} simply has no team / product-change tools. */
@@ -287,6 +334,7 @@ export abstract class ActorAgent extends Think<Env> {
     appTitle: 'Proteus',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
+    getUserCaller: () => this.userCaller(),
   });
 
   constructor(ctx: AgentContext, env: Env) {
@@ -919,6 +967,7 @@ export abstract class ActorAgent extends Think<Env> {
       const runtime = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0], {
         ownerUserId: () => this.getOwnerUserId(),
         workspaceName: this.workspaceName(),
+        capabilityToken: () => this.workspaceCapabilityToken(),
       });
       this.configureRuntime(runtime);
       this._rt = runtime;
@@ -1029,6 +1078,23 @@ export abstract class ActorAgent extends Think<Env> {
     const stub = this.getOwnerUserDO();
     if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
     return stub;
+  }
+
+  /** The identity this actor presents on every privileged user-level call.
+   *  Throws rather than falling back when no token exists — an unclaimed
+   *  workspace reaches nothing. */
+  protected async userCaller(): Promise<UserCaller> {
+    const workspaceToken = await this.workspaceCapabilityToken();
+    if (!workspaceToken) {
+      throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
+    }
+    return { workspaceToken };
+  }
+
+  /** The owner's UserDO paired with this actor's identity — the two things
+   *  every privileged user-level call needs. */
+  protected async userHub(): Promise<{ stub: DurableObjectStub<UserDO>; caller: UserCaller }> {
+    return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
   }
 
   // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
@@ -1321,6 +1387,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._cfHeadRuntime = createCFHeadRuntime(
       this as unknown as Parameters<typeof createCFHeadRuntime>[0],
       ownerUserId,
+      () => this.workspaceCapabilityToken(),
       this.workspaceName(),
       {
         executor: this.rt.executor,
@@ -1402,15 +1469,23 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * Closure boundary: the descriptor that crosses RPC carries only the JSON
    * Schema + name + serverId; we re-construct the AI-SDK `Tool` here so the
-   * `execute` arrow can capture `userDOStub`, `serverId`, and `name` lexically.
+   * `execute` arrow can capture `userDOStub`, the caller identity, `serverId`,
+   * and `name` lexically. The identity is the workspace capability token, so a
+   * facet dispatches as its parent workspace and cannot name another.
    */
   private async buildUserMcpTools(): Promise<ToolSet> {
     const userId = this.getOwnerUserId();
     if (!userId) return {};
     const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
 
+    // No identity, no user-level tools: advertising descriptors the actor can
+    // no longer dispatch just spends context on calls that will be refused.
+    let caller: UserCaller;
+    try { caller = await this.userCaller(); }
+    catch { return {}; }
+
     let watermark: number;
-    try { watermark = await userDOStub.userMcp_updatedAt(); }
+    try { watermark = await userDOStub.userMcp_updatedAt(caller); }
     catch (err) {
       console.warn('[proteus] mcp watermark fetch failed:', (err as Error).message);
       return this._cachedMcpTools;
@@ -1427,16 +1502,13 @@ export abstract class ActorAgent extends Think<Env> {
     }
 
     let descriptors: SerializableToolDescriptor[];
-    try { descriptors = await userDOStub.userMcp_toolDescriptors(); }
+    try { descriptors = await userDOStub.userMcp_toolDescriptors(caller); }
     catch (err) {
       console.warn('[proteus] mcp descriptor fetch failed:', (err as Error).message);
       return this._cachedMcpTools;
     }
 
     const tools: ToolSet = {};
-    // UserDO's hasWorkspace gate knows only top-level workspaces. Facet actors
-    // therefore present the parent workspace identity, never their facet name.
-    const callerAgentName = this.workspaceName();
     for (const d of descriptors) {
       const serverId = d.serverId;
       const mcpName = d.name;
@@ -1446,7 +1518,7 @@ export abstract class ActorAgent extends Think<Env> {
           (d.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0],
         ),
         execute: async (args: unknown) => {
-          try { return await userDOStub.userMcp_callTool(callerAgentName, serverId, mcpName, args); }
+          try { return await userDOStub.userMcp_callTool(caller, serverId, mcpName, args); }
           catch (err) { return { isError: true, error: (err as Error).message }; }
         },
       });

@@ -448,10 +448,9 @@ export class OrchestratorAgent extends ActorAgent {
         },
         isSameOwner: async (senderUserId) => senderUserId === orchestrator.getOwnerUserId(),
         hasGrant: async (senderAgentName, senderUserId) => {
-          const userDO = orchestrator.getOwnerUserDO();
-          if (!userDO) return false;
           try {
-            return await userDO.hasPeerGrant(senderAgentName, senderUserId);
+            const { stub, caller } = await orchestrator.userHub();
+            return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
           } catch (err) {
             console.warn('[proteus] hasPeerGrant lookup failed:', (err as Error).message);
             return false;   // default deny on lookup failure
@@ -497,6 +496,32 @@ export class OrchestratorAgent extends ActorAgent {
     return this._engine;
   }
 
+  /** The hash of the token this workspace holds — not the secret, and not
+   *  invertible, so it is safe for the owner's UserDO to ask for. It is what
+   *  lets the one-shot backfill skip workspaces that already agree instead of
+   *  rotating every token it touches. Worker-side DO RPC only. */
+  async getWorkspaceCapabilityHash(): Promise<string | null> {
+    return this.workspaceCapabilityHash();
+  }
+
+  /** Install the capability token the UserDO minted for this workspace, then
+   *  push it to every live subordinate. Facets present the PARENT workspace's
+   *  identity, so the token is pushed to them rather than read back out of this
+   *  DO — nothing name-addressable ever hands the secret to a caller. */
+  override async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
+    this.ensureSchema();
+    const result = await super.installWorkspaceCapability(token);
+    for (const entry of this.subordinateRoster.list()) {
+      try {
+        const stub = await this.subAgent(SubordinateAgent, entry.name);
+        await stub.installWorkspaceCapability(token);
+      } catch (err) {
+        console.warn(`[proteus] capability push to subordinate ${entry.name} failed:`, (err as Error).message);
+      }
+    }
+    return result;
+  }
+
   /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
     try {
@@ -522,13 +547,15 @@ export class OrchestratorAgent extends ActorAgent {
     const requirePeer = async (agent: string): Promise<void> => {
       requireOwner();
       if (agent === orchestrator.name) throw new Error('that is this agent — pick another peer (action:"list")');
-      const known = await orchestrator.requireOwnerUserDO().hasWorkspace(agent);
+      const { stub, caller } = await orchestrator.userHub();
+      const known = await stub.hasWorkspace(caller, agent);
       if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
     };
     return {
       listPeers: async () => {
         requireOwner();
-        return teamPeers(orchestrator.name, await orchestrator.requireOwnerUserDO().listWorkspaces());
+        const { stub, caller } = await orchestrator.userHub();
+        return teamPeers(orchestrator.name, await stub.listWorkspaces(caller));
       },
       ask: async ({ agent, topic, message, timeoutMs }) => {
         await requirePeer(agent);
@@ -541,11 +568,11 @@ export class OrchestratorAgent extends ActorAgent {
       reply: async ({ eventId, message }) => orchestrator.peerHub.reply({ eventId, message }),
       spawnWorkspace: async ({ name, purpose, message, timeoutMs }): Promise<PeerSpawnOutcome> => {
         const userId = requireOwner();
-        const userDO = orchestrator.requireOwnerUserDO();
+        const { stub: userDO, caller } = await orchestrator.userHub();
         let agentName = name;
         let created = false;
-        if (!agentName || !(await userDO.hasWorkspace(agentName))) {
-          const entry = await createCloudWorkspaceForUser(orchestrator.env, userId, userDO, {
+        if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
+          const entry = await createCloudWorkspaceForUser(orchestrator.env, userId, userDO, caller, {
             ...(agentName ? { name: agentName } : {}),
             purpose,
           });
@@ -580,6 +607,7 @@ export class OrchestratorAgent extends ActorAgent {
           const ownerUserId = orchestrator.getOwnerUserId();
           if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
           const stub = await orchestrator.subAgent(SubordinateAgent, input.name);
+          const capabilityToken = await orchestrator.workspaceCapabilityToken();
           try {
             await stub.setSubordinateIdentity({
               name: input.name,
@@ -587,6 +615,7 @@ export class OrchestratorAgent extends ActorAgent {
               role: input.role,
               mission: input.mission,
               ...(input.model ? { model: input.model } : {}),
+              ...(capabilityToken ? { capabilityToken } : {}),
             });
           } catch (error) {
             await orchestrator.deleteSubAgent(SubordinateAgent, input.name).catch(() => {});
@@ -618,17 +647,17 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
-    const userDO = this.getOwnerUserDO();
-    if (!userDO) return undefined;
+    if (!this.getOwnerUserDO()) return undefined;
+    const hub = () => this.userHub();
     return {
-      board: () => userDO.getProductChangeBoard(this.name, 20),
-      bindSource: (input) => userDO.upsertProductSourceBinding(input),
-      create: (input) => userDO.createProductChange(this.name, input),
-      update: (changeId, patch) => userDO.updateProductChange(changeId, patch),
-      transition: (changeId, status) => userDO.transitionProductChange(changeId, status),
-      recordCheck: (changeId, input) => userDO.recordProductChangeCheck(changeId, input),
-      requestApproval: (changeId, approvalType) => userDO.requestProductChangeApproval(changeId, approvalType),
-      recordDeployment: (changeId, input) => userDO.recordProductDeployment(changeId, input),
+      board: async () => { const { stub, caller } = await hub(); return stub.getProductChangeBoard(caller, this.name, 20); },
+      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertProductSourceBinding(caller, input); },
+      create: async (input) => { const { stub, caller } = await hub(); return stub.createProductChange(caller, this.name, input); },
+      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
+      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, status); },
+      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
+      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestProductChangeApproval(caller, changeId, approvalType); },
+      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
       engine: this.getProductChangeEngine(),
     };
   }
@@ -643,21 +672,22 @@ export class OrchestratorAgent extends ActorAgent {
     if (this._productChangeEngine) return this._productChangeEngine;
     const handle = this.rt.sandboxHandle;
     const provider = this.rt.executionRouter?.getProvider('sandbox');
-    const userDO = () => this.requireOwnerUserDO();
+    const hub = () => this.userHub();
     this._productChangeEngine = new ProductChangeEngine({
       exec: handle && provider ? createSandboxProductChangeExec(handle, provider) : null,
       ledger: {
-        detail: (changeId) => userDO().getProductChangeDetail(changeId),
-        update: (changeId, patch) => userDO().updateProductChange(changeId, patch),
-        transition: (changeId, to) => userDO().transitionProductChange(changeId, to),
-        recordCheck: (changeId, input) => userDO().recordProductChangeCheck(changeId, input),
-        recordDeployment: (changeId, input) => userDO().recordProductDeployment(changeId, input),
+        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getProductChangeDetail(caller, changeId); },
+        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
+        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, to); },
+        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
+        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
       },
       // A stored `github` credential (POST /api/user/credentials/github with a
       // bearer PAT) authorizes clone/push for github source bindings; absent →
       // the engine's honest add-a-credential error.
       gitHubAuth: async () => {
-        const headers = await this.getOwnerUserDO()?.getAuthHeaders('github');
+        const { stub, caller } = await this.userHub();
+        const headers = await stub.getAuthHeaders(caller, 'github');
         return headers?.Authorization ?? null;
       },
     });
@@ -693,13 +723,18 @@ export class OrchestratorAgent extends ActorAgent {
    *  ensureSchema() creates all required tables so the SELECT/UPDATE never hits
    *  a missing table or column, and is flag-gated so onStart won't repeat it.
    */
-  async claimOwner(userId: string): Promise<{ owner: string }> {
+  async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
     if (!userId) throw new Error('userId required');
     try {
       this.ensureSchema();
     } catch (err) {
       console.error('[orchestrator] claimOwner ensureSchema failed:', (err as Error).message);
     }
+    // The HASH, not a boolean: the owner's UserDO compares it against what it
+    // has registered, so any disagreement — a workspace holding nothing, or one
+    // holding a token the UserDO no longer knows — is repaired rather than
+    // mistaken for "already provisioned".
+    const capabilityHash = await this.workspaceCapabilityHash();
     const current = this.getOwnerUserId();
     if (current === null) {
       // Unclaimed — first touch. Ensure identity has the owner marker.
@@ -713,12 +748,12 @@ export class OrchestratorAgent extends ActorAgent {
         this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
       this.invalidateModelCaches();
-      return { owner: userId };
+      return { owner: userId, capabilityHash };
     }
     if (current !== userId) {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
-    return { owner: current };
+    return { owner: current, capabilityHash };
   }
 
   /** Snapshot /workspace to R2 if the agent used the sandbox this turn and the
@@ -1066,11 +1101,10 @@ export class OrchestratorAgent extends ActorAgent {
    *  auto-titling (a provisional title leaves it open; user/auto titles set it). */
   private async propagateDisplayName(displayName: string): Promise<void> {
     this.config.setDisplayName(displayName);
-    const userId = this.getOwnerUserId();
-    if (userId) {
+    if (this.getOwnerUserId()) {
       try {
-        const stub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-        await stub.setWorkspaceDisplayName(this.name, displayName);
+        const { stub, caller } = await this.userHub();
+        await stub.setWorkspaceDisplayName(caller, this.name, displayName);
       } catch (err) {
         console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
       }
@@ -1512,34 +1546,39 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async getProductChangeBoard(limit: number = 20) {
-    return this.requireOwnerUserDO().getProductChangeBoard(this.name, limit);
+    const { stub, caller } = await this.userHub();
+    return stub.getProductChangeBoard(caller, this.name, limit);
   }
 
   @callable()
   async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }) {
-    return this.requireOwnerUserDO().upsertProductSourceBinding(input);
+    const { stub, caller } = await this.userHub();
+    return stub.upsertProductSourceBinding(caller, input);
   }
 
   @callable()
   async createProductChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
-    return this.requireOwnerUserDO().createProductChange(this.name, input);
+    const { stub, caller } = await this.userHub();
+    return stub.createProductChange(caller, this.name, input);
   }
 
   async transitionProductChange(changeId: string, status: ProductChangeStatus) {
-    return this.requireOwnerUserDO().transitionProductChange(changeId, status);
+    const { stub, caller } = await this.userHub();
+    return stub.transitionProductChange(caller, changeId, status);
   }
 
   @callable()
   async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']) {
-    return this.requireOwnerUserDO().requestProductChangeApproval(changeId, approvalType);
+    const { stub, caller } = await this.userHub();
+    return stub.requestProductChangeApproval(caller, changeId, approvalType);
   }
 
   @callable()
   async decideProductChangeApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
-    const userDO = this.requireOwnerUserDO();
-    const decided = await userDO.decideProductChangeApproval(approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+    const { stub, caller } = await this.userHub();
+    const decided = await stub.decideProductChangeApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
     if (decision === 'rejected') {
-      try { await userDO.transitionProductChange(decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
+      try { await stub.transitionProductChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
     }
     return decided;
   }
@@ -2148,10 +2187,10 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async checkpointStatus(): Promise<CheckpointAvailability> {
-    const hub = this.getOwnerUserDO();
-    if (!hub) return { available: false, reason: 'agent has no owner user yet' };
+    if (!this.getOwnerUserDO()) return { available: false, reason: 'agent has no owner user yet' };
     try {
-      return await hub.deviceRpc('checkpointStatus', []) as CheckpointAvailability;
+      const { stub, caller } = await this.userHub();
+      return await stub.deviceRpc(caller, 'checkpointStatus', []) as CheckpointAvailability;
     } catch (err) {
       if (isDeviceNotConnectedError(err)) {
         return { available: false, reason: 'no device connected — connect one with `proteus connect`' };
@@ -2162,10 +2201,10 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async listFileCheckpoints(limit = 50): Promise<FileCheckpointEntry[]> {
-    const hub = this.getOwnerUserDO();
-    if (!hub) return [];
+    if (!this.getOwnerUserDO()) return [];
     try {
-      return await hub.deviceRpc('checkpointList', [this.name, Math.max(1, Math.min(500, limit))]) as FileCheckpointEntry[];
+      const { stub, caller } = await this.userHub();
+      return await stub.deviceRpc(caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))]) as FileCheckpointEntry[];
     } catch (err) {
       if (isDeviceNotConnectedError(err)) return [];
       throw err;
@@ -2174,12 +2213,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
-    return await this.requireOwnerUserDO().deviceRpc('checkpointPlan', [this.name, dir, id]) as FileRestorePlan;
+    const { stub, caller } = await this.userHub();
+    return await stub.deviceRpc(caller, 'checkpointPlan', [this.name, dir, id]) as FileRestorePlan;
   }
 
   @callable()
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
-    return await this.requireOwnerUserDO().deviceRpc('checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
+    const { stub, caller } = await this.userHub();
+    return await stub.deviceRpc(caller, 'checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
   }
 
   /**
@@ -3779,6 +3820,10 @@ export class OrchestratorAgent extends ActorAgent {
     ownerUserId: string;
     model: string | null;
   }> {
+    // Deliberately carries no capability token: this method is reachable by any
+    // holder of a stub to this workspace, so it must never hand out a secret.
+    // The token reaches subordinates by push (setSubordinateIdentity +
+    // installWorkspaceCapability), never by read-back.
     this.ensureSchema();
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
@@ -3847,9 +3892,8 @@ export class OrchestratorAgent extends ActorAgent {
   /** Owner's verified login email (UserDO profile), or null when unknown. */
   private async getOwnerEmail(): Promise<string | null> {
     try {
-      const userDO = this.getOwnerUserDO();
-      if (!userDO) return null;
-      return (await userDO.getProfile())?.email ?? null;
+      const { stub, caller } = await this.userHub();
+      return (await stub.getProfile(caller))?.email ?? null;
     } catch { return null; }
   }
 

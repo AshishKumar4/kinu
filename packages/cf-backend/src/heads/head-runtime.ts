@@ -23,6 +23,7 @@ import { createAgentProviderRegistry } from "../providers/agent-registry.js";
 import { agentAffinityKey } from "@proteus/core";
 import { generateJson } from "../lib/generate-json.js";
 import type { UserDO } from "../user/user-do.js";
+import type { UserCaller } from "../user/workspace-capability.js";
 
 /** Agent surface this head runtime needs — `env` is protected on the DO base
  *  but the orchestrator (a subclass) passes `this` cast to this view. */
@@ -31,17 +32,24 @@ type HeadHost = Think<Env> & { readonly env: Env };
 export function createCFHeadRuntime(
   orchestrator: HeadHost,
   ownerUserId: string,
+  capabilityToken: () => Promise<string | null>,
   parentWorkspaceName: string,
   grounding?: HeadGrounding,
 ): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
-  // is read once from workspace_identity by the orchestrator and threaded down.
+  // is read once from workspace_identity by the orchestrator and threaded down,
+  // as is the workspace capability token every privileged call presents.
   const userDOStub = orchestrator.env.UserDO.get(
     orchestrator.env.UserDO.idFromName(ownerUserId),
   ) as DurableObjectStub<UserDO>;
+  const caller = async (): Promise<UserCaller> => {
+    const workspaceToken = await capabilityToken();
+    if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
+    return { workspaceToken };
+  };
   const reg = createAgentProviderRegistry({
     env: orchestrator.env,
-    userDOStub,
+    userDO: { stub: userDOStub, caller },
     appTitle: 'Proteus (heads)',
     workersAI: { sessionAffinity: agentAffinityKey(orchestrator.name) },
   });
@@ -63,12 +71,13 @@ export function createCFHeadRuntime(
   };
 
   return {
-    spawnHead(input: HeadInput): Promise<SpawnedHead> {
+    async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       // Facet actors share their parent workspace's identity for UserDO/MCP
       // ownership. The spawning actor's facet name is not a registered
       // workspace and must never escape as caller identity.
       return spawnHeadFacet(orchestrator, input, {
         ownerUserId,
+        capabilityToken: await capabilityToken(),
         sharedParent: parentWorkspaceName,
       });
     },

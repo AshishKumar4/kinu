@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { OWNER_SESSION } from '../src/user/workspace-capability.js';
 import { generateText } from 'ai';
 import { createMockFetch } from '@proteus/test-utils';
 import { readFileSync } from 'node:fs';
@@ -6,14 +7,14 @@ import { join } from 'node:path';
 import { OwnedModelServices } from '../src/owned-model-services.ts';
 
 interface FakeUserDO {
-  getAuthHeaders(key: string): Promise<Record<string, string> | null>;
-  getCredentialBaseURL(key: string): Promise<string | null>;
-  listCredentials(): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
+  getAuthHeaders(caller: unknown, key: string): Promise<Record<string, string> | null>;
+  getCredentialBaseURL(caller: unknown, key: string): Promise<string | null>;
+  listCredentials(caller: unknown): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
 }
 
 function fakeUserDO(credentials: Record<string, Record<string, string>> = {}): FakeUserDO {
   return {
-    async getAuthHeaders(key) { return credentials[key] ?? null; },
+    async getAuthHeaders(_caller, key) { return credentials[key] ?? null; },
     async getCredentialBaseURL() { return null; },
     async listCredentials() {
       return Object.keys(credentials).map((key) => ({ key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 }));
@@ -55,6 +56,7 @@ describe('OwnedModelServices', () => {
       appTitle: 'Proteus',
       ownerRequired: true,
       getOwnerUserId: () => null,
+      getUserCaller: async () => OWNER_SESSION,
     });
 
     expect(() => services.providerRegistry()).toThrow(
@@ -73,6 +75,7 @@ describe('OwnedModelServices', () => {
       appTitle: 'Proteus (exploration)',
       ownerRequired: false,
       getOwnerUserId: () => null,
+      getUserCaller: async () => OWNER_SESSION,
     });
 
     expect(services.providerRegistry().registry.list().map((provider) => provider.id)).toEqual([

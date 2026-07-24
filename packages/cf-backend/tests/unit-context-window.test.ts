@@ -1,6 +1,7 @@
 // Per-model context windows — the static fallback table + the catalog lookup
 // that feed the compaction extension's transformContext trigger.
 import { describe, test, expect } from "bun:test";
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { contextWindowForModel } from "../src/lib/context-window";
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
 import { catalogModelInfo, type ProviderDeps } from "@proteus/core";
@@ -27,12 +28,12 @@ describe("contextWindowForModel", () => {
     // default window → compaction at 41% of Kimi's real 262,144 window. The
     // orchestrator resolves the EFFECTIVE spec first (the same
     // normalizeSpecSync resolution getModel() uses) before sizing.
-    const userDOStub = {
+    const userDOStub = userCredentialSource({
       getAuthHeaders: async () => null,
       listCredentials: async () => [],
       getCredentialBaseURL: async () => null,
-    } as unknown as Parameters<typeof createAgentProviderRegistry>[0]["userDOStub"];
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub });
+    });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: userDOStub });
     const effectiveSpec = reg.normalizeSpecSync(null);
     expect(effectiveSpec).toBe("workers-ai/@cf/moonshotai/kimi-k2.6");
     expect(contextWindowForModel(effectiveSpec)).toBe(262_144);

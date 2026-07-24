@@ -2,6 +2,7 @@ import type { AuthIdentity } from './session.js';
 import type { OAuthProviderId } from './providers.js';
 import type { UserDO } from '../user/user-do.js';
 import { randomHex, randomToken, sha256Hex } from '../lib/crypto.js';
+import { OWNER_SESSION } from '../user/workspace-capability.js';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -323,7 +324,7 @@ async function resolveOrCreateIdentity(
   userId = account?.user_id ?? userId;
 
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-  await userDO.ensureProfile(email, profile.displayName ?? undefined);
+  await userDO.ensureProfile(OWNER_SESSION, email, profile.displayName ?? undefined);
 
   return {
     userId,

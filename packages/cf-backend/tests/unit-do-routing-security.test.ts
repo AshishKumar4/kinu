@@ -97,7 +97,7 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
     // Native DO stub RPC (env.UserDO.get(id).method()) does not need @callable;
     // the account-takeover-adjacent methods must still exist, just unexposed.
     const src = source('src/user/user-do.ts');
-    for (const m of ['getAuthHeaders', 'mintCliToken', 'setCredential', 'listWorkspaces', 'ensureProfile']) {
+    for (const m of ['getAuthHeaders', 'mintCliToken', 'setCredential', 'listWorkspaces', 'ensureProfile', 'ensureWorkspaceCapability']) {
       expect(src).toContain(`async ${m}(`);
     }
   });
@@ -107,6 +107,9 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
     for (const m of [
       'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'acceptEmailDelivery',
       'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
+      // Installs this workspace's proof of identity to the owner's UserDO — a
+      // browser socket must never reach it.
+      'installWorkspaceCapability',
     ]) {
       expect(src).not.toContain(`@callable()\n  async ${m}`);
       expect(src).toContain(`async ${m}(`);

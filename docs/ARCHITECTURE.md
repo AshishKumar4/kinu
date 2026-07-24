@@ -284,11 +284,29 @@ MCP servers are authenticated **once at the user level** and held by the `UserDO
 (`cf-backend/src/user/user-do.ts`, `user_mcp_servers` table; OAuth callback at
 `userMcp_handleOAuthCallback`). Agents never receive a token. The orchestrator
 fetches only serializable tool descriptors (`buildUserMcpTools`) and each tool's
-`execute` closure RPCs back to `userMcp_callTool(callerAgentName, serverId, …)` on
-the UserDO, where the one credentialed call runs. That call is **ownership-gated**:
-`userMcp_callTool` checks `hasWorkspace(callerAgentName)` and fails closed if the
-caller is not one of the user's live workspaces, with a second in-SQL check of
-server membership + `allowed_tools`.
+`execute` closure RPCs back to `userMcp_callTool(caller, serverId, …)` on the
+UserDO, where the one credentialed call runs. The caller is a **workspace
+capability token**, not a claimed name, so there is nothing to spoof: the token
+exists only for a workspace this user's registry issued one to, and dies with
+it. A second in-SQL check covers server membership + `allowed_tools`.
+
+## The UserDO caller boundary
+
+Every secret a user owns lives in one `UserDO`, and every privileged method on
+it takes a `UserCaller` first and gates on `requireTier`
+(`cf-backend/src/user/workspace-capability.ts`). Worker routes act for the owner
+whose identity the edge verified and pass `OWNER_SESSION`; a workspace presents
+the per-workspace secret minted for it at claim time and stored hashed, and the
+UserDO looks its tier up live in `workspace_tiers`. The token is identity, not
+capability, so re-tainting a workspace is a single row update.
+
+Today every workspace is registered `full` — the whole user surface, exactly as
+before. The `shared` tier is what a workspace shared with a second human will
+get: full capability inside itself, no reach into the owner's wider account.
+Facets (subordinates, heads, MCTS branches) present their PARENT workspace's
+token, so they attenuate with it and have no identity of their own to forget.
+Enforcement lives where the secrets are, so no workspace-DO code path or
+forgotten tool gate can route around it.
 
 ## Evolution
 

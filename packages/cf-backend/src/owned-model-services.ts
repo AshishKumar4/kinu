@@ -6,6 +6,7 @@ import {
   type AgentProviderRegistry,
 } from './providers/agent-registry.js';
 import type { UserDO } from './user/user-do.js';
+import type { UserCaller } from './user/workspace-capability.js';
 
 export interface OwnedModelServicesOptions {
   readonly env: Env;
@@ -15,6 +16,10 @@ export interface OwnedModelServicesOptions {
   readonly appTitle: string;
   readonly ownerRequired: boolean;
   readonly getOwnerUserId: () => string | null;
+  /** How this actor proves its workspace identity to the UserDO. Resolved per
+   *  call: a facet reads it from its parent, and a workspace only has one once
+   *  the Worker has claimed it. */
+  readonly getUserCaller: () => Promise<UserCaller>;
 }
 
 /** Owner-scoped provider, model, affinity, and web services shared by CF agents. */
@@ -43,7 +48,7 @@ export class OwnedModelServices {
 
     this.providerRegistryCache = createAgentProviderRegistry({
       env: this.options.env,
-      userDOStub,
+      userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
       appTitle: this.options.appTitle,
       workersAI: { sessionAffinity: this.affinityKey },
     });

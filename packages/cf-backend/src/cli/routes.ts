@@ -15,6 +15,7 @@ import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
 import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
+import { OWNER_SESSION } from '../user/workspace-capability.js';
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
@@ -120,13 +121,13 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/logout' && method === 'POST') {
-    await cli.userDO.revokeCliTokenHash(cli.tokenHash);
+    await cli.userDO.revokeCliTokenHash(OWNER_SESSION, cli.tokenHash);
     return json({ ok: true });
   }
 
   // ── CI access tokens — interactive-session-only management surface ──
   if (path === '/tokens' && method === 'GET') {
-    return json({ tokens: await cli.userDO.listAccessTokens() });
+    return json({ tokens: await cli.userDO.listAccessTokens(OWNER_SESSION) });
   }
 
   if (path === '/tokens' && method === 'POST') {
@@ -139,7 +140,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
       return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
     }
-    const minted = await cli.userDO.mintAccessToken(cli.userId, body.name, body.scopes);
+    const minted = await cli.userDO.mintAccessToken(OWNER_SESSION, cli.userId, body.name, body.scopes);
     if (!minted.ok) return err(400, minted.error);
     return json({
       token: minted.token,
@@ -152,17 +153,17 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
   if (tokenRevokeMatch && method === 'DELETE') {
     const ref = decodeURIComponent(tokenRevokeMatch[1]);
-    const result = await cli.userDO.revokeAccessToken(ref);
+    const result = await cli.userDO.revokeAccessToken(OWNER_SESSION, ref);
     if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
     return json({ ok: true });
   }
 
   if (path === '/workspaces' && method === 'GET') {
-    return json(await cli.userDO.listWorkspaces());
+    return json(await cli.userDO.listWorkspaces(OWNER_SESSION));
   }
 
   if (path === '/models' && method === 'GET') {
-    return json(await listAvailableModels(env, cli.userId));
+    return json(await listAvailableModels(env, cli.userId, OWNER_SESSION));
   }
 
   if (path === '/workspaces' && method === 'POST') {
@@ -173,8 +174,8 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (workspaceMatch && method === 'DELETE') {
     try {
       const name = decodeURIComponent(workspaceMatch[1]);
-      if (!(await cli.userDO.hasWorkspace(name))) return err(404, `Agent ${name} not found.`);
-      await cli.userDO.removeWorkspace(name, cli.userId);
+      if (!(await cli.userDO.hasWorkspace(OWNER_SESSION, name))) return err(404, `Agent ${name} not found.`);
+      await cli.userDO.removeWorkspace(OWNER_SESSION, name, cli.userId);
       return json({ ok: true });
     } catch (e) {
       return err(400, e instanceof Error ? e.message : String(e));
@@ -184,8 +185,8 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
-    if (!(await cli.userDO.hasWorkspace(name))) return err(404, `Agent ${name} not found.`);
-    const issued = await cli.userDO.issueCliAgentConnectTicket({
+    if (!(await cli.userDO.hasWorkspace(OWNER_SESSION, name))) return err(404, `Agent ${name} not found.`);
+    const issued = await cli.userDO.issueCliAgentConnectTicket(OWNER_SESSION, {
       userId: cli.userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName: name,
@@ -230,11 +231,11 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/devices' && method === 'GET') {
-    return json(await cli.userDO.listDevices());
+    return json(await cli.userDO.listDevices(OWNER_SESSION));
   }
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson<{ label?: string }>(request);
-    const { deviceId, token } = await cli.userDO.registerDevice(body?.label);
+    const { deviceId, token } = await cli.userDO.registerDevice(OWNER_SESSION, body?.label);
     return json({ deviceId, token, userId: cli.userId, origin: url.origin }, { status: 201 });
   }
 
@@ -293,7 +294,7 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
  *  it against the fresh-auth window; access tokens never qualify. */
 async function sessionTokenMintedAt(cli: CliTokenIdentity): Promise<number | null> {
   if (cli.kind !== 'session') return null;
-  const tokens = await cli.userDO.listCliTokens();
+  const tokens = await cli.userDO.listCliTokens(OWNER_SESSION);
   return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
 }
 

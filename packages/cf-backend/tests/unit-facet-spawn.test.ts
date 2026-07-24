@@ -55,7 +55,7 @@ function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } =
     return Promise.resolve({ ok: true });
   };
   const stub = {
-    setOwner: (userId: string) => record('setOwner', [userId]),
+    setOwner: (userId: string, capabilityToken: string | null) => record('setOwner', [userId, capabilityToken]),
     setSharedParent: (name: string) => record('setSharedParent', [name]),
     initHead: (input: HeadInput) => record('initHead', [input]),
     abortHead: (reason: string) => record('abortHead', [reason]),
@@ -93,6 +93,7 @@ describe('exploration-facet spawn seam', () => {
 
     const head = await spawnHeadFacet(host, input, {
       ownerUserId: 'user-1',
+      capabilityToken: 'pwc_parent',
       sharedParent: 'proteus-main',
     });
 
@@ -100,7 +101,10 @@ describe('exploration-facet spawn seam', () => {
     // Heads spawn the bare ExplorationAgent — never a class carrying the actor
     // tool surface — which is what bounds the spawn tree.
     expect(calls[0]?.args).toEqual([ExplorationAgent, 'head-1']);
-    expect(calls[1]?.args).toEqual(['user-1']);
+    // The spawner's workspace capability token rides down with the owner, so
+    // the head reaches the user's credentials AS the parent workspace and is
+    // attenuated with it — no per-head identity to taint separately.
+    expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
     expect(calls[2]?.args).toEqual(['proteus-main']);
     // The budget the caller derived reaches the facet untouched.
     expect(calls[3]?.args).toEqual([input]);
@@ -110,7 +114,7 @@ describe('exploration-facet spawn seam', () => {
   test('the head handle runs and tears down the facet it spawned', async () => {
     const { host, calls } = makeHost();
     const head = await spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
     });
     calls.length = 0;
 
@@ -125,7 +129,7 @@ describe('exploration-facet spawn seam', () => {
   test('a head still evicts its facet when the in-facet abort fails', async () => {
     const { host, calls } = makeHost({ failing: 'abortHead' });
     const head = await spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
     });
     calls.length = 0;
 
@@ -138,7 +142,7 @@ describe('exploration-facet spawn seam', () => {
     const { host, calls } = makeHost({ failing: 'initHead' });
 
     await expect(spawnHeadFacet(host, headInput(), {
-      ownerUserId: 'user-1', sharedParent: 'proteus-main',
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent', sharedParent: 'proteus-main',
     })).rejects.toThrow('initHead exploded');
 
     expect(methods(calls)).toEqual([
@@ -150,10 +154,13 @@ describe('exploration-facet spawn seam', () => {
   test('a branch seeds only its owner and exposes the MCTS rollout calls', async () => {
     const { host, calls } = makeHost();
 
-    const branch = await spawnBranchFacet(host, 'branch-7', { ownerUserId: 'user-1' });
+    const branch = await spawnBranchFacet(host, 'branch-7', {
+      ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
+    });
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner']);
     expect(calls[0]?.args).toEqual([ExplorationAgent, 'branch-7']);
+    expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
 
     expect(await branch.explore([{ role: 'user', content: 'hi' }], [])).toEqual({
       text: 'an approach', codeUsed: null,
@@ -167,7 +174,7 @@ describe('exploration-facet spawn seam', () => {
   test('an unclaimed workspace spawns a branch without seeding an owner', async () => {
     const { host, calls } = makeHost();
 
-    await spawnBranchFacet(host, 'branch-7', { ownerUserId: null });
+    await spawnBranchFacet(host, 'branch-7', { ownerUserId: null, capabilityToken: null });
 
     expect(methods(calls)).toEqual(['subAgent']);
   });
@@ -175,7 +182,7 @@ describe('exploration-facet spawn seam', () => {
   test('a branch whose owner seeding fails is discarded and the error propagates', async () => {
     const { host, calls } = makeHost({ failing: 'setOwner' });
 
-    await expect(spawnBranchFacet(host, 'branch-7', { ownerUserId: 'user-1' }))
+    await expect(spawnBranchFacet(host, 'branch-7', { ownerUserId: 'user-1', capabilityToken: 'pwc_parent' }))
       .rejects.toThrow('setOwner exploded');
 
     expect(methods(calls)).toEqual(['subAgent', 'setOwner', 'abortSubAgent']);

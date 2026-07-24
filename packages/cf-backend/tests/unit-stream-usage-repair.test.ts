@@ -7,6 +7,7 @@
 // while billing showed ~73% of input tokens served from the prefix cache.
 // Fixtures below are verbatim captures from the live endpoint.
 import { describe, test, expect } from 'bun:test';
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { streamText } from 'ai';
 import { repairSseCachedUsage } from '../src/providers/stream-usage-repair.ts';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
@@ -115,19 +116,19 @@ describe('repairSseCachedUsage', () => {
 
 describe('cached-usage accounting end to end (workers-ai provider)', () => {
   function fakeUserDOStub() {
-    return {
+    return userCredentialSource({
       getAuthHeaders: async (key: string) =>
         key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-user-token' } : null,
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) =>
         key === 'cloudflare.oauth' ? 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1' : null,
-    } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
+    });
   }
 
   test('streamed glm-5.2 usage reports the real cached tokens, not the zeroed duplicate', async () => {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: fakeUserDOStub(),
+      userDO: fakeUserDOStub(),
       fetch: (async () => sseResponse(
         sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]'),
       )) as typeof fetch,

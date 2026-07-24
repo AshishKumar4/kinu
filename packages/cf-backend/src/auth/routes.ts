@@ -16,6 +16,7 @@ import {
 } from '../lib/cloudflare-oauth.js';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access.js';
+import { OWNER_SESSION } from '../user/workspace-capability.js';
 
 export async function handleAuthRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -168,9 +169,9 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     if (cloudflareCredential) {
       stage = 'cloudflare_credential';
       const userDO = env.UserDO.get(env.UserDO.idFromName(session.identity.userId));
-      await userDO.setCredential(CLOUDFLARE_OAUTH_CRED_KEY, cloudflareCredential);
-      if (!await userDO.getConfig('default_model')) {
-        await userDO.setConfig('default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
+      await userDO.setCredential(OWNER_SESSION, CLOUDFLARE_OAUTH_CRED_KEY, cloudflareCredential);
+      if (!await userDO.getConfig(OWNER_SESSION, 'default_model')) {
+        await userDO.setConfig(OWNER_SESSION, 'default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
       }
       notifyWorkspacesCredentialsChanged(env, userDO, ctx);
     }

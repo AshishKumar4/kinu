@@ -1,5 +1,6 @@
 import { initProductChangeTables } from '@proteus/core';
 import { initAccessTokenTable } from '../cli/access-token-store.js';
+import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
 // UserDO SQL schema. All tables live inside a single Durable Object instance
 // keyed by the stable Proteus userId resolved by the D1 auth store.
@@ -49,6 +50,11 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
+
+  // Per-workspace capability tokens + the taint registry — the caller boundary
+  // every privileged method below is gated on. Table shape owned by the module
+  // that implements the gate.
+  initWorkspaceCapabilityTables(sql);
 
   // Cross-owner peer-messaging grants: which foreign (sender_user_id,
   // sender_agent_name) pairs may message THIS user's agents. Enforced by the

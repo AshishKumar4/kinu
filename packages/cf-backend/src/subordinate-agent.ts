@@ -42,6 +42,11 @@ export interface SetSubordinateIdentityInput {
   role: string;
   mission: string;
   model?: string;
+  /** The PARENT workspace's capability token, pushed down at spawn so this
+   *  facet reaches the owner's UserDO as its workspace — and is attenuated
+   *  with it. Refreshed by the parent's installWorkspaceCapability fan-out if
+   *  it is ever reissued. */
+  capabilityToken?: string;
 }
 
 export class SubordinateAgent extends ActorAgent {
@@ -59,6 +64,9 @@ export class SubordinateAgent extends ActorAgent {
     return this.identity.ownerUserId();
   }
 
+  /** A subordinate's workspace is its parent's, so its exec planes, MCP
+   *  dispatch, and credential reads all present the parent's identity — taint
+   *  inheritance by construction rather than by bookkeeping. */
   protected workspaceName(): string {
     const parentWorkspace = this.identity.workspaceName();
     if (!parentWorkspace) throw new Error('Subordinate identity has not been seeded by its parent workspace.');
@@ -165,6 +173,7 @@ export class SubordinateAgent extends ActorAgent {
       mission: `Role: ${input.role}\n\n${input.mission}`,
     });
     this.config.setDisplayName(input.displayName);
+    if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);
     const model = input.model ?? bootstrap.model;
     if (model) this.config.setModel(model);
     this._cachedSoulText = null;

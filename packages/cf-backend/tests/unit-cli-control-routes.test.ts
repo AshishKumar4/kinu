@@ -7,14 +7,14 @@ const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   const calls: string[] = [];
   const userDO = {
-    async verifyCliToken(token: string) {
+    async verifyCliToken(_caller: unknown, token: string) {
       return {
         ok: token === TOKEN,
         tokenHash: 'hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async listCliTokens() {
+    async listCliTokens(_caller: unknown) {
       return [{
         tokenHash: 'hash',
         label: 'terminal',
@@ -23,13 +23,14 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
         lastUsedAt: null,
       }];
     },
-    async hasWorkspace(name: string) {
+    async hasWorkspace(_caller: unknown, name: string) {
       return name === 'jarvis';
     },
-    async removeWorkspace(name: string, ownerUserId: string) {
+    async ensureWorkspaceCapability() {},
+    async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
       calls.push(`workspace:remove:${name}:${ownerUserId}`);
     },
-    async issueCliAgentConnectTicket(input: { userId: string; agentName: string; cliTokenHash: string }) {
+    async issueCliAgentConnectTicket(_caller: unknown, input: { userId: string; agentName: string; cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.userId}:${input.agentName}:${input.cliTokenHash}`);
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
@@ -37,7 +38,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   const agent = {
     async claimOwner(userId: string) {
       calls.push(`claim:${userId}`);
-      return { owner: userId };
+      return { owner: userId, capabilityHash: 'sha-existing' };
     },
     async getAgentStatus() {
       calls.push('status');
@@ -253,16 +254,17 @@ describe('CLI control routes', () => {
       UserDO: {
         idFromName: (n: string) => n,
         get: () => ({
-          async verifyCliToken(token: string) {
+          async verifyCliToken(_caller: unknown, token: string) {
             return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
           },
-          async hasWorkspace() { return true; },
+          async hasWorkspace(_caller: unknown) { return true; },
+          async ensureWorkspaceCapability() {},
         }),
       },
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({
-          async claimOwner() { return { owner: USER_ID }; },
+          async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
           async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
         }),
       },
@@ -279,10 +281,11 @@ describe('shared ownership claim status mapping', () => {
       UserDO: {
         idFromName: (n: string) => n,
         get: () => ({
-          async verifyCliToken(token: string) {
+          async verifyCliToken(_caller: unknown, token: string) {
             return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
           },
-          async hasWorkspace() { return true; },
+          async hasWorkspace(_caller: unknown) { return true; },
+          async ensureWorkspaceCapability() {},
         }),
       },
       OrchestratorAgent: {
