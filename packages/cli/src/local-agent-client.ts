@@ -1,6 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable } from '@proteus/core';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
@@ -13,10 +14,13 @@ import {
   CONFIG_PATH,
   agentDbPath,
   createCodexAuthStore,
+  listConfiguredAgentRefs,
   loadConfigFile,
   resolveMcpServers,
   resolveProviderCredentials,
+  upsertAgentConfig,
 } from './config.js';
+import { suggestAgentIdentityFromMission, type SuggestAgentIdentityOptions } from './agent-create.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 import {
   createCliSession,
@@ -76,6 +80,7 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     checkpointKeep: loadConfigFile().checkpointKeep,
   };
   const { rt, info } = openWorkspaceCLI(db, dbPath, openConfig);
+  autoTitleLocalWorkspace(name, rt, info.purpose, opts);
   return new LocalAgentClient({
     agentName: name,
     rt,
@@ -89,6 +94,36 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     noAutoEvolve: opts.noAutoEvolve ?? false,
     sessionOptions: opts.session ?? {},
   });
+}
+
+/** Workspaces created before mission-derived titling still show their raw
+ *  directory name. Title them from SOUL.md's mission on open, through the same
+ *  identity path `proteus create` uses. The deterministic title lands before
+ *  this returns; the model call runs in the background and never blocks the
+ *  CLI, and failing it leaves the title that already landed. */
+export function autoTitleLocalWorkspace(
+  name: string,
+  rt: AgentRuntime,
+  mission: string,
+  opts: SuggestAgentIdentityOptions,
+): void {
+  initAgentConfigTable(rt.storage.execRaw);
+  const config = createAgentConfigStore(rt.storage.sql);
+  void applyWorkspaceTitle({
+    slug: name,
+    displayName: config.getDisplayName(),
+    nameOrigin: config.getNameOrigin(),
+    mission,
+  }, {
+    persist: (title) => {
+      config.setDisplayName(title);
+      config.setNameOrigin('auto');
+      const configured = listConfiguredAgentRefs()
+        .find((agent) => agent.mode === 'local' && (agent.localName ?? agent.name) === name);
+      upsertAgentConfig({ ...(configured ?? { name, mode: 'local', localName: name }), displayName: title });
+    },
+    suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
+  }).catch(() => { /* best-effort: the workspace keeps the name it had */ });
 }
 
 export interface LocalAgentClientDeps {

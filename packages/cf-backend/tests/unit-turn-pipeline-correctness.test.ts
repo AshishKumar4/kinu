@@ -78,7 +78,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const shadowJudge = source.slice(
       source.indexOf('private async runShadowEvalSampled'),
-      source.indexOf('private async maybeGenerateTitle'),
+      source.indexOf('private async maybeAutoTitleWorkspace'),
     );
     expect(shadowJudge).not.toContain('maxOutputTokens');
     expect(shadowJudge).toContain("reasoningEffortOptions('low', this.effectiveModelProviderFamily())");

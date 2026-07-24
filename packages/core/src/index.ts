@@ -17,13 +17,18 @@ export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, 
 export {
   WORKSPACE_IDENTITY_SYSTEM_PROMPT,
   workspaceIdentityPrompt,
+  applyWorkspaceTitle,
   createWorkspaceNameFromMission,
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
+  isPlaceholderWorkspaceTitle,
   parseWorkspaceIdentityOutput,
+  planWorkspaceTitle,
   resolveWorkspaceTitle,
   slugifyName,
   type SuggestedWorkspaceIdentity,
+  type WorkspaceTitlePlan,
+  type WorkspaceTitleState,
 } from './identity/naming.js';
 
 // Evolution engine (3-timescale auto-evolution)

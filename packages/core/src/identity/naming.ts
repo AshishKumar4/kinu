@@ -1,4 +1,5 @@
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { isPlaceholderMission } from './soul.js';
 
 /** URL-safe slug for stable workspace ids. */
 export function slugifyName(text: string): string {
@@ -123,24 +124,92 @@ export function createWorkspaceNameFromMission(mission: string, id: string): str
   return fallbackWorkspaceIdentity(mission, id).name;
 }
 
-/** Deterministic identity when LLM titling is unavailable: a stated persona
- *  name wins, then a title derived from the mission text itself; the random
- *  adjective-noun pair is the last resort for an empty/unusable mission. */
-export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
+/** Deterministic title for a mission: a stated persona name wins, then the
+ *  mission's own opening line. Empty when the mission yields neither. */
+export function workspaceTitleFromMission(mission: string): string {
   const persona = extractPersonaName(mission);
-  if (persona) {
-    return {
-      name: `${cleanSlug(persona)}-${id.slice(0, 6)}`,
-      displayName: cleanTitle(persona),
-      nameOrigin: 'auto',
-    };
-  }
-  const title = cleanTitle(deriveWorkspaceTitle(mission));
+  return (persona && cleanTitle(persona)) || cleanTitle(deriveWorkspaceTitle(mission));
+}
+
+/** Deterministic identity when LLM titling is unavailable: a title from the
+ *  mission itself; the random adjective-noun pair is the last resort for an
+ *  empty/unusable mission. */
+export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
+  const title = workspaceTitleFromMission(mission);
   const slug = cleanSlug(title);
   if (title && slug) {
     return { name: `${slug}-${id.slice(0, 6)}`, displayName: title, nameOrigin: 'auto' };
   }
   return { ...memorableFallbackIdentity(id), nameOrigin: 'auto' };
+}
+
+/** A workspace's stored naming state, as both backends keep it: the raw slug
+ *  the workspace is addressed by, the shown title, how that title came about,
+ *  and the mission to title from (the opening request, or SOUL.md's mission). */
+export interface WorkspaceTitleState {
+  slug: string;
+  displayName: string | null;
+  nameOrigin: 'user' | 'auto' | null;
+  mission: string;
+}
+
+export interface WorkspaceTitlePlan {
+  /** Deterministic title to persist immediately, or null when the shown title
+   *  is already presentable and only the LLM step can improve it. */
+  provisional: string | null;
+  mission: string;
+}
+
+/** A title nobody chose: absent, or an echo of the raw slug — which is what
+ *  workspaces created before mission-derived titling still carry. */
+export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
+  const shown = displayName?.trim() ?? '';
+  return shown.length === 0 || shown === slug.trim();
+}
+
+/** Decide whether a workspace should be auto-titled, and from what.
+ *
+ *  `null` means leave it alone: the operator named it (`nameOrigin: 'user'`),
+ *  there is no mission to title from, or it already carries a title it was
+ *  deliberately given. Otherwise the workspace either never had a title
+ *  generated (`nameOrigin: null`) or is still showing its raw slug — the
+ *  legacy shape this heals. */
+export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
+  if (state.nameOrigin === 'user') return null;
+  if (isPlaceholderMission(state.mission)) return null;
+  const placeholder = isPlaceholderWorkspaceTitle(state.displayName, state.slug);
+  if (!placeholder && state.nameOrigin !== null) return null;
+  const mission = state.mission.trim();
+  return { provisional: (placeholder && workspaceTitleFromMission(mission)) || null, mission };
+}
+
+/** Auto-title a workspace: persist the deterministic title at once so the
+ *  placeholder never survives a failed model call, then upgrade to the
+ *  generated one. `persist` writes the title AND marks its origin 'auto',
+ *  which is what makes this one-shot — the plan can no longer match.
+ *  Generation failures are swallowed: the deterministic title stands. */
+export async function applyWorkspaceTitle(
+  state: WorkspaceTitleState,
+  effects: {
+    persist: (title: string) => void | Promise<void>;
+    suggest?: (mission: string) => Promise<string | null>;
+  },
+): Promise<string | null> {
+  const plan = planWorkspaceTitle(state);
+  if (!plan) return null;
+  let title: string | null = null;
+  if (plan.provisional) {
+    await effects.persist(plan.provisional);
+    title = plan.provisional;
+  }
+  try {
+    const suggested = (await effects.suggest?.(plan.mission))?.trim();
+    if (suggested && suggested !== title) {
+      await effects.persist(suggested);
+      title = suggested;
+    }
+  } catch { /* the deterministic title stands */ }
+  return title;
 }
 
 /** System prompt paired with workspaceIdentityPrompt — shared by the CLI's

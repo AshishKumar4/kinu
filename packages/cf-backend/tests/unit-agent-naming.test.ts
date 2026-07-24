@@ -1,5 +1,7 @@
 // Agent naming — the P1a single-prompt-box flow: slug for the DO id, a
 // deterministic provisional title, and the roster title-precedence rule.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, test, expect } from "bun:test";
 import { slugifyName, deriveWorkspaceTitle, resolveWorkspaceTitle } from "../src/lib/agent-naming";
 
@@ -50,5 +52,48 @@ describe("resolveWorkspaceTitle — roster precedence", () => {
   test("falls back to the slug when there is nothing to derive from", () => {
     expect(resolveWorkspaceTitle({ slug })).toBe(slug);
     expect(resolveWorkspaceTitle({ purpose: "   ", slug })).toBe(slug);
+  });
+});
+
+// Where the workspace DO hangs the shared titling policy. The decision and the
+// apply loop are proven in @proteus/core; these pin the wiring that a DO test
+// harness cannot reach.
+describe("workspace titling wiring (OrchestratorAgent)", () => {
+  const orchestrator = readFileSync(join(import.meta.dir, "../src/orchestrator.ts"), "utf8");
+
+  test("opening a legacy workspace titles it from SOUL.md without blocking boot", () => {
+    const onStart = orchestrator.slice(
+      orchestrator.indexOf("async onStart()"),
+      orchestrator.indexOf("async alarm()"),
+    );
+    expect(onStart).toContain("if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
+    expect(onStart).toContain("void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''))");
+  });
+
+  test("the first turn drives the same one titling path, fire-and-forget", () => {
+    expect(orchestrator).toContain("void this.maybeAutoTitleWorkspace(userText)");
+    expect(orchestrator.match(/maybeAutoTitleWorkspace\(/g)).toHaveLength(3);
+  });
+
+  test("titling persists through setAutoDisplayName, which marks name_origin auto", () => {
+    const method = orchestrator.slice(
+      orchestrator.indexOf("private async maybeAutoTitleWorkspace"),
+      orchestrator.indexOf("private async suggestWorkspaceTitle"),
+    );
+    expect(method).toContain("applyWorkspaceTitle({");
+    expect(method).toContain("persist: async (name) => { await this.setAutoDisplayName(name); }");
+    const setAutoDisplayName = orchestrator.slice(orchestrator.indexOf("async setAutoDisplayName("));
+    expect(setAutoDisplayName).toContain("this.config.setNameOrigin('auto')");
+  });
+
+  test("one generator: the shared workspace-identity prompt and parser", () => {
+    const suggest = orchestrator.slice(
+      orchestrator.indexOf("private async suggestWorkspaceTitle"),
+      orchestrator.indexOf("/** Push a display name to all three homes"),
+    );
+    expect(suggest).toContain("system: WORKSPACE_IDENTITY_SYSTEM_PROMPT");
+    expect(suggest).toContain("prompt: workspaceIdentityPrompt(mission)");
+    expect(suggest).toContain("parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null");
+    expect(suggest).not.toContain("maxOutputTokens");
   });
 });

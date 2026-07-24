@@ -30,7 +30,6 @@ import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
-import { deriveWorkspaceTitle } from "./lib/agent-naming.js";
 import type { ChatResponseResult, StreamableResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
@@ -103,6 +102,9 @@ import {
   type EnqueueTurnResult,
   slugifyName,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
+  // Automatic workspace titling (first turn + legacy slug heal)
+  applyWorkspaceTitle, isPlaceholderWorkspaceTitle, parseWorkspaceIdentityOutput,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT, workspaceIdentityPrompt,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
@@ -899,8 +901,9 @@ export class OrchestratorAgent extends ActorAgent {
     void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
     // On the first turn, replace the creation-time slug with a concise
-    // AI-generated session title. Fire-and-forget; once-only (name_origin gate).
-    void this.maybeGenerateTitle(userText);
+    // AI-generated title derived from the opening request. Fire-and-forget;
+    // once-only (persisting an auto title marks name_origin).
+    void this.maybeAutoTitleWorkspace(userText);
 
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
     // work survives the container sleeping. Debounced + fire-and-forget.
@@ -1019,36 +1022,40 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  /** Once, on the first turn, replace the creation-time slug with a concise
-   *  AI-generated title derived from the opening request. Skipped if the user
-   *  named the agent (name_origin='user') or it's already auto-titled. */
-  private async maybeGenerateTitle(userText: string): Promise<void> {
+  /** Automatic titling — one path, two triggers: the first turn of a workspace
+   *  that was never titled, and the wake of a legacy workspace still showing
+   *  its raw slug (created before mission-derived titling existed). The shared
+   *  policy decides; a title the operator chose is never touched, and persisting
+   *  an auto title marks name_origin='auto', so this runs at most once. */
+  private async maybeAutoTitleWorkspace(mission: string): Promise<void> {
     try {
-      if (this.config.getNameOrigin() !== null) return; // already user- or auto-named
-      // Show a deterministic provisional title instantly (header parity with the
-      // roster), then replace it with the AI title below. name_origin stays
-      // unset so this retries the AI step on the next turn if generation fails.
-      if (!this.config.getDisplayName()) {
-        const provisional = deriveWorkspaceTitle(userText);
-        if (provisional) await this.propagateDisplayName(provisional);
-      }
-      const prompt =
-        `Generate a concise 3–6 word title (Title Case, no quotes, no trailing ` +
-        `punctuation) for a session that opens with this request:\n\n` +
-        `"${userText.slice(0, 600)}"\n\nReply with ONLY the title.`;
-      const { text } = await generateText({
-        model: this.getModelForReview(), prompt, maxOutputTokens: 24,
-        ...effortFor('judge'),
+      const title = await applyWorkspaceTitle({
+        slug: this.name,
+        displayName: this.config.getDisplayName(),
+        nameOrigin: this.config.getNameOrigin(),
+        mission,
+      }, {
+        persist: async (name) => { await this.setAutoDisplayName(name); },
+        suggest: (text) => this.suggestWorkspaceTitle(text),
       });
-      const title = text.trim().replace(/^["'#\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ').slice(0, 60);
-      if (title.length >= 2) {
-        await this.propagateDisplayName(title);
-        this.config.setNameOrigin('auto');
-        console.log(`[proteus] auto-titled agent → "${title}"`);
-      }
+      if (title) console.log(`[proteus] auto-titled workspace → "${title}"`);
     } catch (err) {
-      console.warn('[proteus] title generation failed:', err instanceof Error ? err.message : err);
+      console.warn('[proteus] workspace titling failed:', err instanceof Error ? err.message : err);
     }
+  }
+
+  /** The shared workspace-naming round-trip (same prompt and parser the create
+   *  path uses), against this workspace's review model. */
+  private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
+    const { text } = await generateText({
+      model: this.getModelForReview(),
+      system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+      prompt: workspaceIdentityPrompt(mission),
+      // No output cap: reasoning models spend their budget thinking before the
+      // JSON, and a cap starves them into empty text.
+      ...effortFor('judge'),
+    });
+    return parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null;
   }
 
   /** Push a display name to all three homes: agent_config (source of truth),
@@ -1394,6 +1401,14 @@ export class OrchestratorAgent extends ActorAgent {
     if (reconciledEventIds.length > 0) {
       console.warn(`[proteus] startup event reconciliation re-pended ${reconciledEventIds.length} event(s)`);
       this.orch.scheduleDrain();
+    }
+
+    // Workspaces created before mission-derived titling still show their raw
+    // slug. Title them from SOUL.md's mission the first time one is opened —
+    // every other workspace is already titled, so it costs a config read.
+    // Fire-and-forget: boot never waits on a model call.
+    if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
+      void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''));
     }
   }
 

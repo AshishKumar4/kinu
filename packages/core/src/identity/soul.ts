@@ -23,6 +23,14 @@ import type { SqlExecutor } from '../types/primitives.js';
 
 export const SOUL_PATH = 'SOUL.md';
 
+/** Missions the renderer writes when a workspace was created without one.
+ *  They describe Proteus itself, so nothing workspace-specific — a title, a
+ *  summary — can be derived from them. */
+const PLACEHOLDER_MISSIONS = [
+  'Help the user by reading real context, using available tools, coordinating parallel heads for breadth and staffing subordinates for multi-part or long-running work, saving durable facts and memory, and improving reusable capabilities over time.',
+  'Help the user with the work they assign.',
+] as const;
+
 export const DEFAULT_SOUL_MD = [
   '# Proteus',
   '',
@@ -30,15 +38,29 @@ export const DEFAULT_SOUL_MD = [
   '',
   '## Mission',
   '',
-  'Help the user by reading real context, using available tools, coordinating parallel heads for breadth and staffing subordinates for multi-part or long-running work, saving durable facts and memory, and improving reusable capabilities over time.',
+  PLACEHOLDER_MISSIONS[0],
 ].join('\n');
+
+/** True when the mission carries no workspace-specific intent: empty, or one
+ *  of the generic missions seeded for a workspace created without one.
+ *  Compared on a prefix because `summarizeSoul` truncates long missions. */
+export function isPlaceholderMission(mission: string | null | undefined): boolean {
+  const text = mission?.trim() ?? '';
+  if (!text) return true;
+  const key = missionKey(text);
+  return PLACEHOLDER_MISSIONS.some((placeholder) => missionKey(placeholder) === key);
+}
+
+function missionKey(mission: string): string {
+  return mission.replace(/\s+/g, ' ').trim().slice(0, 40);
+}
 
 function normalizeName(name: string): string {
   return name.trim().replace(/\s+/g, ' ') || 'Proteus';
 }
 
 function normalizeMission(mission?: string): string {
-  return mission?.trim() || 'Help the user with the work they assign.';
+  return mission?.trim() || PLACEHOLDER_MISSIONS[1];
 }
 
 export function renderSoulMarkdown(input: { name: string; mission?: string }): string {
