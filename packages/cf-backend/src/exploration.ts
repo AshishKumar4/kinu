@@ -43,6 +43,7 @@ import {
   type HeadId,
   type HeadInput,
   type HeadReport,
+  type HeadRuntime,
   type Decision,
   type MergeStrategy,
   type HeadBudget,
@@ -60,6 +61,7 @@ import {
   buildHeadWebTools,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services.js";
+import { spawnHeadFacet } from "./facet-spawn.js";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
@@ -421,24 +423,14 @@ export class ExplorationAgent extends Agent<Env> {
 
     const journal = new HeadJournal(this.sql.bind(this) as unknown as SqlExecutor);
     const facet = this;
-    const runtime = {
-      async spawnHead(childInput: HeadInput) {
-        const stub = await facet.subAgent(ExplorationAgent, childInput.id);
-        const owner = facet.getOwnerUserId();
-        if (owner) await stub.setOwner(owner);
-        // Propagate the ROOT orchestrator unchanged so the whole subtree shares
-        // one common findings scratch (not this intermediate head).
-        const sharedParent = facet.getSharedParent();
-        if (sharedParent) await stub.setSharedParent(sharedParent);
-        await stub.initHead(childInput);
-        return {
-          id: childInput.id,
-          async run(): Promise<HeadReport> { return (await stub.runAsHead()) as HeadReport; },
-          async abort(reason: string) {
-            try { await stub.abortHead(reason); } catch {}
-            try { await facet.abortSubAgent(ExplorationAgent, childInput.id); } catch {}
-          },
-        };
+    const runtime: HeadRuntime = {
+      spawnHead(childInput: HeadInput) {
+        return spawnHeadFacet(facet, childInput, {
+          ownerUserId: facet.getOwnerUserId(),
+          // The ROOT orchestrator, propagated unchanged so the whole subtree
+          // shares one findings scratch (not this intermediate head).
+          sharedParent: facet.getSharedParent(),
+        });
       },
       async mergeLLM(prompt: string): Promise<MergeOutput> {
         const { model, providerOptions } = facet.resolveLowEffortModel(parentInput.model);

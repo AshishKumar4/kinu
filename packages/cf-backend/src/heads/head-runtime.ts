@@ -8,7 +8,7 @@
  */
 
 import type {
-  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
+  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, MergeLLMFn,
 } from "@proteus/core";
 import {
   type MergeOutput,
@@ -18,7 +18,7 @@ import {
   reasoningEffortOptions,
 } from "@proteus/core";
 import type { Think } from "@cloudflare/think";
-import { ExplorationAgent } from "../exploration.js";
+import { spawnHeadFacet } from "../facet-spawn.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
 import { agentAffinityKey } from "@proteus/core";
 import { generateJson } from "../lib/generate-json.js";
@@ -63,24 +63,14 @@ export function createCFHeadRuntime(
   };
 
   return {
-    async spawnHead(input: HeadInput): Promise<SpawnedHead> {
-      const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
-      await stub.setOwner(ownerUserId);
+    spawnHead(input: HeadInput): Promise<SpawnedHead> {
       // Facet actors share their parent workspace's identity for UserDO/MCP
       // ownership. The spawning actor's facet name is not a registered
       // workspace and must never escape as caller identity.
-      await stub.setSharedParent(parentWorkspaceName);
-      await stub.initHead(input);
-      return {
-        id: input.id,
-        async run(): Promise<HeadReport> {
-          return (await stub.runAsHead()) as HeadReport;
-        },
-        async abort(reason: string): Promise<void> {
-          try { await stub.abortHead(reason); } catch { /* nop */ }
-          try { await orchestrator.abortSubAgent(ExplorationAgent, input.id); } catch { /* nop */ }
-        },
-      };
+      return spawnHeadFacet(orchestrator, input, {
+        ownerUserId,
+        sharedParent: parentWorkspaceName,
+      });
     },
     mergeLLM,
     ...(grounding ? { grounding } : {}),

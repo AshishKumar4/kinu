@@ -1,11 +1,10 @@
 // Regression test: the run-events SSE stream must stop polling the agent DO
 // as soon as the client goes away (request abort or stream cancellation)
 // instead of polling every 500ms for up to 5 minutes.
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
+import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
-mock.module('agents', () => ({
-  getAgentByName: async (ns: DurableObjectNamespace, name: string) => ns.get(ns.idFromName(name)),
-}));
+mockAgentsSdk();
 const { handleRunEventsRequest } = await import('../src/run-events-routes.js');
 
 function sseEnv() {

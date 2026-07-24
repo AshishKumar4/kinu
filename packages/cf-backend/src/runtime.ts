@@ -42,7 +42,7 @@ import type { SqlExecutor } from "@proteus/agent-utils";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
-import { ExplorationAgent } from "./exploration.js";
+import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
@@ -595,18 +595,12 @@ function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): I
   };
 }
 
-// ── MCTS branches via real Facets (subAgent) ─────────────────────
+// ── MCTS branches via real Facets (spawn seam: facet-spawn.ts) ───
 
 function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
-      const stub = await agent.subAgent(ExplorationAgent, branchId);
-      const owner = actor.ownerUserId();
-      if (owner) await stub.setOwner(owner);
-      return {
-        explore: async (history, tools, siblings) => stub.explore(history, tools, siblings ?? []),
-        generateReflection: async (task) => stub.generateReflection(task),
-      };
+      return await spawnBranchFacet(agent, branchId, { ownerUserId: actor.ownerUserId() });
     } catch (err) {
       console.warn(`[proteus] subAgent failed for branch ${branchId}: ${(err as Error).message}. Using inline fallback.`);
       return createInlineBranch(agent);
@@ -615,9 +609,7 @@ function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (bra
 }
 
 function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
-  return async (branchId: string) => {
-    try { agent.abortSubAgent(ExplorationAgent, branchId); } catch {}
-  };
+  return async (branchId: string) => { abortExplorationFacet(agent, branchId); };
 }
 
 /**

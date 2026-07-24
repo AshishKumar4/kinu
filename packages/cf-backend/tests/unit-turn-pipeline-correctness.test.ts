@@ -9,6 +9,7 @@ const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'),
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
 const generateJson = readFileSync(join(import.meta.dir, '..', 'src', 'lib', 'generate-json.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
@@ -29,8 +30,12 @@ describe('turn-pipeline correctness wiring', () => {
   test('facet-spawned heads inherit the registered parent workspace identity', () => {
     expect(actor).toMatch(/createCFHeadRuntime\([\s\S]*?ownerUserId,[\s\S]*?this\.workspaceName\(\),/);
     expect(headRuntime).toContain('parentWorkspaceName: string');
-    expect(headRuntime).toContain('await stub.setSharedParent(parentWorkspaceName)');
-    expect(headRuntime).not.toContain('await stub.setSharedParent(orchestrator.name)');
+    expect(headRuntime).toContain('sharedParent: parentWorkspaceName');
+    expect(headRuntime).not.toContain('sharedParent: orchestrator.name');
+    // A recursive split re-uses the ROOT it was given, never its own facet name.
+    expect(exploration).toContain('sharedParent: facet.getSharedParent()');
+    // The spawn seam is what turns that into the child facet's persisted parent.
+    expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
   });
 
   test('beforeTurn weaves the bounded MEMORY.md tail into the ephemeral system-state block', () => {
