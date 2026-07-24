@@ -4,6 +4,7 @@
  */
 
 import chalk from 'chalk';
+import { BUILTIN_TOOLS } from '@proteus/core';
 import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
 import cliPackage from '../package.json' with { type: 'json' };
 
@@ -163,7 +164,7 @@ export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   // Tools section
-  console.log(boxRow(L('Tools:'), `6 built-in + ${info.craftedToolCount} crafted`, w));
+  console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in + ${info.craftedToolCount} crafted`, w));
   console.log(boxRow(L('Memory:'), formatBytes(info.memorySize), w));
   console.log(boxBot(w));
   console.log('');
