@@ -25,12 +25,16 @@ agents are the actors that work inside it.
 │   │  AGENTS  (actors)                                               │  │
 │   │   orchestrator — the DEFAULT agent, always present. Answers     │  │
 │   │     chat, runs tools, evolves the workspace.                    │  │
+│   │   subordinates — DURABLE teammates staffed by the `team` tool.  │  │
+│   │     Each is its own facet running the full turn loop on an      │  │
+│   │     independent workstream, seeing the workspace's files at     │  │
+│   │     /workspace and reporting back as events.                    │  │
 │   │   heads / branches / forks-in-flight — ephemeral actors with    │  │
 │   │     a bare per-head scratch VFS (no workspace mounts); their    │  │
 │   │     durable findings return through the merge.                  │  │
-│   │   team peers — agents of the owner's other workspaces; the      │  │
-│   │     `team` tool lists, messages, awaits, and SPAWNS them        │  │
-│   │     (spawn creates a new workspace with a specialist agent).    │  │
+│   │   peers — agents of the owner's OTHER workspaces; the `peers`   │  │
+│   │     tool lists, messages, awaits, and SPAWNS them (spawn        │  │
+│   │     creates a new workspace with a specialist agent).           │  │
 │   └────────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -53,12 +57,23 @@ agents are the actors that work inside it.
   credentials-stay-in-host). The web UI renders this on the **Environment**
   work surface (`EnvironmentSurface.tsx`) as the mount-table spine plus a
   unified file browser; device (`/pc`) registration lives in Account settings.
-- **One default agent, more on demand.** Heads (`think(strategy:'heads')`)
-  are in-workspace actors with a bare per-head ephemeral VFS and virtual
-  shell — they do NOT see the workspace mounts; findings come back through
-  the merge. Durable collaborators ride the peer transport: the `team`
-  tool (`list | ask | send | reply | spawn`) messages the owner's other
-  workspaces' agents, and `spawn` creates a new workspace around a specialist.
+- **One default agent, more on demand.** Three kinds of extra actor, and which
+  one you get depends on whether the work is ephemeral, durable-in-workspace, or
+  cross-workspace:
+  - **Heads** (`think(strategy:'heads')`) are ephemeral. Each gets a bare
+    per-head VFS and virtual shell — they do NOT see the workspace mounts —
+    and findings come back through the merge.
+  - **Subordinates** (`team`: `list | spawn | assign | status | message |
+    dismiss`) are durable. Each is a `SubordinateAgent` facet with its own
+    SQLite and its own full turn loop, sharing the workspace's files through a
+    parent-RPC mount at `/workspace` and the parent's sandbox and `/pc` exec
+    planes. Their tasks and reports ride the `subordinate` ingress. A
+    subordinate has no `team` tool of its own, so the tree cannot deepen —
+    that confinement is structural, from which deps its profile wires.
+  - **Peers** (`peers`: `list | ask | send | reply | spawn_workspace`) ride the
+    cross-workspace transport to agents of the owner's other workspaces;
+    `spawn_workspace` creates a new workspace around a specialist.
+
   `getWorkspaceAgents()` (RPC) returns the roster the UI shows.
 - **Fork = a new workspace.** Forking copies SOUL.md, messages, and memory to
   a fresh workspace by a new name and records `fork_lineage`
@@ -77,9 +92,11 @@ agents are the actors that work inside it.
 
 ## What deliberately keeps the agent noun
 
-Actor-sense names stay: the `OrchestratorAgent` / `ExplorationAgent` DO classes
-(and the wire path `/agents/orchestrator-agent/<name>` the agents SDK routes —
-internal, not user-facing), `AgentRuntime`/`AgentClient`/`AgentTarget` seams,
+Actor-sense names stay: the `OrchestratorAgent` / `SubordinateAgent` /
+`ExplorationAgent` DO classes (and the wire paths
+`/agents/orchestrator-agent/<name>` and
+`…/sub/subordinate-agent/<sub>` the agents SDK routes — internal, not
+user-facing), `AgentRuntime`/`AgentClient`/`AgentTarget` seams,
 the `agent.*` self-improvement tool namespace, per-agent device consent, peer
 messaging ("this agent wants to use your PC" is the actor asking), and
 `AGENTS.md` discovery (a repo convention). The agent remains the thing that

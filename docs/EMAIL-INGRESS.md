@@ -16,17 +16,19 @@ inbound   Email Routing (catch-all on EMAIL_DOMAIN)
             → routeInboundEmail: recipient → workspace name (src/email/route.ts)
               parse MIME once (postal-mime), strip quoted history
             → agent DO: acceptEmailDelivery             (src/orchestrator.ts)
+              acceptInboundEmail (src/events/ingress/email.ts)
               trust gate → EventLog.publish (email variant, Message-ID dedupe)
               + email_thread ReplyChannel (threading headers, 24h TTL)
-            → drainPendingEvents wakes a turn
+            → scheduleDrain() wakes a turn (debounced; duplicates don't re-wake)
 
 outbound  turn completes (onChatResponse)
             → drainTurnId metadata → dispatchEmailRepliesForTurn
+                                     (src/email/outbound.ts)
             → email_thread dispatcher → env.EMAIL.send
               (In-Reply-To / References per RFC 5322, "Re:" subject)
 
-notify    changelog_digest (EvolutionEngine.onEvent) and background-job
-          settles (BackgroundJobRunner.onSettled) → sendOwnerEmail
+notify    changelog_digest (EvolutionEngine event listener) and background-job
+          settles (BackgroundJobRunner.onSettled → notifyOwner) → sendOwnerEmail
           → the owner's verified login email
 ```
 

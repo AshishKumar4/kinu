@@ -1,5 +1,7 @@
 # Formal Specification
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 Proteus has one Lean 4 project in `lean/`. It currently compiles 84 named
 theorems over hand-maintained abstract models of selected agent, evolution,
 execution, MCTS, safety, and storage behavior. These are machine-checked
@@ -17,7 +19,7 @@ running system.
 |------|---------:|-----------------|--------------------|
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and several transition postconditions are asserted by the model |
-| Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and ten-tool implementation |
+| Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and twelve-tool implementation |
 | MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 REAL values, and transition postconditions are hand-maintained |
 | Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
 | Storage | 9 | index/list properties, byte-chunk reassembly, and a list-backed filesystem | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |

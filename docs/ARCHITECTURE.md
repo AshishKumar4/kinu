@@ -39,8 +39,9 @@ graph TB
     end
 
     Orch["orchestrator (default agent)<br/>the workspace's voice"] --> WS
+    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>parent's files mounted at /workspace over RPC"] -.->|report events| Orch
     Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>bare per-head scratch VFS"] -.->|findings merge back| Orch
-    Team["team peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
+    Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
 The mount table is the source of truth: `listMounts()` (an orchestrator RPC over
@@ -49,6 +50,95 @@ The mount table is the source of truth: `listMounts()` (an orchestrator RPC over
 `/pc` mount is served by the `pc-agent` reverse-WebSocket daemon
 (`packages/pc-agent`) running on the user's machine. See
 [WORKSPACES.md](./WORKSPACES.md) for the full noun model.
+
+## The actor hierarchy
+
+Three DO classes act inside a workspace, and their inheritance is the security
+model, not an implementation detail:
+
+```mermaid
+graph TB
+    A["Agent&lt;Env&gt; — agents SDK"]
+    T["Think — @cloudflare/think 0.8"]
+    AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
+    O["OrchestratorAgent<br/>deps: team · peers · productChanges"]
+    S["SubordinateAgent<br/>deps: report"]
+    E["ExplorationAgent<br/>hand-built head tools only"]
+    OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
+
+    A --> T --> AA
+    AA --> O
+    AA --> S
+    A --> E
+    AA -.->|composition| OMS
+    E -.->|composition| OMS
+```
+
+`ActorAgent` owns everything a full-loop actor needs once: the CF runtime
+assembly, the `BackendHost`, the shared `AgentOrchestrator`, `ExtensionHost` +
+compaction, the ephemeral ledger, the prompt/model/tool caches, and the Think
+hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`,
+`actorToolDeps`, `engine`, `notifyOwner` — plus three optional hooks
+(`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
+
+**Tool gating is structural, not flagged.** `DEPS_GATED_TOOLS` is
+`['team', 'peers', 'report', 'product_change']`, and `actorActiveTools()` filters
+the active set by which deps the profile actually wired. The orchestrator wires
+`team`, `peers`, and `productChanges`; a subordinate wires only `report`. That
+is the whole mechanism — a subordinate cannot staff subordinates of its own
+because there is no `team` tool in its ToolSet to call.
+
+**`ExplorationAgent` deliberately stays on the bare `Agent`.** It is not an
+`ActorAgent` and never inherits the actor tool surface. Its ToolSet is
+hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`, the
+four `sandbox_*` verbs over its own ephemeral SqliteFS and virtual shell,
+`web_search` / `web_fetch`, three `shared_*` verbs into the root's scratch, and
+the depth-budgeted `split_subheads`. No `execute_tools`, no `run`, no `think`,
+no `team`, no `peers`. Recursion is bounded by construction: without `think` a
+head cannot start a fresh strategy run, and its one fan-out path,
+`split_subheads`, decrements `maxDepth` on every spawn and refuses once the
+budget is exhausted.
+
+All three share the owner/provider/model/web substrate by **composition**, not
+inheritance: `OwnedModelServices`
+(`cf-backend/src/owned-model-services.ts`) resolves the owner's provider
+registry, the model spec, the Workers-AI session-affinity key, and the web-search
+provider. `ActorAgent` constructs it with `ownerRequired: true`;
+`ExplorationAgent` constructs its own with `ownerRequired: false`, taking the
+owner from the `facet_owner` row its parent seeds.
+
+## Subordinates
+
+`team(action:'spawn')` calls `orchestrator.subAgent(SubordinateAgent, name)` and
+immediately seeds the facet's identity. That identity is single-row and
+immutable after seeding: re-seeding with a different name, parent workspace, or
+owner throws, and the seeding RPC is denied to client sockets, so only a
+worker-held parent stub can create one.
+
+A subordinate is a *durable* teammate, not a one-shot call. It has its own
+SQLite, runs the full turn loop, keeps its own evolution engine and history, and
+survives hibernation. It sees the workspace's files through
+`createParentRpcMountVFS`, mounted at `/workspace` with `consistency: 'durable'`
+and `credentialsStayInHost: true`; the five parent-side methods it calls
+(`readWorkspaceFile`, `writeWorkspaceFile`, `listWorkspaceFiles`,
+`statWorkspaceFile`, `deleteWorkspaceFile`) deliberately carry no `@callable`,
+so nothing but a parent stub can reach them. Exec planes stay keyed on the
+*parent's* workspace name, so sandbox and `/pc` are shared rather than
+duplicated.
+
+Work arrives as an `ingress: 'subordinate'` event with variant
+`subordinate_task`; results come back through `receiveSubordinateEvent` as
+variant `subordinate_report`, which broadcasts to sockets and schedules a drain
+on the parent. If a subordinate finishes an assigned turn without calling
+`report`, its answer is relayed automatically. `dismiss` deletes the facet
+unless `keep_history` is set, in which case only the roster row is marked
+dismissed.
+
+The system prompt (`core/src/prompt.ts`) carries the matching doctrine — the
+delegation ladder that steers the agent to decompose multi-part or multi-hour
+work and staff one subordinate per independent workstream, keeping the
+coordination and integration turn for itself, rather than grinding through
+everything inline.
 
 ## The turn pipeline
 
@@ -94,7 +184,7 @@ What the boxes are:
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult`; the evolution engine records each call | `orchestrator.ts` |
 | `_transformInferenceResult` | the **mutable scaffold** seam — an evolved `agent.js` becomes the turn's inference loop; un-evolved passes through untouched | `core/src/scaffold/inference-transform.ts` |
 | `onChatResponse` | `emitTurnEnd` → fire-and-forget evolution (never blocks the queue); the turn-failure classifier may arm a one-shot force-compaction retry | `orchestrator.ts`, `core/src/turn-failure.ts` |
-| `getModel` / `getSystemPrompt` / `getTools` | model from `agent_config`; `SOUL.md` from the VFS; the 10 builtin tools | `core/src/tools/registry.ts` |
+| `getModel` / `getSystemPrompt` / `getTools` | model from `agent_config`; `SOUL.md` from the VFS; the 12 builtin tools, filtered to the actor's wired deps | `core/src/tools/registry.ts` |
 
 The two default registrants attach at construction on both backends:
 
@@ -139,7 +229,7 @@ sequenceDiagram
     WS->>T: _handleChatRequest → TurnQueue.enqueue
     T->>X: beforeTurn → emitTurnStart + transformContext (compaction)
     T->>T: assemble context (sanitizer · ledger · cache breakpoints)
-    T->>LLM: streamText(model, system, messages, 10 builtin tools)
+    T->>LLM: streamText(model, system, messages, builtin tools)
     loop Agentic step loop
         LLM-->>T: text delta / tool call
         T-->>U: stream chunk (cf_agent_use_chat_response)
@@ -173,14 +263,20 @@ abort/replan (`unbind`), and re-pended by a stale-sweep for stranded leases
 250 ms debounce) coalesces a burst of events into one programmatic turn instead of
 one turn per event.
 
-Four ingress adapters publish into the log (`cf-backend/src/events/ingress/`):
+Five ingress paths publish into the log:
 
 | Source | Path | Wakes via |
 |---|---|---|
-| Email | `ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
+| Email | `events/ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
 | Webhook | `events/routes.ts` → `acceptWebhookDelivery` | per-trigger HMAC / Bearer / mTLS |
-| Peer | `ingress/peer.ts` (`peer_outbox` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
+| Peer | `events/ingress/peer.ts` (`peer_outbox` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
+| Subordinate | `subordinate-support.ts` `admitSubordinateTask` / `admitSubordinateReport` | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
 | Timer | `orchestrator.ts` `alarm()` + `core/src/events/hub/triggers.ts` | `ingress: 'timer_alarm'` (cron / one-shot) |
+
+The full `IngressKind` union in `core/src/events/hub/types.ts` is wider than
+this — it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
+`mcp_streamable`, `self_emit`, and `reply_request` — but the five above are the
+paths that wake a sleeping workspace from outside its own turn.
 
 ## MCP — user-level once-auth, zero token transfer
 
@@ -224,10 +320,10 @@ and [MCTS.md](./MCTS.md).
 ```mermaid
 graph TB
     subgraph pkgs["packages/"]
-        Core["core/<br/>turn pipeline + ExtensionHost, CompositeVFS,<br/>ExecutionRouter, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, 10 builtin tools, EventLog"]
+        Core["core/<br/>turn pipeline + ExtensionHost, CompositeVFS,<br/>ExecutionRouter, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, 12 builtin tools, EventLog"]
         Utils["agent-utils/<br/>SqliteFS · MemoryStore (FTS5)<br/>CraftStore (FTS5) · POSIX shell emulator"]
         Compact["compaction/<br/>vendored better-compact ladder + Proteus codec"]
-        CF["cf-backend/<br/>OrchestratorAgent (thin Think adapter),<br/>ExplorationAgent (Facets), UserDO, React UI"]
+        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
         CLI["cli/<br/>proteus create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → /pc"]
@@ -270,10 +366,49 @@ and Think; `packages/cli-backend` binds it to `bun:sqlite` and a local process.
 | Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.proteus/` + `SOUL.md` (VFS) |
 | Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
 | MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
+| Subordinates | `SubordinateAgent` Facets (`subAgent`) | not available (one agent per process) |
 
 The full contract and the four "plug in a new idea" seams (ModelProvider,
 ExplorationStrategy, InferenceLoop, CredentialStore) are in
 [EXTENSIBILITY.md](./EXTENSIBILITY.md).
+
+## The model seam
+
+Model choice is per workspace and resolved through a provider registry
+(`core/src/providers/registry.ts`) that both backends build differently and then
+use identically. The cloud registers `workers-ai`, the user's own `my-gateway`,
+the platform `ai-gateway` fallback, `codex`, `openai`, `anthropic`,
+`openrouter`, `openai-compat`, plus a dynamic source backed by the live
+models.dev catalog; the CLI registers the same minus the dynamic catalog, plus
+`claude` (the local Claude Code binary) and `opencode`. Registration order is
+the default-preference order.
+
+Two policies live at this seam and apply to every provider:
+
+- **The catalog is live.** `core/src/providers/models-dev.ts` fetches
+  `https://models.dev/api.json` behind a 5-minute cache and derives each model's
+  context window and capabilities from it. The static per-provider lists
+  (`WORKERS_AI_FALLBACK_MODEL_CATALOG`, each provider's `FALLBACK_MODELS`) are
+  only what you get when that fetch fails or filters to nothing.
+- **Every model fetch retries rate limits.** `withRateLimitRetry`
+  (`core/src/providers/rate-limit-retry.ts`) wraps the fetch of every provider —
+  the shared `createAuthedFetch`, the Workers AI path, the AI Gateway path, and
+  codex. It retries 429/529 (and overload-shaped 503s) up to 6 attempts inside a
+  180 s budget, honoring `Retry-After` verbatim when the server sends one and
+  otherwise waiting a full-jitter draw under an exponentially growing ceiling
+  (2 s doubling to a 60 s cap). Requests whose body isn't replayable pass through
+  untouched, and an exhausted budget returns the original response rather than
+  throwing.
+
+**Reasoning effort** is user-settable rather than baked in: `/effort` in chat or
+`proteus effort <workspace> <level>` stores `reasoning_effort` in the workspace's
+`agent_config`, with `~/.proteus/config.json` holding the CLI-side default for
+new workspaces. `core/src/strategy/effort.ts` maps the level onto each provider
+family's native knob — `reasoning_effort` for Workers AI, `reasoningEffort` for
+OpenAI-shaped and OpenRouter providers, and a thinking `budgetTokens`
+(4k/16k/32k) for Anthropic. Internal stages that shouldn't cost chat-grade
+thinking pick their own level from `REASONING_EFFORT_FOR_STAGE` — reflection and
+MCTS rollouts run `low`, scaffold mutation runs `high`.
 
 ## Storage and formal models
 

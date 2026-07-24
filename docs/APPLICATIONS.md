@@ -1,5 +1,7 @@
 # Applications & Research Positioning
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## 1. What Proteus Is
 
 Proteus is a general-purpose AI agent that improves itself over time. Unlike stateless LLMs that forget everything between conversations, or fixed-tool agents that can only use pre-defined capabilities, Proteus:
@@ -67,14 +69,19 @@ Unlike ChatGPT or Claude (which start fresh each conversation), a Proteus agent 
 
 ### Multi-Model Comparison
 
-The model selector supports switching between models mid-conversation:
+The model selector supports switching between models mid-conversation, across
+every connected provider — not just Workers AI. On Workers AI the usual spread is:
 
 | Model | Description | Best For |
 |-------|-------------|----------|
-| Kimi K2.5 | Advanced reasoning model with extended thinking | Complex problems, CTF challenges, algorithm design |
-| Llama 4 Scout 17B | General-purpose instruction model | Quick tasks, simple questions, iteration |
+| Kimi K2.6 | Reasoning + tools + vision, 262k context. The default. | Complex problems, CTF challenges, algorithm design |
+| Nemotron 3 Super 120B / GPT OSS 120B | Reasoning models, 256k / 128k context | Alternate reasoning trajectories |
+| Llama 4 Scout | General-purpose instruction model | Quick tasks, simple questions, iteration |
 
-Different models produce different evolution trajectories. Kimi K2.5 tends to extract more complex tool patterns; Llama 4 Scout produces different evolution patterns.
+Different models produce different evolution trajectories — a reasoning model
+tends to extract more complex tool patterns than an instruction model. Reasoning
+effort is a separate dial: `/effort low|medium|high` maps onto each provider
+family's native knob, so the same model can be run cheap or deep.
 
 ### With Nimbus: Full Development Environment
 
@@ -97,7 +104,7 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 ```bash
 proteus create dev-helper --purpose "A TypeScript development assistant"
 proteus chat dev-helper
-# Agent has access to execute_tools, run, explore, save_note, search_memory
+# Agent has access to execute_tools, run, skills, think, memory, fact, web_search, web_fetch
 # Evolution happens locally — crafted tools persist in ~/.proteus/dev-helper/agent.db
 ```
 
@@ -205,24 +212,36 @@ graph TB
 
 ## 5. Current Limitations
 
-### No Multi-Agent Collaboration
+### Collaboration exists, but the coordination quality is unproven
 
-Each Proteus agent is an isolated DO. There's no mechanism for agents to communicate, share tools, or collaborate on tasks. The `ExplorationAgent` facets are MCTS branches, not independent collaborators.
+This limitation used to read "no multi-agent collaboration at all," and that is
+no longer true. A workspace can staff durable `SubordinateAgent` facets through
+the `team` tool — each with its own turn loop, sharing the workspace's files —
+and reach the owner's other workspaces through `peers`. What is *not* yet shown
+is that delegating produces better results than working linearly: there is no
+measurement of whether decomposition beats a single long turn, how often
+subordinates duplicate each other's work, or how much coordination overhead the
+orchestrator pays.
 
 ### Evolution is Slow in Practice
 
-- **Turn-level** works well — pattern extraction fires reliably after successful tool usage
-- **Session-level** requires 5+ turns to trigger, and scaffold mutation requires 3+ sessions with clear patterns
-- **Lifetime** MCTS requires explicit trigger (via `explore` tool or `triggerEvolution` RPC)
-- The LLM's ability to generalize tool patterns into reusable code is inconsistent (~50% success rate with Kimi K2.5)
+- **Turn-level** works well — pattern extraction fires reliably after an accepted turn that used tools
+- **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
+- **Lifetime** fires automatically every 5 conversations, or on the `triggerEvolution` RPC
+- The LLM's ability to generalize tool patterns into reusable code is inconsistent
 
-### No Evaluation Framework
+### Evaluation exists; coverage is thin
 
-There's no automated benchmark suite to measure whether evolution actually improves agent performance. The evolution-proof E2E test (CTF challenges) showed improvement, but this isn't a systematic evaluation. Key missing metrics:
+There is now a runnable quality benchmark (`scripts/eval.ts` over
+`core/src/eval/`) that scores a candidate model against a baseline with an LLM
+judge and exits non-zero below a committed floor, plus a replay eval
+(`runReplayEval`) that re-runs labeled past turns through the live scaffold to
+produce a loss curve. That is a real measurable signal, and it is what the
+shadow-veto promotion decision leans on. What is still missing is breadth — the
+seed corpus is small, and these metrics remain unmeasured:
 
 - Task completion rate before vs after evolution
 - Tool reuse frequency
-- Scaffold mutation impact on quality scores
 - Memory utilization efficiency
 
 ### Scaffold Mutation Rarely Triggers
@@ -232,9 +251,12 @@ The scaffold mutation pipeline exists and is fully implemented (4-gate validatio
 - The LLM often produces scaffolds that fail structural validation (forbidden patterns like `import`)
 - Successful mutations are rare — most conversations don't generate enough data for meaningful scaffold improvements
 
-### MCTS Exploration is Not Real-Time Visible
+### MCTS Exploration is Only Coarsely Visible
 
-The MCTS tree visualization in the web UI is a static snapshot loaded once on page load. During active exploration, the UI shows a tool-call spinner with no intermediate tree state. The D3 visualization is fully capable of incremental rendering — it just never receives live updates.
+The engine broadcasts per-iteration progress (`onMctsProgress` →
+`broadcastMctsProgress`), so the UI is no longer a single static snapshot. But
+what it receives is an iteration counter and remaining budget — not incremental
+tree state, so the shape of the search still only resolves once it finishes.
 
 ## 6. Future Roadmap
 
@@ -266,14 +288,15 @@ graph LR
 
 ### Multi-Agent Coordination
 
-Using Cloudflare's Agents SDK, multiple Proteus agents could:
+Delegation to specialist agents shipped — `team` for in-workspace subordinates,
+`peers` for cross-workspace handoff. What's left of the original idea:
 - Share crafted tools via a global CraftStore (using R2 for cross-DO storage)
-- Delegate subtasks to specialized agents (code review agent, testing agent, deployment agent)
 - Coordinate MCTS exploration across agents for larger search spaces
+- Measure whether staffing actually beats working linearly
 
 ### Evaluation Benchmarks
 
-Build a systematic evaluation framework:
+Broaden the existing harness beyond its seed corpus:
 - **CryptoHack** (308 crypto challenges) — CTF-style verification with known flags
 - **SWE-bench** — software engineering tasks with automated verification
 - **Custom evolution benchmarks** — measure tool extraction rate, scaffold improvement, memory utilization

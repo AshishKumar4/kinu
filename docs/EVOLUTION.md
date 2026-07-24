@@ -1,6 +1,8 @@
 # Evolution System
 
-Proteus evolves across three timescales. Each operates independently, with shorter timescales feeding data to longer ones.
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
+Proteus evolves across three timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`.
 
 ## Three Timescales
 
@@ -13,77 +15,173 @@ sequenceDiagram
     participant Lifetime as Lifetime-Level
 
     User->>Agent: Message 1
-    Agent->>Turn: onTurnComplete(turn)
-    Turn->>Turn: Assess quality (heuristic)
-    alt quality < 0.4
+    Agent->>Turn: reviewTurn(turn, followup)
+    Turn->>Turn: Derive outcome (detached review, not a heuristic)
+    alt outcome corrected / frustrated / errored-abandoned
         Turn->>Turn: Generate reflection → append to MEMORY.md
     end
-    alt quality > 0.8 AND tool calls > 0
-        Turn->>Turn: Extract pattern → upsert CraftStore tool
+    alt outcome accepted AND tool calls > 0
+        Turn->>Turn: extractPattern() → upsert CraftStore tool
     end
 
     User->>Agent: Message 2...5
     Note over Turn: Repeats for each message
 
-    Agent->>Session: After 5 turns → onSessionComplete()
-    Session->>Session: LLM generates session reflection
+    Agent->>Session: Every 5 turns → onSessionComplete(session)
+    Session->>Session: Reflect only if a turn errored or drew negative feedback
     Session->>Session: Append reflection to MEMORY.md
-    alt 3+ sessions with clear patterns
+    alt 3+ conversations
         Session->>Session: maybeEvolveScaffold()
-        Session->>Session: LLM proposes new scaffold
-        Session->>Session: 4-gate validation (structural, parse, backup, write)
+        Session->>Session: LLM proposes a new agent.js from an archived base
+        Session->>Session: 4-gate validation → shadow eval → promote or roll back
     end
 
-    Note over Lifetime: Triggered by explore tool or triggerEvolution()
+    Note over Lifetime: Every 5 conversations, or triggerEvolution()
     Agent->>Lifetime: onLifetimeEvolution()
     Lifetime->>Lifetime: periodicCraftConsolidation()
     Lifetime->>Lifetime: Retire low-scoring tools (EMA + time decay)
-    Lifetime->>Lifetime: runMCTS(task, budget, branches)
-    Lifetime->>Lifetime: UCT → Expand → Simulate → Backprop → Converge
+    Lifetime->>Lifetime: runReplayEval() — measured loss vs labeled turns
+    Lifetime->>Lifetime: runMCTS(task, budget 2, branches 2)
 ```
 
 ## Turn-Level Evolution
 
-Fires after every chat response via `onChatResponse()`. Runs asynchronously (fire-and-forget) to avoid blocking the Think TurnQueue.
+`reviewTurn()` fires after every chat response via `onChatResponse()`. It runs
+asynchronously (fire-and-forget) so it never blocks the Think TurnQueue;
+`reviewTurnDetached()` is the variant used when the review itself should run
+outside the turn.
 
-**Quality assessment** uses a heuristic based on:
-- Response length (longer = more substantive)
-- Tool usage (tools indicate active problem-solving)
-- Error presence
-- Duration
+**There is no length/duration quality heuristic any more.** Quality comes from
+a real turn *outcome* — `accepted`, `corrected`, `frustrated`, or `abandoned` —
+recorded in the `turn_outcomes` table. Outcomes arrive from four sources: an
+explicit thumbs vote (`applyExplicitFeedback`), the user's own follow-up
+message, session end, and which alternate take the user picked
+(`applyTakePick`). The only hardcoded number left is 0.1, the quality assigned
+to an errored turn the user abandoned. An unobserved, error-free turn produces
+no quality at all and the review returns early rather than inventing one.
 
-**Reflection** (quality < 0.4): An LLM call generates a lesson from the failed turn, appended to `memory/MEMORY.md` with a quality score and timestamp.
+**Reflection** fires on a negative outcome (`corrected` or `frustrated`, or an
+`abandoned` turn that also errored). An LLM call generates a lesson, appended to
+`memory/MEMORY.md` and recorded in the `lessons` table as `provisional` until a
+later turn corroborates it.
 
-**Pattern extraction** (quality > 0.8 with tool calls): An LLM call generalizes the successful tool-call pattern into a reusable async arrow function with JSON Schema parameters. Stored in `crafted_tools` via `upsertCraftedTool()` with conflict detection (Jaccard similarity > 0.85).
+**Pattern extraction** fires when the outcome is `accepted` and the turn made
+tool calls. `extractPattern()` asks the LLM to generalize the tool-call pattern
+into a reusable async arrow function with JSON Schema parameters, stored in
+`crafted_tools` with conflict detection (name match, or FTS5 top-5 with Jaccard
+word overlap > 0.85). An existing tool is only overwritten when the candidate
+scores more than 0.1 above it.
 
 ## Session-Level Evolution
 
-Session reflection fires via two independent paths:
+The cadence lives in `AgentOrchestrator`, not the engine: every
+`sessionReflectionInterval` (5) turns it calls `engine.onSessionComplete()` with
+the accumulated turns. Both backends pass 5.
 
-1. **Orchestrator path** (`orchestrator.ts:505`): The orchestrator calls `engine.onSessionComplete()` every `SESSION_REFLECTION_INTERVAL` (5) turns, passing accumulated turn data. This resets its own counter.
-2. **Engine-internal path** (`engine.ts:130`): The engine's `onTurnComplete()` tracks `turnsSinceReflection` and triggers its own `onSessionReflection()` every `sessionReflectionInterval` (default 10) turns.
+`onSessionComplete` is selective — it needs at least **3 turns** in the window,
+and `sessionWarrantsReflection()` requires that some turn errored, drew negative
+feedback, or has a negative recorded outcome. A clean session produces no
+reflection. When it does reflect, an LLM call analyzes the window's recent
+lessons and writes a structured reflection to `memory/MEMORY.md`.
 
-Both paths call the same reflection logic; the orchestrator path fires more frequently.
+**Scaffold mutation** is gated on at least 3 conversations, and skipped outright
+if a proposal is already pending. The proposal is not built from the live
+scaffold alone: `selectEvolutionBase()` picks a base from the DGM archive —
+with probability `1 − scaffold_explore_share` (default 0.2) it branches from the
+live `current`, otherwise it samples an archived `historical` or `rolled_back`
+variant weighted by its win rate and inverse trial count, blended with real user
+outcomes. The newest 8 archive entries are rendered into the proposal prompt.
 
-**Session reflection**: An LLM call analyzes the accumulated turns for patterns, writing a structured reflection to `memory/MEMORY.md`.
+`modifyScaffold()` then validates through 4 gates:
 
-**Scaffold mutation** (after 3+ sessions): If the reflection suggests significant improvement, `maybeEvolveScaffold()` proposes a new scaffold via LLM, validated through 4 gates:
+1. **Structural gate** — rationale ≥ 50 chars; none of the four forbidden
+   patterns (`require`/`import`, `globalThis`, `eval(`, `Function(`); the
+   required signature `async function* run(rt, task)`; then the misevolution
+   veto below.
+2. **Parse gate** — the code is compiled through `rt.executor` as a syntax check.
+3. **Version checkpoint** — a single-pending invariant (a second `pending`
+   version is refused), the base taken from `status = 'current'` rather than
+   `MAX(version)`, `newVersion = MAX(version) + 1`, and the DGM base must exist
+   in the archive. Backing up the current version falls out of this step.
+4. **Write gate** — the proposal is written to the **versioned** file
+   `scaffold/agent.js.v{N}`, never to the live `scaffold/agent.js`, so shadow
+   evaluation is never comparing new code against itself.
 
-1. **Structural gate**: Rationale ≥ 50 chars, no forbidden patterns (`require`, `import`, `eval`, `Function`, `globalThis`), required signature `async function* run(rt, task)`
-2. **Parse gate**: Syntax check via executor
-3. **Version checkpoint**: Current scaffold backed up to `scaffold/agent.js.v{N}`
-4. **Write gate**: New scaffold written to VFS, logged to memory
+### Misevolution gate
+
+`core/src/scaffold/misevolution.ts` is a pure text check with five frozen
+criteria; the first match rejects the proposal and writes a
+`misevolution_veto` row to `evolution_events`:
+
+| Criterion | Rejects |
+|---|---|
+| `network-egress` | `fetch(`, `XMLHttpRequest`, `new WebSocket`, `sendBeacon(`, `EventSource` |
+| `version-machinery-tamper` | touching `scaffold_versions`, `scaffold_evaluations`, `scaffold/agent.js`, `agent.js.v<N>` |
+| `rollout-config-tamper` | touching `auto_promote_scaffold`, `shadow_sample_rate`, `scaffold_explore_share`, `auto_gepa_every_n_turns`, `changelog_seen_at` |
+| `self-modification-reentry` | calling `proposeScaffold`, `modifyScaffold`, `applyPromotionDecision`, `applyScaffoldDecision`, `rollbackScaffold`, `checkMisevolution` |
+| `consent-weakening` | touching `shell_approval_mode`, `setShellApprovalMode`, `allow_all`, `device_consent` |
+
+The same check runs at three surfaces, not one: the proposal gate, the promotion
+decision (re-checked against the on-disk file), and crafted-tool upsert.
+
+### Shadow evaluation
+
+A validated proposal does not take effect on merit alone. It is sampled into
+real turns at `shadow_sample_rate` (0.25) and judged against the incumbent:
+
+```
+minTrials 5 · maxTrials 12 · promoteThreshold 0.6 · rollbackThreshold 0.4
+maxRegressions 1 · minDecisiveTrials 5 · autoPromote false
+```
+
+The **regression veto runs first**: more than `maxRegressions` losses rolls the
+proposal back regardless of win rate. `maxRegressions: 1` and
+`minDecisiveTrials: 5` were chosen by binomial Monte Carlo rather than taste
+(`scripts/shadow-veto-monte-carlo.ts`); against the old `(0, 3)` defaults they
+raise the chance of promoting a genuinely better scaffold from about 30% to
+about 51%, at a worst-case ~4.9% chance of promoting a worse one.
+
+The archive keeps **every** version — it is a read model over
+`scaffold_versions` joined to `scaffold_evaluations`, with no eviction — so a
+rolled-back variant remains available as a future stepping stone.
 
 ## Lifetime-Level Evolution
 
 Triggered by:
-- The `explore` tool (agent decides to deeply investigate a subproblem)
+- `onLifetimeEvolution()`, automatically every `lifetimeEvolutionInterval` (5) conversations
 - The `triggerEvolution()` @callable RPC (manual trigger from UI)
-- Automatic trigger after N sessions (consolidation only; full MCTS requires explicit trigger)
 
-**CraftStore consolidation**: Iterates all crafted tools, computes `effectiveScore` with EMA (α=0.3) and time decay (30-day half-life). Retires tools below the retirement threshold (0.1). Never retires all tools (BUG-2 guard).
+**CraftStore consolidation**: computes `effectiveScore` with EMA (α=0.3) and
+time decay (30-day half-life), retiring tools below 0.1 that have been used at
+least twice. Unscored tools are skipped, and the whole pass aborts if it would
+empty the store.
 
-**Full MCTS exploration**: Runs a complete MCTS search cycle. See [MCTS.md](./MCTS.md).
+**Replay eval** (`runReplayEval`): re-scores labeled past turns to produce a
+measurable loss curve, so scaffold changes are judged against a number rather
+than a vibe.
+
+**Full MCTS exploration**: a smaller search than the tool's default — budget 2,
+branches 2. See [MCTS.md](./MCTS.md).
+
+## Evolution Changelog
+
+Every self-modification surfaces as a human-readable card
+(`core/src/evolution/changelog.ts`). It is a pure read model over the durable
+ledgers — the only state it owns is a `changelog_seen_at` marker — with six
+entry kinds:
+
+| Kind | Source | Revertable via |
+|---|---|---|
+| `scaffold` | the archive + promotion/rollback run events | `scaffold_rollback` |
+| `tool` | `crafted_tools` joined to `craft_scores` | `craft_retire` |
+| `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
+| `gepa` | completed GEPA runs | — |
+| `replay` | replay-eval scores, with the delta vs the previous run | — |
+| `outcomes` | aggregated `turn_outcomes` counts | — |
+
+Reverts dispatch to the real code paths (`applyPromotionDecision`,
+`rollbackScaffold`, `craftStore.delete`, `facts.forget`), not to a separate undo
+log.
 
 ## CraftStore Lifecycle
 
@@ -91,29 +189,37 @@ Triggered by:
 graph LR
     A[Tool call pattern<br/>in conversation] -->|"extractPattern()"| B[LLM generalizes<br/>to reusable function]
     B -->|"upsertCraftedTool()"| C[crafted_tools table<br/>+ FTS5 index]
-    C -->|"loadCraftedTools()"| D[AI SDK tool() objects<br/>in getTools()]
-    D -->|"Model calls tool"| E[Execute via<br/>rt.executor]
+    C -->|"filterByEffectiveScore()"| D[Injected into the<br/>execute_tools sandbox]
+    D -->|"Model calls tool"| E[Execute via<br/>the runtime executor]
     E -->|"Score updated"| F[EMA scoring<br/>craft_scores table]
-    F -->|"periodicConsolidation()"| G{effectiveScore<br/>above threshold?}
+    F -->|"periodicCraftConsolidation()"| G{effectiveScore<br/>above threshold?}
     G -->|Yes| C
     G -->|No| H[Retired]
 ```
 
 **Scoring formula:**
-- EMA update: `newScore = 0.7 * oldScore + 0.3 * observation`
+- EMA update: `newScore = 0.7 * oldScore + 0.3 * observation` (α = 0.3)
 - Time decay: `effectiveScore = score * 0.5^(daysSinceLastUse / 30)`
-- Retirement threshold: `effectiveScore < 0.1`
+- Injection cutoff: `effectiveScore >= 0.2` — unscored (brand-new) tools always pass
+- Retirement threshold: `effectiveScore < 0.1`, and only after 2 uses
+
+Crafted-tool code must be between 50 and 1500 characters to be extracted at all.
+Extraction happens from three places: an accepted turn (`extractPattern`), an
+MCTS iteration scoring above `craftExtractionThreshold` (0.8), and MCTS
+convergence when the winner scores above 0.8.
 
 ## Evolution Events
 
-All evolution activity is persisted to the `evolution_events` SQL table:
+Evolution activity is persisted to the `evolution_events` SQL table:
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | TEXT PK | Random hex ID |
-| `type` | TEXT | `turn_complete`, `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `mcts_started`, `mcts_complete` |
+| `type` | TEXT | `turn_complete`, `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `mcts_started`, `mcts_complete`, `replay_eval`, `changelog_digest`, `misevolution_veto` |
 | `message` | TEXT | Human-readable description |
 | `data` | TEXT | JSON payload (optional) |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-The web UI's Evolution tab fetches these via the `getEvolutionEvents()` @callable RPC.
+This table is one of three sources the web UI's timeline merges
+(`cf-backend/src/lib/timeline.ts`) — the others are the durable `run_events` log
+and the MCTS `search_nodes` tree. `proteus status` reads the same table locally.

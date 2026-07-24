@@ -5,15 +5,15 @@
 The extension seam is the small, stable public API for **observing and
 extending a single agent turn** without importing engine internals. It is the
 one hook path BOTH backends' turn loops fire: the shared chat engine
-(`runChat`, the CLI path) and the cloud DO's Think hook bridge
-(`OrchestratorAgent` maps Think's `beforeTurn`/`beforeStep`/`beforeToolCall`/
-`afterToolCall`/`onChatResponse` onto this contract). Internal consumers and
-external plugins ride the same mechanism, so there is no private callback plus a
-parallel plugin API to drift apart.
+(`runChat`, the CLI path) and the cloud DO's Think hook bridge (`ActorAgent`
+maps Think's `beforeTurn`/`beforeStep`/`beforeToolCall`/`afterToolCall`/
+`onChatResponse` onto this contract, for every actor that extends it).
+Internal consumers and external plugins ride the same mechanism, so there is no
+private callback plus a parallel plugin API to drift apart.
 
 For the broader "plug in a new agentic idea" seams (model provider, exploration
-strategy, inference loop, runtime surface), see `EXTENSIBILITY.md`. This document
-is only about the per-turn hooks.
+strategy, actor kind), see `EXTENSIBILITY.md`. This document is only about the
+per-turn hooks.
 
 Source: `packages/core/src/extension.ts`, exported from `@proteus/core`.
 
@@ -111,9 +111,11 @@ engine drives internal consumers and external plugins through the same
 
 ## The cloud bridge
 
-The DO backend (`cf-backend/src/orchestrator.ts`) holds one persistent
-`ExtensionHost` for the activation and bridges Think's subclass hooks onto the
-contract above:
+The host lives on `ActorAgent` (`cf-backend/src/actor-agent.ts`), the abstract
+base both `OrchestratorAgent` and `SubordinateAgent` extend — so a subordinate
+gets the same seam, the same compaction, and the same event injection as the
+workspace's own agent, with no second code path. One persistent `ExtensionHost`
+per activation bridges Think's subclass hooks onto the contract above:
 
 | Think hook (0.8) | ExtensionHost |
 | --- | --- |
@@ -122,12 +124,18 @@ contract above:
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult` |
 | `onChatResponse` (completed) | `emitTurnEnd` |
 
-Both default registrants attach on this host at DO construction: the compaction
-extension (`registerCompactionExtension`) and the mid-turn event-injection
-extension (`proteus.event-injection`, a `prepareStep` hook that drains
-background events which arrived mid-turn into the active turn's next step —
-the DO counterpart of the CLI steering drain, sharing the same `StepInjections`
-splice math).
+Both default registrants attach on this host in the `ActorAgent` constructor:
+the compaction extension (`registerCompactionExtension`, registered under the
+name `compaction`) and the mid-turn event-injection extension
+(`proteus.event-injection`, a `prepareStep` hook that drains background events
+which arrived mid-turn into the active turn's next step — the DO counterpart of
+the CLI steering drain, sharing the same `StepInjections` splice math).
+
+One thing worth knowing about `registerTools` on this backend: an actor's
+`activeTools` whitelist is `[...effectiveActiveTools, ...extensionToolNames]`,
+and `effectiveActiveTools` has already been narrowed by `actorActiveTools()` to
+the deps that actor's profile wired. Extension tools are additive on top of that
+narrowed set; they do not widen it.
 
 ## Notes
 
@@ -136,5 +144,6 @@ splice math).
 - `onToolResult.result` is truncated to 1000 characters (the same bound the
   streamed `tool-result` event uses).
 - The seam is intentionally tiny. It observes and lightly rewrites a turn; it is
-  not a place to re-implement the loop. For a new loop, use the InferenceLoop
-  seam in `EXTENSIBILITY.md`.
+  not a place to re-implement the loop. Replacing the inference loop itself is
+  the mutable scaffold's job (`core/src/scaffold/inference-transform.ts`), which
+  rides Think's `_transformInferenceResult` rather than this host.

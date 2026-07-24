@@ -1,5 +1,7 @@
 # Agent Client Architecture Specification
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 > Version 0.1 - June 2026
 > Status: proposed implementation spec
 > Theme: one cloud agent, many clients; one presentation contract, multiple adapters.
