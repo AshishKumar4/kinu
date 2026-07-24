@@ -189,7 +189,9 @@ export function printAgentList(agents: Array<{
   console.log(`  ${DIM('─'.repeat(termWidth() - 4))}`);
 
   for (const a of agents) {
-    const name = ACCENT(a.name.padEnd(nameW));
+    // Clip as well as pad: a name longer than the column would otherwise run
+    // into MODE and shear the whole table.
+    const name = ACCENT(a.name.slice(0, nameW - 1).padEnd(nameW));
     const mode = DIM(a.mode.padEnd(modeW));
     const purpose = DIM(a.purpose.slice(0, purposeW - 2).padEnd(purposeW));
     const ver = `v${a.scaffoldVersion}`.padEnd(4);
