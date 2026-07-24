@@ -26,3 +26,7 @@ packages/core/tests/helpers.js
 packages/core/tests/helpers.js.map
 packages/core/tests/helpers.d.ts
 packages/core/tests/helpers.d.ts.map
+
+# Internal working notes: dated audits, program ledgers, design studies.
+# Useful locally, not part of the published project.
+/*-2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
