@@ -4,7 +4,7 @@
  *
  * Resume protocol:
  * 1. Read workspace_identity → get stable UUID + name
- * 2. Read SOUL.md → get the workspace identity text (migrates legacy agent_soul DBs)
+ * 2. Read SOUL.md → get the workspace identity text
  * 3. Read scaffold_versions → get current version
  * 4. Read scaffold/agent.js from VFS → current agentic loop
  * 5. Read craft_scores → quality metrics
@@ -13,7 +13,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLMProviderConfig } from '../llm.js';
-import { initAllTables } from './schema.js';
+import { initAllTables, migrateWorkspaceStorage } from './schema.js';
 import { readSoul, summarizeSoul } from './soul.js';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
@@ -49,6 +49,7 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
 
   // Ensure all tables exist (handles schema upgrades gracefully)
   initAllTables(execRaw);
+  migrateWorkspaceStorage(sql);
 
   // Step 1: Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`
@@ -56,7 +57,7 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
   `[0];
   if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
-  // Step 2: Read SOUL.md (migrates pre-SOUL.md agent_soul databases)
+  // Step 2: Read SOUL.md
   const soul = readSoul(sql);
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 

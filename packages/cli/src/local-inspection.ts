@@ -578,7 +578,7 @@ function getLocalStatus(db: SqliteDb): unknown {
   const identity = tableExists(db, 'workspace_identity')
     ? get<{ id: string; name: string; created_at: number }>(db, `SELECT id, name, created_at FROM workspace_identity LIMIT 1`)
     : null;
-  const soul = readSoul(makeSql(db));
+  const soul = tableExists(db, 'vfs_files') ? readSoul(makeSql(db)) : null;
   return {
     id: identity?.id ?? null,
     name: identity?.name ?? null,

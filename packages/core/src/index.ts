@@ -1,7 +1,7 @@
 // @proteus/core — barrel export
 
 // Identity system
-export { initActorTables, initAllTables } from './identity/schema.js';
+export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,

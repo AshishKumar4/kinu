@@ -10,7 +10,7 @@
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initAllTables, readSoul, summarizeSoul } from '@proteus/core';
+import { initAllTables, migrateWorkspaceStorage, readSoul, summarizeSoul } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
@@ -67,6 +67,7 @@ export function openWorkspaceCLI(
 
   // Ensure all tables exist (idempotent)
   initAllTables(execRaw);
+  migrateWorkspaceStorage(sql);
 
   // Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`

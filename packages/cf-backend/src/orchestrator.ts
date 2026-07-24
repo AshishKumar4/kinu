@@ -44,6 +44,7 @@ import {
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
+  migrateWorkspaceStorage,
   // Fork feature
   forkWorkspaceStorage, readForkLineage,
   nanoid, initHeadsTables, type HeadRunView,
@@ -1270,6 +1271,9 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { /* tables don't exist yet — fine */ }
 
     initAllTables(execRaw);
+    // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound
+    // SOUL.md rows) — repaired here so every read path stays a pure read.
+    migrateWorkspaceStorage(this.boundSql);
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);

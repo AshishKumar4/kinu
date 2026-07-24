@@ -8,13 +8,15 @@
  */
 
 import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
-import type { RawSqlExec } from '../types/primitives.js';
+import { migrateSoulStorage } from './soul.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 
 const WORKSPACE_IDENTITY_DDL =
   // ── Workspace identity — the ownership root ────────────────────
-  // Renamed from agent_identity with no back-compat migration by design —
-  // the project is pre-production and the DB is recreated on deploy
-  // (owner decision 2026-06-13).
+  // Renamed from agent_identity; hosted deployments are recreated rather than
+  // migrated (owner decision 2026-06-13), but a local ~/.proteus workspace is
+  // a file that outlives the rename, so migrateWorkspaceStorage adopts the
+  // legacy row.
   `CREATE TABLE IF NOT EXISTS workspace_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
@@ -190,4 +192,39 @@ export function initActorTables(execRaw: RawSqlExec): void {
 /** Initialize all workspace tables. Idempotent — safe to call on every startup. */
 export function initAllTables(execRaw: RawSqlExec): void {
   for (const ddl of DDL) execRaw(ddl);
+}
+
+/**
+ * Bring a workspace created against an older schema up to the current one.
+ * Idempotent, and it writes — every workspace-open path runs it right after
+ * initAllTables, which is what keeps the read paths (`proteus list`,
+ * `proteus status`, both of which open the database readonly) pure reads.
+ */
+export function migrateWorkspaceStorage(sql: SqlExecutor): void {
+  adoptLegacyAgentIdentity(sql);
+  migrateSoulStorage(sql);
+}
+
+/** Move the pre-rename `agent_identity` row (identical columns) into
+ *  workspace_identity. Without it an older local workspace loses its id, name
+ *  and creation date, and openWorkspace rejects it as having no identity. */
+function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
+  const legacyTable = sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_identity'
+  `;
+  if (legacyTable.length === 0) return;
+
+  const claimed = sql<{ c: number }>`SELECT COUNT(*) AS c FROM workspace_identity`[0]?.c ?? 0;
+  // `SELECT *`: owner_user_id was added to agent_identity after its first
+  // release, so the oldest workspaces do not carry the column.
+  const legacy = claimed === 0
+    ? sql<{ id: string; name: string; owner_user_id?: string; created_at: number }>`
+        SELECT * FROM agent_identity LIMIT 1
+      `[0]
+    : undefined;
+  if (legacy) {
+    sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+        VALUES (${legacy.id}, ${legacy.name}, ${legacy.owner_user_id ?? ''}, ${legacy.created_at})`;
+  }
+  sql`DROP TABLE agent_identity`;
 }

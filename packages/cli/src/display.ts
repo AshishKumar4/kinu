@@ -135,7 +135,8 @@ export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
   // Identity section
   console.log(boxRow(L('Name:'), `${ACCENT(info.name)} ${DIM(`(${info.id.slice(0, 12)}...)`)}`, w));
   console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 22), w));
-  console.log(boxRow(L('Created:'), DIM(new Date(info.createdAt).toLocaleDateString()), w));
+  const created = info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—';
+  console.log(boxRow(L('Created:'), DIM(created), w));
   console.log(boxRow(L('Database:'), DIM(formatBytes(dbSize)), w));
   console.log(boxRow(L('Model:'), extra?.model ?? '(default)', w));
   console.log(boxRow(L('Effort:'), extra?.reasoningEffort ?? 'medium (chat default)', w));
