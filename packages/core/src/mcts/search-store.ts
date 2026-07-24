@@ -17,7 +17,7 @@ import type { MCTSConfig } from '../types/mcts.js';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,
  *  minus the live handles (AbortSignal, callbacks, the store itself). */
-export type PersistedMCTSConfig = Omit<MCTSConfig, 'signal' | 'onIterationComplete' | 'search'>;
+export type PersistedMCTSConfig = Omit<MCTSConfig, 'signal' | 'onProgress' | 'search'>;
 
 /** A resumable (interrupted) search: enough to continue the loop from checkpoint. */
 export interface ResumableSearch {
@@ -42,7 +42,7 @@ interface Row {
 
 /** Strip the live, non-serializable fields off an MCTSConfig for persistence. */
 export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
-  const { signal: _signal, onIterationComplete: _onIter, search: _search, ...rest } = config;
+  const { signal: _signal, onProgress: _onProgress, search: _search, ...rest } = config;
   return rest;
 }
 

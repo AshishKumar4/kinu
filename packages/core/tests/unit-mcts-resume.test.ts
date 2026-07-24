@@ -40,9 +40,10 @@ describe('MCTS evict-resume (B6)', () => {
     let run1Iters = 0;
     await expect(runMCTS(rt, createMockSession(), TASK, {
       budget: 4, branches: 1, search: store, signal: ctrl.signal,
-      onIterationComplete: (iteration) => {
-        run1Iters = iteration;
-        if (iteration === 2) ctrl.abort(new Error('DO eviction')); // interrupt mid-run
+      onProgress: (event) => {
+        if (event.type !== 'iteration-complete') return;
+        run1Iters = event.iteration;
+        if (event.iteration === 2) ctrl.abort(new Error('DO eviction')); // interrupt mid-run
       },
     })).rejects.toThrow();
 
@@ -58,7 +59,9 @@ describe('MCTS evict-resume (B6)', () => {
     let run2Iters = 0;
     const result = await runMCTS(rt, createMockSession(), TASK, {
       budget: 4, branches: 1, search: store,
-      onIterationComplete: (iteration) => { run2Iters = iteration; },
+      onProgress: (event) => {
+        if (event.type === 'iteration-complete') run2Iters = event.iteration;
+      },
     });
 
     expect(result).toBeDefined();

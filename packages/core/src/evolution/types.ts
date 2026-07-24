@@ -2,6 +2,8 @@
  * Evolution engine types — the three timescales of self-evolution.
  */
 
+import type { MCTSProgressEvent } from '../types/mcts.js';
+
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {
   name: string;
@@ -62,8 +64,8 @@ export interface EvolutionConfig {
   lifetimeEvolutionInterval: number;
   lifetimeMCTSBudget: number;
   lifetimeMCTSBranches: number;
-  /** Called after each MCTS iteration — for real-time UI broadcasting */
-  onMctsProgress?: (iteration: number, remainingBudget: number) => void;
+  /** Called as the lifetime MCTS search progresses — for real-time UI broadcasting */
+  onMctsProgress?: (event: MCTSProgressEvent) => void;
   /** Re-run a task against the CURRENT config (scaffold/prompt/tools) — the
    *  backend seam the replay-eval harness rolls out through. Absent = the
    *  periodic replay eval is skipped. */

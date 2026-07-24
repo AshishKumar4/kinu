@@ -478,8 +478,10 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        onMctsProgress: (iteration, remaining) => {
-          this.broadcastMctsProgress("iteration", iteration, remaining);
+        onMctsProgress: (event) => {
+          const phase = event.type === "phase" ? event.phase : event.type;
+          const budget = event.type === "branch-failed" ? undefined : event.remainingBudget;
+          this.broadcastMctsProgress(phase, event.iteration, budget);
         },
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".

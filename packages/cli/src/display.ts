@@ -51,17 +51,28 @@ function stripAnsi(s: string): string {
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const isTTY = process.stdout.isTTY ?? false;
 
-export function createSpinner(message: string) {
+export function createSpinner(initialMessage: string) {
   let i = 0;
+  let message = initialMessage;
   let timer: ReturnType<typeof setInterval> | null = null;
   return {
     start() {
       if (!isTTY) return;
       timer = setInterval(() => {
         const frame = ACCENT(SPINNER_FRAMES[i % SPINNER_FRAMES.length]);
-        process.stdout.write(`\r${frame} ${message}`);
+        process.stdout.write(`\r\x1b[K${frame} ${message}`);
         i++;
       }, 80);
+    },
+    /** Replace the live status. Piped output gets one plain line instead. */
+    update(next: string) {
+      message = next;
+      if (!isTTY) console.log(`${DIM('·')} ${next}`);
+    },
+    /** Print a line that stays in the scrollback, above the live status. */
+    note(line: string) {
+      if (isTTY) process.stdout.write(`\r\x1b[K`);
+      console.log(line);
     },
     stop(finalMessage?: string) {
       if (timer) clearInterval(timer);

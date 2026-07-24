@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { runMCTS, type SearchNode } from '@proteus/core';
+import { runMCTS, type MCTSProgressEvent, type SearchNode } from '@proteus/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@proteus/core';
 import { openWorkspaceCLI } from '@proteus/cli-backend';
 import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
@@ -49,11 +49,23 @@ export async function evolveCommand(name: string, opts: {
   const task = `Given my purpose: "${info.purpose}", identify one specific improvement I could make ` +
     `to be more effective. Consider: new tools I could learn, knowledge gaps, or workflow improvements.`;
 
-  const spinner = createSpinner('Running MCTS exploration...');
+  const spinner = createSpinner('Starting MCTS exploration...');
   spinner.start();
 
+  // Failed branches score 0 by design (the engine's allSettled), so a run whose
+  // model calls all failed still returns a number. Count them to qualify it.
+  let failed = 0;
+
   try {
-    const result = await runMCTS(rt, session, task, { budget, branches, maxCostUSD: 5 });
+    const result = await runMCTS(rt, session, task, {
+      budget, branches, maxCostUSD: 5,
+      onProgress: (event) => {
+        if (event.type === 'branch-failed') failed++;
+        const line = formatMctsProgress(event, budget);
+        if (line.sink === 'status') spinner.update(line.text);
+        else spinner.note(line.text);
+      },
+    });
     spinner.stop('Exploration complete');
 
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
@@ -63,6 +75,9 @@ export async function evolveCommand(name: string, opts: {
       console.log(`${OK('✓')} Converged — winner score: ${ACCENT(result.winnerValue.toFixed(3))}`);
     } else {
       console.log(`${WARN('○')} Did not converge — best score: ${ACCENT(result.winnerValue.toFixed(3))}`);
+    }
+    if (failed > 0) {
+      console.log(`${WARN('!')} ${plural(failed, 'branch failure')} — those branches scored 0, so this result understates the ideas.`);
     }
 
     const memory = await rt.memory.read('memory/MEMORY.md');
@@ -79,11 +94,60 @@ export async function evolveCommand(name: string, opts: {
     }
   } catch (err) {
     spinner.fail('Evolution failed');
-    printError((err as Error).message);
+    printError(
+      err instanceof Error ? err.message : String(err),
+      failed > 0
+        ? `${plural(failed, 'branch failure')} preceded it — see the lines above.`
+        : undefined,
+    );
+    process.exitCode = 1;
   }
 
   console.log('');
   db.close();
+}
+
+interface ProgressLine {
+  /** `status` replaces the live spinner text; `log` stays in the scrollback. */
+  sink: 'status' | 'log';
+  text: string;
+}
+
+const PHASE_LABEL = {
+  explore: 'exploring',
+  evaluate: 'evaluating',
+  reflect: 'reflecting on',
+} as const;
+
+/** Render one search event for the terminal. Pure — the sink decides where it goes. */
+export function formatMctsProgress(event: MCTSProgressEvent, totalBudget: number): ProgressLine {
+  switch (event.type) {
+    case 'phase':
+      return {
+        sink: 'status',
+        text: `${iterationTag(event.iteration, totalBudget)} ${PHASE_LABEL[event.phase]} ${plural(event.branches, 'branch', 'branches')}...`,
+      };
+    case 'branch-failed':
+      return {
+        sink: 'log',
+        text: `  ${WARN('!')} ${iterationTag(event.iteration, totalBudget)} branch ${MUTED(event.branchId)} ` +
+          `${DIM(`(${event.stage})`)} ${event.error}`,
+      };
+    case 'iteration-complete':
+      return {
+        sink: 'log',
+        text: `  ${OK('•')} ${iterationTag(event.iteration, totalBudget)} done ` +
+          DIM(`scores ${event.scores.map(s => s.toFixed(2)).join(', ')}`),
+      };
+  }
+}
+
+function iterationTag(current: number, total: number): string {
+  return DIM(`[${current}/${total}]`);
+}
+
+function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
+  return `${count} ${count === 1 ? noun : pluralNoun}`;
 }
 
 function createEvolveSession(rt: AgentRuntime): SessionWriter {

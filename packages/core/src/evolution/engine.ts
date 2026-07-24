@@ -607,7 +607,7 @@ export class EvolutionEngine {
         ...(overrides.explorationWeight !== undefined ? { explorationWeight: overrides.explorationWeight } : {}),
         ...(overrides.judgeSamples !== undefined ? { judgeSamples: overrides.judgeSamples } : {}),
         ...(overrides.maxEvalLLMCalls !== undefined ? { maxEvalLLMCalls: overrides.maxEvalLLMCalls } : {}),
-        onIterationComplete: this.config.onMctsProgress,
+        onProgress: this.config.onMctsProgress,
       });
 
       this.emit({

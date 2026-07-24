@@ -13,7 +13,7 @@ import { runMCTS } from '../src/mcts/engine.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
-import type { SearchNode } from '../src/types/mcts.js';
+import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts.js';
 import type { Executor, LLM } from '../src/types/primitives.js';
 
 /** Executor that fails any code containing FAIL_MARKER, passes the rest. */
@@ -341,6 +341,132 @@ describe('MCTS integration', () => {
     `[0]!;
     expect(child.visits).toBe(1);
     expect(child.value).toBe(0);
+  });
+});
+
+describe('MCTS branch lifetime', () => {
+  /** Runtime whose spawn/abort calls are recorded; branches are real handles. */
+  function trackedBranches(rt: ReturnType<typeof createTestRuntime>['rt']) {
+    const spawned: string[] = [];
+    const aborted: string[] = [];
+    rt.spawnBranch = async (id) => {
+      spawned.push(id);
+      return {
+        explore: async () => ({ text: 'a solid approach', codeUsed: null }),
+        generateReflection: async () => 'lesson',
+      };
+    };
+    rt.abortBranch = async (id) => { aborted.push(id); };
+    return { spawned, aborted };
+  }
+
+  test('every branch an expansion spawns is released when the iteration ends', async () => {
+    const { rt } = createTestRuntime();
+    const { spawned, aborted } = trackedBranches(rt);
+
+    initTables(rt);
+    await runMCTS(rt, createMockSession(), 'plan the work', { budget: 2, branches: 2 });
+
+    expect(spawned.length).toBe(4);
+    expect(new Set(aborted)).toEqual(new Set(spawned));
+  });
+
+  test('a branch is released even when the iteration throws', async () => {
+    const { rt } = createTestRuntime();
+    const { spawned, aborted } = trackedBranches(rt);
+    // Reflection is written to memory; a memory failure aborts the iteration.
+    rt.memory.append = async () => { throw new Error('memory offline'); };
+
+    initTables(rt);
+    await expect(runMCTS(rt, createMockSession(), 'plan the work', {
+      budget: 1, branches: 2,
+    })).rejects.toThrow('memory offline');
+
+    expect(spawned.length).toBe(2);
+    expect(new Set(aborted)).toEqual(new Set(spawned));
+  });
+});
+
+describe('MCTS progress reporting', () => {
+  test('phases are announced per iteration, in order', async () => {
+    const { rt } = createTestRuntime();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'a solid approach', codeUsed: null }),
+      generateReflection: async () => 'n/a',
+    });
+
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    await runMCTS(rt, createMockSession(), 'plan the work', {
+      budget: 2, branches: 2,
+      onProgress: (event) => events.push(event),
+    });
+
+    expect(events.filter(e => e.type === 'phase' && e.phase === 'explore').length).toBe(2);
+    expect(events.filter(e => e.type === 'phase' && e.phase === 'evaluate').length).toBe(2);
+    const iterations = events.flatMap(e => e.type === 'iteration-complete' ? [e] : []);
+    expect(iterations.map(e => e.iteration)).toEqual([1, 2]);
+    expect(iterations[0]!.remainingBudget).toBe(1);
+    expect(iterations[0]!.scores.length).toBe(2);
+    // The first thing reported for an iteration is the phase it entered.
+    expect(events[0]).toMatchObject({ type: 'phase', phase: 'explore', iteration: 1, branches: 2 });
+  });
+
+  test('a failed exploration is reported with its provider error, and the search continues', async () => {
+    const { rt } = createTestRuntime();
+    let branch = 0;
+    rt.spawnBranch = async () => {
+      const failing = branch++ === 0;
+      return {
+        explore: async () => {
+          if (failing) throw new Error('Failed after 3 attempts. Last error: 429 rate limited');
+          return { text: 'a solid approach', codeUsed: null };
+        },
+        generateReflection: async () => 'n/a',
+      };
+    };
+
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    const result = await runMCTS(rt, createMockSession(), 'plan the work', {
+      budget: 1, branches: 2,
+      onProgress: (event) => events.push(event),
+    });
+
+    expect(result).toBeDefined();
+    const failures = events.flatMap(e => e.type === 'branch-failed' && e.stage === 'explore' ? [e] : []);
+    expect(failures.length).toBe(1);
+    expect(failures[0]!.iteration).toBe(1);
+    expect(failures[0]!.error).toBe('Failed after 3 attempts. Last error: 429 rate limited');
+    expect(failures[0]!.branchId.length).toBeGreaterThan(0);
+  });
+
+  test('a failed reflection is reported and does not abort a search that already scored its branches', async () => {
+    const { rt } = createTestRuntime({
+      llmResponses: { 'weak attempt': '{"score": 0.05}' },
+    });
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'weak attempt', codeUsed: null }),
+      generateReflection: async () => { throw new Error('reflection provider down'); },
+    });
+
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    const result = await runMCTS(rt, createMockSession(), 'improve myself', {
+      budget: 1, branches: 1,
+      onProgress: (event) => events.push(event),
+    });
+
+    // The search finished (nodes recorded, converge ran) instead of dying on an
+    // optional post-scoring model call.
+    expect(result.converged).toBe(false);
+    expect(rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`.length).toBe(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'branch-failed', stage: 'reflect', iteration: 1, error: 'reflection provider down',
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'phase', phase: 'reflect', branches: 1,
+    }));
   });
 });
 

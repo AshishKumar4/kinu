@@ -7,7 +7,7 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
-import type { MCTSConfig, MCTSPhase, SearchNode } from '../types/mcts.js';
+import type { MCTSConfig, MCTSPhase, MCTSProgressEvent, SearchNode } from '../types/mcts.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
 import { DEFAULT_CONFIG } from '../config.js';
@@ -98,6 +98,8 @@ export async function runMCTS(
     });
   }
 
+  const report = (event: MCTSProgressEvent): void => config.onProgress?.(event);
+
   return rt.schedule.fiber<ConvergenceResult>('mcts', async (ctx) => {
     // The durable search store is the resume source of truth when injected; the
     // fiber snapshot is the fallback for the inline/no-store path (tests).
@@ -112,6 +114,12 @@ export async function runMCTS(
       const selected = selectNode(rt.storage.sql, W, maxDepth);
       if (!selected) break;
 
+      const iteration = phase.iteration + 1;
+      report({
+        type: 'phase', phase: 'explore',
+        iteration, remainingBudget: phase.budget, branches: N_BRANCHES,
+      });
+
       // EXPAND — spawn N branches
       const branchIds = Array.from({ length: N_BRANCHES }, () =>
         `${selected.id.slice(0, 8)}-${nanoid(8)}`,
@@ -124,142 +132,188 @@ export async function runMCTS(
         config.signal,
         abortBranches,
       );
-      throwIfAborted(config.signal);
+      // The expansion owns its branch agents for exactly this iteration:
+      // they explore, get scored, reflect, and are then released. On the CLI
+      // these are child processes — leaking them keeps the search's caller
+      // alive long after the tree is done.
+      try {
+        throwIfAborted(config.signal);
 
-      const priorHistory = selected.msg_id
-        ? session.getHistory(selected.msg_id)
-        : [{ role: 'user', content: task }];
-      const craftedTools = rt.craftStore.getAll();
+        const priorHistory = selected.msg_id
+          ? session.getHistory(selected.msg_id)
+          : [{ role: 'user', content: task }];
+        const craftedTools = rt.craftStore.getAll();
 
-      // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest).
-      // Each branch is handed its siblings' distinct angles so the N proposals
-      // diverge by construction, not just by sampling temperature (DO-NOW #1).
-      const explorationResults = await abortable(
-        Promise.allSettled(branchHandles.map((handle, i) =>
-          handle.explore(priorHistory, craftedTools, siblingAngles(i, N_BRANCHES)),
-        )),
-        config.signal,
-        abortBranches,
-      );
-      throwIfAborted(config.signal);
-      const explorations = explorationResults.map(r =>
-        r.status === 'fulfilled' ? r.value : { text: '', codeUsed: null },
-      );
-
-      // RECORD nodes
-      const childNodeIds: string[] = [];
-      for (let i = 0; i < N_BRANCHES; i++) {
-        const childId = branchIds[i] ?? nanoid();
-        const exploration = explorations[i] ?? { text: '', codeUsed: null };
-        childNodeIds.push(childId);
-        await recordNode(session, rt.storage.sql, {
-          nodeId: childId,
-          parentNodeId: selected.id,
-          parentMsgId: selected.msg_id,
-          task,
-          action: exploration.text.slice(0, 300),
-          observation: exploration.text,
-          codeUsed: exploration.codeUsed ?? null,
-          depth: selected.depth + 1,
+        // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest).
+        // Each branch is handed its siblings' distinct angles so the N proposals
+        // diverge by construction, not just by sampling temperature (DO-NOW #1).
+        const explorationResults = await abortable(
+          Promise.allSettled(branchHandles.map((handle, i) =>
+            handle.explore(priorHistory, craftedTools, siblingAngles(i, N_BRANCHES)),
+          )),
+          config.signal,
+          abortBranches,
+        );
+        throwIfAborted(config.signal);
+        const explorations = explorationResults.map((r, i) => {
+          if (r.status === 'fulfilled') return r.value;
+          report({
+            type: 'branch-failed', stage: 'explore', iteration,
+            branchId: branchIds[i] ?? '', error: reasonText(r.reason),
+          });
+          return { text: '', codeUsed: null };
         });
-        rt.storage.sql`
-          UPDATE search_nodes SET branch_agent_key = ${childId}
-          WHERE id = ${childId}
-        `;
-      }
 
-      const proposals = explorations.map(e => e.text);
-
-      // EVALUATE — the engine-level seam every backend shares: branches only
-      // explore; scoring happens HERE through the one grounded evaluator
-      // (execution verdicts via rt.executor + judge ensemble via
-      // rt.judgeModel ?? rt.llm, sibling-relative). Evaluation failures score
-      // 0, not neutral 0.5; otherwise failed infrastructure can look like a
-      // balanced optimum and converge falsely.
-      const scoreResults = await abortable(
-        Promise.allSettled(explorations.map((exploration, i) =>
-          evaluateWithMultiModelJudging({
+        // RECORD nodes
+        const childNodeIds: string[] = [];
+        for (let i = 0; i < N_BRANCHES; i++) {
+          const childId = branchIds[i] ?? nanoid();
+          const exploration = explorations[i] ?? { text: '', codeUsed: null };
+          childNodeIds.push(childId);
+          await recordNode(session, rt.storage.sql, {
+            nodeId: childId,
+            parentNodeId: selected.id,
+            parentMsgId: selected.msg_id,
             task,
-            trajectory: exploration.text,
-            codeUsed: exploration.codeUsed,
-            siblings: proposals.filter((p, j) => j !== i && p.length > 0),
-            // Close the band loophole (WP-A5): if a sibling attempted code,
-            // this prose-only branch is capped at the fail ceiling.
-            siblingsProducedCode: explorations.some((e, j) => j !== i && !!e.codeUsed),
-            executor: rt.executor,
-            judge: rt.judgeModel,
-            explorer: rt.llm,
-            judgeSamples,
-            maxLLMCalls: maxEvalLLMCalls,
-          }),
-        )),
-        config.signal,
-        abortBranches,
-      );
-      throwIfAborted(config.signal);
-      const scores = scoreResults.map(r =>
-        r.status === 'fulfilled' ? r.value.score : 0,
-      );
-
-      // BACKPROPAGATE
-      for (let i = 0; i < N_BRANCHES; i++) {
-        const nodeId = childNodeIds[i];
-        const score = scores[i];
-        if (nodeId !== undefined && score !== undefined) {
-          backpropagate(rt.storage.sql, nodeId, score);
+            action: exploration.text.slice(0, 300),
+            observation: exploration.text,
+            codeUsed: exploration.codeUsed ?? null,
+            depth: selected.depth + 1,
+          });
+          rt.storage.sql`
+            UPDATE search_nodes SET branch_agent_key = ${childId}
+            WHERE id = ${childId}
+          `;
         }
-      }
 
-      // REFLECT — write a failure lesson to memory for each below-threshold
-      // branch. Pruning is separate: it scans the whole open population for
-      // settled low-value nodes (pruneLowValueBranches), so it isn't confined
-      // to this iteration's freshly-expanded children.
-      for (let i = 0; i < N_BRANCHES; i++) {
-        const score = scores[i] ?? 0;
-        if (score < reflectionThreshold) {
-          const handle = branchHandles[i];
-          if (handle) {
-            const reflection = (await handle.generateReflection(task)).trim();
-            throwIfAborted(config.signal);
-            // An empty reflection carries no lesson — writing it just litters
-            // MEMORY.md with duplicate bare "### Failure lesson" headers.
-            if (reflection) {
-              await rt.memory.append(
-                'memory/MEMORY.md',
-                `\n### Failure lesson (${isoDate()})\n${reflection}\n`,
-              );
-              await rt.memory.index('memory/MEMORY.md');
-            }
+        const proposals = explorations.map(e => e.text);
+
+        // EVALUATE — the engine-level seam every backend shares: branches only
+        // explore; scoring happens HERE through the one grounded evaluator
+        // (execution verdicts via rt.executor + judge ensemble via
+        // rt.judgeModel ?? rt.llm, sibling-relative). Evaluation failures score
+        // 0, not neutral 0.5; otherwise failed infrastructure can look like a
+        // balanced optimum and converge falsely.
+        report({
+          type: 'phase', phase: 'evaluate',
+          iteration, remainingBudget: phase.budget, branches: N_BRANCHES,
+        });
+        const scoreResults = await abortable(
+          Promise.allSettled(explorations.map((exploration, i) =>
+            evaluateWithMultiModelJudging({
+              task,
+              trajectory: exploration.text,
+              codeUsed: exploration.codeUsed,
+              siblings: proposals.filter((p, j) => j !== i && p.length > 0),
+              // Close the band loophole (WP-A5): if a sibling attempted code,
+              // this prose-only branch is capped at the fail ceiling.
+              siblingsProducedCode: explorations.some((e, j) => j !== i && !!e.codeUsed),
+              executor: rt.executor,
+              judge: rt.judgeModel,
+              explorer: rt.llm,
+              judgeSamples,
+              maxLLMCalls: maxEvalLLMCalls,
+            }),
+          )),
+          config.signal,
+          abortBranches,
+        );
+        throwIfAborted(config.signal);
+        const scores = scoreResults.map((r, i) => {
+          if (r.status === 'fulfilled') return r.value.score;
+          report({
+            type: 'branch-failed', stage: 'evaluate', iteration,
+            branchId: branchIds[i] ?? '', error: reasonText(r.reason),
+          });
+          return 0;
+        });
+
+        // BACKPROPAGATE
+        for (let i = 0; i < N_BRANCHES; i++) {
+          const nodeId = childNodeIds[i];
+          const score = scores[i];
+          if (nodeId !== undefined && score !== undefined) {
+            backpropagate(rt.storage.sql, nodeId, score);
           }
         }
-      }
-      await pruneLowValueBranches(rt, pruneThreshold, minVisitsForPrune);
-      throwIfAborted(config.signal);
 
-      // EXTRACT crafted tools from winners
-      for (let i = 0; i < N_BRANCHES; i++) {
-        const score = scores[i] ?? 0;
-        const exploration = explorations[i];
-        if (score > craftExtractionThreshold && exploration?.codeUsed) {
-          await maybeStoreCraftedTool(rt, exploration.codeUsed, score);
+        // REFLECT — write a failure lesson to memory for each below-threshold
+        // branch. Pruning is separate: it scans the whole open population for
+        // settled low-value nodes (pruneLowValueBranches), so it isn't confined
+        // to this iteration's freshly-expanded children.
+        const reflecting = scores.filter(score => score < reflectionThreshold).length;
+        if (reflecting > 0) {
+          report({
+            type: 'phase', phase: 'reflect',
+            iteration, remainingBudget: phase.budget, branches: reflecting,
+          });
         }
+        for (let i = 0; i < N_BRANCHES; i++) {
+          const score = scores[i] ?? 0;
+          if (score >= reflectionThreshold) continue;
+          const handle = branchHandles[i];
+          if (!handle) continue;
+          // A reflection is an optional memory side-effect on an already-scored
+          // branch. Its model call fails the same way exploration does (that is
+          // what allSettled above tolerates), so letting it throw would discard
+          // a search whose branches are already recorded and backpropagated.
+          const reflection = await handle.generateReflection(task).then(
+            text => text.trim(),
+            (err: unknown) => {
+              report({
+                type: 'branch-failed', stage: 'reflect', iteration,
+                branchId: branchIds[i] ?? '', error: reasonText(err),
+              });
+              return '';
+            },
+          );
+          throwIfAborted(config.signal);
+          // An empty reflection carries no lesson — writing it just litters
+          // MEMORY.md with duplicate bare "### Failure lesson" headers.
+          if (reflection) {
+            await rt.memory.append(
+              'memory/MEMORY.md',
+              `\n### Failure lesson (${isoDate()})\n${reflection}\n`,
+            );
+            await rt.memory.index('memory/MEMORY.md');
+          }
+        }
+        await pruneLowValueBranches(rt, pruneThreshold, minVisitsForPrune);
+        throwIfAborted(config.signal);
+
+        // EXTRACT crafted tools from winners
+        for (let i = 0; i < N_BRANCHES; i++) {
+          const score = scores[i] ?? 0;
+          const exploration = explorations[i];
+          if (score > craftExtractionThreshold && exploration?.codeUsed) {
+            await maybeStoreCraftedTool(rt, exploration.codeUsed, score);
+          }
+        }
+
+        phase.iteration++;
+        phase.budget--;
+        ctx.stash(phase);
+        // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
+        // continue from the remaining budget against the persisted tree (B6).
+        search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
+
+        report({
+          type: 'iteration-complete',
+          iteration: phase.iteration, remainingBudget: phase.budget, scores,
+        });
+      } finally {
+        await abortBranches();
       }
-
-      phase.iteration++;
-      phase.budget--;
-      ctx.stash(phase);
-      // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
-      // continue from the remaining budget against the persisted tree (B6).
-      search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
-
-      // Notify caller for real-time UI updates
-      config.onIterationComplete?.(phase.iteration, phase.budget);
     }
 
     const result = converge(rt, session, minAcceptableScore, takesEpsilon);
     search?.converge(rootId, searchEpoch, Date.now());
     return result;
   });
+}
+
+function reasonText(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

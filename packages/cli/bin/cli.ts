@@ -319,7 +319,7 @@ program
 
 program
   .command('daemon [action]')
-  .description('Manage the local scheduler daemon for local workspace alarms')
+  .description('Manage the local scheduler daemon: start, stop, restart, status, logs')
   .action(wrapAction(daemonCommand));
 
 program
