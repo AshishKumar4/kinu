@@ -156,10 +156,15 @@ export async function runMCTS(
         );
         throwIfAborted(config.signal);
         const explorations = explorationResults.map((r, i) => {
-          if (r.status === 'fulfilled') return r.value;
+          // A branch runs behind a backend seam (a facet RPC on cf, a forked
+          // worker locally), so a "fulfilled" result is still untrusted input:
+          // a malformed one must score 0 like any other failure, never crash
+          // the search after its nodes are already recorded.
+          if (r.status === 'fulfilled' && typeof r.value?.text === 'string') return r.value;
           report({
             type: 'branch-failed', stage: 'explore', iteration,
-            branchId: branchIds[i] ?? '', error: reasonText(r.reason),
+            branchId: branchIds[i] ?? '',
+            error: r.status === 'rejected' ? reasonText(r.reason) : 'branch returned no exploration',
           });
           return { text: '', codeUsed: null };
         });

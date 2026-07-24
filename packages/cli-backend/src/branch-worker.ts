@@ -128,7 +128,10 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
     }
     process.send!({ method: msg.method, result });
   } catch (err) {
-    process.send!({ method: msg.method, error: (err as Error).message });
+    // Always carry a message: an empty one reads as "no error" to any
+    // presence-checking caller and hides the real failure.
+    const message = err instanceof Error && err.message ? err.message : String(err) || 'branch worker failed';
+    process.send!({ method: msg.method, error: message });
   }
 });
 

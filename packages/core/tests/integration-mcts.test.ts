@@ -47,6 +47,31 @@ function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
 }
 
 describe('MCTS integration', () => {
+  // A branch runs behind a backend seam (facet RPC on cf, forked worker
+  // locally), so a resolved value is still untrusted input. One that resolves
+  // malformed used to crash the search AFTER its nodes were recorded; it must
+  // score 0 like any other failed branch and be reported.
+  test('a branch that resolves a malformed exploration is reported, not fatal', async () => {
+    const { rt } = createTestRuntime();
+    const failures: string[] = [];
+    rt.spawnBranch = async () => ({
+      // Resolves — but with nothing the engine can read.
+      explore: (async () => undefined) as unknown as never,
+      generateReflection: async () => 'n/a',
+    });
+
+    initTables(rt);
+    const result = await runMCTS(rt, createMockSession(), 'pick a strategy', {
+      budget: 1,
+      branches: 2,
+      onProgress: (e) => { if (e.type === 'branch-failed') failures.push(e.error); },
+    });
+
+    expect(result).toBeDefined();
+    expect(failures.length).toBeGreaterThan(0);
+    expect(failures.some((e) => e.includes('no exploration'))).toBe(true);
+  });
+
   test('DO-NOW #1: sibling diversity — each branch in an expansion gets a DISTINCT prompt naming the other branch angles', async () => {
     const { rt } = createTestRuntime();
     // Capture the siblings arg each branch received in its expansion.

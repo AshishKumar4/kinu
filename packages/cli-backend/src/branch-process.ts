@@ -64,8 +64,16 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
           if (msg.method === method) {
             clearTimeout(timeout);
             child.off('message', handler);
-            if (msg.error) reject(new Error(msg.error));
-            else resolve(msg.result as T);
+            // Presence, not truthiness: an error whose message is empty is
+            // still a failure, and treating it as success used to surface far
+            // away as a TypeError inside the search loop.
+            if (msg.error !== undefined) {
+              reject(new Error(msg.error || `Branch worker failed ${method} without a message`));
+            } else if (msg.result === undefined) {
+              reject(new Error(`Branch worker returned no result for ${method}`));
+            } else {
+              resolve(msg.result);
+            }
           }
         };
         child.on('message', handler);
