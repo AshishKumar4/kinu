@@ -240,12 +240,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     }
     await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
     const now = Date.now();
-    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-old', ${now - 1000}, 4, 2, 2, 0.50, 0.50, 0, '[]')`;
-    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-new', ${now}, 4, 3, 1, 0.75, 0.25, ${version}, '[]')`;
-    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-decline', ${now + 1}, 4, 2, 2, 0.60, 0.40, ${version}, '[]')`;
+    const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
+      rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+          VALUES (${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
+    };
+    // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
+    // this is not a direction and must not be reported as one.
+    replayRow('rpl-old', now - 1000, 4, 0.50, 0);
+    replayRow('rpl-new', now, 4, 0.75, version);
+    // 0.30 → 0.95 over 40 instances: the intervals clear each other.
+    replayRow('rpl-lo', now + 1, 40, 0.30, version);
+    replayRow('rpl-hi', now + 2, 40, 0.95, version);
+    replayRow('rpl-drop', now + 3, 40, 0.30, version);
 
     const entries = buildChangelog(rt.storage.sql);
     const scaffold = entries.find((entry) => entry.kind === 'scaffold')!;
@@ -253,11 +259,13 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
     expect(scaffold.evidence).toContain(RATIONALE);
     const replay = entries.find((entry) => entry.id === 'replay:rpl-new')!;
-    expect(replay.summary).toBe('Self-test score improved to 75%');
-    expect(replay.evidence).toContain('loss 0.25');
+    expect(replay.summary).toBe('Self-test score held within noise at 0.75 (95% CI 0.30–0.95)');
+    expect(replay.evidence).toContain('loss 0.25 (95% CI 0.05–0.70)');
     expect(replay.evidence).toContain(`scaffold v${version}`);
-    expect(entries.find((entry) => entry.id === 'replay:rpl-decline')!.summary)
-      .toBe('Self-test score declined to 60%');
+    expect(entries.find((entry) => entry.id === 'replay:rpl-hi')!.summary)
+      .toBe('Self-test score improved to 0.95 (95% CI 0.83–0.99)');
+    expect(entries.find((entry) => entry.id === 'replay:rpl-drop')!.summary)
+      .toBe('Self-test score declined to 0.30 (95% CI 0.18–0.45)');
   });
 });
 

@@ -12,6 +12,7 @@ import {
   ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon, CopyIcon,
   DesktopTowerIcon,
 } from "@phosphor-icons/react";
+import { formatScoreInterval, type ScoreInterval } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import {
   listDevices, listDeviceConsents, setDeviceConsentScope,
@@ -349,15 +350,25 @@ function GepaOptimizationCard({
     setRunning(true);
     setMsg('Optimising — running candidate scaffolds against recent tasks (this can take a few minutes)…');
     try {
-      const r = await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4, evalSize: 5 }]) as {
+      // No evalSize override — the agent's configured budget is the one
+      // tuned against cost, and a smaller one cannot resolve a winner.
+      const r = await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }]) as {
         ok: boolean; error?: string; proposed?: boolean; pendingVersion?: number | null;
-        skipReason?: string; bestScore?: number; seedScore?: number;
+        skipReason?: string; bestScore?: ScoreInterval; seedScore?: ScoreInterval;
+        selection?: { heldOutNegatives: number; guards: number }; selectionWarning?: string;
       };
+      const scores = r.bestScore && r.seedScore
+        ? `best ${formatScoreInterval(r.bestScore)} vs seed ${formatScoreInterval(r.seedScore)}`
+        : '';
+      const scoredOn = r.selection
+        ? ` Scored on ${r.selection.heldOutNegatives} unseen failure(s) + ${r.selection.guards} accepted guard(s).`
+        : '';
+      const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}) — it will shadow-eval, then you can promote it from the agent's Brain surface.`);
+        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}) — it will shadow-eval, then you can promote it from the agent's Brain surface.${scoredOn}${caveat}`);
       } else {
-        setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}).`);
+        setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }
       await refresh();
     } catch (e) {

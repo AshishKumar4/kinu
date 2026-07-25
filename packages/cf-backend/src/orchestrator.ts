@@ -80,7 +80,8 @@ import {
   loadGepaCandidates,
   type EvalInstance, type MetricOutcome, type GepaRunSummary,
   // Turn-outcome signal + replay-eval loss curve (audit R3)
-  buildOutcomeEvalSplit, listReplayEvals,
+  buildOutcomeEvalSplit, describeSplitDegeneracy, listReplayEvals,
+  clampGepaEvalBudget, type ScoreInterval,
   type OutcomeEvalExpectation, type ReplayEvalSummary,
   // K_align — the correction-rate trend over the same outcome ledger
   alignmentConvergence, type AlignmentConvergence,
@@ -2320,18 +2321,21 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
-   * Offline + batch: draws a budgeted train/val split from the turn-outcome
-   * ledger (corrected/frustrated turns = the negative train set reflection
-   * must fix; accepted turns = the val regression guards), runs the current
-   * scaffold + reflection-mutated candidates against them, scores each with
-   * an outcome-aware judge, and — if a strictly-better candidate is found —
+   * Offline + batch: draws a budgeted, DISJOINT train/val split from the
+   * turn-outcome ledger (older corrected/frustrated turns = the train set
+   * reflection must fix; the newest failures held out + accepted turns = the
+   * val set the winner is selected on), runs the current scaffold +
+   * reflection-mutated candidates against them, scores each with an
+   * outcome-aware judge, and — if a strictly-better candidate is found —
    * hands the winner to modifyScaffold so it enters the normal shadow-eval →
    * promote pipeline. Persisted to gepa_runs/gepa_candidates so the UI can
    * show lineage.
    *
    * Cost-bounded: the instance budget comes from agent_config
-   * gepa_eval_budget (default 8) unless opts.evalSize overrides it; each
-   * metric call runs a full scaffold + a judge call.
+   * gepa_eval_budget (DEFAULT_GEPA_EVAL_BUDGET) unless opts.evalSize
+   * overrides it; each metric call runs a full scaffold + a judge call.
+   * Scores come back as intervals — with a val set this size, a winner inside
+   * the seed's interval is not evidence of anything.
    */
   @callable()
   async runScaffoldGepaOptimization(opts?: {
@@ -2345,22 +2349,37 @@ export class OrchestratorAgent extends ActorAgent {
     proposed?: boolean;
     pendingVersion?: number | null;
     skipReason?: string;
-    bestScore?: number;
-    seedScore?: number;
+    bestScore?: ScoreInterval;
+    seedScore?: ScoreInterval;
     iterations?: number;
+    /** What the winner was selected on: failures it never trained on plus
+     *  accepted regression guards. */
+    selection?: { heldOutNegatives: number; guards: number };
+    /** Present when the split could not support an out-of-sample selection —
+     *  the result is exploratory, not evidence. */
+    selectionWarning?: string;
   }> {
-    const evalSize = Math.max(2, Math.min(opts?.evalSize ?? this.config.getGepaEvalBudget(), 20));
-    const budget = {
-      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
-      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 40, 200)),
-      minibatchSize: 1,
-    };
+    const evalSize = clampGepaEvalBudget(opts?.evalSize ?? this.config.getGepaEvalBudget());
 
     // 1. Train/val split from outcome-labeled turns (turn_outcomes ledger).
-    const { train: trainSet, val: evalSet } = buildOutcomeEvalSplit(this.boundSql, evalSize);
-    if (evalSet.length === 0) {
-      return { ok: false, error: 'no outcome-labeled turns yet — chat with the agent first' };
+    const split = buildOutcomeEvalSplit(this.boundSql, evalSize);
+    const { train: trainSet, val: evalSet } = split;
+    // Without a failure to optimise toward there is nothing to select on but
+    // judge noise over already-accepted turns — and an empty train set would
+    // hand the eval set straight back to reflection as its minibatch source.
+    if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
+      return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
     }
+    const budget = {
+      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
+      // Seed scoring (|val|) + one minibatch and one full scoring per
+      // iteration; the default covers the default 4 iterations over a
+      // default-budget split with headroom.
+      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 120, 400)),
+      // The paper's 3 — reflection reads three failures per proposal. The
+      // engine caps it at the (now disjoint) train set when fewer exist.
+      minibatchSize: 3,
+    };
 
     const model = this.getModel();
 
@@ -2448,9 +2467,14 @@ export class OrchestratorAgent extends ActorAgent {
       proposed: result.proposed,
       pendingVersion: result.pendingVersion,
       skipReason: result.skipReason,
-      bestScore: result.gepa.winner.aggregateScore,
-      seedScore: result.gepa.history[0]?.aggregateScore,
+      bestScore: result.winnerScore,
+      seedScore: result.seedScore,
       iterations: result.gepa.iterationsRun,
+      selection: {
+        heldOutNegatives: split.heldOutNegatives,
+        guards: evalSet.length - split.heldOutNegatives,
+      },
+      ...(split.degeneracy ? { selectionWarning: describeSplitDegeneracy(split.degeneracy) } : {}),
     };
   }
 

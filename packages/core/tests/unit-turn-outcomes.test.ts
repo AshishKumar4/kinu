@@ -10,6 +10,7 @@ import {
   isTrivialTurn, classifyTurnOutcome, outcomeToFeedback, outcomeQuality, feedbackToQuality,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
+  describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
 } from '../src/evolution/outcomes.js';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive.js';
@@ -233,7 +234,7 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
   });
 });
 
-describe('buildOutcomeEvalSplit — GEPA train/val discipline', () => {
+describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () => {
   function seed(sql: ReturnType<typeof makeSql>, negatives: number, accepted: number) {
     for (let i = 0; i < negatives; i++) {
       recordTurnOutcome(sql, {
@@ -249,16 +250,45 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline', () => {
     }
   }
 
-  test('train = the negative set; val = negatives + accepted regression guards', () => {
+  /** The turn each instance came from — the identity that must not appear on
+   *  both sides of the split. */
+  const turnOf = (instance: { id: string }) => instance.id.split('-').slice(2).join('-');
+
+  test('train = failures to fix; val = HELD-OUT failures + accepted guards, with no overlap', () => {
     const { sql } = setup();
     seed(sql, 5, 5);
     const split = buildOutcomeEvalSplit(sql, 8);
-    expect(split.train).toHaveLength(4); // ceil(8/2) negatives
-    expect(split.val).toHaveLength(8);
+
+    // Budget 8 → 4 failures drawn, of which round(4/3) = 1 is held out.
+    expect(split.train).toHaveLength(3);
+    expect(split.val).toHaveLength(5);
+    expect(split.heldOutNegatives).toBe(1);
+    expect(split.degeneracy).toBeNull();
+
     expect(split.train.every((i) => i.expected?.outcome === 'corrected')).toBe(true);
-    expect(split.val.filter((i) => i.expected?.outcome === 'accepted')).toHaveLength(4);
     // The negative instances carry the user's correction for the metric.
     expect(split.train[0].expected?.followup).toContain('correction');
+
+    // Accepted turns stay in val as regression guards.
+    expect(split.val.filter((i) => i.expected?.outcome === 'accepted')).toHaveLength(4);
+    // …and the one failure in val was never trained on.
+    const heldOut = split.val.filter((i) => i.expected?.outcome === 'corrected');
+    expect(heldOut).toHaveLength(1);
+
+    const trainTurns = new Set(split.train.map(turnOf));
+    expect(split.val.filter((i) => trainTurns.has(turnOf(i)))).toEqual([]);
+  });
+
+  test('no instance is ever on both sides, across every budget', () => {
+    const { sql } = setup();
+    seed(sql, 9, 9);
+    for (const budget of [2, 3, 4, 5, 6, 8, 12, 18, 24]) {
+      const split = buildOutcomeEvalSplit(sql, budget);
+      const trainTurns = new Set(split.train.map(turnOf));
+      expect(split.val.some((i) => trainTurns.has(turnOf(i)))).toBe(false);
+      expect(split.heldOutNegatives)
+        .toBe(split.val.filter((i) => i.expected?.outcome !== 'accepted').length);
+    }
   });
 
   test('instances carry process evidence reconstructed from the existing run ledger', () => {
@@ -291,24 +321,50 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline', () => {
   test('negatives backfill when accepted turns are scarce (and vice versa)', () => {
     const { sql } = setup();
     seed(sql, 6, 1);
+    // 5 failures drawn (backfilling the 2 the accepted pool can't cover) →
+    // round(5/3) = 2 held out, 3 to train on, plus the 1 accepted guard.
     const split = buildOutcomeEvalSplit(sql, 6);
-    expect(split.val).toHaveLength(6);
-    expect(split.train).toHaveLength(5);
+    expect(split.train).toHaveLength(3);
+    expect(split.val).toHaveLength(3);
+    expect(split.heldOutNegatives).toBe(2);
+    expect(split.degeneracy).toBeNull();
   });
 
-  test('no negatives yet → train falls back to the accepted val set', () => {
+  test('the newest failures are the held-out ones — a forward-in-time holdout', () => {
+    const { sql } = setup();
+    seed(sql, 4, 0); // recorded oldest-first: "fix task 0" … "fix task 3"
+    const split = buildOutcomeEvalSplit(sql, 8);
+    expect(split.val.map((i) => i.input)).toEqual(['fix task 3']);
+    expect(split.train.map((i) => i.input)).toEqual(['fix task 2', 'fix task 1', 'fix task 0']);
+  });
+
+  test('a single failure cannot be held out — the split says so instead of overlapping', () => {
+    const { sql } = setup();
+    seed(sql, 1, 3);
+    const split = buildOutcomeEvalSplit(sql, 8);
+    expect(split.train).toHaveLength(1);
+    expect(split.heldOutNegatives).toBe(0);
+    expect(split.val.every((i) => i.expected?.outcome === 'accepted')).toBe(true);
+    expect(split.degeneracy).toBe('no_held_out_negatives');
+    expect(describeSplitDegeneracy(split.degeneracy!)).toContain('not evidence');
+  });
+
+  test('no negatives yet → empty train set, flagged (never the accepted set)', () => {
     const { sql } = setup();
     seed(sql, 0, 3);
     const split = buildOutcomeEvalSplit(sql, 6);
     expect(split.val).toHaveLength(3);
-    expect(split.train).toEqual(split.val);
+    expect(split.train).toHaveLength(0);
+    expect(split.heldOutNegatives).toBe(0);
+    expect(split.degeneracy).toBe('no_negatives');
   });
 
-  test('empty ledger → empty split', () => {
+  test('empty ledger → empty split, flagged', () => {
     const { sql } = setup();
     const split = buildOutcomeEvalSplit(sql, 8);
     expect(split.val).toHaveLength(0);
     expect(split.train).toHaveLength(0);
+    expect(split.degeneracy).toBe('no_labeled_turns');
   });
 });
 

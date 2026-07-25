@@ -22,11 +22,12 @@ export {
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  buildOutcomeEvalSplit,
+  buildOutcomeEvalSplit, describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeClassification, type RecordTurnOutcomeInput, type RealOutcomeRate,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
+  type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus,
 } from './outcomes.js';
 export {

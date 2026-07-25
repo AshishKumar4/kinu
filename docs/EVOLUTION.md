@@ -174,7 +174,19 @@ empty the store.
 
 **Replay eval** (`runReplayEval`): re-scores labeled past turns to produce a
 measurable loss curve, so scaffold changes are judged against a number rather
-than a vibe.
+than a vibe. Every point on that curve is a mean of `DEFAULT_REPLAY_SAMPLE_SIZE`
+judge verdicts, so it is reported — and persisted, in `replay_evals.score_lo` /
+`score_hi` — with the 95% Wilson interval around it (`core/src/utils/stats.ts`).
+The changelog only calls a move "improved" or "declined" when the two intervals
+don't overlap.
+
+**GEPA train/val split** (`buildOutcomeEvalSplit`): the reflection minibatch
+draws from older corrected/frustrated turns; the newest failures are held out
+and scored on alongside the accepted-turn regression guards. The two sets are
+disjoint, so a winning candidate was never optimised against the instances that
+picked it. When the ledger holds too few failures to hold any out, the split
+returns a `degeneracy` reason and the caller reports the selection as
+exploratory instead of quietly overlapping the sets.
 
 **Full MCTS exploration**: a smaller search than the tool's default — budget 2,
 branches 2. See [MCTS.md](./MCTS.md).
@@ -192,7 +204,7 @@ entry kinds:
 | `tool` | `crafted_tools` joined to `craft_scores` | `craft_retire` |
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
 | `gepa` | completed GEPA runs | — |
-| `replay` | replay-eval scores, with the delta vs the previous run | — |
+| `replay` | replay-eval scores with their intervals, and the direction vs the previous run when the intervals separate | — |
 | `outcomes` | aggregated `turn_outcomes` counts | — |
 
 Reverts dispatch to the real code paths (`applyPromotionDecision`,

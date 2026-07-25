@@ -353,13 +353,13 @@ describe('runGepa', () => {
     })).rejects.toThrow(/non-empty/);
   });
 
-  test('rejects out-of-range minibatchSize', async () => {
+  test('rejects a non-positive minibatchSize', async () => {
     await expect(runGepa({
       seed: 'x',
       evalSet: [mkInstance('i1', 'a')],
       metric: async () => ({ score: 0, feedback: '' }),
       reflectionLm: async () => 'x',
-      budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 5 },
+      budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 0 },
     })).rejects.toThrow(/minibatchSize/);
   });
 });

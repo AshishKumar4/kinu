@@ -12,8 +12,9 @@
  *               follow-up says how; score whether the new response already
  *               addresses that correction (improvement).
  *
- * loss = 1 − mean(score). Persisted to `replay_evals` so the curve is
- * queryable over time (read-only RPC + agent.replayEvals helper).
+ * loss = 1 − mean(score), reported with the 95% interval around it (a mean of
+ * a dozen judge verdicts is not a point). Persisted to `replay_evals` so the
+ * curve is queryable over time (read-only RPC + agent.replayEvals helper).
  */
 
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
@@ -21,8 +22,18 @@ import { listTurnOutcomes, type TurnOutcomeRow } from './outcomes.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
+import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats.js';
 
-export const DEFAULT_REPLAY_SAMPLE_SIZE = 6;
+/**
+ * Instances per replay pass. Each one costs a full re-run of a past task
+ * against the live config plus a judge call — the dominant cost in the
+ * lifetime-evolution cycle, so this is chosen against the width it buys.
+ * 95% half-width at a mean of 0.5: ±0.31 at 6 (the interval covers most of
+ * [0,1] — the number says nothing), ±0.20 at 20, ±0.14 at 48. 20 is where the
+ * curve stops being noise, for a bit over 3× the cost; 48 would cost 2.4×
+ * again to take a third off the width.
+ */
+export const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
 export function initReplayTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (
@@ -34,8 +45,16 @@ export function initReplayTables(execRaw: RawSqlExec): void {
     mean_score REAL NOT NULL,
     loss REAL NOT NULL,
     scaffold_version INTEGER,
-    details TEXT NOT NULL
+    details TEXT NOT NULL,
+    score_lo REAL,
+    score_hi REAL
   )`);
+  // The record is the audit of what was reported, interval included, so the
+  // bounds are stored rather than recomputed. Rows written before they
+  // existed keep NULLs; listReplayEvals reconstructs those exactly from the
+  // stored mean and sample size.
+  try { execRaw(`ALTER TABLE replay_evals ADD COLUMN score_lo REAL`); } catch { /* exists */ }
+  try { execRaw(`ALTER TABLE replay_evals ADD COLUMN score_hi REAL`); } catch { /* exists */ }
 }
 
 export interface ReplayInstanceResult {
@@ -53,6 +72,9 @@ export interface ReplayEvalSummary {
   negativeCount: number;
   meanScore: number;
   loss: number;
+  /** 95% interval around `meanScore` (loss bounds are its complement — see
+   *  `lossInterval`). Never read the mean without it. */
+  interval: ScoreInterval;
   scaffoldVersion: number | null;
   results: ReplayInstanceResult[];
 }
@@ -133,25 +155,28 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     }
   }
 
-  const meanScore = results.reduce((acc, r) => acc + r.score, 0) / results.length;
+  const interval = scoreInterval(results.map((r) => r.score));
   const summary: ReplayEvalSummary = {
     id: `rpl-${nanoid()}`,
     ranAt: opts.now ?? nowMs(),
     sampleSize: results.length,
     acceptedCount: results.filter((r) => r.outcome === 'accepted').length,
     negativeCount: results.filter((r) => r.outcome === 'corrected' || r.outcome === 'frustrated').length,
-    meanScore,
-    loss: 1 - meanScore,
+    meanScore: interval.mean,
+    loss: 1 - interval.mean,
+    interval,
     scaffoldVersion: opts.scaffoldVersion ?? null,
     results,
   };
 
   opts.sql`INSERT INTO replay_evals
-      (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+      (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version,
+       details, score_lo, score_hi)
     VALUES
       (${summary.id}, ${summary.ranAt}, ${summary.sampleSize}, ${summary.acceptedCount},
        ${summary.negativeCount}, ${summary.meanScore}, ${summary.loss},
-       ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)})`;
+       ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)},
+       ${interval.lo}, ${interval.hi})`;
   return summary;
 }
 
@@ -162,6 +187,7 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
       id: string; ran_at: number; sample_size: number; accepted_n: number;
       negative_n: number; mean_score: number; loss: number;
       scaffold_version: number | null; details: string;
+      score_lo: number | null; score_hi: number | null;
     }>`SELECT * FROM replay_evals ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
     return rows.map((r) => {
       let results: ReplayInstanceResult[] = [];
@@ -169,10 +195,14 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
         const parsed = JSON.parse(r.details) as unknown;
         if (Array.isArray(parsed)) results = parsed as ReplayInstanceResult[];
       } catch { /* malformed details — summary numbers still stand */ }
+      // Pre-interval rows carry no bounds; mean and n determine them exactly.
+      const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
+        ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
+        : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
       return {
         id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
         acceptedCount: r.accepted_n, negativeCount: r.negative_n,
-        meanScore: r.mean_score, loss: r.loss,
+        meanScore: r.mean_score, loss: r.loss, interval,
         scaffoldVersion: r.scaffold_version, results,
       };
     });

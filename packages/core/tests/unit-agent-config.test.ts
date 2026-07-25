@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
-  DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
+  DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
 } from '../src/index.ts';
 import { createTestSql } from '@proteus/test-utils';
 
@@ -215,16 +215,17 @@ describe('AgentConfigStore — MCTS overrides', () => {
 });
 
 describe('AgentConfigStore — GEPA eval budget', () => {
-  test('defaults to 8, reads stored values, clamps to 2..20, ignores garbage', () => {
+  test('defaults to 24, reads stored values, clamps to 4..64, ignores garbage', () => {
     const c = setup();
-    expect(c.getGepaEvalBudget()).toBe(8);
+    expect(c.getGepaEvalBudget()).toBe(DEFAULT_GEPA_EVAL_BUDGET);
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '12');
     expect(c.getGepaEvalBudget()).toBe(12);
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '500');
-    expect(c.getGepaEvalBudget()).toBe(20);
+    expect(c.getGepaEvalBudget()).toBe(64);
+    // Below the floor a disjoint split is impossible — clamp up, don't accept.
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, '1');
-    expect(c.getGepaEvalBudget()).toBe(8);
+    expect(c.getGepaEvalBudget()).toBe(4);
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, 'many');
-    expect(c.getGepaEvalBudget()).toBe(8);
+    expect(c.getGepaEvalBudget()).toBe(DEFAULT_GEPA_EVAL_BUDGET);
   });
 });

@@ -69,7 +69,9 @@ const TYPES = `export declare const agent: {
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Read-only loss curve: replay-eval entries (newest first) — outcome-
    *  labeled past turns re-run against your CURRENT config and scored
-   *  against how they originally landed. loss = 1 − mean score. */
+   *  against how they originally landed. loss = 1 − mean score, and every
+   *  entry carries an 'interval' field — the 95% CI on that mean. Read them
+   *  together. */
   replayEvals(limit?: number): Promise<unknown>;
 };
 `;
@@ -171,7 +173,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       replayEvals: {
-        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed.',
+        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score — a move inside the interval is noise, not progress.',
         execute: async (...args: unknown[]) => {
           const limit = typeof args[0] === 'number' ? args[0] : undefined;
           try { return await host.getReplayEvals(limit); }

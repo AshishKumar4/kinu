@@ -46,7 +46,7 @@ export const AGENT_CONFIG_KEYS = {
    *  than this drive the unseen badge. */
   changelogSeenAt: 'changelog_seen_at',
   /** Total outcome-labeled instances a GEPA run draws into its train/val
-   *  split (buildOutcomeEvalSplit). Default 8, clamped 2..20. */
+   *  split (buildOutcomeEvalSplit) — see DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
   /** Operator-tuned MCTS knobs (Settings UI / setMctsConfig). Unset = engine
    *  defaults (DEFAULT_CONFIG.mcts) at the call site. */
@@ -120,7 +120,8 @@ export interface AgentConfigStore {
   /** Epoch ms of the last changelog view (0 = never seen). */
   getChangelogSeenAt(): number;
   setChangelogSeenAt(ms: number): void;
-  /** GEPA eval budget — labeled instances per run (default 8, clamp 2..20). */
+  /** GEPA eval budget — labeled instances per run (train + val). See
+   *  DEFAULT_GEPA_EVAL_BUDGET / clampGepaEvalBudget. */
   getGepaEvalBudget(): number;
   /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
    *  into runMCTS call sites so unset knobs keep engine defaults. */
@@ -148,6 +149,27 @@ export interface MctsOverrides {
  *  fresh outcome labels, sparse enough that each pass sees a genuinely new
  *  eval split (the trace-driven counter pauses it on idle agents anyway). */
 export const DEFAULT_AUTO_GEPA_EVERY_N_TURNS = 25;
+
+/**
+ * Outcome-labeled instances one GEPA pass draws (train + val together).
+ * Every instance in `val` costs a full scaffold execution plus a judge call
+ * for EVERY candidate scored, so this is the dominant cost knob — and the
+ * thing that decides whether the winner's score means anything. 24 draws ~12
+ * failures (8 to reflect on, 4 held out) and ~12 accepted guards, putting ~16
+ * instances under every candidate. 95% half-width at an aggregate of 0.5:
+ * ±0.28 on the old 8-instance split, ±0.22 at 16, ±0.19 at 24, ±0.14 at 48 —
+ * cost is linear in instances while the width falls off as 1/√n, so this is
+ * the last doubling that buys much. The per-instance Pareto comparison is
+ * paired across candidates and resolves finer than the absolute aggregate.
+ */
+export const DEFAULT_GEPA_EVAL_BUDGET = 24;
+
+/** The operator-settable range for the GEPA eval budget. The floor keeps a
+ *  disjoint split possible at all (2 failures + 2 guards); the ceiling is the
+ *  most an operator can spend on one pass. */
+export function clampGepaEvalBudget(n: number): number {
+  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
+}
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
@@ -275,8 +297,10 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));
     },
     getGepaEvalBudget() {
-      const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.gepaEvalBudget)));
-      return Number.isFinite(n) && n >= 2 ? Math.min(n, 20) : 8;
+      const raw = get(AGENT_CONFIG_KEYS.gepaEvalBudget);
+      if (raw == null) return DEFAULT_GEPA_EVAL_BUDGET;
+      const n = Number(raw);
+      return Number.isFinite(n) ? clampGepaEvalBudget(n) : DEFAULT_GEPA_EVAL_BUDGET;
     },
     getChangelogSeenAt() {
       const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));

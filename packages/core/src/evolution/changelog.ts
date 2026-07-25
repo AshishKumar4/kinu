@@ -20,6 +20,7 @@ import { rollbackScaffold } from '../scaffold/rollback.js';
 import { listGepaRuns } from './gepa/persistence.js';
 import { listReplayEvals } from './replay.js';
 import { listTurnOutcomes } from './outcomes.js';
+import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 
 export type ChangelogEntryKind = 'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes';
 
@@ -248,20 +249,25 @@ function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   const rows = listReplayEvals(sql, limit + 1);
   return rows.slice(0, limit).map((r, index) => {
     const previous = rows[index + 1];
+    // A move is only called improved/declined when the two intervals don't
+    // overlap. Two noisy means crossing is not a direction.
     const direction = previous
-      ? r.meanScore > previous.meanScore ? 'improved'
-        : r.meanScore < previous.meanScore ? 'declined'
+      ? r.interval.lo > previous.interval.hi ? 'improved'
+        : r.interval.hi < previous.interval.lo ? 'declined'
           : 'held'
       : 'reached';
     const scoreSummary = direction === 'reached'
-      ? `Self-test score reached ${pct(r.meanScore)}`
-      : `Self-test score ${direction} ${direction === 'held' ? 'at' : 'to'} ${pct(r.meanScore)}`;
+      ? `Self-test score reached ${formatScoreInterval(r.interval)}`
+      : direction === 'held'
+        ? `Self-test score held within noise at ${formatScoreInterval(r.interval)}`
+        : `Self-test score ${direction} to ${formatScoreInterval(r.interval)}`;
     return {
       id: `replay:${r.id}`,
       kind: 'replay' as const,
       at: r.ranAt,
       summary: scoreSummary,
-      evidence: `Replay eval — score ${pct(r.meanScore)} · loss ${r.loss.toFixed(2)}` +
+      evidence: `Replay eval — score ${formatScoreInterval(r.interval)} · ` +
+        `loss ${formatScoreInterval(lossInterval(r.interval))}` +
         (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
         ` · ${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
     };

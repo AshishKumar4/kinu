@@ -133,7 +133,10 @@ export interface GepaConfig<I = unknown, E = unknown> {
   /** Upstream GEPA's trainset: the instances reflection minibatches are
    *  sampled from. Pass the outcome-labeled NEGATIVE set (corrected/
    *  frustrated turns) so mutation proposals focus on what must be fixed
-   *  while `evalSet` scoring guards regressions. Defaults to evalSet. */
+   *  while `evalSet` scoring guards regressions — and pass one DISJOINT from
+   *  `evalSet`, or the winner is selected on instances it was optimised
+   *  against. Omitted (or empty) means exactly that in-sample selection: the
+   *  eval set doubles as the train set. */
   trainSet?: ReadonlyArray<EvalInstance<I, E>>;
   /** Per-instance scorer. */
   metric: GepaMetric<I, E>;

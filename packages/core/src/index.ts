@@ -58,9 +58,11 @@ export {
   outcomeToFeedback, outcomeQuality, isTrivialTurn,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
+  describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
+  type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
@@ -90,6 +92,7 @@ export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } 
 export {
   createAgentConfigStore, initAgentConfigTable,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
+  DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
   type AgentConfigStore, type AgentConfigKey, type MctsOverrides, type ShellApprovalMode,
 } from './config/index.js';
 
@@ -594,6 +597,11 @@ export {
 
 // Utils
 export { nanoid } from './utils/nanoid.js';
+// Confidence intervals — every score this system reports travels with one.
+export {
+  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
+  type ScoreInterval,
+} from './utils/stats.js';
 export { isoDate, today, nowMs } from './utils/date.js';
 
 // ── branching heads (parallel reasoning streams with merge) ──

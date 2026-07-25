@@ -8,7 +8,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon, ArrowsOutIcon } from "@phosphor-icons/react";
-import { DEFAULT_QUALITY_THRESHOLD, type AlignmentConvergence } from "@proteus/core";
+import { DEFAULT_QUALITY_THRESHOLD, lossInterval, scoreInterval, type AlignmentConvergence, type ScoreInterval } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
 import { EmptyState, EMPTY_HINTS, MarkdownContent } from "./shared";
@@ -653,13 +653,18 @@ function GepaView({ rpc }: { rpc: Rpc }) {
             {detail.candidates.map((c) => {
               const onPareto = paretoIds.has(c.id);
               const isWinner = detail.run?.winnerId === c.id;
+              // The aggregate is a mean over a handful of judged instances —
+              // shown with its interval so two candidates aren't read apart on
+              // a gap the eval set can't resolve.
+              const ci = scoreInterval(Object.values(c.scores));
               return (
                 <div key={c.id} className="flex items-center gap-2 text-[10px]">
                   <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
-                  <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden">
+                  <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
                     <div className={`h-full ${isWinner ? "p-dot-success" : onPareto ? "p-dot-info" : "p-dot-neutral"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
                   </div>
                   <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
+                  <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{ci.lo.toFixed(2)}–{ci.hi.toFixed(2)}]</span>
                 </div>
               );
             })}
@@ -679,6 +684,19 @@ interface ReplayEvalRow {
   id: string; ranAt: number; sampleSize: number;
   acceptedCount: number; negativeCount: number;
   meanScore: number; loss: number; scaffoldVersion: number | null;
+  /** 95% interval on meanScore — a dozen judge verdicts is not a point. */
+  interval: ScoreInterval;
+}
+
+// A reported score is never shown alone: the 95% interval sits under it, at
+// the sample sizes these runs use it is the whole story.
+function ScoreWithInterval({ value, interval, className }: { value: number; interval: ScoreInterval; className?: string }) {
+  return (
+    <span className="flex flex-col leading-tight">
+      <span className={className}>{value.toFixed(3)}</span>
+      <span className="text-[9px] p-text-3 tabular-nums">95% CI {interval.lo.toFixed(2)}–{interval.hi.toFixed(2)}</span>
+    </span>
+  );
 }
 
 // Both quality signals load together so the pane resolves once, rather than
@@ -708,11 +726,12 @@ function QualityView({ rpc }: { rpc: Rpc }) {
 function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
   const chrono = [...rows].reverse(); // oldest → newest for the curve
   const latest = rows[0];
+  const latestLoss = lossInterval(latest.interval);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Metric label="Latest score" value={<span className={scoreColor(latest.meanScore)}>{latest.meanScore.toFixed(3)}</span>} />
-        <Metric label="Loss" value={latest.loss.toFixed(3)} />
+        <Metric label="Latest score" value={<ScoreWithInterval value={latest.meanScore} interval={latest.interval} className={scoreColor(latest.meanScore)} />} />
+        <Metric label="Loss" value={<ScoreWithInterval value={latest.loss} interval={latestLoss} />} />
         <Metric label="Sample" value={`${latest.sampleSize} (${latest.acceptedCount}✓ / ${latest.negativeCount}✗)`} />
         <Metric label="Scaffold" value={latest.scaffoldVersion ?? "—"} />
       </div>
@@ -737,10 +756,11 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
                 {r.scaffoldVersion != null && (
                   <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
                 )}
-                <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden">
+                <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden" title={`95% CI ${r.interval.lo.toFixed(2)}–${r.interval.hi.toFixed(2)} over ${r.sampleSize} turns`}>
                   <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
                 </div>
                 <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
+                <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{r.interval.lo.toFixed(2)}–{r.interval.hi.toFixed(2)}]</span>
               </div>
             );
           })}
@@ -815,16 +835,23 @@ function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; thre
   const x = (i: number) => n <= 1 ? W / 2 : pad + (i / (n - 1)) * (W - 2 * pad);
   const y = (score: number) => pad + (1 - Math.max(0, Math.min(1, score))) * (H - 2 * pad);
   const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.meanScore).toFixed(2)}`).join(" ");
+  // The 95% band the means sit inside — drawn so the curve can't be read as
+  // more precise than it is.
+  const band = [
+    ...points.map((p, i) => `${x(i).toFixed(2)},${y(p.interval.hi).toFixed(2)}`),
+    ...[...points].reverse().map((p, i) => `${x(points.length - 1 - i).toFixed(2)},${y(p.interval.lo).toFixed(2)}`),
+  ].join(" ");
   const floorY = y(threshold).toFixed(2);
   const dotColor = (s: number) => s >= 0.7 ? "var(--c-success, #34d399)" : s >= 0.4 ? "var(--c-warning, #fbbf24)" : "var(--c-danger, #f87171)";
   return (
     <div className="rounded-lg border p-border p-surface p-2">
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-24">
         <line x1={pad} y1={floorY} x2={W - pad} y2={floorY} stroke="var(--c-text-3, #888)" strokeWidth={0.4} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" opacity={0.6} />
+        {n > 1 && <polygon points={band} fill="var(--c-accent, #38bdf8)" opacity={0.14} />}
         {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent, #38bdf8)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
         {points.map((p, i) => (
           <circle key={p.id} cx={x(i)} cy={y(p.meanScore)} r={1.4} fill={dotColor(p.meanScore)} vectorEffect="non-scaling-stroke">
-            <title>{`${new Date(p.ranAt).toLocaleString()} · score ${p.meanScore.toFixed(3)} · loss ${p.loss.toFixed(3)}${p.scaffoldVersion != null ? ` · scaffold v${p.scaffoldVersion}` : ""}`}</title>
+            <title>{`${new Date(p.ranAt).toLocaleString()} · score ${p.meanScore.toFixed(3)} (95% CI ${p.interval.lo.toFixed(2)}–${p.interval.hi.toFixed(2)}) · loss ${p.loss.toFixed(3)}${p.scaffoldVersion != null ? ` · scaffold v${p.scaffoldVersion}` : ""}`}</title>
           </circle>
         ))}
       </svg>

@@ -7,6 +7,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers.js';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes.js';
 import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay.js';
+import { wilsonInterval } from '../src/utils/stats.js';
 import { EvolutionEngine } from '../src/evolution/engine.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
@@ -58,11 +59,20 @@ describe('runReplayEval', () => {
     expect(summary!.loss).toBeCloseTo(0.25);
     expect(ranTasks.sort()).toEqual(['list the open ports', 'summarize Q3']);
 
-    // Persisted — the loss curve is queryable.
+    // 0.75 over TWO instances says almost nothing, and the summary says so.
+    expect(summary!.interval).toEqual(wilsonInterval(1.5, 2));
+    expect(summary!.interval.lo).toBeCloseTo(0.1979, 4);
+    expect(summary!.interval.hi).toBeCloseTo(0.9733, 4);
+
+    // Persisted — the loss curve is queryable, interval included.
     const stored = listReplayEvals(sql);
     expect(stored).toHaveLength(1);
     expect(stored[0].loss).toBeCloseTo(0.25);
     expect(stored[0].results).toHaveLength(2);
+    expect(stored[0].interval).toEqual(summary!.interval);
+    const [row] = sql<{ score_lo: number; score_hi: number }>`SELECT score_lo, score_hi FROM replay_evals`;
+    expect(row.score_lo).toBeCloseTo(0.1979, 4);
+    expect(row.score_hi).toBeCloseTo(0.9733, 4);
   });
 
   test('a failed re-run or unusable judge scores 0 — failing to reproduce IS loss', async () => {
@@ -119,6 +129,14 @@ describe('listReplayEvals — the quality-panel data series', () => {
     for (let i = 0; i < 5; i++) insertReplay(sql, { id: `r${i}`, ranAt: i * 10, meanScore: 0.5, scaffoldVersion: null });
     expect(listReplayEvals(sql, 3)).toHaveLength(3);
   });
+
+  test('rows written before the interval columns get theirs reconstructed exactly', () => {
+    const { sql } = setup();
+    // insertReplay writes no score_lo/score_hi — a pre-interval row.
+    insertReplay(sql, { id: 'legacy', ranAt: 100, meanScore: 0.75, scaffoldVersion: null });
+    const [row] = listReplayEvals(sql);
+    expect(row.interval).toEqual(wilsonInterval(3, 4)); // mean 0.75 over the row's 4 instances
+  });
 });
 
 describe('EvolutionEngine.runReplayEval — the periodic seam', () => {
@@ -144,7 +162,8 @@ describe('EvolutionEngine.runReplayEval — the periodic seam', () => {
 
     const replayEvents = events.filter((e) => e.type === 'replay_eval');
     expect(replayEvents).toHaveLength(1);
-    expect(replayEvents[0].message).toContain('loss 0.20');
+    // The loss is reported with the interval it deserves at two instances.
+    expect(replayEvents[0].message).toContain('loss 0.20 (95% CI 0.02–0.78)');
     expect(listReplayEvals(rt.storage.sql)).toHaveLength(1);
   });
 

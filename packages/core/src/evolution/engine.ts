@@ -49,6 +49,7 @@ import {
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
+import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 import { buildChangelog } from './changelog.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
@@ -645,7 +646,8 @@ export class EvolutionEngine {
       if (summary) {
         this.emit({
           type: 'replay_eval',
-          message: `Replay eval: loss ${summary.loss.toFixed(2)} over ${summary.sampleSize} labeled turns ` +
+          message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
+            `over ${summary.sampleSize} labeled turns ` +
             `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
           data: summary,
         });

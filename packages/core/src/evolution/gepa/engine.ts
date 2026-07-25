@@ -45,15 +45,16 @@ export async function runGepa<I = unknown, E = unknown>(
     throw new Error('runGepa: evalSet must be non-empty');
   }
   const budget = { ...DEFAULT_GEPA_BUDGET, ...config.budget };
-  if (budget.minibatchSize <= 0 || budget.minibatchSize > config.evalSet.length) {
-    throw new Error(
-      `runGepa: minibatchSize must be in (0, evalSet.length=${config.evalSet.length}]; got ${budget.minibatchSize}`,
-    );
-  }
   // Reflection minibatches come from the train set (upstream GEPA's trainset
-  // discipline); scoring/Pareto always runs on the full evalSet. The
-  // minibatch size is capped by whichever set it samples from.
+  // discipline); scoring/Pareto always runs on the full evalSet. The two are
+  // disjoint when the caller supplies a real train set, so the minibatch is
+  // bounded by the set it actually samples from — not by the eval set.
   const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
+  if (budget.minibatchSize <= 0) {
+    throw new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`);
+  }
+  // Over-asking is benign and normal — the train set is however many labeled
+  // failures the ledger happens to hold — so it caps rather than throws.
   const minibatchSize = Math.min(budget.minibatchSize, trainSet.length);
   const random = config.random ?? Math.random;
   const instanceIds = config.evalSet.map(i => i.id);

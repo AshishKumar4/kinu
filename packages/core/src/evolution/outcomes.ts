@@ -367,13 +367,43 @@ export interface OutcomeEvalExpectation {
 
 export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
 
+/** Why a split cannot support an out-of-sample winner selection. */
+export type OutcomeSplitDegeneracy =
+  /** Nothing is graded yet — there is nothing to optimize or to score on. */
+  | 'no_labeled_turns'
+  /** Only accepted turns exist: no failure to fix, so `train` is empty and a
+   *  run would select on regression guards alone. */
+  | 'no_negatives'
+  /** Exactly one failure exists: it has to be trained on, so nothing unseen
+   *  remains to score improvement against. */
+  | 'no_held_out_negatives';
+
+/** One honest sentence per degeneracy — what it costs the selection. */
+export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
+  switch (degeneracy) {
+    case 'no_labeled_turns':
+      return 'no outcome-labeled turns yet — chat with the agent first';
+    case 'no_negatives':
+      return 'no corrected/frustrated turns yet — there is no failure to optimize toward';
+    case 'no_held_out_negatives':
+      return 'only one labeled failure exists, and the optimizer must train on it — ' +
+        'the winner is selected without any unseen failure, so an improvement here is not evidence of one';
+  }
+}
+
 export interface OutcomeEvalSplit {
   /** Reflection minibatch source — the corrected/frustrated turns the
-   *  optimizer must fix. Falls back to `val` when no negatives exist yet. */
+   *  optimizer must fix. Shares no instance with `val`. */
   train: OutcomeEvalInstance[];
-  /** Scoring set (Pareto/winner selection): the negatives to fix PLUS the
-   *  accepted turns the optimizer must not regress. */
+  /** Scoring set (Pareto/winner selection): failures HELD OUT of `train`
+   *  PLUS the accepted turns the optimizer must not regress. */
   val: OutcomeEvalInstance[];
+  /** Failures in `val` the optimizer never trained on. Selection is only
+   *  evidence of improvement when this is > 0. */
+  heldOutNegatives: number;
+  /** null when the split supports an out-of-sample selection; otherwise why
+   *  it does not — the caller must not read the winner as trustworthy. */
+  degeneracy: OutcomeSplitDegeneracy | null;
 }
 
 interface TurnMessageWindow {
@@ -456,18 +486,33 @@ function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | 
   }
 }
 
-/** Draw a budgeted train/val split from the outcome ledger: negatives first
- *  (up to half the budget — they are the optimization targets), accepted
- *  turns fill the rest as regression guards. Newest outcomes win. */
+/** Share of the drawn failures held OUT of the reflection minibatch and
+ *  scored on instead. A third keeps most of the (scarce) failures available
+ *  to learn from while still leaving a real held-out set — at the default
+ *  budget, 8 to train on and 4 to be judged on. */
+const NEGATIVE_HOLDOUT_SHARE = 1 / 3;
+
+/** Draw a budgeted, DISJOINT train/val split from the outcome ledger.
+ *
+ *  Negatives come first (up to half the budget — they are the optimization
+ *  targets) and are then partitioned: the newest go to `val` as held-out
+ *  failures, the rest to `train`. Holding out the newest is a temporal
+ *  holdout — a candidate proves itself on failures more recent than the ones
+ *  it was written against. Accepted turns fill the remaining budget as `val`
+ *  regression guards. Newest outcomes win throughout.
+ *
+ *  No instance is ever in both sets: a winner selected on `val` was never
+ *  reflected on during training. When the ledger is too thin to hold anything
+ *  out, the split says so via `degeneracy` instead of quietly overlapping. */
 export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): OutcomeEvalSplit {
   const size = Math.max(2, Math.floor(budget));
   const negatives = listTurnOutcomes(sql, { limit: size, outcomes: ['corrected', 'frustrated'] });
   const accepted = listTurnOutcomes(sql, { limit: size, outcomes: ['accepted'] });
 
   const negativeShare = Math.min(negatives.length, Math.ceil(size / 2));
-  const acceptedShare = Math.min(accepted.length, size - negativeShare);
+  const acceptedCount = Math.min(accepted.length, size - negativeShare);
   // Negatives backfill what the accepted pool can't cover (and vice versa).
-  const negativeCount = Math.min(negatives.length, size - acceptedShare);
+  const negativeCount = Math.min(negatives.length, size - acceptedCount);
 
   const toInstance = (row: TurnOutcomeRow, i: number, kind: string): OutcomeEvalInstance => ({
     id: `${kind}-${i}-${row.id}`,
@@ -479,9 +524,25 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): Outcome
     expected: { outcome: row.outcome, recordedResponse: row.assistantResponse, followup: row.followup },
   });
 
-  const train = negatives.slice(0, negativeCount).map((r, i) => toInstance(r, i, 'neg'));
-  const val = [...train, ...accepted.slice(0, acceptedShare).map((r, i) => toInstance(r, i, 'pos'))];
-  return { train: train.length > 0 ? train : val, val };
+  const drawnNegatives = negatives.slice(0, negativeCount);
+  // A single failure cannot be both trained on and held out, so it stays in
+  // train and the split reports that selection is blind to improvement.
+  const holdoutCount = drawnNegatives.length >= 2
+    ? Math.max(1, Math.round(drawnNegatives.length * NEGATIVE_HOLDOUT_SHARE))
+    : 0;
+
+  const train = drawnNegatives.slice(holdoutCount).map((r, i) => toInstance(r, i, 'neg'));
+  const val = [
+    ...drawnNegatives.slice(0, holdoutCount).map((r, i) => toInstance(r, i, 'held')),
+    ...accepted.slice(0, acceptedCount).map((r, i) => toInstance(r, i, 'pos')),
+  ];
+
+  const degeneracy: OutcomeSplitDegeneracy | null =
+    drawnNegatives.length === 0
+      ? (val.length === 0 ? 'no_labeled_turns' : 'no_negatives')
+      : holdoutCount === 0 ? 'no_held_out_negatives' : null;
+
+  return { train, val, heldOutNegatives: holdoutCount, degeneracy };
 }
 
 // ── Lessons ledger (provisional → corroborated) ──────────────────
