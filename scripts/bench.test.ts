@@ -2,7 +2,7 @@
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
 import { describe, test, expect, afterAll } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, lstatSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { splitOf } from '../packages/core/src/index.js';
@@ -253,5 +253,25 @@ describe('loadBenchCorpus', () => {
   test('reports the line number for malformed JSON', () => {
     const root = fixtureRoot('{not json', { patch: 'x' });
     expect(() => loadBenchCorpus(root)).toThrow(/tasks\.jsonl:1/);
+  });
+});
+
+// A defect patch is a context diff against the source it was authored on, so an
+// ordinary refactor elsewhere silently invalidates a task — and a corpus that
+// no longer applies measures nothing. This caught the clade-selection refactor
+// breaking archive-novelty-bonus. It is deliberately a fast `git apply --check`
+// rather than a full `bench validate`: drift must fail on the same push that
+// causes it, not overnight.
+describe('the task corpus stays applicable to HEAD', () => {
+  test('every defect patch applies cleanly to the current source', () => {
+    const repo = join(import.meta.dir, '..');
+    const dir = join(repo, 'tests', 'bench', 'patches');
+    const stale = readdirSync(dir)
+      .filter((f) => f.endsWith('.patch'))
+      .filter((f) => Bun.spawnSync(
+        ['git', 'apply', '--check', join(dir, f)],
+        { cwd: repo, stdout: 'pipe', stderr: 'pipe' },
+      ).exitCode !== 0);
+    expect(stale).toEqual([]);
   });
 });

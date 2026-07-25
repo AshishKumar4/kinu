@@ -11,14 +11,25 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join, relative, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { attemptPassed } from '../packages/core/src/index.js';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index.js';
 
-/** Top-level entries never copied into a sandbox. `tests/bench` is the seal's
- *  outermost ring: an agent that cannot read the corpus cannot read the
- *  held-out tasks, look up its own defect patch, or tune against either. */
-const SANDBOX_EXCLUDES = ['.git', 'node_modules', join('tests', 'bench')] as const;
+/** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
+ *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
+ *  look up its own defect patch, or tune against either. `.claude` holds agent
+ *  worktrees — checkouts of this same repo, each with its own node_modules,
+ *  and none of them are the source under test. */
+const SANDBOX_EXCLUDES = ['.git', 'node_modules', '.claude', join('tests', 'bench')] as const;
+
+/** Nested checkouts, excluded wherever they appear. Each carries its OWN
+ *  node_modules, and copying those turns a ~500MB sandbox into a multi-gigabyte
+ *  one — which is how this suite exhausted tmpfs and failed as ENOSPC rather
+ *  than as a real result. Note this cannot be a blanket `node_modules` rule:
+ *  packages/<pkg>/node_modules holds the relative workspace links that let a
+ *  solver's cross-package edits be seen, so those must be copied. */
+const SANDBOX_EXCLUDED_NAMES = new Set(['.git']);
+const NESTED_CHECKOUT_DIRS = ['.claude', 'external'] as const;
 
 const OUTPUT_TAIL_BYTES = 4000;
 
@@ -62,8 +73,15 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
   mkdirSync(proteusHome, { recursive: true });
 
   const repo = resolve(opts.repoRoot);
-  const excluded = new Set(SANDBOX_EXCLUDES.map((e) => join(repo, e)));
-  cpSync(repo, dir, { recursive: true, dereference: false, filter: (src) => !excluded.has(src) });
+  const excluded = new Set([
+    ...SANDBOX_EXCLUDES.map((e) => join(repo, e)),
+    ...NESTED_CHECKOUT_DIRS.map((e) => join(repo, e)),
+  ]);
+  cpSync(repo, dir, {
+    recursive: true,
+    dereference: false,
+    filter: (src) => !excluded.has(src) && !SANDBOX_EXCLUDED_NAMES.has(basename(src)),
+  });
 
   // Third-party deps are shared read-only; the workspace links inside
   // packages/*/node_modules are relative, so they resolve into THIS copy and
