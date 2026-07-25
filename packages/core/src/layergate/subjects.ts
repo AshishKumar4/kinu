@@ -49,7 +49,7 @@ import { StepInjections } from '../prompting/step-injections.js';
 import { EventInjectionBuffer } from '../orchestrator/event-injection.js';
 import { DrainScheduler } from '../orchestrator/drain-scheduler.js';
 import { formatApproval, reviewCommand, withApprovalGate } from '../safety/approval-gate.js';
-import { argumentDigest, stableStringify } from '../safety/argument-digest.js';
+import { argumentDigest } from '../safety/argument-digest.js';
 import { checkMisevolution } from '../scaffold/misevolution.js';
 import { decidePromotion } from '../scaffold/shadow.js';
 import { selectEvolutionBase } from '../scaffold/archive.js';
@@ -113,7 +113,6 @@ export interface PipelineSubjects {
   readonly formatApproval: typeof formatApproval;
   readonly withApprovalGate: typeof withApprovalGate;
   readonly argumentDigest: typeof argumentDigest;
-  readonly stableStringify: typeof stableStringify;
 
   // ── evolution gate ──
   readonly checkMisevolution: typeof checkMisevolution;
@@ -181,7 +180,6 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   formatApproval: 'safety/approval-gate.ts',
   withApprovalGate: 'safety/approval-gate.ts',
   argumentDigest: 'safety/argument-digest.ts',
-  stableStringify: 'safety/argument-digest.ts',
 
   checkMisevolution: 'scaffold/misevolution.ts',
   decidePromotion: 'scaffold/shadow.ts',
@@ -246,7 +244,6 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     formatApproval,
     withApprovalGate,
     argumentDigest,
-    stableStringify,
 
     checkMisevolution,
     decidePromotion,

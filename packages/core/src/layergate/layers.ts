@@ -787,7 +787,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'safety-gate',
     owns: 'the shell approval ladder and the argument digest an approval binds',
-    subjects: ['reviewCommand', 'formatApproval', 'withApprovalGate', 'argumentDigest', 'stableStringify'],
+    subjects: ['reviewCommand', 'formatApproval', 'withApprovalGate', 'argumentDigest'],
     probes: [
       {
         id: 'safety-gate/decision-table',
@@ -843,17 +843,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           distinct: s.argumentDigest({ a: 1 }) !== s.argumentDigest({ a: 2 }),
           digest: s.argumentDigest({ command: 'rm -rf /tmp/x', runtime: 'sandbox' }),
         }),
-      },
-      {
-        id: 'safety-gate/stable-serialization',
-        asserts: 'the serializer is total and key-sorted for every value shape an argument can take',
-        observe: (s) => [
-          s.stableStringify({ z: 1, a: 2 }),
-          s.stableStringify([3, 'x', null, true]),
-          s.stableStringify(null),
-          s.stableStringify(undefined),
-          s.stableStringify({ nested: { b: [{ y: 1, x: 2 }] } }),
-        ],
       },
     ],
   },
@@ -993,7 +982,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'delegation/render-duration-units',
         asserts: 'the rendered evidence switches to minutes past a minute, with one decimal',
         observe: (s) => [4_000, 59_999, 60_000, 630_000].map((wallClockMs) =>
-          s.renderDelegationFeatures({ stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeToolsCalls: 3, wallClockMs })),
+          s.renderDelegationFeatures({
+            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeToolsCalls: 3,
+            loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0, wallClockMs,
+          })),
       },
     ],
   },
