@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/craft/ema.ts b/packages/core/src/craft/ema.ts
+index 663c7b0..00d5fd6 100644
+--- a/packages/core/src/craft/ema.ts
++++ b/packages/core/src/craft/ema.ts
+@@ -18,7 +18,7 @@ export function emaUpdate(
+   newObs: number,
+   alpha = DEFAULT_CONFIG.craftStore.emaAlpha,
+ ): number {
+-  return (1 - alpha) * oldScore + alpha * newObs;
++  return alpha * oldScore + (1 - alpha) * newObs;
+ }
+ 
+ /**

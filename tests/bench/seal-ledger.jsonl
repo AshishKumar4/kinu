@@ -1,0 +1,9 @@
+# Seal access ledger — one line per sealed-split evaluation, ever.
+# Committed on purpose: peeking at the held-out set is what destroys it, so
+# every peek is permanent and public. A high ordinal means the sealed number
+# has been iterated against and is no longer held out in any meaningful sense.
+{"ordinal":1,"ts":1784940568191,"runId":"9609b103e7f3","manifestHash":"872ae788e039c80e","variantA":"null","variantB":"oracle","tasks":4,"effect":1,"pValue":0.125}
+{"ordinal":2,"ts":1784941013020,"runId":"dde34910cdd4","manifestHash":"0bacc6a8252c6e6b","variantA":"null","variantB":"oracle","tasks":6,"effect":1,"pValue":0.031250000000000014}
+{"ordinal":3,"ts":1784941442929,"runId":"fc42d895cfb1","manifestHash":"fe6a7b80bd3ab288","variantA":"noisy:0.4","variantB":"noisy:0.9","tasks":7,"effect":0.7142857142857143,"pValue":0.0625}
+{"ordinal":4,"ts":1784941569324,"runId":"14a9ee68894e","manifestHash":"fe6a7b80bd3ab288","variantA":"noisy:0.7","variantB":"noisy:0.70","tasks":7,"effect":-0.2857142857142857,"pValue":0.6250000000000002}
+{"ordinal":5,"ts":1784941664153,"runId":"37064eeb0aac","manifestHash":"fe6a7b80bd3ab288","variantA":"null","variantB":"oracle","tasks":7,"effect":1,"pValue":0.015625000000000003}

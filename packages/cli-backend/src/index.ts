@@ -4,6 +4,7 @@
 
 export { createCLIRuntime, makeSql, makeExecRaw, withCheckpointedShell, type CLIRuntimeConfig } from './runtime.js';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
+export { proteusHome } from './home.js';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open.js';
 export { createSandboxedExecutor, createNodeExecutor } from './executor.js';
 export { createLinuxFiber, detectOrphanedFibers } from './fiber.js';

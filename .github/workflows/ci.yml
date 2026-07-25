@@ -40,6 +40,11 @@ jobs:
       - name: Eval gate logic
         run: bun test scripts/eval.test.ts
 
+      # Bench harness guarantees: sandbox isolation, the seal, anti-self-scoring,
+      # budget enforcement, corpus well-formedness. No model, no credentials.
+      - name: Bench harness guarantees
+        run: bun test scripts/bench.test.ts
+
   verify-lean:
     runs-on: ubuntu-latest
     timeout-minutes: 15

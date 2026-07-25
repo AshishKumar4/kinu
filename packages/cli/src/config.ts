@@ -4,8 +4,7 @@
  */
 
 import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   ANTHROPIC_BASE_URL,
   ANTHROPIC_DEFAULT_MODEL,
@@ -23,13 +22,14 @@ import {
 import {
   cloudProxyBaseURL,
   createFileCodexAuthStore,
+  proteusHome,
   type LocalCloudSession,
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
 } from '@proteus/cli-backend';
 
-export const AGENT_HOME = resolve(process.env.PROTEUS_HOME?.trim() || join(homedir(), '.proteus'));
+export const AGENT_HOME = proteusHome();
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
 export const BIN_DIR = join(AGENT_HOME, 'bin');
 const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;

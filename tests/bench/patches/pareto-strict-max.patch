@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/gepa/pareto.ts b/packages/core/src/evolution/gepa/pareto.ts
+index 5027772..c17c11c 100644
+--- a/packages/core/src/evolution/gepa/pareto.ts
++++ b/packages/core/src/evolution/gepa/pareto.ts
+@@ -43,7 +43,7 @@ export function computeParetoFront(
+     let bests: GepaCandidate[] = [];
+     for (const cand of pool) {
+       const s = cand.scores.get(id) ?? 0;
+-      if (s > maxScore) { maxScore = s; bests = [cand]; }
++      if (s >= maxScore) { maxScore = s; bests = [cand]; }
+       else if (s === maxScore) bests.push(cand);
+     }
+     perInstanceBest.set(id, bests);

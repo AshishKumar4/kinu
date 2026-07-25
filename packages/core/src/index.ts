@@ -559,6 +559,11 @@ export * from './strategy/index.js';
 // Eval harness — A/B test arbitrary strategies/loops on a corpus of tasks.
 export * from './eval/index.js';
 
+// Bench harness — machine-scored, sealed-split, paired-statistics measurement
+// of whether a variant (scaffold, memory, evolved state) actually helps. Pure
+// math + report shapes; the executing runner lives in scripts/bench.ts.
+export * from './bench/index.js';
+
 // Voyager-style automatic curriculum + Absolute Zero learnability filter.
 // Proposes next tasks at the "barely succeeds" sweet spot.
 export * from './curriculum/index.js';

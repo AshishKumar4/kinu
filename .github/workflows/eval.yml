@@ -55,6 +55,12 @@ jobs:
           EVAL_MIN_SCORE: ${{ github.event.inputs.min_score || vars.EVAL_MIN_SCORE }}
         run: bun scripts/eval.ts --out eval-report.json
 
+      # Corpus validity: every bench task's defect must break this repo's own
+      # checks and reversing it must restore them. Needs no credentials, but
+      # runs the suite ~34 times, so it lives here rather than on every push.
+      - name: Validate bench corpus
+        run: bun scripts/bench.ts validate --run-root "$RUNNER_TEMP/bench"
+
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
