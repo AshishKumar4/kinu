@@ -19,6 +19,9 @@ bun test --cwd packages/core             # run all unit tests
 bun test packages/core/tests/unit-*.test.ts  # run only unit tests
 bun test tests/e2e-lifecycle.test.ts     # run E2E tests (needs LLM credentials)
 bun run dev                              # Vite dev server (cf-backend)
+bun run layergate                        # per-layer regression report (no LLM)
+bun run layergate --matrix               # fault-injection localization matrix
+bun run layergate:lock                   # re-lock after an intended change
 ```
 
 No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
@@ -61,6 +64,7 @@ tests/          E2E tests (run from repo root)
 | execution/  | Multi-executor routing: workspace, nimbus, container, SSH|
 | types/      | TypeScript interfaces for all primitives                 |
 | utils/      | nanoid, date helpers                                     |
+| layergate/  | Per-layer deterministic regression gate over the turn pipeline |
 
 ## Execution Layer
 

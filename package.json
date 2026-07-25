@@ -11,6 +11,8 @@
     "check": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && node --check packages/pc-agent/src/index.js",
     "dev": "bun run --cwd packages/cf-backend start",
     "cli": "bun run packages/cli/bin/cli.ts",
+    "layergate": "bun run scripts/layergate.ts",
+    "layergate:lock": "bun run scripts/layergate.ts --lock",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh"
   },

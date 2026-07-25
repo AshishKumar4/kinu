@@ -681,3 +681,20 @@ export type {
   RunCraftedToolGepaOpts, RunCraftedToolGepaResult,
   GepaRunSummary,
 } from './evolution/gepa/index.js';
+
+// ── Layer gate ──
+// Deterministic, no-LLM per-layer regression scoring over the turn pipeline.
+// The tier between the structural scaffold gates and the LLM judge: it gives a
+// self-change a per-layer effect size instead of one aggregate that a single
+// user's traffic can never resolve. Uncovered layers report null, never 100%.
+export {
+  LAYERS, FAULTS, LOCKED_BASELINE,
+  LOCALIZATION_OWN_MIN_PP, LOCALIZATION_OTHER_MAX_PP,
+  createPipelineSubjects, SUBJECT_SOURCE,
+  observePipeline, scoreAgainstBaseline, runLayerGate, lockBaseline,
+  renderLayerGateReport, runFaultMatrix, renderFaultMatrix,
+} from './layergate/index.js';
+export type {
+  Layer, Probe, PipelineSubjects, SubjectName,
+  Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
+} from './layergate/index.js';
