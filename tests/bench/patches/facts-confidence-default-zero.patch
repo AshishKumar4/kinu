@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/memory/facts.ts b/packages/core/src/memory/facts.ts
+index a61fd5e..535cc6f 100644
+--- a/packages/core/src/memory/facts.ts
++++ b/packages/core/src/memory/facts.ts
+@@ -66,7 +66,7 @@ function safeParse(json: string): unknown {
+ export function createFactsStore(sql: SqlExecutor): FactsStore {
+   return {
+     upsert(key, value, opts = {}) {
+-      const conf = opts.confidence ?? 1;
++      const conf = opts.confidence ?? 0;
+       const src = opts.source ?? null;
+       const valueJson = JSON.stringify(value);
+       if (valueJson === undefined) {
