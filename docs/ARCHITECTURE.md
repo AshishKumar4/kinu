@@ -328,7 +328,9 @@ mutations are guarded before they can take effect: a **misevolution gate**
 (`core/src/scaffold/misevolution.ts`) rejects harmful edits by fixed criteria, a
 **shadow-veto** (`core/src/scaffold/shadow.ts`, `maxRegressions: 1`,
 `minDecisiveTrials: 5`, Monte-Carlo-derived) rejects regressions, and a **DGM-style
-archive** (`core/src/scaffold/archive.ts`) keeps prior variants as stepping stones.
+archive** (`core/src/scaffold/archive.ts`) keeps prior variants as stepping
+stones, ranked for re-branching by clade-metaproductivity (what a lineage went
+on to produce) rather than by each variant's own score.
 Every self-modification surfaces as a human-readable card via the **Evolution
 Changelog** (`core/src/evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md)
 and [MCTS.md](./MCTS.md).

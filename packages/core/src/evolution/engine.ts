@@ -527,7 +527,8 @@ export class EvolutionEngine {
       // (policy + justification in scaffold/archive.ts selectEvolutionBase).
       // Selection weights blend the shadow record with how each version's
       // turns ACTUALLY landed with the user (turn_outcomes) — the real-outcome
-      // prior the shadow judge alone can't supply.
+      // prior the shadow judge alone can't supply — and are then aggregated
+      // over each candidate's descendant lineage (clade-metaproductivity).
       const archive = listScaffoldArchive(this.rt.storage.sql, 12);
       const realRates = realOutcomeScaffoldRates(this.rt.storage.sql);
       const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {

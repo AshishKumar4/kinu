@@ -89,8 +89,15 @@ if a proposal is already pending. The proposal is not built from the live
 scaffold alone: `selectEvolutionBase()` picks a base from the DGM archive —
 with probability `1 − scaffold_explore_share` (default 0.2) it branches from the
 live `current`, otherwise it samples an archived `historical` or `rolled_back`
-variant weighted by its win rate and inverse trial count, blended with real user
-outcomes. The newest 8 archive entries are rendered into the proposal prompt.
+variant weighted by its **clade-metaproductivity** and inverse trial count. The
+clade score is the evidence-weighted pooled win rate over the candidate's whole
+descendant subtree (itself included), win rates having already been blended with
+real user outcomes — HGM's (ICLR 2026) correction to DGM: a variant that won its
+own trial but whose children all regressed is a dead end, while the middling
+variant every good version descends from is the one worth branching off again.
+A candidate with no descendants pools over itself alone and scores exactly its
+own win rate, so a shallow archive reproduces the pre-clade policy term for
+term. The newest 8 archive entries are rendered into the proposal prompt.
 
 `modifyScaffold()` then validates through 4 gates:
 
