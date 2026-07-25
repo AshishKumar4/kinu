@@ -16,6 +16,7 @@
  * direction it cannot support.
  */
 
+import { wilsonInterval } from '../utils/stats.js';
 import type { SqlExecutor } from '../types/primitives.js';
 
 /** 95% two-sided normal quantile. */
@@ -87,18 +88,9 @@ export interface AlignmentConvergence {
  * Clopper-Pearson would also be defensible but is needlessly conservative and
  * would need an incomplete-beta implementation for no gain here.
  */
-export function wilsonInterval(successes: number, trials: number, z: number = Z_95): { low: number; high: number } {
-  if (trials <= 0) return { low: 0, high: 1 };
-  const p = successes / trials;
-  const z2 = z * z;
-  const denominator = 1 + z2 / trials;
-  const center = (p + z2 / (2 * trials)) / denominator;
-  const halfWidth = (z / denominator) * Math.sqrt((p * (1 - p)) / trials + z2 / (4 * trials * trials));
-  return { low: Math.max(0, center - halfWidth), high: Math.min(1, center + halfWidth) };
-}
 
 function rateInterval(negatives: number, turns: number): RateInterval {
-  const { low, high } = wilsonInterval(negatives, turns);
+  const { lo: low, hi: high } = wilsonInterval(negatives, turns);
   return {
     per100: turns > 0 ? (negatives / turns) * 100 : 0,
     lowPer100: low * 100,

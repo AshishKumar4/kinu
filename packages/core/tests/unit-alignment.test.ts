@@ -9,7 +9,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes.js';
 import type { TurnOutcome } from '../src/evolution/outcomes.js';
 import {
-  alignmentConvergence, renderAlignmentConvergence, wilsonInterval,
+  alignmentConvergence, renderAlignmentConvergence,
 } from '../src/evolution/alignment.js';
 import type { SqlExecutor } from '../src/types/primitives.js';
 
@@ -37,37 +37,6 @@ function seed(sql: SqlExecutor, opts: {
   for (let i = 0; i < opts.turns; i += 1) write(i < opts.negatives ? 'corrected' : 'accepted', i);
   for (let i = 0; i < (opts.abandoned ?? 0); i += 1) write('abandoned', opts.turns + i);
 }
-
-describe('wilsonInterval', () => {
-  // Hand-checked against the published Wilson score interval: for k=20, n=100
-  // at 95% the interval is (0.1334, 0.2888) — the value every reference table
-  // and R's prop.test(20, 100) reports.
-  test('matches the textbook interval for 20/100', () => {
-    const { low, high } = wilsonInterval(20, 100);
-    expect(low).toBeCloseTo(0.1334, 4);
-    expect(high).toBeCloseTo(0.2888, 4);
-  });
-
-  // Wald would give (0, 0) here; Wilson reports the real finding: "at most
-  // 11.35%". This is why the interval choice matters.
-  test('stays informative at zero successes, where Wald collapses', () => {
-    const { low, high } = wilsonInterval(0, 30);
-    expect(low).toBe(0);
-    expect(high).toBeCloseTo(0.1135, 4);
-  });
-
-  test('is symmetric under success/failure exchange', () => {
-    const a = wilsonInterval(20, 100);
-    const b = wilsonInterval(80, 100);
-    expect(a.low).toBeCloseTo(1 - b.high, 12);
-    expect(a.high).toBeCloseTo(1 - b.low, 12);
-  });
-
-  test('never leaves [0, 1], and reports total ignorance with no trials', () => {
-    expect(wilsonInterval(100, 100)).toEqual({ low: expect.any(Number), high: 1 });
-    expect(wilsonInterval(0, 0)).toEqual({ low: 0, high: 1 });
-  });
-});
 
 describe('alignmentConvergence', () => {
   test('an empty ledger is undefined, not zero', () => {

@@ -13,8 +13,7 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './delegation-features.js';
 export {
-  alignmentConvergence, renderAlignmentConvergence, wilsonInterval,
-  type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
+  alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
   type AlignmentTrend, type RateInterval,
 } from './alignment.js';
 export {

@@ -48,8 +48,7 @@ export {
 // K_align — the correction rate per 100 graded turns, per scaffold version,
 // with 95% Wilson intervals. Pure telemetry: no benchmark, no judge, no LLM.
 export {
-  alignmentConvergence, renderAlignmentConvergence, wilsonInterval,
-  type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
+  alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
   type AlignmentTrend, type RateInterval,
 } from './evolution/alignment.js';
 // Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
