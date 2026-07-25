@@ -8,6 +8,11 @@ describe('TurnAccumulator', () => {
     const a = new TurnAccumulator();
     a.recordStep({ usage: { inputTokens: 5, outputTokens: 3 } });
     a.recordToolCall({ toolName: 'run', success: true, output: 'ok' });
+    // A failed call first, so the hadError assertion below is not vacuous —
+    // a reset that forgot the flag would leak the previous turn's failure.
+    a.recordToolCall({ toolName: 'run', success: false, error: 'boom' });
+    a.onFirstChunk();
+    expect(a.hadError).toBe(true);
     a.reset(1000);
     expect(a.toolCalls).toEqual([]);
     expect(a.stepCount).toBe(0);
@@ -64,6 +69,49 @@ describe('TurnAccumulator', () => {
     expect(a.lastPromptTokens).toBe(1_450);
     a.reset(1);
     expect(a.lastPromptTokens).toBe(0);
+  });
+
+  test('each tool call gets its own id — the run-event log must not collapse them', () => {
+    const ids: string[] = [];
+    const a = new TurnAccumulator({ onToolCallEvent: (e) => ids.push(e.toolCallId) });
+    a.recordToolCall({ toolName: 'read', success: true, output: 1 });
+    a.recordToolCall({ toolName: 'read', success: true, output: 2 });
+    a.recordToolCall({ toolName: 'write', success: true, output: 3 });
+    expect(ids).toEqual(['tc-1', 'tc-2', 'tc-3']);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  test('a 0ms duration is a real measurement, not an absent one', () => {
+    // `durationMs != null` must not degrade into a truthiness check: a
+    // sub-millisecond tool would silently lose its timing.
+    const details: Array<string | undefined> = [];
+    const durations: Array<number | undefined> = [];
+    const a = new TurnAccumulator({
+      logActivity: (_e, d) => details.push(d),
+      onToolCallEvent: (e) => durations.push(e.durationMs),
+    });
+    a.recordToolCall({ toolName: 'fast', success: true, output: 1, durationMs: 0 });
+    a.recordToolCall({ toolName: 'untimed', success: true, output: 1 });
+    expect(details).toEqual(['fast (0ms)', 'untimed']);
+    expect(durations).toEqual([0, undefined]);
+  });
+
+  test('recordStep names tool calls from either SDK shape (toolName or name)', () => {
+    const details: Array<string | undefined> = [];
+    const a = new TurnAccumulator({ logActivity: (_e, d) => details.push(d) });
+    a.recordStep({ toolCalls: [{ toolName: 'current' }, { name: 'legacy' }, {}] });
+    expect(details[0]).toContain('tools=3[current,legacy,?]');
+  });
+
+  test('a non-string finishReason reaches the step sink as undefined, not as "undefined"', () => {
+    // The run-event log's `reason` is a nullable string column; stringifying an
+    // absent finishReason would write the literal text into it.
+    const reasons: Array<string | undefined> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => reasons.push(e.reason) });
+    a.recordStep({ finishReason: 'stop' });
+    a.recordStep({});
+    a.recordStep({ finishReason: { type: 'stop' } });
+    expect(reasons).toEqual(['stop', undefined, undefined]);
   });
 
   test('works with no sinks (pure consumer)', () => {

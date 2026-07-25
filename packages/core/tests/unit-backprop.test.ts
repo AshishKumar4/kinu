@@ -76,9 +76,11 @@ describe('Backpropagation', () => {
     expect(ids.map(r => r.id)).toEqual(['a', 'b']);
   });
 
-  test('BUG-1: initial value=0 (not 0.5) gives correct running mean', () => {
+  // NOT a BUG-1 guard: Lean's init_values_equal_at_first_step proves the first
+  // update erases the prior, so no backprop assertion can see value's default.
+  // The prior is guarded behaviourally in unit-initial-value-prior.test.ts.
+  test('running mean from a zero-valued node tracks the reward sequence', () => {
     const { sql } = setup();
-    // Value initialized to 0 per BUG-1 fix
     sql`INSERT INTO search_nodes (id, task, value, visits) VALUES ('n', 'test', 0, 0)`;
 
     backpropagate(sql, 'n', 0.7);

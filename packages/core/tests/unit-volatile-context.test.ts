@@ -126,6 +126,25 @@ describe('renderSystemStateBlock', () => {
     expect(executorAvailabilityLabel(idleSandbox)).toBe('ready on demand');
     expect(executorAvailabilityLabel({ name: 'nimbus' })).toBe('available');
   });
+
+  test('each signal that produces a label does so on its own', () => {
+    // The fixtures above set available/configured/active/status together, so
+    // every branch is reachable via more than one field. Isolate them: a
+    // dropped disjunct mislabels a live runtime as merely 'available', and the
+    // model reads these labels to decide where to run code.
+    expect(executorAvailabilityLabel({ name: 'sandbox', active: true })).toBe('active');
+    expect(executorAvailabilityLabel({ name: 'sandbox', status: 'active' })).toBe('active');
+    expect(executorAvailabilityLabel({ name: 'sandbox', status: 'idle' })).toBe('ready on demand');
+    expect(executorAvailabilityLabel({ name: 'sandbox', configured: true })).toBe('ready on demand');
+  });
+
+  test('laptop reports connection, not activity — on either signal', () => {
+    expect(executorAvailabilityLabel({ name: 'laptop', active: true })).toBe('connected');
+    expect(executorAvailabilityLabel({ name: 'laptop', status: 'active' })).toBe('connected');
+    // A configured-but-disconnected laptop is NOT 'ready on demand': the user's
+    // machine has to actually be there.
+    expect(executorAvailabilityLabel({ name: 'laptop', configured: true })).toBe('available');
+  });
 });
 
 describe('renderTurnLocalContext', () => {
@@ -138,6 +157,25 @@ describe('renderTurnLocalContext', () => {
     expect(text!).toStartWith(TURN_CONTEXT_HEADER);
     expect(text!).toContain('alpha (keyword "deploy")');
     expect(text!).toContain('PC just connected');
+  });
+
+  test('every activation reason kind renders in its own form', () => {
+    // The three kinds carry different payload fields; rendering one in
+    // another's form would tell the model a skill was pinned when the user
+    // actually typed a slash command (or vice versa).
+    const text = renderTurnLocalContext({
+      activeSkills: {
+        active: [skill('alpha'), skill('beta'), skill('gamma')],
+        reasons: [
+          { name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } },
+          { name: 'beta', reason: { kind: 'keyword', matched_keyword: 'ship' } },
+          { name: 'gamma', reason: { kind: 'always_active', via: 'config' } },
+        ],
+      },
+    });
+    expect(text!).toContain('- alpha (explicit /deploy)');
+    expect(text!).toContain('- beta (keyword "ship")');
+    expect(text!).toContain('- gamma (pinned via config)');
   });
 
   test('empty turn-local context renders nothing (and no message)', () => {
@@ -248,6 +286,29 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
       { role: 'user', content: freshBlock },
     ]);
     expect(ledger.size).toBe(1);
+  });
+
+  test('a block frozen exactly at the tail survives a re-weave of the same history', () => {
+    // The boundary the self-healing guard must NOT trip on: a block born at
+    // index === history.length is at the tail, not stale. An off-by-one there
+    // discards every earlier block on the very next turn — the tree of frozen
+    // positions collapses to one, silently undoing the cache-stability
+    // contract while every "history grew" test still passes.
+    const ledger = new EphemeralContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
+    ledger.weave(history, state);                                  // block @ 1
+    history.push({ role: 'assistant', content: 'a1' }, { role: 'user', content: 'turn-2' });
+    const changed = { ...state, factsBlock: '- k = v2' };
+    ledger.weave(history, changed);                                // block @ 3 (the tail)
+    expect(ledger.size).toBe(2);
+
+    // Re-weave with the history and state both unchanged: nothing is stale, so
+    // no block may be discarded and no new one born.
+    const out = ledger.weave(history, changed);
+    expect(ledger.size).toBe(2);
+    expect(out.map(messageText)).toEqual([
+      'turn-1', renderSystemStateBlock(state)!, 'a1', 'turn-2', renderSystemStateBlock(changed)!,
+    ]);
   });
 
   test('nothing to say → no block is born and none is removed', () => {
