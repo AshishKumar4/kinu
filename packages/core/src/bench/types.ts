@@ -41,9 +41,17 @@ export interface AttemptBudget {
   maxTokens: number;
 }
 
+/**
+ * Measured, not guessed. On a 5-task pilot against deepseek-v4-flash, a 200k
+ * token cap breached on 2 of 5 attempts (40%) and scored them failed; the same
+ * five tasks with a 600k cap passed 5/5. A cap that tight measures the budget
+ * rather than the solver, and it does so ASYMMETRICALLY — it penalises whichever
+ * variant explores more, which in a scaffold comparison is the thing under test.
+ * Raised with headroom; an attempt that genuinely runs away still terminates.
+ */
 export const DEFAULT_ATTEMPT_BUDGET: AttemptBudget = {
   wallClockMs: 300_000,
-  maxTokens: 200_000,
+  maxTokens: 600_000,
 };
 
 export type BudgetBreach = 'wall-clock' | 'tokens';
