@@ -33,7 +33,8 @@
  *   • LLM config derived per-call from the owner user's provider registry
  */
 
-import { Agent, callable } from "agents";
+import { Agent, callable, type AgentContext } from "agents";
+import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText, tool, jsonSchema } from "ai";
 import { diversityDirective, formatInheritedContext, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
@@ -67,6 +68,11 @@ import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
 
 export class ExplorationAgent extends Agent<Env> {
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    sealRpcSurface(this, EXPLORATION_RPC_SURFACE);
+  }
+
   // ── MCTS-mode state (pre-existing) ──────────────────────────────
 
   // ── Head-mode state  ────────────────────────────────────────

@@ -1,4 +1,5 @@
-import { callable } from 'agents';
+import { callable, type AgentContext } from 'agents';
+import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface.js';
 import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
 import { initCompactionStateTable } from '@proteus/compaction';
@@ -50,6 +51,11 @@ export interface SetSubordinateIdentityInput {
 }
 
 export class SubordinateAgent extends ActorAgent {
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    sealRpcSurface(this, SUBORDINATE_RPC_SURFACE);
+  }
+
   private _schemaReady = false;
   private _identity: SubordinateIdentityStore | null = null;
   private _engine: EvolutionEngine | null = null;

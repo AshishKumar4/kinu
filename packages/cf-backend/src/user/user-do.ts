@@ -22,7 +22,8 @@
  * allows. Methods the DO calls on itself pass `OWNER_SESSION` because their
  * public entry point was already gated.
  */
-import { Agent } from "agents";
+import { Agent, type AgentContext } from "agents";
+import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface.js";
 import { parseCliTokenUserId } from "../cli/auth-store.js";
 import {
   getActiveAccessTokenScopes,
@@ -202,6 +203,11 @@ function parseCapabilityList(value: string): string[] {
 }
 
 export class UserDO extends Agent<Env> {
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    sealRpcSurface(this, USER_DO_RPC_SURFACE);
+  }
+
   private _initialized = false;
 
   /** Per-user MCP manager. NOTE: distinct from the inherited `Agent.mcp`

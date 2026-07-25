@@ -12,7 +12,8 @@
  * @proteus/core so the CLI surface shares them verbatim.
  */
 
-import { callable } from "agents";
+import { callable, type AgentContext } from "agents";
+import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { initCompactionStateTable } from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
 import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
@@ -253,6 +254,11 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
 }
 
 export class OrchestratorAgent extends ActorAgent {
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+  }
+
   override async onBeforeSubAgent(
     request: Request,
     child: { className: string; name: string },

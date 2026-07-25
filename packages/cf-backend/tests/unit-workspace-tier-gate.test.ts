@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestUserDO, provisionTestWorkspace, type TestUserDO } from './helpers/user-do.js';
+import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
 import { sha256Hex } from '../src/lib/crypto.js';
 import {
   CapabilityDeniedError,
@@ -520,27 +521,12 @@ const NON_RPC_METHODS = new Set(['fetch', 'webSocketMessage', 'webSocketClose', 
  *  below and the contract asserted here. */
 const IDENTITY_BOOTSTRAP = 'ensureWorkspaceCapability';
 
-/**
- * Every member declared on the class body, as [modifiers, name, params].
- * Deliberately broad — `public`/`static`/non-`async`/generator/getter forms are
- * all real ways to add a method, and a check that only understood `async foo(`
- * would wave any of the others through.
- */
-function declaredMembers(): Array<{ modifiers: string; name: string; params: string }> {
-  const re = /^ {2}((?:public |protected |private |static |readonly |override |async |\* |get |set )*)([A-Za-z_$][A-Za-z0-9_$]*)\(([^)]*)\)/gm;
-  return [...USER_DO_SOURCE.matchAll(re)].map((m) => ({
-    modifiers: m[1].trim(),
-    name: m[2],
-    params: m[3].trim(),
-  }));
-}
-
-const isInternal = (modifiers: string) => /\b(private|protected)\b/.test(modifiers);
+const declaredMembers = () => declaredClassMembers(USER_DO_SOURCE);
 
 describe('no privileged UserDO method escapes the gate', () => {
   test('every externally-callable member takes the caller first, or is an explicit exception', () => {
     const ungated = declaredMembers()
-      .filter((m) => !isInternal(m.modifiers))
+      .filter((m) => !isInternalMember(m))
       .filter((m) => !NON_RPC_METHODS.has(m.name) && m.name !== IDENTITY_BOOTSTRAP)
       .filter((m) => !m.params.startsWith('caller: UserCaller'))
       .map((m) => m.name);
@@ -556,13 +542,13 @@ describe('no privileged UserDO method escapes the gate', () => {
     expect(named('fetch')).toBe(true);                       // override async
     expect(named('requireTier')).toBe(true);                 // private, non-async
     expect(named('credentialSummaries')).toBe(true);         // private, non-async
-    expect(declared.filter((m) => isInternal(m.modifiers)).length).toBeGreaterThan(5);
+    expect(declared.filter(isInternalMember).length).toBeGreaterThan(5);
   });
 
   test('every gated method is exercised by the matrix above', () => {
     const declared = new Set(
       declaredMembers()
-        .filter((m) => !isInternal(m.modifiers) && m.params.startsWith('caller: UserCaller'))
+        .filter((m) => !isInternalMember(m) && m.params.startsWith('caller: UserCaller'))
         .map((m) => m.name),
     );
     const exercised = new Set(GATED_CALLS.map((c) => c.name.replace(/\(.*$/, '')));

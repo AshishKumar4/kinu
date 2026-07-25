@@ -1,0 +1,387 @@
+/**
+ * The Durable Object RPC boundary — what a stub-holder can actually reach.
+ *
+ * Cloudflare resolves `stub.foo(...)` by looking `foo` up on the receiver's
+ * PROTOTYPE CHAIN. Three consequences, each verified against real workerd
+ * (1.20260601.1, via miniflare, one DO calling another):
+ *
+ *   1. TypeScript `private` is erased at compile time, so a `private` method is
+ *      an ordinary prototype method and IS callable over RPC. Every
+ *      `requireTier` check in `user/workspace-capability.ts` sits at the top of
+ *      a public method; a stub-holder that calls `sqlx` or `getCredentialRow`
+ *      instead never reaches one.
+ *   2. SUPERCLASS methods are reachable too — the walk does not stop at the
+ *      most-derived class. `Agent.sql` from the agents SDK is a tagged-template
+ *      query runner over `ctx.storage.sql`, so a single inherited method hands
+ *      any stub-holder arbitrary SQL against the receiver's storage. `Agent` +
+ *      `Server` alone contribute 267 reachable names; `Think` adds 245 more.
+ *   3. OWN INSTANCE properties are NOT reachable. workerd rejects them with
+ *      `The RPC receiver does not implement the method "x".`, exactly as it
+ *      rejects a name that does not exist — including when the own property
+ *      shadows a prototype method of the same name.
+ *
+ * (3) is the primitive this module is built on. `sealRpcSurface` copies every
+ * reachable member that is NOT on a class's declared surface down onto the
+ * instance as a non-enumerable own property. In-process behaviour is
+ * unchanged — `this.sqlx(...)` finds the same function object, `super.x()`
+ * still reaches the prototype, base-class code that calls `this.sql\`…\`` still
+ * works, and `@callable` metadata (a WeakMap keyed on function identity)
+ * still matches. From outside, the name has ceased to exist.
+ *
+ * Why not the alternatives:
+ *   • `#`-private members are genuinely unreachable, but they cannot express a
+ *     `protected` member a subclass needs (`ActorAgent` → `OrchestratorAgent` /
+ *     `SubordinateAgent`), and they cannot touch the inherited SDK surface at
+ *     all — which is where `sql` lives. They fix the smaller half of the hole.
+ *   • A narrow RpcTarget facade only helps if callers hold the facade instead
+ *     of the stub. Inside one Worker every Durable Object can call
+ *     `env.UserDO.get(...)` itself, so the raw stub can never be taken away.
+ *   • An allowlist at the dispatch boundary is what `cli/rpc-gate.ts` does for
+ *     the WebSocket transport, because the agents SDK routes those frames
+ *     through `onMessage` and there is a place to stand. Native Workers RPC has
+ *     no such hook: resolution happens inside the runtime, before any Proteus
+ *     code runs. The allowlist survives — it is the `surface` argument here —
+ *     but enforcement has to be reachability, not interception.
+ *
+ * Fail-closed by construction: the surface is an allowlist, so a member added
+ * to a sealed class tomorrow is unreachable until someone puts its name here,
+ * and a name that is not reachable at all is denied by the runtime anyway. The
+ * corollary is that adopting an SDK feature whose protocol runs over a stub
+ * means adding its names — the agents SDK's agent-tool adapter
+ * (`startAgentToolRun` and friends), which Proteus does not use, is the one
+ * such feature deliberately left off every surface.
+ */
+
+import { AGENT_RPC_ACCESS } from './cli/rpc-gate.js';
+import type { ActorAgent } from './actor-agent.js';
+import type { ExplorationAgent } from './exploration.js';
+import type { OrchestratorAgent } from './orchestrator.js';
+import type { SubordinateAgent } from './subordinate-agent.js';
+import type { UserDO } from './user/user-do.js';
+
+/**
+ * The names the Workers runtime and the two SDKs dispatch on a stub, which
+ * therefore have to stay reachable on every sealed class.
+ *
+ *   • `fetch` — the agents/partyserver transport. Every browser and CLI
+ *     WebSocket, and every HTTP call to `/agents/*`, arrives this way.
+ *   • `setName` — `getServerByName` calls it on the stub before returning it,
+ *     so denying it breaks every `getAgentByName`.
+ *   • `_initAndFetch` — partyserver's combined entry point. It is exactly
+ *     `setName` followed by `fetch`, both already reachable, so listing it
+ *     costs nothing it did not already have.
+ *   • `alarm` / `webSocket*` — handlers the runtime itself invokes on the
+ *     instance. Denying them would risk the DO's own lifecycle for no gain:
+ *     their arguments (a live WebSocket) cannot cross an RPC boundary.
+ */
+export const PLATFORM_RPC_SURFACE: readonly string[] = [
+  'fetch',
+  'setName',
+  '_initAndFetch',
+  'alarm',
+  'webSocketMessage',
+  'webSocketClose',
+  'webSocketError',
+] as const;
+
+/**
+ * The agents-SDK facet protocol: the `_cf_`-prefixed methods the SDK invokes on
+ * a stub rather than on `this`. Sub-agents (`SubordinateAgent`,
+ * `ExplorationAgent`) are facets of their parent DO, and every hop between a
+ * facet and its root crosses a real RPC boundary (`_rootAlarmOwner()` resolves
+ * the root through `getServerByName`), so sealing these would break sub-agents,
+ * facet schedules, and sub-agent WebSocket bridging. Only the agent family
+ * needs them; `UserDO` neither is a facet nor spawns one.
+ *
+ * Derived by reading `agents/dist/index.js` for `_cf_` calls whose receiver is
+ * not `this`, so it is the SDK's actual cross-stub surface and not a prefix
+ * rule. Three universal bridges are deliberately absent —
+ * `_cf_invokeSubAgent`, `_cf_invokeSubAgentPath` and `_cf_invokeStubMethod`
+ * take a method NAME and call it on the receiver, which would re-open
+ * everything this module closes. They are only used by `getSubAgentByName` and
+ * by `parentAgent()` from a facet nested two deep; Proteus uses neither.
+ */
+export const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
+  '_cf_acquireFacetKeepAlive',
+  '_cf_broadcastToSubAgent',
+  '_cf_cancelScheduleForFacet',
+  '_cf_checkRunFibersForFacet',
+  '_cf_cleanupFacetPrefix',
+  '_cf_closeSubAgentConnection',
+  '_cf_destroyDescendantFacet',
+  '_cf_dispatchScheduledCallback',
+  '_cf_getScheduleForFacet',
+  '_cf_handleSubAgentWebSocketClose',
+  '_cf_handleSubAgentWebSocketConnect',
+  '_cf_handleSubAgentWebSocketMessage',
+  '_cf_initAsFacet',
+  '_cf_listSchedulesForFacet',
+  '_cf_registerFacetRun',
+  '_cf_releaseFacetKeepAlive',
+  '_cf_scheduleEveryForFacet',
+  '_cf_scheduleForFacet',
+  '_cf_sendToSubAgentConnection',
+  '_cf_setSubAgentConnectionState',
+  '_cf_subAgentConnectionMetas',
+  '_cf_unregisterFacetRun',
+] as const;
+
+/**
+ * The names Cloudflare will resolve on a stub for `target` — every member on
+ * the prototype chain below `Object.prototype`, minus anything an own instance
+ * property shadows. This is the rule workerd implements, and it is the single
+ * definition both `sealRpcSurface` and its tests work from.
+ */
+export function rpcReachableNames(target: object): string[] {
+  const own = new Set(Object.getOwnPropertyNames(target));
+  const reachable = new Set<string>();
+  for (let proto: object | null = Object.getPrototypeOf(target);
+       proto !== null && proto !== Object.prototype;
+       proto = Object.getPrototypeOf(proto)) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name !== 'constructor' && !own.has(name)) reachable.add(name);
+    }
+  }
+  return [...reachable].sort();
+}
+
+/**
+ * Reduce `instance`'s RPC-reachable surface to `surface`, in place. Call it as
+ * the last statement of a Durable Object's constructor, once the whole
+ * prototype chain — including the wrappers the agents SDK installs during
+ * `super()` — is in its final shape.
+ *
+ * Every other reachable member is copied onto the instance descriptor-for-
+ * descriptor (accessors stay accessors, function identity is preserved), which
+ * leaves in-process calls untouched and makes the name unresolvable from a
+ * stub. Names in `surface` that the class does not have are ignored: a surface
+ * is a ceiling, and the runtime already denies what does not exist.
+ */
+export function sealRpcSurface(instance: object, surface: readonly string[]): void {
+  const allowed = new Set(surface);
+  for (const name of rpcReachableNames(instance)) {
+    if (allowed.has(name)) continue;
+    const descriptor = inheritedDescriptor(instance, name);
+    if (descriptor) Object.defineProperty(instance, name, { ...descriptor, enumerable: false });
+  }
+}
+
+/** The descriptor the prototype chain resolves `name` to. */
+function inheritedDescriptor(instance: object, name: string): PropertyDescriptor | undefined {
+  for (let proto: object | null = Object.getPrototypeOf(instance);
+       proto !== null && proto !== Object.prototype;
+       proto = Object.getPrototypeOf(proto)) {
+    const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+    if (descriptor) return descriptor;
+  }
+  return undefined;
+}
+
+// ── The surfaces ────────────────────────────────────────────────────────────
+// One table per Durable Object class, kept together so "what can be reached in
+// this Worker" is answerable by reading one file — the same reason
+// `cli/rpc-gate.ts` keeps the CLI's transport policy in one table. The class
+// types are imported for types only, exactly as `cli/rpc-gate.ts` imports
+// `OrchestratorAgent`, so nothing here pulls a Durable Object into the graph.
+//
+// `satisfies readonly (keyof X)[]` on each list is the compile-time half of the
+// guard: a name that is not a member, or that is `private`/`protected`, is not
+// in `keyof X` and fails the build here rather than at runtime.
+
+/**
+ * Everything a holder of a `UserDO` stub may call — the RPC counterpart of the
+ * `requireTier` gate. Each entry is a method that takes a `UserCaller` and gates
+ * itself (plus the identity bootstrap and the platform handlers), so the two
+ * lists are the same list: a name here is a name the gate has already vetted.
+ *
+ * Nothing else on this class or anywhere in its inheritance chain is reachable
+ * from a stub — not `sqlx`, not `getCredentialRow`, and not the SDK's inherited
+ * `sql`, which would otherwise hand any Durable Object in this Worker arbitrary
+ * queries against the credential store.
+ *
+ * `UserDO` gets no facet surface: it is neither a facet nor spawns one.
+ */
+const USER_DO_METHODS = [
+  'backfillWorkspaceCapabilities',
+  'createProductChange',
+  'decideProductChangeApproval',
+  'deleteCredential',
+  'deviceRpc',
+  'disconnectCodex',
+  'ensureProfile',
+  'ensureWorkspaceCapability',
+  'getAuthHeaders',
+  'getCodexStatus',
+  'getConfig',
+  'getCredentialBaseURL',
+  'getDeviceFsConsent',
+  'getProductChangeBoard',
+  'getProductChangeDetail',
+  'getProfile',
+  'hasPeerGrant',
+  'hasWorkspace',
+  'issueCliAgentConnectTicket',
+  'issueDeviceConnectTicket',
+  'listAIGateways',
+  'listAccessTokens',
+  'listCliTokens',
+  'listConfig',
+  'listConnectedProviders',
+  'listCredentials',
+  'listDeviceConsents',
+  'listDevices',
+  'listProductSourceBindings',
+  'listWorkspaces',
+  'mintAccessToken',
+  'mintCliToken',
+  'pollCodexDeviceFlow',
+  'recordProductChangeCheck',
+  'recordProductDeployment',
+  'registerDevice',
+  'registerWorkspace',
+  'removeWorkspace',
+  'requestProductChangeApproval',
+  'revokeAccessToken',
+  'revokeCliTokenHash',
+  'revokeDevice',
+  'selectAIGateway',
+  'setConfig',
+  'setCredential',
+  'setDeviceConsentScope',
+  'setWorkspaceDisplayName',
+  'startCodexDeviceFlow',
+  'touchWorkspace',
+  'transitionProductChange',
+  'updateProductChange',
+  'upsertProductSourceBinding',
+  'userMcp_add',
+  'userMcp_callTool',
+  'userMcp_handleOAuthCallback',
+  'userMcp_list',
+  'userMcp_remove',
+  'userMcp_toolDescriptors',
+  'userMcp_update',
+  'userMcp_updatedAt',
+  'userMcp_warmConnections',
+  'verifyAccessToken',
+  'verifyCliAgentConnectTicket',
+  'verifyCliToken',
+  'verifyDeviceConnectTicket',
+  'verifyDeviceToken',
+] as const satisfies readonly (keyof UserDO)[];
+
+export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
+
+/**
+ * The members every actor exposes to a stub-holder — the workspace-capability
+ * handshake, the credential-change fan-out, and the workspace filesystem a
+ * subordinate reaches on its parent. Concrete actors add their own on top.
+ *
+ * Everything else this class declares — including every `protected` member a
+ * subclass relies on — stays an ordinary method and stays unreachable, because
+ * the seal shadows rather than removes.
+ */
+const ACTOR_AGENT_RPC_SURFACE = [
+  'deleteWorkspaceFile',
+  'installWorkspaceCapability',
+  'listWorkspaceFiles',
+  'onCredentialsChanged',
+  'readWorkspaceFile',
+  'statWorkspaceFile',
+  'writeWorkspaceFile',
+] as const satisfies readonly (keyof ActorAgent)[];
+
+/**
+ * What a holder of an `OrchestratorAgent` stub may call, beyond the shared
+ * actor and infrastructure surfaces.
+ *
+ * `AGENT_RPC_ACCESS` supplies the larger half: the CLI's HTTP transport
+ * dispatches those names straight onto this stub, so they are reachable by
+ * construction and that table is their single source of truth. Its `never`
+ * entry (`destroyAgent`) stays here too — it is denied to remote CLI clients by
+ * `cli/routes.ts`, but the owner's UserDO calls it Durable-Object-to-Durable-
+ * Object when a workspace is deleted.
+ *
+ * The names below are the rest: the worker routes (email, webhooks, runs, MCP),
+ * the UserDO handshake, and the calls siblings make — a subordinate reaching
+ * its parent, an exploration facet reaching shared scratch, one workspace
+ * delivering a peer message or a fork copy to another.
+ */
+const ORCHESTRATOR_METHODS = [
+  'acceptEmailDelivery',
+  'acceptWebhookDelivery',
+  'awaitDeviceConsent',
+  'claimOwner',
+  'createDurableWebhook',
+  'getEmailIngress',
+  'getRunEvents',
+  'getShadowStatus',
+  'getSubordinateBootstrapIdentity',
+  'getToolList',
+  'getWorkspaceCapabilityHash',
+  'listPeersFromMcp',
+  'listRuns',
+  'rawCopyFromFork',
+  'receivePeerMessage',
+  'receiveSubordinateEvent',
+  'runScaffoldOnce',
+  'runTaskFromMcp',
+  'saveNoteFromMcp',
+  'sendPeerFromMcp',
+  'setAutoDisplayName',
+  'setEmailAllowlist',
+  'setEmailNotifications',
+  'setProvisionalDisplayName',
+  'sharedScratchList',
+  'sharedScratchRead',
+  'sharedScratchWrite',
+  'transitionProductChange',
+] as const satisfies readonly (keyof OrchestratorAgent)[];
+
+export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
+  ...PLATFORM_RPC_SURFACE,
+  ...AGENTS_FACET_RPC_SURFACE,
+  ...ACTOR_AGENT_RPC_SURFACE,
+  ...Object.keys(AGENT_RPC_ACCESS),
+  ...ORCHESTRATOR_METHODS,
+];
+
+/**
+ * What the parent orchestrator may call on a subordinate facet. A subordinate
+ * carries its parent's capability token, so its reachable surface is kept to
+ * the four calls the parent actually makes; its chat surface arrives over the
+ * SDK's sub-agent WebSocket bridge and is dispatched on `this`, not on a stub.
+ */
+const SUBORDINATE_METHODS = [
+  'enqueueSubordinateTask',
+  'getSubordinateStatus',
+  'setSubordinateIdentity',
+] as const satisfies readonly (keyof SubordinateAgent)[];
+
+export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
+  ...PLATFORM_RPC_SURFACE,
+  ...AGENTS_FACET_RPC_SURFACE,
+  ...ACTOR_AGENT_RPC_SURFACE,
+  ...SUBORDINATE_METHODS,
+];
+
+/**
+ * What a spawner may call on an exploration facet: seed it, then run it. Its
+ * reach back into the workspace goes the other way — it holds an orchestrator
+ * stub — so nothing else here needs to be reachable.
+ */
+const EXPLORATION_METHODS = [
+  'abortHead',
+  'explore',
+  'generateReflection',
+  'initHead',
+  'runAsHead',
+  'setOwner',
+  'setSharedParent',
+] as const satisfies readonly (keyof ExplorationAgent)[];
+
+export const EXPLORATION_RPC_SURFACE: readonly string[] = [
+  ...PLATFORM_RPC_SURFACE,
+  ...AGENTS_FACET_RPC_SURFACE,
+  ...EXPLORATION_METHODS,
+];
