@@ -42,9 +42,16 @@ export {
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
 } from './evolution/types.js';
 export {
-  delegationFeatures, renderDelegationFeatures,
-  type DelegationFeatures,
+  delegationFeatures, renderDelegationFeatures, executionPathSignals,
+  type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features.js';
+// K_align — the correction rate per 100 graded turns, per scaffold version,
+// with 95% Wilson intervals. Pure telemetry: no benchmark, no judge, no LLM.
+export {
+  alignmentConvergence, renderAlignmentConvergence, wilsonInterval,
+  type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
+  type AlignmentTrend, type RateInterval,
+} from './evolution/alignment.js';
 // Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
 // every evolution surface reads (audit R3: the measurable loss).
 export {

@@ -12,10 +12,12 @@ import {
   createAgentConfigStore,
   initAgentConfigTable,
   initEventsHubTables,
+  alignmentConvergence,
   listGepaRuns,
   loadGepaCandidates,
   nextCronFire,
   productChangeSqlFromExec,
+  type AlignmentConvergence,
   type EventVariant,
   type ProductChangeBoard,
   type SearchNode,
@@ -298,6 +300,12 @@ export function listLocalGepaRuns(name: string, limit = 20): unknown[] {
     if (!tableExists(db, 'gepa_runs')) return [];
     return listGepaRuns(makeSql(db), limit);
   });
+}
+
+/** K_align for a local agent. A workspace with no outcome ledger yet reads as
+ *  an empty result — alignmentConvergence already owns that case. */
+export function getLocalAlignment(name: string): AlignmentConvergence {
+  return withLocalDb(name, (db) => alignmentConvergence(makeSql(db)));
 }
 
 export function getLocalGepaRun(name: string, runId: string): unknown {

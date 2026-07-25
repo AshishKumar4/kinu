@@ -72,6 +72,7 @@ export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 export const AGENT_RPC_ACCESS = {
   // ── Reads a workspace.read token may perform (old GET /workspaces/:name/*) ──
   getAgentStatus: 'workspace.read',
+  getAlignmentConvergence: 'workspace.read',
   getChatHistory: 'workspace.read',
   getExecutors: 'workspace.read',
   getGepaRun: 'workspace.read',

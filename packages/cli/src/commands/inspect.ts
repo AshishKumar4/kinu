@@ -1,3 +1,4 @@
+import { renderAlignmentConvergence, type AlignmentConvergence } from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
 import { requireAuthConfig } from '../config.js';
 import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
@@ -5,6 +6,7 @@ import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display.js';
 import {
   executeLocalExecutor,
   getLocalAgentState,
+  getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
   getLocalProductBoard,
@@ -176,6 +178,21 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
     return;
   }
   printData(data, opts);
+}
+
+/** K_align — how often the user had to correct this agent, per 100 graded
+ *  turns, split by the scaffold version that served them. */
+export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+  const target = resolveAgentTarget(name);
+  const data = await readTarget(target, {
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAlignmentConvergence'),
+    local: () => getLocalAlignment(target.localName),
+  });
+  if (opts.json) {
+    printJson(data);
+    return;
+  }
+  console.log(renderAlignmentConvergence(data as AlignmentConvergence));
 }
 
 export async function productCommand(name: string, opts: InspectOpts = {}): Promise<void> {

@@ -82,6 +82,8 @@ import {
   // Turn-outcome signal + replay-eval loss curve (audit R3)
   buildOutcomeEvalSplit, listReplayEvals,
   type OutcomeEvalExpectation, type ReplayEvalSummary,
+  // K_align — the correction-rate trend over the same outcome ledger
+  alignmentConvergence, type AlignmentConvergence,
   // Evolution Changelog — the self-change digest + revert dispatch
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -2466,6 +2468,14 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async getReplayEvals(limit: number = 50): Promise<ReplayEvalSummary[]> {
     return listReplayEvals(this.boundSql, limit);
+  }
+
+  /** K_align: the correction rate per 100 graded turns, per scaffold version,
+   *  with 95% Wilson intervals — the self-improvement question answered from
+   *  telemetry alone, no benchmark and no judge. */
+  @callable()
+  async getAlignmentConvergence(): Promise<AlignmentConvergence> {
+    return alignmentConvergence(this.boundSql);
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +

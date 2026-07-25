@@ -9,9 +9,14 @@ export {
   type ToolCallRecord,
 } from './types.js';
 export {
-  delegationFeatures, renderDelegationFeatures,
-  type DelegationFeatures,
+  delegationFeatures, renderDelegationFeatures, executionPathSignals,
+  type DelegationFeatures, type ExecutionPathSignals,
 } from './delegation-features.js';
+export {
+  alignmentConvergence, renderAlignmentConvergence, wilsonInterval,
+  type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
+  type AlignmentTrend, type RateInterval,
+} from './alignment.js';
 export {
   feedbackToQuality, outcomeToFeedback, outcomeQuality,
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,

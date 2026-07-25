@@ -8,7 +8,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon, ArrowsOutIcon } from "@phosphor-icons/react";
-import { DEFAULT_QUALITY_THRESHOLD } from "@proteus/core";
+import { DEFAULT_QUALITY_THRESHOLD, type AlignmentConvergence } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
 import { EmptyState, EMPTY_HINTS, MarkdownContent } from "./shared";
@@ -681,17 +681,35 @@ interface ReplayEvalRow {
   meanScore: number; loss: number; scaffoldVersion: number | null;
 }
 
+// Both quality signals load together so the pane resolves once, rather than
+// flashing an empty state while the second call is still in flight.
 function QualityView({ rpc }: { rpc: Rpc }) {
-  const [rows, setRows] = useState<ReplayEvalRow[] | null>(null);
-  useEffect(() => { rpc<ReplayEvalRow[]>("getReplayEvals", [50]).then(setRows).catch(() => setRows([])); }, [rpc]);
+  const [data, setData] = useState<{ rows: ReplayEvalRow[]; align: AlignmentConvergence | null } | null>(null);
+  useEffect(() => {
+    void Promise.all([
+      rpc<ReplayEvalRow[]>("getReplayEvals", [50]).catch(() => []),
+      rpc<AlignmentConvergence>("getAlignmentConvergence").catch(() => null),
+    ]).then(([rows, align]) => setData({ rows, align }));
+  }, [rpc]);
 
-  if (rows === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  if (rows.length === 0) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve and latest aggregate appear here." />;
+  if (data === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  const { rows, align } = data;
+  const hasAlignment = align !== null && align.overall.turns > 0;
+  if (rows.length === 0 && !hasAlignment) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
 
+  return (
+    <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
+      {hasAlignment && <AlignmentPanel k={align} />}
+      {rows.length > 0 && <ReplayEvalPanel rows={rows} />}
+    </div>
+  );
+}
+
+function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
   const chrono = [...rows].reverse(); // oldest → newest for the curve
   const latest = rows[0];
   return (
-    <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
+    <div className="space-y-4">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <Metric label="Latest score" value={<span className={scoreColor(latest.meanScore)}>{latest.meanScore.toFixed(3)}</span>} />
         <Metric label="Loss" value={latest.loss.toFixed(3)} />
@@ -729,6 +747,62 @@ function QualityView({ rpc }: { rpc: Rpc }) {
         </div>
       </section>
     </div>
+  );
+}
+
+/* ── K_align (Alignment Convergence Rate) ──────────────────────── */
+
+// How often the user had to correct the agent, per 100 graded turns, split by
+// the scaffold version that served them — computed from the turn_outcomes
+// ledger alone (no benchmark, no judge). Every rate is shown WITH its 95%
+// Wilson interval, and a segment whose interval is too wide to read is drawn
+// muted, because the point of this panel is to stop small numbers being
+// over-read as progress.
+const TREND_STYLE: Record<AlignmentConvergence["trend"], { label: string; className: string }> = {
+  improving: { label: "improving", className: "p-success" },
+  worsening: { label: "worsening", className: "p-danger" },
+  flat: { label: "no detectable change", className: "p-text-2" },
+  insufficient: { label: "not enough data", className: "p-text-3" },
+};
+
+function AlignmentPanel({ k }: { k: AlignmentConvergence }) {
+  const trend = TREND_STYLE[k.trend];
+  // One shared scale so segment intervals are visually comparable; the floor
+  // keeps a near-zero rate from filling the whole track.
+  const scaleMax = Math.max(20, ...k.segments.map((s) => s.rate.highPer100));
+  return (
+    <section className="space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-normal p-text-3">K_align · corrections per 100 turns</div>
+        <div className={`text-[10px] ${trend.className}`}>
+          {trend.label}{k.deltaPer100 !== null ? ` (${k.deltaPer100 > 0 ? "+" : ""}${k.deltaPer100.toFixed(1)})` : ""}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <Metric label="Rate" value={`${k.overall.rate.per100.toFixed(1)}`} />
+        <Metric label="95% interval" value={`${k.overall.rate.lowPer100.toFixed(1)}–${k.overall.rate.highPer100.toFixed(1)}`} />
+        <Metric label="Graded turns" value={`${k.overall.turns}${k.overall.abandoned > 0 ? ` (+${k.overall.abandoned} ungraded)` : ""}`} />
+      </div>
+      <div className="space-y-1">
+        {k.segments.map((s) => (
+          <div key={`${s.scaffoldVersion ?? "none"}-${s.firstAt}`}
+            className={`flex items-center gap-2 text-[10px] ${s.rate.reliable ? "" : "opacity-50"}`}
+            title={s.rate.reliable ? undefined : "interval too wide to read as a rate"}>
+            <span className="shrink-0 font-mono p-text-3 w-8">v{s.scaffoldVersion ?? "?"}</span>
+            <span className="shrink-0 p-text-3 w-12 tabular-nums">n={s.turns}</span>
+            <div className="flex-1 h-2 rounded-full p-elevated relative overflow-hidden">
+              <div className="absolute inset-y-0 p-dot-info opacity-40" style={{
+                left: `${(s.rate.lowPer100 / scaleMax) * 100}%`,
+                width: `${Math.max(1, ((s.rate.highPer100 - s.rate.lowPer100) / scaleMax) * 100)}%`,
+              }} />
+              <div className="absolute inset-y-0 w-0.5 p-dot-info" style={{ left: `${(s.rate.per100 / scaleMax) * 100}%` }} />
+            </div>
+            <span className="font-mono p-text-3 tabular-nums shrink-0 w-8 text-right">{s.rate.per100.toFixed(1)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10px] p-text-3">{k.note}</div>
+    </section>
   );
 }
 

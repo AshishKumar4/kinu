@@ -20,6 +20,7 @@ import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
 import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from '../src/commands/control.js';
 import {
+  alignmentCommand,
   eventsCommand,
   executorsCommand,
   gepaCommand,
@@ -270,6 +271,12 @@ llmOpts(
     .option('--no-session', 'Do not record this run')
     .option('-n, --name <label>', 'Human-readable session label'),
 ).action(wrapAction(execCommand));
+
+program
+  .command('alignment <name>')
+  .description('K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals')
+  .option('--json', 'Print raw JSON')
+  .action(wrapAction(alignmentCommand));
 
 program
   .command('product <name>')
