@@ -1,6 +1,6 @@
 # Proteus
 
-Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, plus a CI-gated Lean 4 corpus over hand-maintained abstract models of selected core algorithms.
+Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, plus a CI-gated Lean 4 corpus of abstract models covering selected core algorithms.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
@@ -51,7 +51,6 @@ graph TB
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
 - **POSIX shell emulator** — 16 commands (ls, grep, find, sed, cat, etc.) over virtual filesystem. No real OS needed on Workers.
 - **Web search & fetch** — `web_search` and `web_fetch` are built in and work with zero keys (DuckDuckGo search + Cloudflare's markdown service); add a Tavily key for ranked, answer-augmented search.
-- **Lean-checked abstract models** — 84 theorems cover selected agent, evolution, execution, MCTS, safety, and storage properties. Their axiom reports use only Lean's kernel axioms; one separate SQLite FTS5 assumption is documented and enrolled. CI gates compilation, negative consistency, axiom closure, and requirement-to-proof-to-source traceability. The models are hand-maintained, and model-to-TypeScript differential fixtures are planned.
 - **Portable** — same core runs on Cloudflare Workers (Think + DOs) or local CLI (bun:sqlite)
 
 ## Quick Start
