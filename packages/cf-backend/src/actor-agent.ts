@@ -2010,10 +2010,16 @@ export abstract class ActorAgent extends Think<Env> {
     return wrapped;
   }
 
-  /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
-   *  the user's chosen model so quality assessments stay consistent. */
-  protected getModelForReview(): import('ai').LanguageModel {
-    return this.ownedModelServices.resolveModel(this.getStoredModelId());
+  /** Model for review/judge tasks: the operator's `review_model`, else a
+   *  different-vendor model when one is connected, else the chat model — the
+   *  self-preference policy in core's selectJudgeModel. Async because
+   *  cross-family availability is a credential-aware registry query; the
+   *  answer is cached until the owner's provider set is invalidated. */
+  protected getModelForReview(): Promise<import('ai').LanguageModel> {
+    return this.ownedModelServices.resolveJudgeModel({
+      reviewSpec: this.config.getReviewModel(),
+      chatSpec: this.getStoredModelId(),
+    });
   }
 
   // ── Fiber recovery — durable execution surviving DO eviction ──

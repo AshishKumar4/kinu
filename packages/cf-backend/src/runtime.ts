@@ -45,6 +45,7 @@ import type { Think } from "@cloudflare/think";
 import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
+import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
 import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
@@ -557,11 +558,13 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
 
 /**
  * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
- * operator's review_model (the `review_model` agent_config key) at call
- * time so judging can run on a DIFFERENT model from the explorer — the
- * self-enhancement-bias fix. When no review_model is set this resolves the
- * agent's chat model: same-model judging is the documented fallback, not a
- * separate code path. Errors propagate — the evaluator's judge ensemble
+ * operator's review_model (the `review_model` agent_config key) at call time
+ * so judging can run on a DIFFERENT model from the explorer — the
+ * self-enhancement-bias fix. With no review_model set it now searches the
+ * registry for an available model from a different VENDOR family than the
+ * chat model, because an unset key used to mean the agent graded itself with
+ * itself; same-model judging survives only as the single-vendor fallback (see
+ * core's selectJudgeModel). Errors propagate — the evaluator's judge ensemble
  * drops failed samples instead of misreading them as scores.
  */
 function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
@@ -571,16 +574,19 @@ function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
       const config = createAgentConfigStore(
         agent.sql.bind(agent) as unknown as CoreSqlExecutor,
       );
-      const reg = createAgentProviderRegistry({
+      const registry = createAgentProviderRegistry({
         env: agent.env,
         userDO: userCredentialSourceFor(agent, actor),
         appTitle: 'Proteus (judge)',
         workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
       });
-      const spec = config.getReviewModel() ?? config.getModel();
-      const model = reg.resolveModel(reg.normalizeSpecSync(spec));
+      const { spec } = await resolveJudgeModelSelection({
+        registry,
+        reviewSpec: config.getReviewModel(),
+        chatSpec: config.getModel(),
+      });
       const result = await generateText({
-        model, prompt,
+        model: registry.resolveModel(spec), prompt,
         ...effortFor('judge'),
       });
       return result.text.trim();

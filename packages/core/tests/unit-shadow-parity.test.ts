@@ -63,16 +63,22 @@ async function setup(): Promise<AgentRuntime> {
   return rt;
 }
 
-/** A deterministic judge: the pending only avoids losing if its output shows
- *  the conversational context (the codename) the live answer had. */
+/** A deterministic judge that decides purely from CONTENT — which it must,
+ *  since the protocol shows the two responses unlabelled in a randomized
+ *  order. It rewards whichever response cites the codename; when both (or
+ *  neither) do, it ties. */
 const contextJudge: StructuredJudgeFn = async (prompt) => {
-  const pendingSection = prompt.slice(prompt.indexOf("Response B (PENDING scaffold's output):"));
-  const sawContext = pendingSection.includes('BLUEFIN');
+  const [a, b] = prompt.split('\nResponse B:\n');
+  const aSaw = a.slice(a.indexOf('\nResponse A:\n')).includes('BLUEFIN');
+  const bSaw = b.includes('BLUEFIN');
+  if (aSaw === bSaw) {
+    return { winner: 'tie', rationale: 'both responses cite the codename', scoreA: 0.8, scoreB: 0.8 };
+  }
   return {
-    winner: sawContext ? 'tie' : 'current',
-    rationale: sawContext ? 'both cite the codename' : 'pending lacks the conversational context',
-    currentScore: 0.8,
-    pendingScore: sawContext ? 0.8 : 0.2,
+    winner: aSaw ? 'a' : 'b',
+    rationale: 'the loser lacks the conversational context',
+    scoreA: aSaw ? 0.8 : 0.2,
+    scoreB: bSaw ? 0.8 : 0.2,
   };
 };
 

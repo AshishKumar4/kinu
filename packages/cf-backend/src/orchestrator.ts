@@ -1003,7 +1003,7 @@ export class OrchestratorAgent extends ActorAgent {
 
       const judge: StructuredJudgeFn = async (prompt) =>
         generateJson({
-          model: this.getModelForReview(),
+          model: await this.getModelForReview(),
           schema: JudgeOutputSchema,
           prompt,
           providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
@@ -1087,7 +1087,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  path uses), against this workspace's review model. */
   private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
     const { text } = await generateText({
-      model: this.getModelForReview(),
+      model: await this.getModelForReview(),
       system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
       prompt: workspaceIdentityPrompt(mission),
       // No output cap: reasoning models spend their budget thinking before the

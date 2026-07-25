@@ -137,16 +137,25 @@ A validated proposal does not take effect on merit alone. It is sampled into
 real turns at `shadow_sample_rate` (0.25) and judged against the incumbent:
 
 ```
-minTrials 5 · maxTrials 12 · promoteThreshold 0.6 · rollbackThreshold 0.4
+minTrials 5 · maxTrials 20 · promoteThreshold 0.6 · rollbackThreshold 0.4
 maxRegressions 1 · minDecisiveTrials 5 · autoPromote false
 ```
 
+Each trial is judged **twice, with the two responses swapped**. The judge sees
+them unlabelled and in a randomized order, and a candidate takes the trial only
+by winning both orders — a flip is recorded as a tie. That removes the position
+and status-quo bias the old prompt built in by pinning the incumbent to
+"Response A" and labelling it CURRENT. The judge itself prefers a model from a
+different vendor family than the agent's chat model whenever one is connected,
+because a model grading its own family's prose inflates it; same-model judging
+survives only as the single-vendor fallback.
+
 The **regression veto runs first**: more than `maxRegressions` losses rolls the
-proposal back regardless of win rate. `maxRegressions: 1` and
-`minDecisiveTrials: 5` were chosen by binomial Monte Carlo rather than taste
-(`scripts/shadow-veto-monte-carlo.ts`); against the old `(0, 3)` defaults they
-raise the chance of promoting a genuinely better scaffold from about 30% to
-about 51%, at a worst-case ~4.9% chance of promoting a worse one.
+proposal back regardless of win rate. Every constant here comes from binomial
+Monte Carlo rather than taste (`scripts/shadow-veto-monte-carlo.ts`, which
+models the judging protocol itself). At the shipping settings a genuinely
+better scaffold is promoted about 62% of the time, against a worst case of
+about 3.2% for promoting a clearly worse one.
 
 The archive keeps **every** version — it is a read model over
 `scaffold_versions` joined to `scaffold_evaluations`, with no eviction — so a

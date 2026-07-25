@@ -5,6 +5,7 @@ import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,
 } from './providers/agent-registry.js';
+import { resolveJudgeModelSelection } from './providers/judge-model.js';
 import type { UserDO } from './user/user-do.js';
 import type { UserCaller } from './user/workspace-capability.js';
 
@@ -26,6 +27,7 @@ export interface OwnedModelServicesOptions {
 export class OwnedModelServices {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
+  private judgeSpecCache: { key: string; spec: string } | null = null;
 
   constructor(private readonly options: OwnedModelServicesOptions) {}
 
@@ -60,6 +62,23 @@ export class OwnedModelServices {
     return registry.resolveModel(registry.normalizeSpecSync(spec));
   }
 
+  /**
+   * The model that judges this agent's own output — `review_model` when the
+   * operator set one, else a different-vendor model when one is connected,
+   * else the chat model itself (see core's selectJudgeModel). Cached per
+   * (review, chat) pair because the cross-family search costs a credential
+   * listing; `invalidate()` drops it with the rest of the owner-bound state.
+   */
+  async resolveJudgeModel(opts: { reviewSpec: string | null; chatSpec: string | null }): Promise<LanguageModel> {
+    const registry = this.providerRegistry();
+    const key = `${opts.reviewSpec ?? ''}\n${opts.chatSpec ?? ''}`;
+    if (this.judgeSpecCache?.key !== key) {
+      const { spec } = await resolveJudgeModelSelection({ registry, ...opts });
+      this.judgeSpecCache = { key, spec };
+    }
+    return registry.resolveModel(this.judgeSpecCache.spec);
+  }
+
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
     this.webSearchProviderCache = buildCfWebSearchProvider(
@@ -72,5 +91,6 @@ export class OwnedModelServices {
   /** Drop owner-bound provider/auth state; the web provider resolves it per call. */
   invalidate(): void {
     this.providerRegistryCache = null;
+    this.judgeSpecCache = null;
   }
 }

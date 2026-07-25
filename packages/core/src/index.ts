@@ -403,6 +403,7 @@ export {
   type ShadowConfig,
   type ScaffoldStatus,
   type JudgeFn,
+  type ShadowTrialVerdict,
 } from './scaffold/shadow.js';
 // auto-judge shadow evaluation — sampled-per-turn closure of the
 // shadow-rollout loop. Picks up pending scaffolds, runs them against the

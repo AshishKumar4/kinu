@@ -55,17 +55,23 @@ export interface PendingScaffold {
   ties: number;
 }
 
+/** One trial's verdict, in the current-vs-pending terms `decidePromotion` and
+ *  `scaffold_evaluations` consume. How a judge arrives at it (single call,
+ *  order-swapped double call — see scaffold/auto-judge.ts) is its own business;
+ *  this is the contract the promotion rule is calibrated against. */
+export interface ShadowTrialVerdict {
+  winner: 'current' | 'pending' | 'tie';
+  rationale: string;
+  currentScore: number;
+  pendingScore: number;
+}
+
 export interface JudgeFn {
   (opts: {
     task: string;
     currentOutput: string;
     pendingOutput: string;
-  }): Promise<{
-    winner: 'current' | 'pending' | 'tie';
-    rationale: string;
-    currentScore: number;
-    pendingScore: number;
-  }>;
+  }): Promise<ShadowTrialVerdict>;
 }
 
 export interface ShadowConfig {
@@ -75,7 +81,9 @@ export interface ShadowConfig {
   promoteThreshold: number;
   /** Win-rate fraction at which to rollback pending. Default 0.4. */
   rollbackThreshold: number;
-  /** Hard ceiling on trials before forcing a decision. Default 12. */
+  /** Hard ceiling on trials before forcing a decision. Default 20 — a budget
+   *  sized to the DECISIVE yield of the order-swapped judge, not to raw turns
+   *  (see DEFAULT_SHADOW_CONFIG). */
   maxTrials: number;
   /** Auto-promote/rollback without user confirmation. Default false. */
   autoPromote: boolean;
@@ -93,35 +101,57 @@ export interface ShadowConfig {
  * 200k sims/cell over the REAL decidePromotion, sequential per-trial stopping
  * exactly as runAutoShadowEval applies it — rerun the script to reproduce).
  *
- * The old maxRegressions=0 ("one loss = rollback") was the statistically
- * indefensible constant: a genuinely-better scaffold almost always loses SOME
- * decisive trial under judge noise before accumulating a promotable record.
- * Config aggregates from the sweep (win-rates {.55,.6,.7,.8} × tie-rates
- * {.3,.5,.7}; "worse" = mirror 1-win):
+ * The bar: false-promotion of CLEARLY-worse variants (true win ≤ 0.30) under
+ * 5% at tie rates ≤ 0.5, maximizing mean true-promotion. Worlds sweep win-rates
+ * {.55,.6,.7,.8} × per-call tie-rates {.3,.5,.7}, "worse" = the 1-win mirror,
+ * judged by the order-swapped double-win protocol at 10pp of residual bias.
+ *
+ * maxTrials — 12 → 20. This is a budget in trials, but only DECISIVE trials
+ * carry information, and the order-swapped double-win judge (scaffold/
+ * auto-judge.ts) roughly halves the decisive yield per turn: at the flagship
+ * world the recorded tie rate goes 50% → 73%. A budget of 12 then runs out
+ * while only two or three decisive trials are in, and the ceiling's forced
+ * decision — which promotes on a bare >0.5 majority and does NOT consult
+ * minDecisiveTrials — starts deciding most rollouts. That is the leak this
+ * comment used to file as "residual and not config-fixable"; it is fixable, by
+ * denominating the budget correctly. Sweeping it at (maxReg 1, minDec 5):
+ *
+ *   maxTrials | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
+ *          12 |        65.6%           |   7.9%   ← misses the bar
+ *          16 |        63.7%           |   5.2%
+ *          20 |        62.3%           |   3.2%   ← CHOSEN
+ *          24 |        61.3%           |   2.1%
+ *          40 |        59.0%           |   1.0%
+ *
+ * maxRegressions / minDecisiveTrials — unchanged at (1, 5), which the sweep
+ * re-derives as the frontier at the rescaled budget. maxRegressions=0 ("one
+ * loss = rollback") remains the statistically indefensible setting: a
+ * genuinely-better scaffold almost always loses SOME decisive trial under
+ * judge noise before accumulating a promotable record.
  *
  *   maxReg minDec | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
- *        0      3 |        29.8%           |   2.5%   ← old default
- *        0      5 |        20.8%           |   0.7%
- *        1      3 |        66.1%           |  18.9%
- *        1      5 |        50.6%           |   4.9%   ← CHOSEN
- *        2      3 |        71.3%           |  20.4%
- *        2      5 |        71.3%           |  16.3%
+ *        0      3 |        44.2%           |   1.5%
+ *        0      5 |        34.6%           |   0.8%
+ *        1      3 |        75.6%           |  12.2%
+ *        1      5 |        62.3%           |   3.2%   ← CHOSEN
+ *        2      3 |        76.1%           |  12.5%
+ *        2      5 |        76.6%           |   7.7%
  *
- * (1,5) is the frontier: it keeps false-promotion of clearly-worse variants
- * (true win ≤ 0.30) under 5% at tie rates ≤ 0.5 while +70% relative
- * true-promotion vs the old default (flagship case, 70%-win / 50%-tie:
- * 32.4% → 55.6%). A strict <5% bar against ALL worse worlds (incl. the 45%
- * near-coin-flip mirror) is unattainable in principle at maxTrials=12 — that
- * needs hundreds of decisive trials — and near-coin-flip promotions are
- * low-harm and revertable from the Evolution Changelog. Known residual leak
- * (documented, not config-fixable): the maxTrials forced decision promotes on
- * a bare >0.5 majority, which dominates false promotions in high-tie worlds.
+ * The resulting operating point strictly dominates the original calibration on
+ * BOTH axes (which scored 50.9% / 4.9% for an unbiased single-call judge, and
+ * 34.9% / 1.5% for the position-biased one production actually ran — the bias
+ * was suppressing true and false promotion alike).
+ *
+ * A strict <5% bar against ALL worse worlds (incl. the 45% near-coin-flip
+ * mirror) stays unattainable in principle at any budget this side of hundreds
+ * of decisive trials — and near-coin-flip promotions are low-harm and
+ * revertable from the Evolution Changelog.
  */
 export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
   minTrials: 5,
   promoteThreshold: 0.6,
   rollbackThreshold: 0.4,
-  maxTrials: 12,
+  maxTrials: 20,
   autoPromote: false,
   maxRegressions: 1,
   minDecisiveTrials: 5,
@@ -296,7 +326,7 @@ export function recordShadowEvaluation(
     task: string;
     currentOutput: string;
     pendingOutput: string;
-    judgeResult: Awaited<ReturnType<JudgeFn>>;
+    judgeResult: ShadowTrialVerdict;
   },
 ): ShadowEvaluationRow {
   const id = `eval-${nanoid()}`;
@@ -332,6 +362,9 @@ export function decidePromotion(
 ): { decision: 'promote' | 'rollback' | 'continue'; winRate: number } {
   const decisiveTrials = pending.pendingWins + pending.currentWins;
   if (decisiveTrials === 0) {
+    // All ties so far carries no signal in either direction — keep observing,
+    // even past maxTrials. The ceiling below is NOT a guaranteed stopping
+    // point; a run of pure ties legitimately extends the window.
     return { decision: 'continue', winRate: 0.5 };
   }
   const winRate = pending.pendingWins / decisiveTrials;
@@ -351,7 +384,10 @@ export function decidePromotion(
   }
   if (pending.trialsSoFar >= config.maxTrials) {
     // Hard ceiling. The regression veto already passed (currentWins ≤
-    // maxRegressions), so promote iff genuinely ahead, else rollback.
+    // maxRegressions), so promote iff genuinely ahead, else rollback. This
+    // branch deliberately does NOT re-check minDecisiveTrials — it is the
+    // forced decision — which is why maxTrials is sized against the judge's
+    // decisive YIELD rather than raw turns (see DEFAULT_SHADOW_CONFIG).
     return { decision: winRate > 0.5 ? 'promote' : 'rollback', winRate };
   }
   return { decision: 'continue', winRate };
