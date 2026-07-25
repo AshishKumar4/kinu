@@ -24,7 +24,7 @@ bun scripts/bench.ts gain     --run-root /tmp/bench --stateful agent-evolving --
 ## The task family
 
 A task is **a seeded defect in this repo**, and the score is **this repo's own
-checks**. `tests/bench/tasks.jsonl` holds 17 of them; `tests/bench/patches/<id>.patch`
+checks**. `tests/bench/tasks.jsonl` holds 165 of them; `tests/bench/patches/<id>.patch`
 is the diff that breaks the code.
 
 An attempt is scored by running, in the sandbox:
@@ -207,8 +207,8 @@ over-read it:
 
 | split | tasks | best achievable p | can it ever be significant? |
 |---|---|---|---|
-| dev | 10 | 0.002 | yes |
-| sealed | 7 | 0.0156 | yes, but only on a near-clean sweep |
+| dev | 98 | 1.6e-29 | yes |
+| sealed | 67 | 1.4e-20 | yes, with wide margin |
 
 With `n` all-discordant pairs the smallest two-sided p is 2·0.5ⁿ, so **fewer
 than 6 held-out tasks can never reach p ≤ 0.05 whatever the effect**. That is
@@ -291,7 +291,7 @@ home.
 
 ## What is instrument, and what is demonstrated
 
-**Demonstrated:** the instrument measures. Validated end-to-end on all 17 tasks
+**Demonstrated:** the instrument measures. Validated end-to-end on all 165 tasks
 (defect fails, oracle passes), with the discrimination, false-positive, and
 acceptance behaviour checked against deterministic controls. The `agent` path
 was driven end-to-end against a mock provider — real v0 workspace, real turn,
@@ -301,8 +301,8 @@ correct token accounting, budget breach honoured.
 `agent-evolving` run against a real model has been made, so **the gain is
 unmeasured**. The instrument exists; the experiment has not been run.
 
-Note also that a true 50pp gap between two synthetic solvers came out
-*non-significant* on this corpus. Seventeen tasks is enough to prove the harness
-works and nowhere near enough to resolve a modest scaffold effect. Growing the
-corpus is the precondition for the real experiment, and the authoring loop
-(mutate → run the suite → keep only what breaks) is mechanical.
+On power: the 67-task sealed split resolves roughly 15pp at a dispersion of
+0.20 — enough for a substantial effect, not for a subtle one. Reaching 10pp on
+the seal alone would need about 157 sealed tasks (~390 total); the whole corpus
+reaches it today. Repeats raise precision within a task but never add pairs, so
+they shrink dispersion rather than buying power outright.
