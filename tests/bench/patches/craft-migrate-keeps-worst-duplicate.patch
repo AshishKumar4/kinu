@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/craft/migrate-duplicates.ts b/packages/core/src/craft/migrate-duplicates.ts
+index 2174128..93fe2b1 100644
+--- a/packages/core/src/craft/migrate-duplicates.ts
++++ b/packages/core/src/craft/migrate-duplicates.ts
+@@ -66,7 +66,7 @@ export function migrateCraftedToolDuplicates(
+       FROM crafted_tools ct
+       LEFT JOIN craft_scores cs ON cs.tool_name = ct.name
+       WHERE LOWER(ct.name) = ${g.lower_name}
+-      ORDER BY COALESCE(cs.score, 0.5) DESC, ct.updated_at DESC`;
++      ORDER BY COALESCE(cs.score, 0.5) ASC, ct.updated_at DESC`;
+ 
+     if (rows.length < 2) continue;
+     const keep = rows[0]!;

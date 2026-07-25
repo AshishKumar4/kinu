@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/scaffold/archive.ts b/packages/core/src/scaffold/archive.ts
+index 53e86ba..8114542 100644
+--- a/packages/core/src/scaffold/archive.ts
++++ b/packages/core/src/scaffold/archive.ts
+@@ -182,7 +182,7 @@ export function selectEvolutionBase(
+       : (archive.length > 0 ? { version: archive[0]!.version, mode: 'current' } : null);
+   }
+   const exploreShare = Math.min(1, Math.max(0, opts.exploreShare));
+-  if (explorable.length === 0 || random() >= exploreShare) {
++  if (explorable.length === 0 || random() > exploreShare) {
+     return { version: current.version, mode: 'current' };
+   }
+ 

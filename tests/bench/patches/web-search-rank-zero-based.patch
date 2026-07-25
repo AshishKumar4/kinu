@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/web/provider.ts b/packages/core/src/web/provider.ts
+index 0eae95f..9c9e8ab 100644
+--- a/packages/core/src/web/provider.ts
++++ b/packages/core/src/web/provider.ts
+@@ -298,7 +298,7 @@ export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResul
+       title,
+       url,
+       snippet: (snippets[i] ?? '').trim(),
+-      position: results.length + 1,
++      position: results.length,
+     });
+     i++;
+   }

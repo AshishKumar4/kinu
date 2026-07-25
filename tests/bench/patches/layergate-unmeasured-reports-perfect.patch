@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/layergate/gate.ts b/packages/core/src/layergate/gate.ts
+index f038a45..2913005 100644
+--- a/packages/core/src/layergate/gate.ts
++++ b/packages/core/src/layergate/gate.ts
+@@ -86,7 +86,7 @@ export function scoreAgainstBaseline(
+     }
+     scores.push({
+       layer: layer.id,
+-      conformance: layer.probes.length === 0 ? null : matched / layer.probes.length,
++      conformance: layer.probes.length === 0 ? 1 : matched / layer.probes.length,
+       probes: layer.probes.length,
+       matched,
+       drifted,

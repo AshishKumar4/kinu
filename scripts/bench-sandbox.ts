@@ -80,6 +80,11 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
   cpSync(repo, dir, {
     recursive: true,
     dereference: false,
+    // Without this, cpSync REWRITES every relative symlink to an absolute path
+    // into the source tree — so packages/*/node_modules/@proteus/* would point
+    // back at the pristine repo and a solver's cross-package edits would be
+    // invisible to any test that imports through a workspace specifier.
+    verbatimSymlinks: true,
     filter: (src) => !excluded.has(src) && !SANDBOX_EXCLUDED_NAMES.has(basename(src)),
   });
 

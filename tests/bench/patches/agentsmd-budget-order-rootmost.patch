@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/agents-md.ts b/packages/core/src/prompting/agents-md.ts
+index 796e891..3453455 100644
+--- a/packages/core/src/prompting/agents-md.ts
++++ b/packages/core/src/prompting/agents-md.ts
+@@ -46,7 +46,7 @@ export function renderAgentsMdSection(
+   let remaining = Math.max(0, maxChars);
+   const kept = new Map<string, RenderedFile>();
+   const omitted: string[] = [];
+-  for (const file of [...present].reverse()) {
++  for (const file of [...present]) {
+     if (file.content.length <= remaining) {
+       kept.set(file.path, { path: file.path, body: file.content });
+       remaining -= file.content.length;

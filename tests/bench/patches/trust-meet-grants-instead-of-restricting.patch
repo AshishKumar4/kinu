@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/events/hub/trust.ts b/packages/core/src/events/hub/trust.ts
+index 55c2555..4342dfe 100644
+--- a/packages/core/src/events/hub/trust.ts
++++ b/packages/core/src/events/hub/trust.ts
+@@ -26,7 +26,7 @@ import {
+ /** `merge(owner, external) = external`. A head consuming an owner Chat and
+  *  an external Webhook runs at `external` trust, full stop. */
+ export function meetTrust(a: TrustLevel, b: TrustLevel): TrustLevel {
+-  return TRUST_ORDER[a] < TRUST_ORDER[b] ? a : b;
++  return TRUST_ORDER[a] > TRUST_ORDER[b] ? a : b;
+ }
+ 
+ /** Reduce over a non-empty set. Returns `self` for the empty case (vacuous

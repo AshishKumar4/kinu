@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/changelog.ts b/packages/core/src/evolution/changelog.ts
+index fbf9d75..7fa430b 100644
+--- a/packages/core/src/evolution/changelog.ts
++++ b/packages/core/src/evolution/changelog.ts
+@@ -160,7 +160,7 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
+ function humanizeFact(key: string, value: string): string {
+   const normalizedKey = key.trim().toLowerCase();
+   const segments = normalizedKey.split('.').filter(Boolean);
+-  const leaf = segments.at(-1) ?? normalizedKey;
++  const leaf = segments.at(0) ?? normalizedKey;
+   if (segments[0] === 'sandbox' && leaf.endsWith('_version')) {
+     const software = leaf.slice(0, -'_version'.length).replace(/_/g, ' ');
+     const runs = value.toLowerCase().startsWith(software.toLowerCase())

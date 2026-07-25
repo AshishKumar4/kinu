@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/extension.ts b/packages/core/src/extension.ts
+index 84f1fc8..04f9ef6 100644
+--- a/packages/core/src/extension.ts
++++ b/packages/core/src/extension.ts
+@@ -125,7 +125,7 @@ export class ExtensionHost {
+       if (!contributed) continue;
+       for (const [name, tool] of Object.entries(contributed)) {
+         const prior = owners.get(name);
+-        if (prior) {
++        if (!prior) {
+           throw new Error(`extension "${ext.name}" registers tool "${name}" already registered by "${prior}"`);
+         }
+         owners.set(name, ext.name);

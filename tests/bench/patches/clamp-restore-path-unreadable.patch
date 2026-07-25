@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
+index 9f29f33..1bd4ea9 100644
+--- a/packages/core/src/tools/clamp.ts
++++ b/packages/core/src/tools/clamp.ts
+@@ -46,7 +46,7 @@ export async function clampToolResult(
+     try {
+       await opts.vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
+       await opts.vfs.writeFile(path, text);
+-      savedPath = `/${path}`;
++      savedPath = path;
+     } catch {
+       savedPath = null; // offload failed — still clamp, marker stays honest
+     }

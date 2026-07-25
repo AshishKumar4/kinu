@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/scaffold/shadow.ts b/packages/core/src/scaffold/shadow.ts
+index 5b09fcd..f2976c3 100644
+--- a/packages/core/src/scaffold/shadow.ts
++++ b/packages/core/src/scaffold/shadow.ts
+@@ -431,7 +431,7 @@ export async function applyPromotionDecision(
+     }
+     await rt.identity.scaffold.write(pendingCode);
+     sql`UPDATE scaffold_versions SET status = 'historical'
+-        WHERE status = 'current' AND version != ${pending.version}`;
++        WHERE status = 'current' AND version = ${pending.version}`;
+     sql`UPDATE scaffold_versions SET status = 'current'
+         WHERE version = ${pending.version}`;
+     return { newCurrentVersion: pending.version, action: 'promote' };

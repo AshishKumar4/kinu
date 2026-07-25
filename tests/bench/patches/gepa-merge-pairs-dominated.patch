@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/gepa/merge.ts b/packages/core/src/evolution/gepa/merge.ts
+index 6e1052a..6c65ff0 100644
+--- a/packages/core/src/evolution/gepa/merge.ts
++++ b/packages/core/src/evolution/gepa/merge.ts
+@@ -58,7 +58,7 @@ export function findComplementaryPair(
+       }
+       // Each side must win on at least one instance; otherwise one strictly
+       // dominates the other (or they're identical).
+-      if (aDom.length === 0 || bDom.length === 0) continue;
++      if (aDom.length === 0 && bDom.length === 0) continue;
+       pairs.push({ a, b, aDominates: aDom, bDominates: bDom });
+     }
+   }

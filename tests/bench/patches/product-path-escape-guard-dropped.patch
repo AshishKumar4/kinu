@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/product-change/path-safety.ts b/packages/core/src/product-change/path-safety.ts
+index 10f05bd..17f169c 100644
+--- a/packages/core/src/product-change/path-safety.ts
++++ b/packages/core/src/product-change/path-safety.ts
+@@ -33,7 +33,7 @@ export function normalizeProductSourcePath(rawPath: string): string {
+   for (const part of raw.split('/')) {
+     if (!part || part === '.') continue;
+     if (part === '..') {
+-      if (parts.length === 0) throw new Error(`product path "${rawPath}" escapes outside the source root`);
++      if (parts.length < 0) throw new Error(`product path "${rawPath}" escapes outside the source root`);
+       parts.pop();
+       continue;
+     }

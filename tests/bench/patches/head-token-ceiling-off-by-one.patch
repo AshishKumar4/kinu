@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/heads/types.ts b/packages/core/src/heads/types.ts
+index ede74c9..de51944 100644
+--- a/packages/core/src/heads/types.ts
++++ b/packages/core/src/heads/types.ts
+@@ -313,7 +313,7 @@ export function budgetExhausted(
+   consumedTokens = 0,
+ ): { exhausted: boolean; reason?: string } {
+   if (b.maxDepth <= 0) return { exhausted: true, reason: 'max-depth' };
+-  if (consumedTokens >= b.maxTokens) return { exhausted: true, reason: 'tokens' };
++  if (consumedTokens > b.maxTokens) return { exhausted: true, reason: 'tokens' };
+   if (Date.now() - b.spawnedAt >= b.maxWallClockMs) return { exhausted: true, reason: 'wall-clock' };
+   return { exhausted: false };
+ }

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/vfs/mount-adapters.ts b/packages/core/src/vfs/mount-adapters.ts
+index b14f06d..d237de5 100644
+--- a/packages/core/src/vfs/mount-adapters.ts
++++ b/packages/core/src/vfs/mount-adapters.ts
+@@ -324,7 +324,7 @@ export function createDeviceMountVFS(transport: DeviceTransport, consent: Device
+   const guard = async (path: string, op: string): Promise<void> => {
+     if (await consent.hasFullFilesystem()) return;
+     const root = await effectiveRoot();
+-    if (path === root || root === '/' || path.startsWith(`${root}/`)) return;
++    if (path === root || root === '/' || path.startsWith(root)) return;
+     throw makeVfsError(
+       'EACCES',
+       `'${path}' is outside the consented device directory '${root}' — ` +

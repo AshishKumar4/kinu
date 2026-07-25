@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/bench/stats.ts b/packages/core/src/bench/stats.ts
+index 3e55c9f..27b5028 100644
+--- a/packages/core/src/bench/stats.ts
++++ b/packages/core/src/bench/stats.ts
+@@ -243,7 +243,7 @@ export function pairedBinaryComparison(
+   const passRateB = pairs === 0 ? 0 : (bothPass + onlyB) / pairs;
+   const diffs = outcomes.map((o) => (o.b ? 1 : 0) - (o.a ? 1 : 0));
+   const { mean: effect, ci } = pairedBootstrapCI(diffs, { ...opts, alpha });
+-  const pValue = binomialTwoSidedP(onlyB, discordant);
++  const pValue = binomialTwoSidedP(onlyB, pairs);
+   const mde = minimumDetectableEffect({ pairs, discordanceRate, alpha, power });
+   const resolutionRatio = Number.isFinite(mde) && mde > 0 ? Math.abs(effect) / mde : 0;
+   const resolvable = resolutionRatio >= 1;

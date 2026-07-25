@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/bench/stats.ts b/packages/core/src/bench/stats.ts
+index 3e55c9f..dd4ac97 100644
+--- a/packages/core/src/bench/stats.ts
++++ b/packages/core/src/bench/stats.ts
+@@ -167,7 +167,7 @@ export function requiredPairs(effect: number, params: Omit<PowerParams, 'pairs'>
+   const power = params.power ?? DEFAULT_POWER;
+   if (effect === 0 || params.discordanceRate <= 0) return Number.POSITIVE_INFINITY;
+   const z = normalQuantile(1 - alpha / 2) + normalQuantile(power);
+-  return Math.ceil((params.discordanceRate * z * z) / (effect * effect));
++  return Math.floor((params.discordanceRate * z * z) / (effect * effect));
+ }
+ 
+ export interface PairedBinaryStats {

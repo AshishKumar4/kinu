@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/providers/rate-limit-retry.ts b/packages/core/src/providers/rate-limit-retry.ts
+index 910cc8a..8a9fbf5 100644
+--- a/packages/core/src/providers/rate-limit-retry.ts
++++ b/packages/core/src/providers/rate-limit-retry.ts
+@@ -86,7 +86,7 @@ async function isRateLimited(response: Response): Promise<boolean> {
+ function parseRetryAfter(value: string | null, nowMs: number): number | null {
+   if (value === null || !value.trim()) return null;
+   const seconds = Number(value);
+-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
++  if (Number.isFinite(seconds) && seconds >= 0) return seconds;
+   const at = Date.parse(value);
+   return Number.isNaN(at) ? null : Math.max(0, at - nowMs);
+ }

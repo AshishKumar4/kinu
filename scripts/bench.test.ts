@@ -2,7 +2,7 @@
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
 import { describe, test, expect, afterAll } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { splitOf } from '../packages/core/src/index.js';
@@ -100,8 +100,21 @@ describe('createAttemptSandbox', () => {
     const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a3', defect });
     expect(lstatSync(join(sandbox.dir, 'node_modules')).isSymbolicLink()).toBe(true);
     expect(existsSync(join(sandbox.dir, '.git'))).toBe(false);
-    // Workspace links are relative, so they must resolve inside the copy.
-    expect(existsSync(join(sandbox.dir, 'packages/core/node_modules/@proteus/test-utils'))).toBe(true);
+    sandbox.dispose();
+  });
+
+  // Existence is not the property that matters: a workspace link that still
+  // RESOLVES to the pristine repo makes every cross-package import read the
+  // source tree instead of the copy, so a solver's edits — and a task's defect —
+  // are invisible to any test that imports through '@proteus/*'. This caught
+  // facts-confidence-default-zero validating as "breaks nothing".
+  test('workspace links resolve inside the copy, not back into the real repo', () => {
+    const runRoot = tempDir('bench-ws-');
+    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', defect });
+    for (const link of ['packages/core/node_modules/@proteus/test-utils', 'packages/test-utils/node_modules/@proteus/core']) {
+      const resolved = realpathSync(join(sandbox.dir, link));
+      expect(resolved.startsWith(realpathSync(sandbox.dir))).toBe(true);
+    }
     sandbox.dispose();
   });
 

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/identity/soul.ts b/packages/core/src/identity/soul.ts
+index f405199..ca49b07 100644
+--- a/packages/core/src/identity/soul.ts
++++ b/packages/core/src/identity/soul.ts
+@@ -48,7 +48,7 @@ export function isPlaceholderMission(mission: string | null | undefined): boolea
+   const text = mission?.trim() ?? '';
+   if (!text) return true;
+   const key = missionKey(text);
+-  return PLACEHOLDER_MISSIONS.some((placeholder) => missionKey(placeholder) === key);
++  return PLACEHOLDER_MISSIONS.every((placeholder) => missionKey(placeholder) === key);
+ }
+ 
+ function missionKey(mission: string): string {

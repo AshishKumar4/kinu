@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/events/hub/dedupe.ts b/packages/core/src/events/hub/dedupe.ts
+index f0c52e8..74498a6 100644
+--- a/packages/core/src/events/hub/dedupe.ts
++++ b/packages/core/src/events/hub/dedupe.ts
+@@ -15,7 +15,7 @@ export function dedupeKeyFor(event: ProteusEvent): string | null {
+   switch (event.variant) {
+     case 'webhook': {
+       const p = event.payload;
+-      const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
++      const bucket = Math.floor(event.received_at / (60 * 1000));
+       const bodyHash = sha256Hex(stableStringify(p.body), 24);
+       return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;
+     }

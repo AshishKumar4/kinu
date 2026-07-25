@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/eval/types.ts b/packages/core/src/eval/types.ts
+index 823e439..6eaf412 100644
+--- a/packages/core/src/eval/types.ts
++++ b/packages/core/src/eval/types.ts
+@@ -77,7 +77,7 @@ export function summarizeEval(results: EvalResult[]): EvalSummary {
+     byTag: {},
+   };
+   for (const r of results) {
+-    if (r.verdict.winner === 'a') summary.aWins++;
++    if (r.verdict.winner === 'a') summary.bWins++;
+     else if (r.verdict.winner === 'b') summary.bWins++;
+     else summary.ties++;
+     summary.avgScoreA += r.verdict.scoreA;

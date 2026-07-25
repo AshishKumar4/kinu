@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/product-change/approval-digest.ts b/packages/core/src/product-change/approval-digest.ts
+index 00f0474..9541559 100644
+--- a/packages/core/src/product-change/approval-digest.ts
++++ b/packages/core/src/product-change/approval-digest.ts
+@@ -49,7 +49,7 @@ export function deployApprovalDigest(binding: DeployApprovalBinding): string {
+   return argumentDigest({
+     v: 1,
+     approvalType: binding.approvalType,
+-    patch: binding.patch ?? null,
++    patch: binding.patch ?? '',
+     command: binding.command ?? null,
+   });
+ }

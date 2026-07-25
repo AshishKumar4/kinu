@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/changelog.ts b/packages/core/src/evolution/changelog.ts
+index fbf9d75..c2e64aa 100644
+--- a/packages/core/src/evolution/changelog.ts
++++ b/packages/core/src/evolution/changelog.ts
+@@ -310,7 +310,7 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
+   const outcomes = outcomeEntry(sql, opts.since);
+   if (outcomes) entries.push(outcomes);
+   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+-  return entries.slice(0, limit);
++  return entries.slice(0, limit - 1);
+ }
+ 
+ /** Entries newer than the seen marker — the badge count. */

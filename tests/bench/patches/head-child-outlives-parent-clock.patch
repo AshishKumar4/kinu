@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/heads/types.ts b/packages/core/src/heads/types.ts
+index ede74c9..348ec0c 100644
+--- a/packages/core/src/heads/types.ts
++++ b/packages/core/src/heads/types.ts
+@@ -293,7 +293,7 @@ export function deriveChildBudget(
+     maxTokens: Math.floor(parent.maxTokens * tokensRatio),
+     // A child can never outlive the parent's remaining wall-clock, regardless
+     // of the requested ratio — the child clock starts fresh at `now`.
+-    maxWallClockMs: Math.min(
++    maxWallClockMs: Math.max(
+       Math.floor(parent.maxWallClockMs * wallClockRatio),
+       parentRemainingMs,
+     ),

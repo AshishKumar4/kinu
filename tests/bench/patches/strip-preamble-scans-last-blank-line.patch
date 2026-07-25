@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/compaction.ts b/packages/core/src/compaction.ts
+index e858934..e86ef44 100644
+--- a/packages/core/src/compaction.ts
++++ b/packages/core/src/compaction.ts
+@@ -30,7 +30,7 @@ export function wrapCompactionSummary(summary: string): string {
+ /** Recover the summary body from a stored checkpoint (for iterative updates). */
+ export function stripCheckpointPreamble(summary: string): string {
+   if (!summary.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return summary.trim();
+-  const bodyStart = summary.indexOf('\n\n');
++  const bodyStart = summary.lastIndexOf('\n\n');
+   return bodyStart === -1 ? '' : summary.slice(bodyStart + 2).trim();
+ }
+ 

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/layergate/gate.ts b/packages/core/src/layergate/gate.ts
+index f038a45..3bbdefc 100644
+--- a/packages/core/src/layergate/gate.ts
++++ b/packages/core/src/layergate/gate.ts
+@@ -98,7 +98,7 @@ export function scoreAgainstBaseline(
+     layers: scores,
+     aggregate: measured.length === 0
+       ? null
+-      : measured.reduce((acc, s) => acc + (s.conformance ?? 0), 0) / measured.length,
++      : measured.reduce((acc, s) => acc + (s.conformance ?? 0), 0) / scores.length,
+     measured: measured.map((s) => s.layer),
+     unmeasured: scores.filter((s) => s.conformance === null).map((s) => s.layer),
+   };

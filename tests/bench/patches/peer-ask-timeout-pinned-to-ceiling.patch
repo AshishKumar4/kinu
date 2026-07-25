@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/tools/builtins.ts b/packages/core/src/tools/builtins.ts
+index e639ea9..2f89e93 100644
+--- a/packages/core/src/tools/builtins.ts
++++ b/packages/core/src/tools/builtins.ts
+@@ -275,7 +275,7 @@ const ASK_TIMEOUT_MAX_MS = 600_000;
+ 
+ function askTimeoutMs(timeoutSeconds: number | undefined): number {
+   if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_DEFAULT_MS;
+-  return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
++  return Math.max(ASK_TIMEOUT_MAX_MS, Math.min(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
+ }
+ 
+ export interface ProductChangeToolDeps {

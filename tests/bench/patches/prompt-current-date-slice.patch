@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
+index 77a8b66..54fe650 100644
+--- a/packages/core/src/prompt.ts
++++ b/packages/core/src/prompt.ts
+@@ -56,7 +56,7 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
+  *  pass this so cron wakes, agent.schedule, and dated facts reason from the
+  *  real date without busting the prompt-cache prefix within a day. */
+ export function currentDateForPrompt(now: Date = new Date()): string {
+-  return now.toISOString().slice(0, 10);
++  return now.toISOString().slice(0, 11);
+ }
+ 
+ export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;

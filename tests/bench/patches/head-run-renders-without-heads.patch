@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/heads/journal.ts b/packages/core/src/heads/journal.ts
+index 00401b2..9cc6f45 100644
+--- a/packages/core/src/heads/journal.ts
++++ b/packages/core/src/heads/journal.ts
+@@ -190,7 +190,7 @@ export class HeadJournal {
+     // children; for top-level splits (synthetic root) nothing matches, so all
+     // rows are heads.
+     const rootRow = rows.find((h) => h.id === rootId) ?? null;
+-    const heads: HeadRunHeadView[] = rows.filter((h) => h.id !== rootId).map((h) => ({
++    const heads: HeadRunHeadView[] = rows.filter((h) => h.id === rootId).map((h) => ({
+       id: h.id, task: h.task, rationale: h.rationale ?? '', status: h.status,
+       summary: h.summary, errorMessage: h.error_message,
+       tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,

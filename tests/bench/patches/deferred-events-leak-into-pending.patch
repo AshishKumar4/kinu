@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/events/hub/log.ts b/packages/core/src/events/hub/log.ts
+index 612153d..7b8119a 100644
+--- a/packages/core/src/events/hub/log.ts
++++ b/packages/core/src/events/hub/log.ts
+@@ -183,7 +183,7 @@ export class EventLog {
+       FROM agent_log
+       WHERE kind = 'event'
+         AND turn_id IS NULL
+-        AND (step_idx IS NULL OR step_idx >= 0)
++        AND (step_idx IS NULL OR step_idx >= -1)
+     `;
+     const bindings: unknown[] = [];
+ 

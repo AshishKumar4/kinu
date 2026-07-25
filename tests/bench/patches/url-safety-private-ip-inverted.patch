@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/web/url-safety.ts b/packages/core/src/web/url-safety.ts
+index 93c6a16..f5fec15 100644
+--- a/packages/core/src/web/url-safety.ts
++++ b/packages/core/src/web/url-safety.ts
+@@ -87,7 +87,7 @@ export function assertSafeUrl(url: string): URL {
+   }
+ 
+   const ipv4 = parseIPv4(hostname);
+-  if (ipv4 && isPrivateIPv4(ipv4)) {
++  if (ipv4 && !isPrivateIPv4(ipv4)) {
+     throw new UnsafeUrlError(`blocked private/internal address: ${hostname}`);
+   }
+   // Bracketed IPv6 literals: block loopback (::1) and any link-local (fe80::).

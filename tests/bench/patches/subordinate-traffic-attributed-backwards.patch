@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/events/hub/visibility.ts b/packages/core/src/events/hub/visibility.ts
+index 792f23e..e95bf46 100644
+--- a/packages/core/src/events/hub/visibility.ts
++++ b/packages/core/src/events/hub/visibility.ts
+@@ -166,7 +166,7 @@ function friendlySource(event: ProteusEvent): string {
+     case 'file_watch':      return `file (${(event.payload as { path?: string }).path ?? '?'})`;
+     case 'peer_async':      return `peer agent (${(event.payload as { from_agent_name?: string }).from_agent_name ?? '?'})`;
+     case 'subordinate':
+-      return event.variant === 'subordinate_report'
++      return event.variant !== 'subordinate_report'
+         ? `subordinate (${(event.payload as { from_subordinate?: string }).from_subordinate ?? '?'})`
+         : `workspace orchestrator (${(event.payload as { from_workspace?: string }).from_workspace ?? '?'})`;
+     case 'email_inbound':   return `email (${(event.payload as { from?: string }).from ?? '?'})`;

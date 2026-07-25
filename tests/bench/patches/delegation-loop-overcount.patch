@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/delegation-features.ts b/packages/core/src/evolution/delegation-features.ts
+index f2eacaf..9c4f771 100644
+--- a/packages/core/src/evolution/delegation-features.ts
++++ b/packages/core/src/evolution/delegation-features.ts
+@@ -65,7 +65,7 @@ function countLooped(prints: ReadonlyArray<string>): number {
+     if (!cycle) { i += 1; continue; }
+     let repeats = 1;
+     while (blockEquals(prints, i, i + repeats * cycle, cycle)) repeats += 1;
+-    looped += (repeats - 1) * cycle;
++    looped += repeats * cycle;
+     i += repeats * cycle;
+   }
+   return looped;

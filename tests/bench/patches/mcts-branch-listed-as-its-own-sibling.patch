@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/mcts/diversity.ts b/packages/core/src/mcts/diversity.ts
+index 1e2627f..98baa77 100644
+--- a/packages/core/src/mcts/diversity.ts
++++ b/packages/core/src/mcts/diversity.ts
+@@ -35,7 +35,7 @@ export function siblingAngles(i: number, n: number): string[] {
+   if (n <= 1) return [];
+   const out: string[] = [];
+   for (let j = 0; j < n; j++) {
+-    if (j !== i) out.push(diversityAngle(j, n));
++    out.push(diversityAngle(j, n));
+   }
+   return out;
+ }

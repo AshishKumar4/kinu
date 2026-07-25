@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/gepa/engine.ts b/packages/core/src/evolution/gepa/engine.ts
+index 186054d..769fd7d 100644
+--- a/packages/core/src/evolution/gepa/engine.ts
++++ b/packages/core/src/evolution/gepa/engine.ts
+@@ -50,7 +50,7 @@ export async function runGepa<I = unknown, E = unknown>(
+   // disjoint when the caller supplies a real train set, so the minibatch is
+   // bounded by the set it actually samples from — not by the eval set.
+   const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
+-  if (budget.minibatchSize <= 0) {
++  if (budget.minibatchSize < 0) {
+     throw new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`);
+   }
+   // Over-asking is benign and normal — the train set is however many labeled

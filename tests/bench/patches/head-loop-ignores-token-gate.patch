@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/heads/head-inference.ts b/packages/core/src/heads/head-inference.ts
+index faaa61b..c280f2a 100644
+--- a/packages/core/src/heads/head-inference.ts
++++ b/packages/core/src/heads/head-inference.ts
+@@ -392,7 +392,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
+       stopWhen: ({ steps }) => {
+         if (deps.isAborted()) return true;
+         if (steps.length >= maxSteps) return true;
+-        if (budgetExhausted(input.budget, usageTotal().total).exhausted) return true;
++        if (budgetExhausted(input.budget, usageTotal().total).exhausted) return false;
+         return false;
+       },
+     });

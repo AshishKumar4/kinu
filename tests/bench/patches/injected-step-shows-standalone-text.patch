@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/orchestrator/event-injection.ts b/packages/core/src/orchestrator/event-injection.ts
+index 06d50c1..d9fedcd 100644
+--- a/packages/core/src/orchestrator/event-injection.ts
++++ b/packages/core/src/orchestrator/event-injection.ts
+@@ -54,7 +54,7 @@ export class EventInjectionBuffer {
+     const drained = this.pending.splice(0);
+     this.absorbed.push(...drained);
+     return this.injections.drain(ctx, drained.length > 0
+-      ? [{ message: { role: 'user', content: drained.map((batch) => batch.stepText).join('\n\n') } }]
++      ? [{ message: { role: 'user', content: drained.map((batch) => batch.turnText).join('\n\n') } }]
+       : []);
+   }
+ 
