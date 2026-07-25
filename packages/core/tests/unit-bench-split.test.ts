@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   SEAL_SALT, DEFAULT_SEALED_FRACTION, splitOf, taskHash, manifestHash,
-  partitionCorpus, promptLeaksFix, SealedSplit,
+  partitionCorpus, promptLeaksFix, SealedSplit, validateWithRetries,
 } from '../src/index.ts';
 import type { BenchTask } from '../src/index.ts';
 
@@ -64,7 +64,7 @@ describe('SealedSplit', () => {
 
   test('evaluate returns aggregates and no per-task information', async () => {
     const split = new SealedSplit(sealedTasks);
-    const card = await split.evaluate(async () => ({ a: false, b: true }), { seed: 1, iterations: 500 });
+    const card = await split.evaluate(async () => ({ a: [false], b: [true] }), { seed: 1, iterations: 500 });
     expect(card.tasks).toBe(6);
     expect(card.stats.onlyB).toBe(6);
     // The whole point: nothing task-identifying escapes.
@@ -82,11 +82,84 @@ describe('SealedSplit', () => {
     expect(Object.keys(split)).not.toContain('tasks');
   });
 
-  test('validate reports only which tasks are malformed', async () => {
+  test('evaluate carries every repeat through to pass^k', async () => {
     const split = new SealedSplit(sealedTasks);
-    const result = await split.validate(async (t) => t.id !== 's3');
+    const card = await split.evaluate(
+      async (t) => (t.id === 's1'
+        ? { a: [false, false, false], b: [true, false, true] }
+        : { a: [false, false, false], b: [true, true, true] }),
+      { seed: 1, iterations: 500 },
+    );
+    expect(card.stats.repeats).toBe(3);
+    expect(card.stats.passAtOneB).toBeCloseTo((2 / 3 + 5) / 6, 10);
+    expect(card.stats.passAllB).toBeCloseTo(5 / 6, 10);
+    // Instability is reported as a count, never as an id — the seal's rule.
+    expect(card.stats.flakyB).toBe(1);
+    expect(JSON.stringify(card)).not.toContain('s1');
+  });
+
+  test('a task that fails every attempt is BAD, not merely unlucky', async () => {
+    let calls = 0;
+    const result = await validateWithRetries(2, async () => {
+      calls++;
+      return { ok: false, detail: 'defect→PASS (breaks nothing)' };
+    });
+    expect(calls).toBe(3);
+    expect(result).toEqual({
+      ok: false, attempts: 3, passedOnAttempt: null,
+      detail: 'failed all 3 attempt(s): defect→PASS (breaks nothing)',
+    });
+  });
+
+  test('a task that fails once then passes is FLAKY — valid, and said so', async () => {
+    const result = await validateWithRetries(2, async (attempt) => (attempt === 1
+      ? { ok: false, detail: 'oracle→FAIL sandbox symlink' }
+      : { ok: true, detail: 'defect trips core-tests, oracle restores it' }));
+    expect(result.ok).toBe(true);
+    expect(result.attempts).toBe(2);
+    expect(result.passedOnAttempt).toBe(2);
+    // The operator learns BOTH that it validated and that it needed a retry.
+    expect(result.detail).toContain('FLAKY');
+    expect(result.detail).toContain('oracle→FAIL sandbox symlink');
+  });
+
+  test('a task that passes first time costs one attempt and reads as plain ok', async () => {
+    let calls = 0;
+    const result = await validateWithRetries(2, async () => {
+      calls++;
+      return { ok: true, detail: 'defect trips core-tests, oracle restores it' };
+    });
+    expect(calls).toBe(1);
+    expect(result).toEqual({
+      ok: true, attempts: 1, passedOnAttempt: 1,
+      detail: 'defect trips core-tests, oracle restores it',
+    });
+  });
+
+  test('zero retries is the old single-shot behaviour, and the budget is bounded', async () => {
+    let calls = 0;
+    const result = await validateWithRetries(0, async () => {
+      calls++;
+      return { ok: false, detail: 'nope' };
+    });
+    expect(calls).toBe(1);
+    expect(result.ok).toBe(false);
+    expect(validateWithRetries(-1, async () => ({ ok: true, detail: '' })))
+      .rejects.toThrow(/non-negative integer/);
+  });
+
+  test('validate reports which tasks are malformed and which are merely unstable', async () => {
+    const split = new SealedSplit(sealedTasks);
+    const result = await split.validate(async (t) => ({
+      ok: t.id !== 's3',
+      attempts: t.id === 's5' ? 2 : 1,
+      passedOnAttempt: t.id === 's3' ? null : t.id === 's5' ? 2 : 1,
+      detail: '',
+    }));
     expect(result.checked).toBe(6);
     expect(result.invalid).toEqual(['s3']);
+    // s5 validated, but only on a retry: valid corpus, unreliable task.
+    expect(result.flaky).toEqual(['s5']);
   });
 });
 

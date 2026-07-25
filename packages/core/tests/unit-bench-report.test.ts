@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import {
   DEFAULT_ATTEMPT_BUDGET, GAIN_CALIBRATION, attemptPassed, benchConfigHash,
-  buildBenchReport, buildGainReport, decideBenchOutcome, pairedBinaryComparison,
-  renderBenchSummary, renderGainSummary, runOrder, usageTokens,
+  buildBenchReport, buildGainReport, caseIsUnstable, decideBenchOutcome,
+  pairedBinaryComparison, renderBenchSummary, renderGainSummary, runOrder, usageTokens,
 } from '../src/index.ts';
 import type {
   AttemptOutcome, BenchRunConfig, PairedOutcome, SealedScorecard,
@@ -14,19 +14,25 @@ const CONFIG: BenchRunConfig = {
   seed: 1,
   variantA: 'baseline',
   variantB: 'candidate',
+  repeats: 1,
   manifestHash: 'abc123',
 };
 
 function attempt(taskId: string, variantId: string, passed: boolean, extra: Partial<AttemptOutcome> = {}): AttemptOutcome {
   return {
-    taskId, variantId, slot: variantId === CONFIG.variantA ? 'a' : 'b',
+    taskId, variantId, slot: variantId === CONFIG.variantA ? 'a' : 'b', repeat: 0,
     passed, checks: [{ id: 'c', passed, exitCode: passed ? 0 : 1, durationMs: 5, output: '' }],
     durationMs: 10, tokens: 100, budgetBreach: null, ...extra,
   };
 }
 
+/** All the repeats of one task under one variant. */
+function repeats(taskId: string, variantId: string, passes: readonly boolean[]): AttemptOutcome[] {
+  return passes.map((passed, repeat) => attempt(taskId, variantId, passed, { repeat }));
+}
+
 function scorecard(spec: { a: boolean; b: boolean }[]): SealedScorecard {
-  const outcomes: PairedOutcome[] = spec.map((s, i) => ({ taskId: `s${i}`, ...s }));
+  const outcomes: PairedOutcome[] = spec.map((s, i) => ({ taskId: `s${i}`, a: [s.a], b: [s.b] }));
   return { tasks: spec.length, manifestHash: 'sealed-hash', stats: pairedBinaryComparison(outcomes, { seed: 1, iterations: 1000 }) };
 }
 
@@ -34,6 +40,10 @@ describe('benchConfigHash', () => {
   test('changes when the budget changes — two envelopes are not comparable', () => {
     const bigger = { ...CONFIG, budget: { ...CONFIG.budget, maxTokens: CONFIG.budget.maxTokens * 2 } };
     expect(benchConfigHash(bigger)).not.toBe(benchConfigHash(CONFIG));
+  });
+
+  test('changes when the repeat count changes — pass^3 is not pass^1', () => {
+    expect(benchConfigHash({ ...CONFIG, repeats: 3 })).not.toBe(benchConfigHash(CONFIG));
   });
 
   test('changes when the corpus manifest changes', () => {
@@ -66,6 +76,48 @@ describe('buildBenchReport', () => {
       runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
       devAttempts: [attempt('t1', 'baseline', false)],
     })).toThrow(/unpaired/);
+  });
+
+  test('a missing repeat is an error too — a lost attempt would silently change pass^k', () => {
+    const config = { ...CONFIG, repeats: 3 };
+    expect(() => buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        ...repeats('t1', 'baseline', [false, false, false]),
+        ...repeats('t1', 'candidate', [true, true]),
+      ],
+    })).toThrow(/expected 3 attempt\(s\) per variant, got 3 and 2/);
+  });
+
+  test('folds repeats into one case row and averages the per-attempt cost', () => {
+    const config = { ...CONFIG, repeats: 3 };
+    const report = buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        ...repeats('t1', 'baseline', [true, false, true]),
+        ...repeats('t1', 'candidate', [true, true, true]),
+        // Emitted out of repeat order on purpose: the report must not depend
+        // on the order the runner happened to produce.
+        attempt('t2', 'baseline', false, { repeat: 1, tokens: 400, durationMs: 30 }),
+        attempt('t2', 'baseline', false, { repeat: 0, tokens: 200, durationMs: 10 }),
+        attempt('t2', 'baseline', false, { repeat: 2, tokens: 300, durationMs: 20, budgetBreach: 'tokens' }),
+        ...repeats('t2', 'candidate', [false, false, false]),
+      ],
+    });
+    const [t1, t2] = report.dev.cases;
+    expect(t1).toMatchObject({ taskId: 't1', attempts: 3, passesA: 2, passesB: 3 });
+    expect(t2).toMatchObject({ taskId: 't2', attempts: 3, passesA: 0, passesB: 0 });
+    // Mean per attempt, so a k=3 row reads against the same per-attempt budget.
+    expect(t2!.tokensA).toBe(300);
+    expect(t2!.durationMsA).toBe(20);
+    expect(t2!.breachA).toBe('tokens');
+    expect(report.budgetBreaches).toBe(1);
+    expect(caseIsUnstable(t1!)).toBe(true);
+    expect(caseIsUnstable(t2!)).toBe(false);
+    // pass@1 counts every attempt; pass^3 counts only clean sweeps.
+    expect(report.dev.stats.passAtOneA).toBeCloseTo(1 / 3, 10);
+    expect(report.dev.stats.passAllA).toBe(0);
+    expect(report.dev.stats.passAllB).toBe(0.5);
   });
 
   test('an attempt from an unknown variant is refused', () => {
@@ -132,6 +184,42 @@ describe('renderBenchSummary', () => {
     expect(text).toContain('DECISION: KEEP');
     expect(text).toContain('caveat:');
     expect(text).toContain('McNemar exact');
+  });
+
+  test('reports pass^k next to pass@1 and names the unstable tasks', () => {
+    const config = { ...CONFIG, repeats: 3 };
+    const report = buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        ...repeats('steady', 'baseline', [true, true, true]),
+        ...repeats('steady', 'candidate', [true, true, true]),
+        ...repeats('wobbly', 'baseline', [true, false, true]),
+        ...repeats('wobbly', 'candidate', [false, false, false]),
+      ],
+    });
+    const text = renderBenchSummary(report);
+    expect(text).toContain('Repeats: 3 attempt(s) per task per variant');
+    expect(text).toContain('pass@1 A=83.3%  B=50.0%');
+    expect(text).toContain('pass^3 A=50.0%  B=50.0%');
+    expect(text).toContain('unstable: 1/2 task(s) (A=1, B=0)');
+    expect(text).toContain('UNSTABLE on dev (repeats disagreed): 1/2 task(s)');
+    expect(text).toContain('wobbly');
+    expect(text).toContain('A=2/3');
+    expect(text).toContain('~unstable');
+    expect(text).toContain('exact sign test over tasks');
+    expect(text).toContain('repeats buy precision within a task');
+  });
+
+  test('says every task agreed when the repeats were unanimous', () => {
+    const config = { ...CONFIG, repeats: 2 };
+    const report = buildBenchReport({
+      runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        ...repeats('t1', 'baseline', [false, false]),
+        ...repeats('t1', 'candidate', [true, true]),
+      ],
+    });
+    expect(renderBenchSummary(report)).toContain('UNSTABLE on dev: none');
   });
 
   test('says so plainly when the seal was never opened', () => {

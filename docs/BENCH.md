@@ -17,7 +17,7 @@ the harness will say so.
 
 ```
 bun scripts/bench.ts validate --run-root /tmp/bench
-bun scripts/bench.ts compare  --run-root /tmp/bench --a null --b oracle --sealed
+bun scripts/bench.ts compare  --run-root /tmp/bench --a null --b oracle --sealed --repeats 3
 bun scripts/bench.ts gain     --run-root /tmp/bench --stateful agent-evolving --stateless agent
 ```
 
@@ -48,6 +48,34 @@ candidate (a `>=` → `>` change in `decidePromotion`) broke nothing — no test
 covered that boundary — so it was dropped rather than shipped as a task nobody
 could fail. `bench validate` re-proves the precondition for all 17: defect
 fails, oracle passes.
+
+### Validation is itself noisy — `--validate-retries n`
+
+A full 165-task validation once flagged `autojudge-slot-scores-swapped` **BAD**.
+It then validated 5/5 in isolation and passed the next complete run: the failure
+was never reproduced, and the cause was the sandbox, not the task. A single
+scored attempt can record a false fail.
+
+So a task that fails well-formedness is re-checked, up to `--validate-retries`
+more times (default 2, so 3 attempts). The policy is bounded and stops at the
+first success — unbounded retrying would eventually let any sufficiently noisy
+broken task through, and running every attempt regardless would triple the cost
+of the normal case, which is a corpus that validates first time.
+
+Three outcomes, kept distinct rather than collapsed to a boolean:
+
+| label | meaning | exit |
+|---|---|---|
+| `ok` | passed on the first attempt | 0 |
+| `FLKY` | failed, then passed on a retry — **non-deterministic** | 0, reported loudly |
+| `BAD` | failed every attempt — genuinely broken | 1 |
+
+`FLKY` is not papered over. The summary lists every flaky task and says why it
+matters: the same non-determinism that made it pass on a retry can make a scored
+`compare` run record a false fail on it, which is exactly what `--repeats` is
+for. The sealed split reports flaky ids alongside invalid ones — well-formedness
+is a property of the task, not of any variant, so neither leaks performance
+signal.
 
 `BENCH_SUITES` in `scripts/bench-corpus.ts` also defines a `lean` suite over
 `scripts/verify-lean.sh`. The check mechanism is just an argv and an exit code,
@@ -90,25 +118,89 @@ sandboxes and fresh homes per attempt, so memory, CraftStore, lessons, and
 scaffold state cannot leak from one variant into the next.
 
 **Randomized order.** Which variant attempts a task first is `runOrder(taskId,
-seed)` — deterministic given the seed, so runs reproduce, but not a fixed order
-that would confound host drift with the variant.
+seed, repeat)` — deterministic given the seed, so runs reproduce, but not a fixed
+order that would confound host drift with the variant. The repeat index is part
+of the draw, so a task's repeats do not all inherit one order.
+
+## Repeats — `--repeats n`
+
+Each task runs `n` times per variant. Prediction noise in agentic runs is 2–6×
+data noise, so three runs per task resolves more than doubling the task count —
+but only if the statistics stay honest about what repeats actually buy.
+
+**The unit of pairing is the task, not the attempt.** Repeats of one task share
+its difficulty, its defect, and its checks; they are not independent
+observations. Feeding `k·n` attempt pairs to an exact test as though they were
+`k·n` independent pairs is pseudoreplication, and it inflates significance
+*multiplicatively* — the reported p goes from 2·0.5ⁿ to 2·0.5^(k·n).
+
+That is not hypothetical. A real 4-task, 3-repeat run here (`oracle` vs
+`noisy:0.5`, seed 7) had the baseline sweep 12/12 and the candidate take 5/12:
+
+| pairing | discordant units | p |
+|---|---|---|
+| per attempt (**wrong**) | 7 attempts | 0.0156 — "significant", from 4 tasks |
+| per task (what we do) | 4 tasks | 0.1250 — correctly, nothing established |
+
+So `summarizeRepeats` collapses every task to a per-task pass **rate** before
+anything else runs, and:
+
+- **the exact test** votes once per task. At `k=1` a task's rate is 0 or 1, so
+  "rate B > rate A" is "only B passed" and the test *is* exact McNemar — the
+  design is unchanged. Above `k=1` it is the exact sign test on task-level rate
+  differences.
+- **the bootstrap** resamples task-level differences, which makes it a cluster
+  bootstrap: a task is resampled whole, so within-task correlation lands in the
+  interval instead of being washed out.
+- **the MDE** uses ψ = mean squared per-task difference. At `k=1` that is
+  exactly the discordance rate, so the 157/0.20 → 10pp anchor is unchanged;
+  above it, ψ shrinks as run-to-run noise averages away. That shrinkage is the
+  real — and only — power gain repeats buy, and `pairs` stays the task count, so
+  the reported resolution can never be inflated by running more attempts. The
+  verdict says this out loud: *"12 attempts per variant, but still 4 independent
+  pairs — repeats buy precision within a task, never more tasks"*.
+
+`--repeats` is hashed into `configHash` for the same reason the budget is: a
+`k=3` measurement is not comparable with a `k=1` one.
+
+### pass@1 and pass^k
+
+Both are reported, for both variants:
+
+- **pass@1** — mean over every attempt. The single-shot number.
+- **pass^k** — the fraction of tasks solved in **all** k attempts. Reliability.
+
+They can disagree, and that disagreement is the point. In the run above the
+candidate scored **pass@1 41.7%** and **pass^3 0%** — passable-looking on one
+shot, unable to solve a single task reliably. At `k=1` they are identical by
+construction.
+
+### Flakiness is surfaced, not averaged
+
+A task whose repeats disagree is telling you something, and an unstable task
+folded into a pass rate is a finding being hidden. Every unstable task is marked
+`~unstable` in its row and listed again under `UNSTABLE on dev`, with counts
+(`unstable: 4/4 task(s) (A=0, B=4)`) in the stats block. The sealed split reports
+those counts and never the ids — instability is aggregate signal like everything
+else that leaves the seal.
 
 ## The statistics
 
 Every comparison is paired — the same task, both variants — so a two-sample test
 would be wrong and weaker. `packages/core/src/bench/stats.ts`:
 
-- **Exact McNemar** (binomial, not chi-squared) on the discordant pairs.
-- **Seeded paired bootstrap** for the interval, resampling the difference
-  vector so the pairing survives.
+- **Exact McNemar** (binomial, not chi-squared) on the discordant pairs — the
+  exact sign test over tasks once repeats are involved, which is the same test.
+- **Seeded paired bootstrap** for the interval, resampling the per-task
+  difference vector so the pairing (and any within-task correlation) survives.
 - **Minimum detectable effect**, δ\* = (z<sub>α/2</sub> + z<sub>β</sub>)·√(ψ/n),
-  and **resolution ratio** = |effect| / δ\*.
+  and **resolution ratio** = |effect| / δ\*. `n` is always tasks.
 
 ### State the detectable effect up front
 
-At **157 paired tasks and 20% discordance**, α=0.05 and 80% power, this design
-resolves **≈10pp**. A 3pp difference at that n is **not detectable** — it would
-need ~1745 pairs. Both numbers are pinned by unit test.
+At **157 paired tasks and ψ=0.20**, α=0.05 and 80% power, this design resolves
+**≈10pp**. A 3pp difference at that n is **not detectable** — it would need ~1745
+pairs. Both numbers are pinned by unit test.
 
 This corpus is far smaller, and the harness says so rather than letting anyone
 over-read it:
@@ -158,6 +250,13 @@ physically reach, so the seal could never accept anything at all.)
 reward(stateless))` — the share of remaining headroom the machinery captured.
 Per-task rewards are reported in sequence order, so the learning curve is
 visible rather than just its average.
+
+With `--repeats n` the replicate is a whole **pass over the sequence**, not an
+individual attempt. The stateful arm's entire point is that state accumulates
+*along* the sequence, so re-attempting one task mid-run would measure the same
+accumulated state twice rather than draw independently. Each pass therefore gets
+its own shared home — a genuinely fresh v0 identity — and a task's reward is its
+mean over passes.
 
 This is the only design that separates what the evolution machinery contributes
 from what the base model contributes, and on this substrate creating a fresh v0

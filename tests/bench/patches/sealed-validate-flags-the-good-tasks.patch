@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/bench/split.ts b/packages/core/src/bench/split.ts
-index 5cb72d6..828f775 100644
+index 12c0790..117af6a 100644
 --- a/packages/core/src/bench/split.ts
 +++ b/packages/core/src/bench/split.ts
-@@ -96,7 +96,7 @@ export class SealedSplit {
-   async validate(check: (task: BenchTask) => Promise<boolean>): Promise<{ checked: number; invalid: string[] }> {
-     const invalid: string[] = [];
+@@ -125,7 +125,7 @@ export class SealedSplit {
+     const flaky: string[] = [];
      for (const task of this.#tasks) {
--      if (!(await check(task))) invalid.push(task.id);
-+      if (await check(task)) invalid.push(task.id);
+       const result = await check(task);
+-      if (!result.ok) invalid.push(task.id);
++      if (result.ok) invalid.push(task.id);
+       else if ((result.passedOnAttempt ?? 1) > 1) flaky.push(task.id);
      }
-     return { checked: this.#tasks.length, invalid };
-   }
+     return { checked: this.#tasks.length, invalid, flaky };

@@ -16,31 +16,47 @@ export interface BenchRunConfig {
   seed: number;
   variantA: string;
   variantB: string;
+  /** Attempts per task per variant. */
+  repeats: number;
   /** Digest of the whole task corpus — both splits. */
   manifestHash: string;
 }
 
 /** Two runs are comparable only when this matches. Budget is part of it, so a
- *  variant cannot win by quietly being given a bigger compute envelope. */
+ *  variant cannot win by quietly being given a bigger compute envelope; repeats
+ *  are part of it for the same reason — pass^k at k=3 and k=1 are different
+ *  measurements and averaging noise away changes what the number means. */
 export function benchConfigHash(config: BenchRunConfig): string {
   return fnv1a64(JSON.stringify([
     config.corpus, config.budget.wallClockMs, config.budget.maxTokens,
-    config.seed, config.variantA, config.variantB, config.manifestHash,
+    config.seed, config.variantA, config.variantB, config.repeats, config.manifestHash,
   ]));
 }
 
 export interface BenchCaseScore {
   taskId: string;
-  passedA: boolean;
-  passedB: boolean;
+  /** Repeats run per variant on this task. */
+  attempts: number;
+  passesA: number;
+  passesB: number;
+  /** Mean per attempt, so the number stays on the same scale as the budget. */
   durationMsA: number;
   durationMsB: number;
   tokensA: number;
   tokensB: number;
+  /** First breach seen across the repeats, or null when none breached. */
   breachA: BudgetBreach | null;
   breachB: BudgetBreach | null;
+  /** First error seen across the repeats. */
   errorA?: string;
   errorB?: string;
+}
+
+/** Repeats disagreed under at least one variant: the task is unstable, and an
+ *  unstable task averaged into a pass rate is a finding being hidden. */
+export function caseIsUnstable(c: BenchCaseScore): boolean {
+  const unstable = (passes: number) => passes > 0 && passes < c.attempts;
+  return unstable(c.passesA) || unstable(c.passesB);
 }
 
 export interface DevSplitReport {
@@ -115,13 +131,32 @@ export interface BuildBenchReportInput {
   bootstrap?: BootstrapOptions;
 }
 
+/** Per-attempt figures collapsed to one row. Mean rather than total for the
+ *  cost fields, so a k=3 row is read against the same per-attempt budget a k=1
+ *  row is. */
+function foldRepeats(attempts: readonly AttemptOutcome[]): {
+  passes: number; durationMs: number; tokens: number;
+  breach: BudgetBreach | null; error?: string; breachCount: number;
+} {
+  const n = attempts.length;
+  const error = attempts.find((x) => x.error)?.error;
+  return {
+    passes: attempts.filter((x) => x.passed).length,
+    durationMs: Math.round(attempts.reduce((s, x) => s + x.durationMs, 0) / n),
+    tokens: Math.round(attempts.reduce((s, x) => s + x.tokens, 0) / n),
+    breach: attempts.find((x) => x.budgetBreach)?.budgetBreach ?? null,
+    breachCount: attempts.filter((x) => x.budgetBreach).length,
+    ...(error === undefined ? {} : { error }),
+  };
+}
+
 export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
   const { config } = input;
-  const byTask = new Map<string, { a?: AttemptOutcome; b?: AttemptOutcome }>();
+  const byTask = new Map<string, { a: AttemptOutcome[]; b: AttemptOutcome[] }>();
   for (const attempt of input.devAttempts) {
-    const entry = byTask.get(attempt.taskId) ?? {};
-    if (attempt.variantId === config.variantA) entry.a = attempt;
-    else if (attempt.variantId === config.variantB) entry.b = attempt;
+    const entry = byTask.get(attempt.taskId) ?? { a: [], b: [] };
+    if (attempt.variantId === config.variantA) entry.a.push(attempt);
+    else if (attempt.variantId === config.variantB) entry.b.push(attempt);
     else throw new Error(`attempt for unknown variant "${attempt.variantId}" on task ${attempt.taskId}`);
     byTask.set(attempt.taskId, entry);
   }
@@ -130,19 +165,28 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
   const outcomes: PairedOutcome[] = [];
   let budgetBreaches = 0;
   for (const [taskId, { a, b }] of byTask) {
-    if (!a || !b) throw new Error(`unpaired task ${taskId}: a paired design cannot drop half a pair`);
-    if (a.budgetBreach) budgetBreaches++;
-    if (b.budgetBreach) budgetBreaches++;
+    if (a.length !== config.repeats || b.length !== config.repeats) {
+      throw new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length} — a paired design cannot drop half a pair`);
+    }
+    // Repeat order is the pairing order for pass^k and flakiness alike; sorting
+    // makes a report byte-identical whatever order the runner emitted in.
+    const byRepeat = (x: AttemptOutcome, y: AttemptOutcome) => x.repeat - y.repeat;
+    a.sort(byRepeat);
+    b.sort(byRepeat);
+    const foldA = foldRepeats(a);
+    const foldB = foldRepeats(b);
+    budgetBreaches += foldA.breachCount + foldB.breachCount;
     cases.push({
       taskId,
-      passedA: a.passed, passedB: b.passed,
-      durationMsA: a.durationMs, durationMsB: b.durationMs,
-      tokensA: a.tokens, tokensB: b.tokens,
-      breachA: a.budgetBreach, breachB: b.budgetBreach,
-      ...(a.error ? { errorA: a.error } : {}),
-      ...(b.error ? { errorB: b.error } : {}),
+      attempts: config.repeats,
+      passesA: foldA.passes, passesB: foldB.passes,
+      durationMsA: foldA.durationMs, durationMsB: foldB.durationMs,
+      tokensA: foldA.tokens, tokensB: foldB.tokens,
+      breachA: foldA.breach, breachB: foldB.breach,
+      ...(foldA.error ? { errorA: foldA.error } : {}),
+      ...(foldB.error ? { errorB: foldB.error } : {}),
     });
-    outcomes.push({ taskId, a: a.passed, b: b.passed });
+    outcomes.push({ taskId, a: a.map((x) => x.passed), b: b.map((x) => x.passed) });
   }
   cases.sort((x, y) => x.taskId.localeCompare(y.taskId));
 
@@ -167,19 +211,30 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
 
 export function renderBenchSummary(report: BenchReport): string {
   const { config, dev } = report;
+  const k = config.repeats;
   const lines: string[] = [];
   lines.push(`Bench: ${config.variantB} (candidate) vs ${config.variantA} (baseline)`);
   lines.push(`Corpus: ${config.corpus}  manifest=${config.manifestHash}  config=${report.configHash}  seed=${config.seed}`);
   lines.push(`Budget: ${config.budget.wallClockMs}ms wall-clock, ${config.budget.maxTokens} tokens per attempt` +
     (report.budgetBreaches > 0 ? `  (${report.budgetBreaches} attempt(s) hit the budget)` : ''));
+  lines.push(`Repeats: ${k} attempt(s) per task per variant`);
   lines.push('');
   lines.push(`DEV split (${dev.tasks} paired tasks) — adaptation may see this`);
   lines.push(renderPairedStats(dev.stats));
-  for (const c of dev.cases) {
-    const mark = (p: boolean, breach: BudgetBreach | null) => `${p ? 'pass' : 'FAIL'}${breach ? `(${breach})` : ''}`;
-    lines.push(`  ${c.taskId.padEnd(28)} A=${mark(c.passedA, c.breachA).padEnd(14)} B=${mark(c.passedB, c.breachB)}`);
-  }
+  for (const c of dev.cases) lines.push(`  ${renderCase(c)}`);
   lines.push('');
+  const unstable = dev.cases.filter(caseIsUnstable);
+  if (unstable.length > 0) {
+    // Surfaced rather than averaged into the pass rate: a task whose repeats
+    // disagree is reporting instability, and instability read as a score is how
+    // a marginal result becomes an artifact.
+    lines.push(`UNSTABLE on dev (repeats disagreed): ${unstable.length}/${dev.tasks} task(s)`);
+    for (const c of unstable) lines.push(`  ${renderCase(c)}`);
+    lines.push('');
+  } else if (k > 1) {
+    lines.push(`UNSTABLE on dev: none — every task agreed across all ${k} repeats`);
+    lines.push('');
+  }
   if (report.sealed) {
     lines.push(`SEALED split (${report.sealed.tasks} paired tasks) — aggregates only, opened ${report.sealAccessOrdinal ?? '?'} time(s)`);
     lines.push(renderPairedStats(report.sealed.stats));
@@ -192,14 +247,37 @@ export function renderBenchSummary(report: BenchReport): string {
   return lines.join('\n');
 }
 
+function renderCase(c: BenchCaseScore): string {
+  const mark = (passes: number, breach: BudgetBreach | null): string => {
+    const score = c.attempts === 1 ? (passes === 1 ? 'pass' : 'FAIL') : `${passes}/${c.attempts}`;
+    return `${score}${breach ? `(${breach})` : ''}`;
+  };
+  return `${c.taskId.padEnd(28)} A=${mark(c.passesA, c.breachA).padEnd(14)} B=${mark(c.passesB, c.breachB)}` +
+    (caseIsUnstable(c) ? '  ~unstable' : '');
+}
+
 function renderPairedStats(s: PairedBinaryStats): string {
-  return [
-    `  pass A=${(s.passRateA * 100).toFixed(1)}%  B=${(s.passRateB * 100).toFixed(1)}%  effect=${fmtPp(s.effect)}` +
+  const lines = [
+    `  pass@1 A=${pct(s.passAtOneA)}  B=${pct(s.passAtOneB)}  effect=${fmtPp(s.effect)}` +
       `  95% CI [${fmtPp(s.ci.lo)}, ${fmtPp(s.ci.hi)}]`,
-    `  McNemar exact p=${s.pValue.toFixed(4)}  (b=${s.onlyA} only-A, c=${s.onlyB} only-B, ${s.discordant}/${s.pairs} discordant)`,
+    `  pass^${s.repeats} A=${pct(s.passAllA)}  B=${pct(s.passAllB)}  effect=${fmtPp(s.effectAll)}` +
+      (s.repeats === 1 ? '  (identical to pass@1 at 1 repeat)' : `  — solved in all ${s.repeats} attempts`),
+    // Named for what it actually is at each k: at one attempt per task the sign
+    // test over discordant tasks IS exact McNemar; above it, it is the same
+    // exact test on task-level rate differences.
+    `  ${s.repeats === 1 ? 'McNemar exact' : 'exact sign test over tasks'} p=${s.pValue.toFixed(4)}` +
+      `  (b=${s.onlyA} favour A, c=${s.onlyB} favour B, ${s.discordant}/${s.pairs} discordant tasks)`,
     `  detectable at this n: ${fmtPp(s.mde)}  resolution=${s.resolutionRatio.toFixed(2)}x` +
       `  → ${s.verdict}`,
-  ].join('\n');
+  ];
+  if (s.repeats > 1) {
+    lines.splice(2, 0, `  unstable: ${s.flakyEither}/${s.pairs} task(s) (A=${s.flakyA}, B=${s.flakyB})`);
+  }
+  return lines.join('\n');
+}
+
+function pct(x: number): string {
+  return `${(x * 100).toFixed(1)}%`;
 }
 
 export interface GainTaskScore {
@@ -262,7 +340,8 @@ export function renderGainSummary(report: GainReport): string {
   lines.push(`Corpus: ${report.config.corpus}  manifest=${report.config.manifestHash}  config=${report.configHash}`);
   lines.push(`Budget: ${report.config.budget.wallClockMs}ms wall-clock, ${report.config.budget.maxTokens} tokens per attempt`);
   lines.push('');
-  lines.push(`Tasks: ${s.tasks} (identical sequence, both arms)`);
+  lines.push(`Tasks: ${s.tasks} (identical sequence, both arms)` +
+    (report.config.repeats > 1 ? ` × ${report.config.repeats} passes; per-task reward is the mean over passes` : ''));
   lines.push(`  stateful reward  ${(s.statefulReward * 100).toFixed(1)}%`);
   lines.push(`  stateless reward ${(s.statelessReward * 100).toFixed(1)}%`);
   lines.push(`  gain ${fmtPp(s.gain)}  95% CI [${fmtPp(s.ci.lo)}, ${fmtPp(s.ci.hi)}]  p=${s.pValue.toFixed(4)}`);

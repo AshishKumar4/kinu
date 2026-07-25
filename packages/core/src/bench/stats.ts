@@ -6,6 +6,16 @@
 // use a seeded paired bootstrap. Both report an interval, and both report the
 // instrument's own resolution so a "significant" result that the design cannot
 // actually resolve is visible as such.
+//
+// THE UNIT OF PAIRING IS THE TASK, NOT THE ATTEMPT. With `repeats` attempts per
+// task per variant, the repeats of one task are not independent observations —
+// they share the task's difficulty, its defect, and its checks. Feeding k·n
+// attempt pairs to an exact test as though they were k·n independent pairs is
+// the classic pseudoreplication error and it inflates significance
+// multiplicatively: n tasks that a candidate sweeps at k=3 would report
+// 2·0.5^(3n) instead of the 2·0.5^n the design actually earns. So every task is
+// collapsed to a per-task pass RATE first, and the test and the interval both
+// operate on the n task-level differences.
 
 import { fnv1a64 } from '../prompting/volatile-context.js';
 
@@ -102,7 +112,10 @@ export interface BootstrapOptions {
 }
 
 /** Percentile bootstrap CI for the mean of paired differences. Resamples the
- *  DIFFERENCE vector, which is what preserves the pairing. */
+ *  DIFFERENCE vector, which is what preserves the pairing — and, once the
+ *  entries are per-TASK differences over repeats, makes this a cluster
+ *  bootstrap: a task is resampled whole, so within-task correlation is carried
+ *  into the interval instead of being washed out. */
 export function pairedBootstrapCI(diffs: readonly number[], opts: BootstrapOptions = {}): { mean: number; ci: Interval } {
   const alpha = opts.alpha ?? DEFAULT_ALPHA;
   const iterations = opts.iterations ?? DEFAULT_BOOTSTRAP_ITERATIONS;
@@ -122,15 +135,22 @@ export function pairedBootstrapCI(diffs: readonly number[], opts: BootstrapOptio
 }
 
 export interface PowerParams {
+  /** Independent pairs — i.e. TASKS. Never attempts: repeats of one task are
+   *  not independent, and counting them here is what overstates power. */
   pairs: number;
-  /** Fraction of pairs on which the two variants disagree. */
-  discordanceRate: number;
+  /** ψ: mean squared per-task difference, the null variance of one pair's
+   *  contribution. For single-attempt binary outcomes a task's difference is
+   *  −1, 0 or +1, so ψ is exactly the discordance rate — the classic McNemar
+   *  quantity. With repeats the per-task difference is a difference of RATES,
+   *  so ψ shrinks as run-to-run noise averages out, and that shrinkage is the
+   *  real (and only) power gain repeats buy. */
+  dispersion: number;
   alpha?: number;
   power?: number;
 }
 
-/** Smallest |effect| (on the pass-rate scale) that a paired McNemar design with
- *  `pairs` tasks and this discordance rate can detect at the given alpha/power.
+/** Smallest |effect| (on the pass-rate scale) that a paired design with `pairs`
+ *  tasks and this dispersion can detect at the given alpha/power.
  *
  *  δ* = (z_{α/2} + z_β) · sqrt(ψ / n)
  *
@@ -138,12 +158,12 @@ export interface PowerParams {
  *  Stating this number up front is the whole point: a 3pp difference at that n
  *  is BELOW the instrument's resolution and must not be read as a finding. */
 export function minimumDetectableEffect(params: PowerParams): number {
-  const { pairs, discordanceRate } = params;
+  const { pairs, dispersion } = params;
   const alpha = params.alpha ?? DEFAULT_ALPHA;
   const power = params.power ?? DEFAULT_POWER;
-  if (pairs <= 0 || discordanceRate <= 0) return Number.POSITIVE_INFINITY;
+  if (pairs <= 0 || dispersion <= 0) return Number.POSITIVE_INFINITY;
   const z = normalQuantile(1 - alpha / 2) + normalQuantile(power);
-  return z * Math.sqrt(discordanceRate / pairs);
+  return z * Math.sqrt(dispersion / pairs);
 }
 
 /** The smallest two-sided p an exact paired test can ever produce with `pairs`
@@ -161,34 +181,60 @@ export function minimumPairsForSignificance(alpha = DEFAULT_ALPHA): number {
   return Number.POSITIVE_INFINITY;
 }
 
-/** Inverse of minimumDetectableEffect: pairs needed to detect `effect`. */
+/** Inverse of minimumDetectableEffect: TASKS needed to detect `effect`. */
 export function requiredPairs(effect: number, params: Omit<PowerParams, 'pairs'>): number {
   const alpha = params.alpha ?? DEFAULT_ALPHA;
   const power = params.power ?? DEFAULT_POWER;
-  if (effect === 0 || params.discordanceRate <= 0) return Number.POSITIVE_INFINITY;
+  if (effect === 0 || params.dispersion <= 0) return Number.POSITIVE_INFINITY;
   const z = normalQuantile(1 - alpha / 2) + normalQuantile(power);
-  return Math.ceil((params.discordanceRate * z * z) / (effect * effect));
+  return Math.ceil((params.dispersion * z * z) / (effect * effect));
 }
 
 export interface PairedBinaryStats {
+  /** Independent pairs — tasks, not attempts. */
   pairs: number;
-  /** Both variants passed. */
+  /** Attempts per task per variant. 1 restores the plain McNemar design. */
+  repeats: number;
+  /** Attempts per variant across the whole split, for cost reporting only. It
+   *  is deliberately NOT the denominator of anything inferential. */
+  attemptsPerVariant: number;
+  /** Both variants passed every repeat. */
   bothPass: number;
-  /** Both variants failed. */
+  /** Both variants failed every repeat. */
   bothFail: number;
-  /** Only the baseline (A) passed — McNemar's b. */
+  /** Tied at a rate that is neither 0 nor 1 — only reachable with repeats. */
+  tiedPartial: number;
+  /** Baseline (A) had the higher pass rate — McNemar's b. */
   onlyA: number;
-  /** Only the candidate (B) passed — McNemar's c. */
+  /** Candidate (B) had the higher pass rate — McNemar's c. */
   onlyB: number;
   discordant: number;
   discordanceRate: number;
-  passRateA: number;
-  passRateB: number;
-  /** passRateB − passRateA, on the pass-rate scale. */
+  /** ψ: mean squared per-task rate difference. Equals discordanceRate at
+   *  repeats=1; below it once repeats average run-to-run noise away. */
+  dispersion: number;
+  /** pass@1 — mean over every attempt. The single-shot number. */
+  passAtOneA: number;
+  passAtOneB: number;
+  /** pass^k — fraction of tasks solved in ALL k attempts. The reliability
+   *  number, and identical to pass@1 when k=1. */
+  passAllA: number;
+  passAllB: number;
+  /** Tasks whose repeats disagreed under that variant — unstable, not solved. */
+  flakyA: number;
+  flakyB: number;
+  /** Tasks unstable under either variant. Counts only: this shape is what the
+   *  sealed split emits, and ids there would leak per-task signal. */
+  flakyEither: number;
+  /** passAtOneB − passAtOneA, on the pass-rate scale. */
   effect: number;
-  /** Paired bootstrap interval for `effect`. */
+  /** passAllB − passAllA: the same comparison on the reliability axis. */
+  effectAll: number;
+  /** Cluster (per-task) bootstrap interval for `effect`. */
   ci: Interval;
-  /** Exact McNemar (binomial) two-sided p-value. */
+  /** Exact two-sided p over the tasks whose rates differed. At repeats=1 this
+   *  is exact McNemar; above it, the exact sign test on task-level differences,
+   *  which keeps one vote per task. */
   pValue: number;
   alpha: number;
   power: number;
@@ -215,40 +261,106 @@ export interface PairedBinaryStats {
 
 export interface PairedOutcome {
   taskId: string;
-  /** Baseline variant passed. */
-  a: boolean;
-  /** Candidate variant passed. */
-  b: boolean;
+  /** One entry per repeat: did the baseline pass that attempt? */
+  a: readonly boolean[];
+  /** One entry per repeat: did the candidate pass that attempt? */
+  b: readonly boolean[];
 }
 
-/** The headline comparison: exact McNemar + a paired bootstrap interval +
- *  an explicit resolution statement. `a` is the baseline, `b` the candidate. */
+/** How one task came out across its repeats, under both variants. */
+export interface TaskRepeatSummary {
+  taskId: string;
+  repeats: number;
+  passesA: number;
+  passesB: number;
+  rateA: number;
+  rateB: number;
+  /** Passed every repeat — the pass^k contribution. */
+  allA: boolean;
+  allB: boolean;
+  /** Repeats disagreed: the task is unstable under that variant. */
+  flakyA: boolean;
+  flakyB: boolean;
+}
+
+/** Collapse a task's repeats to the quantities every downstream number is built
+ *  from. This is the pseudoreplication firewall: after this point there is one
+ *  row per task, so nothing can accidentally treat k attempts as k pairs. */
+export function summarizeRepeats(outcome: PairedOutcome): TaskRepeatSummary {
+  const repeats = outcome.a.length;
+  if (repeats === 0) throw new Error(`task ${outcome.taskId} has no attempts`);
+  if (outcome.b.length !== repeats) {
+    throw new Error(`task ${outcome.taskId} ran ${repeats} baseline attempts but ${outcome.b.length} candidate attempts — a paired design cannot compare unequal repeats`);
+  }
+  const passesA = outcome.a.filter(Boolean).length;
+  const passesB = outcome.b.filter(Boolean).length;
+  return {
+    taskId: outcome.taskId, repeats, passesA, passesB,
+    rateA: passesA / repeats, rateB: passesB / repeats,
+    allA: passesA === repeats, allB: passesB === repeats,
+    flakyA: passesA > 0 && passesA < repeats,
+    flakyB: passesB > 0 && passesB < repeats,
+  };
+}
+
+/** The headline comparison: an exact paired test over TASKS + a cluster
+ *  bootstrap interval + an explicit resolution statement. `a` is the baseline,
+ *  `b` the candidate.
+ *
+ *  With repeats=1 this is bit-for-bit the McNemar design it has always been: a
+ *  task's rate is 0 or 1, so "rateB > rateA" is "only B passed", and the sign
+ *  test over discordant tasks IS exact McNemar. With repeats>1 the same code
+ *  keeps one vote per task, which is the whole point — the alternative, one
+ *  vote per attempt, would report 2·0.5^(k·n) where the design earns 2·0.5^n. */
 export function pairedBinaryComparison(
   outcomes: readonly PairedOutcome[],
   opts: BootstrapOptions & { power?: number } = {},
 ): PairedBinaryStats {
   const alpha = opts.alpha ?? DEFAULT_ALPHA;
   const power = opts.power ?? DEFAULT_POWER;
-  const pairs = outcomes.length;
-  let bothPass = 0, bothFail = 0, onlyA = 0, onlyB = 0;
-  for (const o of outcomes) {
-    if (o.a && o.b) bothPass++;
-    else if (!o.a && !o.b) bothFail++;
-    else if (o.a) onlyA++;
-    else onlyB++;
+  const summaries = outcomes.map(summarizeRepeats);
+  const pairs = summaries.length;
+  const repeats = summaries[0]?.repeats ?? 1;
+  for (const s of summaries) {
+    if (s.repeats !== repeats) {
+      throw new Error(`task ${s.taskId} ran ${s.repeats} repeats but the split ran ${repeats} — a split with ragged repeats has no single pass^k`);
+    }
+  }
+
+  let bothPass = 0, bothFail = 0, tiedPartial = 0, onlyA = 0, onlyB = 0;
+  let flakyA = 0, flakyB = 0, flakyEither = 0;
+  let allA = 0, allB = 0, rateSumA = 0, rateSumB = 0, squaredDiff = 0;
+  for (const s of summaries) {
+    if (s.rateA > s.rateB) onlyA++;
+    else if (s.rateB > s.rateA) onlyB++;
+    else if (s.allA) bothPass++;
+    else if (s.passesA === 0) bothFail++;
+    else tiedPartial++;
+    if (s.flakyA) flakyA++;
+    if (s.flakyB) flakyB++;
+    if (s.flakyA || s.flakyB) flakyEither++;
+    if (s.allA) allA++;
+    if (s.allB) allB++;
+    rateSumA += s.rateA;
+    rateSumB += s.rateB;
+    squaredDiff += (s.rateB - s.rateA) ** 2;
   }
   const discordant = onlyA + onlyB;
   const discordanceRate = pairs === 0 ? 0 : discordant / pairs;
-  const passRateA = pairs === 0 ? 0 : (bothPass + onlyA) / pairs;
-  const passRateB = pairs === 0 ? 0 : (bothPass + onlyB) / pairs;
-  const diffs = outcomes.map((o) => (o.b ? 1 : 0) - (o.a ? 1 : 0));
+  const dispersion = pairs === 0 ? 0 : squaredDiff / pairs;
+  const passAtOneA = pairs === 0 ? 0 : rateSumA / pairs;
+  const passAtOneB = pairs === 0 ? 0 : rateSumB / pairs;
+  const passAllA = pairs === 0 ? 0 : allA / pairs;
+  const passAllB = pairs === 0 ? 0 : allB / pairs;
+
+  const diffs = summaries.map((s) => s.rateB - s.rateA);
   const { mean: effect, ci } = pairedBootstrapCI(diffs, { ...opts, alpha });
   const pValue = binomialTwoSidedP(onlyB, discordant);
-  const mde = minimumDetectableEffect({ pairs, discordanceRate, alpha, power });
+  const mde = minimumDetectableEffect({ pairs, dispersion, alpha, power });
   const resolutionRatio = Number.isFinite(mde) && mde > 0 ? Math.abs(effect) / mde : 0;
   const resolvable = resolutionRatio >= 1;
   const significant = pValue < alpha;
-  const pairsNeededForObserved = requiredPairs(effect, { discordanceRate, alpha, power });
+  const pairsNeededForObserved = requiredPairs(effect, { dispersion, alpha, power });
 
   const smallSample = discordant > 0 && discordant < 10;
   const floor = floorPValue(pairs);
@@ -264,10 +376,13 @@ export function pairedBinaryComparison(
   else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)} — suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;
   else verdict = `no detectable difference (p=${pValue.toFixed(4)}); this design resolves ${fmtPp(mde)}, so effects below that are invisible`;
   if (smallSample) verdict += ` [only ${discordant} discordant pairs — the p-value is exact, the ${fmtPp(mde)} threshold is a normal approximation and loose here]`;
+  if (repeats > 1) verdict += ` [${repeats} repeats × ${pairs} tasks = ${pairs * repeats} attempts per variant, but still ${pairs} independent pairs — repeats buy precision within a task, never more tasks]`;
 
   return {
-    pairs, bothPass, bothFail, onlyA, onlyB, discordant, discordanceRate,
-    passRateA, passRateB, effect, ci, pValue, alpha, power,
+    pairs, repeats, attemptsPerVariant: pairs * repeats,
+    bothPass, bothFail, tiedPartial, onlyA, onlyB, discordant, discordanceRate, dispersion,
+    passAtOneA, passAtOneB, passAllA, passAllB, flakyA, flakyB, flakyEither,
+    effect, effectAll: passAllB - passAllA, ci, pValue, alpha, power,
     mde, resolutionRatio, resolvable, significant, smallSample,
     floorPValue: floor, canReachSignificance, pairsNeededForObserved, verdict,
   };

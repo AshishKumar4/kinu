@@ -60,7 +60,65 @@ export interface SealedScorecard {
   stats: PairedBinaryStats;
 }
 
-export type SealedPairRunner = (task: BenchTask) => Promise<{ a: boolean; b: boolean }>;
+/** One entry per repeat, per variant. */
+export type SealedPairRunner = (task: BenchTask) => Promise<{ a: readonly boolean[]; b: readonly boolean[] }>;
+
+/** The outcome of well-formedness checking one task, with its retry history.
+ *
+ *  Validation is itself noisy: a real 165-task run flagged one task BAD that
+ *  then validated 5/5 in isolation. A single scored attempt can therefore
+ *  record a false fail, so a task that fails is re-checked — and a task that
+ *  only passed on a retry is NOT the same thing as one that passed first time.
+ *  Both facts are carried here rather than collapsed into a boolean. */
+export interface TaskValidation {
+  ok: boolean;
+  /** How many well-formedness checks were run, including the first. */
+  attempts: number;
+  /** 1-based attempt that succeeded; null when none did. >1 means flaky. */
+  passedOnAttempt: number | null;
+  /** Human-readable outcome of the last attempt. */
+  detail: string;
+}
+
+export interface SealedValidation {
+  checked: number;
+  /** Failed every attempt — genuinely broken tasks. */
+  invalid: string[];
+  /** Passed, but only after a retry — non-deterministic tasks. */
+  flaky: string[];
+}
+
+/** The validation repeat policy. Runs `check` until it succeeds or the budget of
+ *  `1 + retries` attempts is spent, and records which attempt won.
+ *
+ *  Bounded and stop-on-first-success on purpose. Unbounded retrying would
+ *  eventually let any sufficiently noisy broken task through, and running every
+ *  attempt regardless would triple the cost of the common case, which is a
+ *  corpus that validates first time. */
+export async function validateWithRetries(
+  retries: number,
+  check: (attempt: number) => Promise<{ ok: boolean; detail: string }>,
+): Promise<TaskValidation> {
+  if (!Number.isInteger(retries) || retries < 0) throw new Error(`validate retries must be a non-negative integer, got ${retries}`);
+  const budget = retries + 1;
+  let first = '';
+  for (let attempt = 1; attempt <= budget; attempt++) {
+    const { ok, detail } = await check(attempt);
+    if (attempt === 1) first = detail;
+    if (ok) {
+      return {
+        ok: true,
+        attempts: attempt,
+        passedOnAttempt: attempt,
+        detail: attempt === 1 ? detail : `FLAKY: ${detail} — but attempt 1 failed (${first})`,
+      };
+    }
+    if (attempt === budget) {
+      return { ok: false, attempts: attempt, passedOnAttempt: null, detail: `failed all ${budget} attempt(s): ${detail}` };
+    }
+  }
+  throw new Error('unreachable: the retry budget is at least 1');
+}
 
 export class SealedSplit {
   readonly #tasks: readonly BenchTask[];
@@ -91,14 +149,18 @@ export class SealedSplit {
 
   /** Well-formedness only. A task is valid when its defect breaks the checks
    *  and reversing it restores them — a property of the TASK, not of any
-   *  variant, so surfacing which ones are broken leaks no performance signal.
-   *  A corpus that cannot be validated is worse than one that can. */
-  async validate(check: (task: BenchTask) => Promise<boolean>): Promise<{ checked: number; invalid: string[] }> {
+   *  variant, so surfacing which ones are broken (or unstable) leaks no
+   *  performance signal. A corpus that cannot be validated is worse than one
+   *  that can. */
+  async validate(check: (task: BenchTask) => Promise<TaskValidation>): Promise<SealedValidation> {
     const invalid: string[] = [];
+    const flaky: string[] = [];
     for (const task of this.#tasks) {
-      if (!(await check(task))) invalid.push(task.id);
+      const result = await check(task);
+      if (!result.ok) invalid.push(task.id);
+      else if ((result.passedOnAttempt ?? 1) > 1) flaky.push(task.id);
     }
-    return { checked: this.#tasks.length, invalid };
+    return { checked: this.#tasks.length, invalid, flaky };
   }
 
   /** Held-out task ids exist only to be excluded elsewhere (e.g. asserting the

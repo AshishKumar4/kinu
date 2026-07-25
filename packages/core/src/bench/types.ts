@@ -64,6 +64,9 @@ export interface AttemptOutcome {
   variantId: string;
   /** Which side of the randomized pairing this variant occupied. */
   slot: 'a' | 'b';
+  /** 0-based repeat index. Repeats of one task are correlated observations of
+   *  the same task, never independent pairs — see bench/stats.ts. */
+  repeat: number;
   passed: boolean;
   checks: readonly CheckOutcome[];
   durationMs: number;
@@ -84,6 +87,11 @@ export interface SolverContext {
   signal: AbortSignal;
   /** Deterministic per-attempt seed, so controls are reproducible. */
   seed: number;
+  /** 0-based repeat index. A solver that models run-to-run noise must fold this
+   *  into its draw, or every repeat returns the same answer and repeats measure
+   *  nothing. (seed, task, repeat) still determines the draw, so runs
+   *  reproduce. */
+  repeat: number;
 }
 
 export interface SolverResult {
@@ -128,10 +136,12 @@ function tokenField(usage: unknown, key: string): number {
   return 0;
 }
 
-/** Which variant attempts a task first, randomized per task from the run seed.
- *  Order matters once real agents are involved (warm caches, host state), and a
- *  fixed order would confound it with the variant. Deterministic given a seed so
- *  a run reproduces exactly. */
-export function runOrder(taskId: string, seed: number): 'ab' | 'ba' {
-  return unitHash(`order:${seed}:${taskId}`) < 0.5 ? 'ab' : 'ba';
+/** Which variant attempts a task first, randomized per task and repeat from the
+ *  run seed. Order matters once real agents are involved (warm caches, host
+ *  state), and a fixed order would confound it with the variant. The repeat is
+ *  part of the draw so a task's repeats do not all inherit one order — that
+ *  would leave the very confound the randomization exists to break. Fully
+ *  determined by (seed, task, repeat), so a run reproduces exactly. */
+export function runOrder(taskId: string, seed: number, repeat = 0): 'ab' | 'ba' {
+  return unitHash(`order:${seed}:${taskId}:${repeat}`) < 0.5 ? 'ab' : 'ba';
 }

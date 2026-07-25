@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { splitOf } from '../packages/core/src/index.js';
-import { parseArgv } from './bench.js';
+import { DEFAULT_VALIDATE_RETRIES, parseArgv, parseCommon } from './bench.js';
 import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus.js';
 import { assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox.js';
 
@@ -32,6 +32,30 @@ describe('parseArgv', () => {
 
   test('rejects a positional argument that is not the command', () => {
     expect(() => parseArgv(['compare', 'stray'])).toThrow(/unexpected argument/);
+  });
+});
+
+describe('parseCommon — repeats and the validation retry budget', () => {
+  const opts = (extra: Record<string, string> = {}) =>
+    parseCommon(new Map(Object.entries({ 'run-root': tempDir('bench-opts-'), ...extra })));
+
+  test('defaults to one attempt per task and a bounded validate retry', () => {
+    const common = opts();
+    expect(common.repeats).toBe(1);
+    expect(common.validateRetries).toBe(DEFAULT_VALIDATE_RETRIES);
+  });
+
+  test('accepts a repeat count and zero retries', () => {
+    expect(opts({ repeats: '3' }).repeats).toBe(3);
+    expect(opts({ 'validate-retries': '0' }).validateRetries).toBe(0);
+  });
+
+  test('refuses counts that would silently change what is being measured', () => {
+    // Zero repeats would produce an empty pass^k; a fractional one would run
+    // floor(n) attempts while the config claimed n.
+    expect(() => opts({ repeats: '0' })).toThrow(/--repeats must be an integer ≥ 1/);
+    expect(() => opts({ repeats: '2.5' })).toThrow(/--repeats must be an integer ≥ 1/);
+    expect(() => opts({ 'validate-retries': '-1' })).toThrow(/--validate-retries must be an integer ≥ 0/);
   });
 });
 

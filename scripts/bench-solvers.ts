@@ -34,16 +34,19 @@ export function createOracleSolver(patches: PatchLookup): Solver {
   };
 }
 
-/** Solves with probability `rate`, decided by a hash of (seed, task, id) so a
- *  run reproduces exactly. Two of these with different rates are a known-truth
- *  pair: the harness must recover the gap between them. */
+/** Solves with probability `rate`, decided by a hash of (seed, task, repeat, id)
+ *  so a run reproduces exactly. The repeat index is in the draw deliberately: a
+ *  solver with a success rate is a model of run-to-run noise, and one that
+ *  returned the same answer to every repeat would make `--repeats` measure
+ *  nothing and pass^k trivially equal to pass@1. Two of these with different
+ *  rates are a known-truth pair: the harness must recover the gap between them. */
 export function createNoisyOracleSolver(patches: PatchLookup, rate: number, label: string): Solver {
   if (!(rate >= 0 && rate <= 1)) throw new Error(`noisy oracle rate must be in [0,1], got ${rate}`);
   return {
     id: label,
     description: `synthetic solver with a ${(rate * 100).toFixed(0)}% success rate`,
     async solve(ctx: SolverContext): Promise<SolverResult> {
-      const draw = unitHash(`${label}:${ctx.seed}:${ctx.task.id}`);
+      const draw = unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`);
       if (draw < rate) applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
       return {};
     },

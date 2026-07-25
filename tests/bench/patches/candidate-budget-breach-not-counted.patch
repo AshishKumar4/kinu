@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/bench/report.ts b/packages/core/src/bench/report.ts
-index c4a59b1..252513b 100644
+index 4941dad..b9a4642 100644
 --- a/packages/core/src/bench/report.ts
 +++ b/packages/core/src/bench/report.ts
-@@ -132,7 +132,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
-   for (const [taskId, { a, b }] of byTask) {
-     if (!a || !b) throw new Error(`unpaired task ${taskId}: a paired design cannot drop half a pair`);
-     if (a.budgetBreach) budgetBreaches++;
--    if (b.budgetBreach) budgetBreaches++;
-+    if (a.budgetBreach) budgetBreaches++;
+@@ -175,7 +175,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
+     b.sort(byRepeat);
+     const foldA = foldRepeats(a);
+     const foldB = foldRepeats(b);
+-    budgetBreaches += foldA.breachCount + foldB.breachCount;
++    budgetBreaches += foldA.breachCount + foldA.breachCount;
      cases.push({
        taskId,
-       passedA: a.passed, passedB: b.passed,
+       attempts: config.repeats,
