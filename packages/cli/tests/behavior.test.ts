@@ -298,6 +298,50 @@ describe("proteus exec (headless)", () => {
       bad.stop();
     }
   }, 120_000);
+
+  // --no-auto-evolve is the switch a paired benchmark arm needs: the same
+  // workspace and the same turn, with the evolution machinery off.
+  test("--no-auto-evolve runs the turn normally on a local workspace", async () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-noevolve-"));
+    tempDirs.push(home);
+    const server = startMockLlm("Hello from mock.");
+    try {
+      const env = {
+        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
+        PROTEUS_AUTH: "Bearer mock",
+        PROTEUS_MODEL: "mock-model",
+      };
+      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+
+      const proc = runCli(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
+      expect(proc.stderr.toString()).toBe("");
+      expect(proc.exitCode).toBe(0);
+      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
+      expect(events.some((e) => e.type === "evolution")).toBe(false);
+    } finally {
+      server.stop();
+    }
+  }, 120_000);
+
+  // Reaching this rejection proves the flag is threaded all the way into the
+  // AgentClient factory rather than parsed and dropped.
+  test("--no-auto-evolve is rejected for cloud workspaces", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-noevolve-cloud-"));
+    tempDirs.push(home);
+    const stamp = new Date(0).toISOString();
+    writeConfig(home, {
+      origin: "https://proteus.example.com",
+      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      agents: {
+        jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
+      },
+    });
+
+    const proc = runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr.toString()).toContain("--no-auto-evolve applies to local workspaces");
+  });
 });
 
 /** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks

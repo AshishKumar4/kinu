@@ -306,3 +306,92 @@ On power: the 67-task sealed split resolves roughly 15pp at a dispersion of
 the seal alone would need about 157 sealed tasks (~390 total); the whole corpus
 reaches it today. Repeats raise precision within a task but never add pairs, so
 they shrink dispersion rather than buying power outright.
+
+## External benchmarks — the Harbor adapter
+
+The internal corpus measures Proteus against seeded defects in this repo. It is
+a closed loop: our tasks, our checks. `bench/harbor/` is the other half — a
+[Harbor](https://github.com/laude-institute/harbor) agent adapter that runs
+Proteus inside somebody else's task containers, scored by somebody else's
+verifier. DeepSWE and Terminal-Bench are the two corpora it has been pointed at.
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"          # harbor
+export PYTHONPATH="$PWD"                      # so harbor can import bench.harbor
+export OPENROUTER_API_KEY=$(python3 -c "import json;print(json.load(open('$HOME/.proteus/config.json'))['providers']['openrouter']['apiKey'])")
+
+harbor run \
+  --agent bench.harbor.proteus_agent:ProteusAgent \
+  --path ./deep-swe -i <task-name> \
+  -m deepseek/deepseek-v4-flash \
+  --ak evolve=false \
+  --allow-agent-host openrouter.ai \
+  --jobs-dir /tmp/harbor-jobs -n 1 -y
+```
+
+`--ak evolve=true|false` is the experiment: the same adapter, the same task, the
+same model, with the three-timescale evolution machinery live or off. It reaches
+`proteus exec --no-auto-evolve`, which is the CLI's switch over the
+`EvolutionEngine`'s `enabled` flag — the same one `agent` vs `agent-evolving`
+flips internally.
+
+Other kwargs: `workspace` (workspace name, default `harbor`), `mission` (the
+workspace's opening mission), `proteus_repo` (which checkout to build from).
+Model access comes from `PROTEUS_BASE_URL` (default OpenRouter),
+`OPENROUTER_API_KEY`/`OPENAI_API_KEY` (or a complete `PROTEUS_AUTH` header), and
+`-m` for the model id as the endpoint's provider names it.
+
+### How it installs
+
+DeepSWE task images declare `allow_internet = false`, and the install phase runs
+under the environment baseline — before `--allow-agent-host` opens anything. So
+nothing can be downloaded inside the container, which rules out fetching bun and
+the Proteus sources there.
+
+Instead `bun build --compile` turns the CLI into one self-contained x86-64 binary
+on the host (the bun runtime and `bun:sqlite` are embedded), and the adapter
+uploads it. That also pins each run to the working tree under test rather than to
+whatever a registry serves. The agent phase still needs `--allow-agent-host` for
+the model endpoint.
+
+Inside the container the adapter creates a fresh local workspace per trial and
+hands the task's `instruction.md` to `proteus exec --json`, teed to
+`/logs/agent/proteus.jsonl`. `populate_context_post_run` converts that stream to
+an ATIF `trajectory.json` and reports the turn's token usage; `cost_usd` stays
+unset, because Proteus reports tokens and not prices.
+
+Reading the stream is `bench/clbench/proteus/events.py` — one reader for the
+CLI's event contract, shared with the CL-Bench adapter, so a change to the event
+shape breaks a test instead of quietly degrading two benchmark scores.
+
+### What the `evolve` switch measures here, and what it does not
+
+Harbor gives every trial its own container, and the adapter creates a fresh
+workspace inside it. So `evolve=true` measures the evolution machinery running
+**within a single task** — reflection, scaffold mutation, and lesson-writing
+during the turn. It does **not** measure state carried **across** tasks, which
+is what `agent-evolving` tests internally by sharing one `PROTEUS_HOME` over a
+whole sequence.
+
+Carrying state across Harbor trials would mean bind-mounting one host
+`~/.proteus` into every container. Concurrent trials would then race on one
+SQLite database and the task order would be whatever the scheduler picked, so
+that is a change to the harness, not a flag — and until it exists, an external
+paired run answers the narrower question.
+
+### What has actually been run through it
+
+`deepseek/deepseek-v4-flash` over OpenRouter, one task at a time, July 2026:
+
+| corpus | task | `evolve` | tool calls | wall | reward |
+|---|---|---|---|---|---|
+| terminal-bench | `openssl-selfsigned-cert` | true | 12 | 1m02 | **1.0** |
+| deep-swe | `abs-module-cache-flags` | true | 59 | 9m09 | 0.0 |
+| deep-swe | `abs-module-cache-flags` | false | 84 | 20m49 | 0.0 |
+
+$0.61 of model spend for the four runs including one capped probe. Both DeepSWE
+arms finished their turn on their own — no timeout, no error — and failed the
+task's own tests, which is a real result and not an instrument failure. At n=1
+per arm it says nothing about the gain, and nothing here is a measurement of
+Proteus yet; it is the pipeline proving it runs end to end on both corpora, both
+arms, with a pass and a fail among the outcomes.

@@ -38,3 +38,6 @@ packages/core/tests/helpers.d.ts.map
 # External benchmark corpora (downloaded via harbor, not our source)
 /deep-swe/
 /terminal-bench/
+
+# Throwaway output of the bench/harbor bun --compile step
+/.harbor-build-*/
