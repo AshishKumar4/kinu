@@ -899,6 +899,7 @@ export class OrchestratorAgent extends ActorAgent {
       void this.completeEventBatch(injected.turnId, assistantText);
     }
 
+    const turnUsage = this.acc.reportedUsage();
     const turn: CompletedTurn = {
       userMessage: userText,
       assistantResponse: assistantText,
@@ -912,6 +913,7 @@ export class OrchestratorAgent extends ActorAgent {
       turnId: msgId,
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
+      ...(turnUsage ? { usage: turnUsage } : {}),
     };
 
     // CRITICAL: Evolution hooks make LLM calls (outcome classification,

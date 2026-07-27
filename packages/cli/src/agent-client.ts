@@ -11,7 +11,7 @@ import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
-  ReasoningEffort,
+  ReasoningEffort, TurnUsage,
 } from '@proteus/core';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelEntry } from './model-catalog.js';
@@ -42,6 +42,9 @@ export interface AgentTurnResult {
   steps: number;
   durationMs: number;
   hadError: boolean;
+  /** Provider-reported token usage for the turn. Local backend only — the
+   *  cloud websocket protocol does not carry per-turn usage. */
+  usage?: TurnUsage;
 }
 
 export type AgentClientEvent =

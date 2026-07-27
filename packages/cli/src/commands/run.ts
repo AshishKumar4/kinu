@@ -2,7 +2,7 @@ import * as readline from 'node:readline';
 import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
-import { createAgentClient } from '../client-factory.js';
+import { createAgentClient, type AgentClientFlags } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
 import type { CliSessionOptions } from '../session.js';
 import { chatCommand } from './chat.js';
@@ -29,12 +29,6 @@ import {
   searchLocalMemory,
 } from '../local-inspection.js';
 
-interface OneShotLlmOpts {
-  model?: string;
-  baseUrl?: string;
-  auth?: string;
-}
-
 /** Session flags as Commander actually delivers them: `--no-session` arrives
  *  as `session: false` on the shared option key, not as `noSession: true`. */
 interface OneShotSessionFlags {
@@ -47,7 +41,7 @@ interface OneShotSessionFlags {
   fork?: string;
 }
 
-export async function runCommand(name: string, promptParts: string[], opts: OneShotLlmOpts & OneShotSessionFlags & {
+export async function runCommand(name: string, promptParts: string[], opts: AgentClientFlags & OneShotSessionFlags & {
   classic?: boolean;
   mode?: string;
 }): Promise<void> {
@@ -79,9 +73,11 @@ export async function runCommand(name: string, promptParts: string[], opts: OneS
   if (failed) process.exitCode = 1;
 }
 
-export interface ExecOptions extends OneShotLlmOpts {
+export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
   workspace?: string;
   json?: boolean;
+  /** Commander delivers `--no-auto-evolve` as `autoEvolve: false`. */
+  autoEvolve?: boolean;
   resume?: string;
   session?: string | false;
   sessionDir?: string;
@@ -105,6 +101,7 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     model: opts.model,
     baseUrl: opts.baseUrl,
     auth: opts.auth,
+    noAutoEvolve: opts.autoEvolve === false,
     session: opts.resume ?? opts.session,
     sessionDir: opts.sessionDir,
     name: opts.name,
@@ -135,7 +132,7 @@ function resolveExecWorkspaceName(explicit?: string): string {
 async function runOneShot(
   target: AgentTarget,
   rawPrompt: string,
-  opts: OneShotLlmOpts & OneShotSessionFlags,
+  opts: AgentClientFlags & OneShotSessionFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
   // Same @path semantics as the chat surfaces: images/PDFs inline as file
@@ -144,7 +141,7 @@ async function runOneShot(
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) });
+  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) });
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
@@ -218,7 +215,7 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
 
 async function runRpc(
   target: AgentTarget,
-  opts: OneShotLlmOpts & OneShotSessionFlags,
+  opts: AgentClientFlags & OneShotSessionFlags,
 ): Promise<void> {
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
   const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) };
@@ -512,7 +509,13 @@ function jsonEvents(event: AgentClientEvent): unknown[] {
     case 'turn-end':
       return [
         { type: 'message_end', role: 'assistant', text: event.turn.text },
-        { type: 'turn_end', steps: event.turn.steps, durationMs: event.turn.durationMs, hadError: event.turn.hadError },
+        {
+          type: 'turn_end',
+          steps: event.turn.steps,
+          durationMs: event.turn.durationMs,
+          hadError: event.turn.hadError,
+          ...(event.turn.usage ? { usage: event.turn.usage } : {}),
+        },
       ];
     case 'step-finish':
       return [];

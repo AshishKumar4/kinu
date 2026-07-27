@@ -266,6 +266,7 @@ llmOpts(
     .description('Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`)')
     .option('-w, --workspace <name>', 'Workspace to run (defaults to the only configured workspace)')
     .option('--json', 'Emit line-delimited JSON events')
+    .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
     .option('--resume <sessionId>', 'Continue a recorded CLI session')
     .option('--session-dir <dir>', 'Override CLI session storage directory')
     .option('--no-session', 'Do not record this run')

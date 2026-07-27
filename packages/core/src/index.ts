@@ -39,7 +39,7 @@ export {
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
-  type CompletedTurn, type CompletedSession, type ToolCallRecord,
+  type CompletedTurn, type CompletedSession, type ToolCallRecord, type TurnUsage,
 } from './evolution/types.js';
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,

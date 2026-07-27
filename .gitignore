@@ -21,6 +21,10 @@ transcript*.json
 /external
 /external/
 
+# Python bytecode (bench/clbench is the only Python in the repo)
+__pycache__/
+*.py[cod]
+
 # Compiled test artifacts (sources are .ts)
 packages/core/tests/helpers.js
 packages/core/tests/helpers.js.map

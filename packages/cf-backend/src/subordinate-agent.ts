@@ -324,6 +324,7 @@ export class SubordinateAgent extends ActorAgent {
       responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
     });
 
+    const turnUsage = this.acc.reportedUsage();
     const turn: CompletedTurn = {
       userMessage: userText,
       assistantResponse: assistantText,
@@ -335,6 +336,7 @@ export class SubordinateAgent extends ActorAgent {
       ...(result.message.id ? { turnId: result.message.id } : {}),
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
+      ...(turnUsage ? { usage: turnUsage } : {}),
     };
     this.orch.recordTurn(turn);
 

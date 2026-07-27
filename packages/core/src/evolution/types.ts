@@ -11,6 +11,14 @@ export interface ToolCallRecord {
   result: unknown;
 }
 
+/** Provider-reported token usage for one turn, summed over its steps.
+ *  `cached` is the cache-read share of `input`, not an addition to it. */
+export interface TurnUsage {
+  input: number;
+  output: number;
+  cached: number;
+}
+
 /** A completed turn — input + output + metadata for the evolution engine */
 export interface CompletedTurn {
   userMessage: string;
@@ -35,6 +43,9 @@ export interface CompletedTurn {
    *  verdicts on user-origin turns; programmatic turns (reactor / job wake)
    *  carry no user signal. */
   origin?: 'user' | 'programmatic';
+  /** What the turn spent, as the provider reported it per step. Absent when
+   *  the provider reported no usage at all. */
+  usage?: TurnUsage;
 }
 
 /** A completed session — sequence of turns */

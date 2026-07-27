@@ -60,6 +60,18 @@ describe('TurnAccumulator', () => {
     expect(steps).toEqual([1, 2]);
   });
 
+  test('reportedUsage is the turn usage, or undefined when nothing was reported', () => {
+    const a = new TurnAccumulator();
+    // A provider that reports no usage must not be recorded as having spent
+    // zero — a cost consumer has to be able to tell the two apart.
+    a.recordStep({ finishReason: 'stop' });
+    expect(a.reportedUsage()).toBeUndefined();
+    a.recordStep({ usage: { inputTokens: 12, outputTokens: 4, cachedInputTokens: 8 } });
+    expect(a.reportedUsage()).toEqual({ input: 12, output: 4, cached: 8 });
+    a.reset(0);
+    expect(a.reportedUsage()).toBeUndefined();
+  });
+
   test('lastPromptTokens tracks the newest reporting step and survives usage-less steps', () => {
     const a = new TurnAccumulator();
     expect(a.lastPromptTokens).toBe(0);

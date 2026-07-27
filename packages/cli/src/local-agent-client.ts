@@ -478,6 +478,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
             args: call.args,
             result: call.result === undefined ? undefined : String(call.result),
           })),
+          ...(event.turn.usage ? { usage: event.turn.usage } : {}),
         },
       };
     case 'evolution':

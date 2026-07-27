@@ -1113,18 +1113,22 @@ export class LocalAgentSession implements BackendHost {
     }
 
     let assistantMsgId: string | null = null;
-    const snapshotTurn = (): CompletedTurn => ({
-      userMessage: item.text,
-      assistantResponse: fullText,
-      toolCalls: this.orch.acc.toolCalls,
-      steps: this.orch.acc.stepCount,
-      durationMs: Date.now() - startedAt,
-      feedback: null,
-      hadError: this.orch.acc.hadError,
-      ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
-      sessionId: this.sessionId,
-      origin: item.kind,
-    });
+    const snapshotTurn = (): CompletedTurn => {
+      const usage = this.orch.acc.reportedUsage();
+      return {
+        userMessage: item.text,
+        assistantResponse: fullText,
+        toolCalls: this.orch.acc.toolCalls,
+        steps: this.orch.acc.stepCount,
+        durationMs: Date.now() - startedAt,
+        feedback: null,
+        hadError: this.orch.acc.hadError,
+        ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
+        sessionId: this.sessionId,
+        origin: item.kind,
+        ...(usage ? { usage } : {}),
+      };
+    };
 
     try {
       // Persist the turn's final provider-priced prompt size — the NEXT turn's

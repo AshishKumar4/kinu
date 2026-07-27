@@ -40,6 +40,7 @@ packages/
   cli/          CLI frontend (commander-based)
   cli-backend/  CLI-specific backend (bun:sqlite, Node vm)
 tests/          E2E tests (run from repo root)
+bench/clbench/  Proteus as a system for the external Continual Learning Bench
 ```
 
 ### cf-backend Architecture
