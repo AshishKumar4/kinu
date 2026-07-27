@@ -96,7 +96,7 @@ describe("CLI behavior", () => {
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
-    const proc = runCliInPty(["setup"], { home, stdin: "6\n" });
+    const proc = runCliInPty(["setup"], { home, stdin: "7\n" });
     const stdout = proc.stdout.toString();
 
     expect(proc.exitCode).toBe(0);
@@ -118,7 +118,7 @@ describe("CLI behavior", () => {
 
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Skipped local model setup");
-    expect(stdout).toContain("Cloud agents remain ready");
+    expect(stdout).toContain("Cloud workspaces remain ready");
   });
 
   test("provider list summarizes connected providers without leaking credentials", () => {
@@ -215,7 +215,7 @@ describe("proteus exec (headless)", () => {
     expect(proc.stderr.toString()).toContain("A task prompt is required");
   });
 
-  test("demands --agent when several agents are configured", () => {
+  test("demands --workspace when several workspaces are configured", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-agents-"));
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
@@ -229,7 +229,7 @@ describe("proteus exec (headless)", () => {
     const proc = runCli(["exec", "do something"], { home });
     expect(proc.exitCode).toBe(1);
     const stderr = proc.stderr.toString();
-    expect(stderr).toContain("Multiple agents configured");
+    expect(stderr).toContain("Multiple workspaces configured");
     expect(stderr).toContain("alpha");
     expect(stderr).toContain("beta");
   });
@@ -237,7 +237,7 @@ describe("proteus exec (headless)", () => {
   // The real hermetic smoke: a local agent created and exec'd through the
   // spawned CLI binary against a mock OpenAI-compatible endpoint — proving
   // exit codes and the line-delimited JSON event shape end to end.
-  test("runs a local agent end-to-end with --json, resumable sessions, and honest exit codes", async () => {
+  test("runs a local workspace end-to-end with --json, resumable sessions, and honest exit codes", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-smoke-"));
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
@@ -251,12 +251,12 @@ describe("proteus exec (headless)", () => {
       const created = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke test agent"], { home, env });
       expect(created.exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--agent", "smokey", "--json", "Say hello"], { home, env });
+      const proc = runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], { home, env });
       expect(proc.stderr.toString()).toBe("");
       expect(proc.exitCode).toBe(0);
 
       const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-      expect(events[0]).toMatchObject({ type: "session", agent: "smokey", backend: "local" });
+      expect(events[0]).toMatchObject({ type: "session", workspace: "smokey", backend: "local" });
       expect(events).toContainEqual(expect.objectContaining({ type: "turn_start", kind: "user", text: "Say hello" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
       const turnEnd = events.find((e) => e.type === "turn_end");
@@ -264,7 +264,7 @@ describe("proteus exec (headless)", () => {
 
       // --resume continues the same recorded session instead of opening a new one.
       const sessionId = String((events[0] as { id: string }).id);
-      const resumed = runCli(["exec", "--agent", "smokey", "--json", "--resume", sessionId, "Say hello again"], { home, env });
+      const resumed = runCli(["exec", "--workspace", "smokey", "--json", "--resume", sessionId, "Say hello again"], { home, env });
       expect(resumed.exitCode).toBe(0);
       const resumedHeader = JSON.parse(resumed.stdout.toString().trim().split("\n")[0]!) as { id: string };
       expect(resumedHeader.id).toBe(sessionId);
@@ -286,7 +286,7 @@ describe("proteus exec (headless)", () => {
       };
       expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv }).exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--agent", "smokey", "--json", "Say hello"], {
+      const proc = runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
         env: { ...goodEnv, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
@@ -298,6 +298,50 @@ describe("proteus exec (headless)", () => {
       bad.stop();
     }
   }, 120_000);
+
+  // --no-auto-evolve is the switch a paired benchmark arm needs: the same
+  // workspace and the same turn, with the evolution machinery off.
+  test("--no-auto-evolve runs the turn normally on a local workspace", async () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-noevolve-"));
+    tempDirs.push(home);
+    const server = startMockLlm("Hello from mock.");
+    try {
+      const env = {
+        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
+        PROTEUS_AUTH: "Bearer mock",
+        PROTEUS_MODEL: "mock-model",
+      };
+      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+
+      const proc = runCli(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
+      expect(proc.stderr.toString()).toBe("");
+      expect(proc.exitCode).toBe(0);
+      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
+      expect(events.some((e) => e.type === "evolution")).toBe(false);
+    } finally {
+      server.stop();
+    }
+  }, 120_000);
+
+  // Reaching this rejection proves the flag is threaded all the way into the
+  // AgentClient factory rather than parsed and dropped.
+  test("--no-auto-evolve is rejected for cloud workspaces", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-noevolve-cloud-"));
+    tempDirs.push(home);
+    const stamp = new Date(0).toISOString();
+    writeConfig(home, {
+      origin: "https://proteus.example.com",
+      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      agents: {
+        jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
+      },
+    });
+
+    const proc = runCli(["exec", "--workspace", "jarvis", "--json", "--no-auto-evolve", "Say hello"], { home });
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr.toString()).toContain("--no-auto-evolve applies to local workspaces");
+  });
 });
 
 /** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/utils/stats.ts b/packages/core/src/utils/stats.ts
+index 2e35e7c..b6039c9 100644
+--- a/packages/core/src/utils/stats.ts
++++ b/packages/core/src/utils/stats.ts
+@@ -48,7 +48,7 @@ export function wilsonInterval(successes: number, n: number): ScoreInterval {
+   if (n <= 0) return { mean: 0, lo: 0, hi: 1, n: 0 };
+   const p = Math.min(1, Math.max(0, successes / n));
+   const z2 = Z_95 * Z_95;
+-  const denominator = 1 + z2 / n;
++  const denominator = 1 + z2 / (2 * n);
+   const center = (p + z2 / (2 * n)) / denominator;
+   const halfWidth = (Z_95 / denominator) * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
+   return {

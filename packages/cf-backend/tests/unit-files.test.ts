@@ -1,59 +1,30 @@
-// Behavior tests for the file-manager plumbing: the readdir normalizer
-// (each executor's readdir has a different shape; parseReaddirEntries unifies
-// them into typed DirEntry[]) and the writeExecutorFileOp upload seam.
+// Behavior tests for the file-manager plumbing: the executor→composite path
+// mapping (one plane for read and write) and the writeExecutorFileOp seam.
 import { describe, test, expect } from "bun:test";
 import {
   MAX_UPLOAD_BYTES,
   decodeBase64,
   encodeBase64,
-  parseReaddirEntries,
   sortDirEntries,
+  toCompositePath,
   writeExecutorFileOp,
   type ExecutorWriteDeps,
 } from "../src/lib/files";
 
-describe("parseReaddirEntries", () => {
-  test("parses the sandbox 'd/- name' format (dirs first, alphabetical)", () => {
-    const out = parseReaddirEntries("d src\n- a.md\n- b.json\nd lib");
-    expect(out).toEqual([
-      { name: "lib", type: "dir", size: undefined },
-      { name: "src", type: "dir", size: undefined },
-      { name: "a.md", type: "file", size: undefined },
-      { name: "b.json", type: "file", size: undefined },
-    ]);
+describe("toCompositePath", () => {
+  test("workspace paths pass through unchanged", () => {
+    expect(toCompositePath("workspace", "/src/main.ts")).toBe("/src/main.ts");
+    expect(toCompositePath("workspace", "/")).toBe("/");
   });
 
-  test("parses the nimbus 'd name (123b)' size suffix", () => {
-    const out = parseReaddirEntries("d logs (4096b)\n- app.ts (812b)");
-    expect(out).toEqual([
-      { name: "logs", type: "dir", size: 4096 },
-      { name: "app.ts", type: "file", size: 812 },
-    ]);
+  test("remote executors map onto their mount prefix (leading slash normalized)", () => {
+    expect(toCompositePath("sandbox", "/workspace/a.ts")).toBe("/sandbox/workspace/a.ts");
+    expect(toCompositePath("nimbus", "home/user/b")).toBe("/nimbus/home/user/b");
+    expect(toCompositePath("laptop", "/home/me/c")).toBe("/pc/home/me/c");
   });
 
-  test("parses a plain string[] (laptop ls -1a), trailing slash = dir", () => {
-    const out = parseReaddirEntries(["bin/", "main.rs", "Cargo.toml"]);
-    expect(out).toEqual([
-      { name: "bin", type: "dir" },
-      { name: "Cargo.toml", type: "file" },
-      { name: "main.rs", type: "file" },
-    ]);
-  });
-
-  test("drops '.' and '..' and blank lines", () => {
-    const out = parseReaddirEntries(".\n..\n- real.txt\n\n");
-    expect(out).toEqual([{ name: "real.txt", type: "file", size: undefined }]);
-  });
-
-  test("falls back to file for unrecognized plain lines", () => {
-    const out = parseReaddirEntries("justaname.txt");
-    expect(out).toEqual([{ name: "justaname.txt", type: "file" }]);
-  });
-
-  test("empty / nullish input → empty list", () => {
-    expect(parseReaddirEntries("")).toEqual([]);
-    expect(parseReaddirEntries(null)).toEqual([]);
-    expect(parseReaddirEntries(undefined)).toEqual([]);
+  test("an executor with no file plane → null", () => {
+    expect(toCompositePath("ghost", "/a")).toBeNull();
   });
 });
 
@@ -70,17 +41,16 @@ describe("sortDirEntries", () => {
 });
 
 describe("writeExecutorFileOp", () => {
-  /** In-memory deps: a capturing workspace VFS + optional provider tool map. */
-  function makeDeps(providers: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>> = {}) {
+  /** In-memory deps: a capturing composite VFS, optionally throwing like a
+   *  reserved/offline mount. */
+  function makeDeps(opts: { throwOn?: RegExp; error?: string } = {}) {
     const written = new Map<string, Uint8Array | string>();
     const deps: ExecutorWriteDeps = {
-      vfs: { writeFile: async (path, data) => { written.set(path, data); } },
-      getProvider: (id) => {
-        const tools = providers[id];
-        if (!tools) return null;
-        return {
-          tools: Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, { execute }])),
-        };
+      vfs: {
+        writeFile: async (path, data) => {
+          if (opts.throwOn?.test(path)) throw new Error(opts.error ?? "mount unavailable");
+          written.set(path, data);
+        },
       },
     };
     return { deps, written };
@@ -94,35 +64,26 @@ describe("writeExecutorFileOp", () => {
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
   });
 
-  test("provider executors route text through their writeFile tool", async () => {
-    const calls: unknown[][] = [];
-    const { deps, written } = makeDeps({
-      nimbus: { writeFile: async (...args) => { calls.push(args); return "ok"; } },
-    });
-    const result = await writeExecutorFileOp(deps, "nimbus", "/srv/notes.md", encodeBase64(new TextEncoder().encode("# hello")));
-    expect(result).toEqual({ ok: true });
-    expect(calls).toEqual([["/srv/notes.md", "# hello"]]);
-    expect(written.size).toBe(0); // never falls through to the workspace VFS
+  test("executor uploads land BINARY-SAFE through the executor's composite mount", async () => {
+    const { deps, written } = makeDeps();
+    const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
+    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", encodeBase64(bin))).toEqual({ ok: true });
+    expect(written.get("/sandbox/workspace/logo.png")).toEqual(bin);
+
+    expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", encodeBase64(bin))).toEqual({ ok: true });
+    expect(written.get("/nimbus/home/user/a.bin")).toEqual(bin);
+
+    expect(await writeExecutorFileOp(deps, "laptop", "/home/me/proj/b.bin", encodeBase64(bin))).toEqual({ ok: true });
+    expect(written.get("/pc/home/me/proj/b.bin")).toEqual(bin);
   });
 
-  test("a provider writeFile failure string surfaces as a typed error", async () => {
+  test("an unavailable mount surfaces the composite's honest reservation error", async () => {
     const { deps } = makeDeps({
-      laptop: { writeFile: async () => "writeFile failed: permission denied" },
+      throwOn: /^\/sandbox\//,
+      error: "ENXIO: /sandbox is not available (sandbox executor not configured), open '/sandbox/workspace/x'",
     });
-    const result = await writeExecutorFileOp(deps, "laptop", "/etc/x", encodeBase64(new TextEncoder().encode("y")));
-    expect(result).toEqual({ error: "writeFile failed: permission denied" });
-  });
-
-  test("executors without a writeFile tool are read-only", async () => {
-    const { deps } = makeDeps({ laptop: { readFile: async () => "" } });
-    const result = await writeExecutorFileOp(deps, "laptop", "/tmp/a.txt", encodeBase64(new TextEncoder().encode("x")));
-    expect(result).toEqual({ error: 'Executor "laptop" is read-only — it has no writeFile tool' });
-  });
-
-  test("binary content is refused on string-typed provider transports", async () => {
-    const { deps } = makeDeps({ nimbus: { writeFile: async () => "ok" } });
-    const result = await writeExecutorFileOp(deps, "nimbus", "/srv/blob.bin", encodeBase64(new Uint8Array([1, 0, 2])));
-    expect(result).toEqual({ error: 'binary upload is not supported on "nimbus" — use the workspace executor' });
+    const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", encodeBase64(new TextEncoder().encode("y")));
+    expect(result).toMatchObject({ error: expect.stringContaining("/sandbox is not available") });
   });
 
   test("unknown executor → typed error", async () => {

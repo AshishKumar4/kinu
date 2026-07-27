@@ -19,29 +19,32 @@
  *                           virtual-bash for scratch work; siblings can't
  *                           see each other.
  *
- * Both modes share: Facet class, getModel() helper, lifecycle, parallel-
- * spawn infrastructure (rt.spawnBranch). Heads are a mode of this Facet, not
- * a separate agent class.
+ * Both modes share: Facet class, composed owner/model services, lifecycle,
+ * and parallel-spawn infrastructure. Heads are a mode of this Facet, not a
+ * separate agent class.
  *
- * Constraints (Agent SDK facets):
- *   • schedule(), keepAlive(), runFiber() all throw in facets
- *   • Own SQLite — independent from the orchestrator's
+ * Constraints (Agent SDK facets, verified against agents 0.14.1 dist):
+ *   • schedule()/keepAlive()/runFiber() WORK in facets — each delegates to
+ *     the root DO (_cf_scheduleForFacet / _cf_acquireFacetKeepAlive /
+ *     _cf_registerFacetRun), which owns the single physical alarm slot.
+ *     This class simply doesn't need them.
+ *   • Own SQLite — independent from the orchestrator's (shares the parent
+ *     DO's storage quota)
  *   • LLM config derived per-call from the owner user's provider registry
  */
 
-import { Agent, callable } from "agents";
+import { Agent, callable, type AgentContext } from "agents";
+import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText, tool, jsonSchema } from "ai";
-import type { LanguageModel } from "ai";
-import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
+import { diversityDirective, formatInheritedContext, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
-import type { UserDO } from "./user/user-do.js";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
   type HeadId,
   type HeadInput,
   type HeadReport,
+  type HeadRuntime,
   type Decision,
   type MergeStrategy,
   type HeadBudget,
@@ -57,14 +60,19 @@ import {
   buildHeadAccumulatorTools,
   buildHeadSandboxTools,
   buildHeadWebTools,
-  createDefaultWebSearchProvider,
-  type WebSearchProvider,
 } from "@proteus/core";
+import { OwnedModelServices } from "./owned-model-services.js";
+import { spawnHeadFacet } from "./facet-spawn.js";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
 
 export class ExplorationAgent extends Agent<Env> {
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    sealRpcSurface(this, EXPLORATION_RPC_SURFACE);
+  }
+
   // ── MCTS-mode state (pre-existing) ──────────────────────────────
 
   // ── Head-mode state  ────────────────────────────────────────
@@ -74,6 +82,28 @@ export class ExplorationAgent extends Agent<Env> {
   private headCapture: HeadCapture | null = null;
   private headAborted = false;
   private headAbortReason: string | null = null;
+
+  private readonly ownedModelServices = new OwnedModelServices({
+    env: this.env,
+    agentName: () => this.name,
+    appTitle: 'Proteus (exploration)',
+    ownerRequired: false,
+    getOwnerUserId: () => this.getOwnerUserId(),
+    getUserCaller: async () => {
+      const workspaceToken = this.getCapabilityToken();
+      if (!workspaceToken) throw new Error('This exploration facet was seeded without a workspace capability token.');
+      return { workspaceToken };
+    },
+  });
+
+  private resolveLowEffortModel(spec?: string | null) {
+    const registry = this.ownedModelServices.providerRegistry();
+    const normalizedSpec = registry.normalizeSpecSync(spec);
+    return {
+      model: registry.resolveModel(normalizedSpec),
+      providerOptions: reasoningEffortOptions('low', parseModelSpec(normalizedSpec).provider),
+    };
+  }
 
   // Lazy per-facet VFS + shell — only built when head mode runs.
   private _vfs: SqliteFS | null = null;
@@ -91,46 +121,59 @@ export class ExplorationAgent extends Agent<Env> {
     return this._shell;
   }
 
-  private _providerRegistry: AgentProviderRegistry | null = null;
-  private providerRegistry(): AgentProviderRegistry {
-    if (this._providerRegistry) return this._providerRegistry;
-    const userId = this.getOwnerUserId();
-    const userDOStub = userId
-      ? (this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>)
-      : null;
-    this._providerRegistry = createAgentProviderRegistry({
-      env: this.env,
-      userDOStub,
-      appTitle: 'Proteus (exploration)',
-      workersAI: { sessionAffinity: agentAffinityKey(this.name) },
-    });
-    return this._providerRegistry;
-  }
-
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
    *  them; the parent calls setOwner immediately after subAgent() returns
-   *  the stub. Persisted to SQL so hibernation between spawn + run is safe. */
+   *  the stub. The workspace capability token comes down with it, so a head's
+   *  model calls reach the owner's credentials as the PARENT workspace and are
+   *  attenuated exactly as it is. Persisted to SQL so hibernation between spawn
+   *  + run is safe. */
   @callable()
-  async setOwner(userId: string): Promise<{ ok: true }> {
+  async setOwner(userId: string, capabilityToken: string | null): Promise<{ ok: true }> {
     if (!userId) throw new Error('userId required');
+    this.ensureFacetOwnerTable();
     this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS facet_owner (id INTEGER PRIMARY KEY CHECK (id = 1), user_id TEXT NOT NULL)`,
+      `INSERT INTO facet_owner (id, user_id, capability_token) VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, capability_token = excluded.capability_token`,
+      userId, capabilityToken,
     );
-    this.ctx.storage.sql.exec(
-      `INSERT INTO facet_owner (id, user_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id`,
-      userId,
-    );
-    this._providerRegistry = null;   // rebuild against the new owner
+    this.ownedModelServices.invalidate();
     return { ok: true };
   }
 
-  private getOwnerUserId(): string | null {
+  private ensureFacetOwnerTable(): void {
+    const sql = this.ctx.storage.sql;
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS facet_owner (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         user_id TEXT NOT NULL,
+         capability_token TEXT
+       )`,
+    );
+    const columns = sql.exec(`PRAGMA table_info(facet_owner)`).toArray();
+    if (!columns.some((c) => c.name === 'capability_token')) {
+      sql.exec(`ALTER TABLE facet_owner ADD COLUMN capability_token TEXT`);
+    }
+  }
+
+  /** Migrate on READ as well as on write: a facet seeded before the token
+   *  column existed and resumed without a fresh setOwner would otherwise lose
+   *  its OWNER too, not merely its token, on the missing-column error. */
+  private facetOwnerRow(): { user_id: string; capability_token: string | null } | null {
     try {
+      this.ensureFacetOwnerTable();
       const rows = this.ctx.storage.sql.exec(
-        `SELECT user_id FROM facet_owner WHERE id = 1`,
-      ).toArray() as Array<{ user_id: string }>;
-      return rows[0]?.user_id ?? null;
+        `SELECT user_id, capability_token FROM facet_owner WHERE id = 1`,
+      ).toArray() as Array<{ user_id: string; capability_token: string | null }>;
+      return rows[0] ?? null;
     } catch { return null; }
+  }
+
+  private getOwnerUserId(): string | null {
+    return this.facetOwnerRow()?.user_id ?? null;
+  }
+
+  private getCapabilityToken(): string | null {
+    return this.facetOwnerRow()?.capability_token ?? null;
   }
 
   /** The ROOT orchestrator agent name — the shared point every head in a split
@@ -166,40 +209,6 @@ export class ExplorationAgent extends Agent<Env> {
     return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)) as DurableObjectStub<OrchestratorAgent>;
   }
 
-  /** Resolve the LanguageModel for this facet. `modelId` is whatever the
-   *  parent passed (could be a bare modelId or a full spec); the registry
-   *  normalizes it (handles BC `@cf/...` form). */
-  getModel(modelId?: string): LanguageModel {
-    const reg = this.providerRegistry();
-    return reg.resolveModel(reg.normalizeSpecSync(modelId));
-  }
-
-  private _webSearchProvider: WebSearchProvider | null = null;
-  /** The head's web research provider — same key-less-by-default seam the
-   *  orchestrator's main loop uses (DuckDuckGo + Markdown-for-Agents; a stored
-   *  `tavily` credential upgrades search). Built per-facet so a head can gather
-   *  live information rather than reason from clipped inherited context. */
-  private getWebSearchProvider(): WebSearchProvider {
-    if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
-    const ai = (this.env as { AI?: { toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>> } }).AI;
-    this._webSearchProvider = createDefaultWebSearchProvider({
-      fetch: globalThis.fetch,
-      ...(getAuth ? { getAuth } : {}),
-      ...(ai?.toMarkdown
-        ? {
-            htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
-              const name = (opts?.url ?? 'page') + '.html';
-              const blob = new Blob([html], { type: 'text/html' });
-              const out = await ai.toMarkdown!([{ name, blob }]);
-              return out[0]?.data ?? '';
-            },
-          }
-        : {}),
-    });
-    return this._webSearchProvider;
-  }
-
   async onStart() {
     // MCTS mode trace table — pre-existing.
     this.ctx.storage.sql.exec(`
@@ -221,7 +230,7 @@ export class ExplorationAgent extends Agent<Env> {
     craftedTools: CraftedTool[],
     siblings: readonly string[] = [],
   ): Promise<{ text: string; codeUsed: string | null }> {
-    const model = this.getModel();
+    const { model, providerOptions } = this.resolveLowEffortModel();
     const context = formatInheritedContext(priorHistory);
     const toolHints = craftedTools.length > 0
       ? `\nKnown patterns:\n${craftedTools.map(t => `- ${t.name}: ${t.description}`).join("\n")}`
@@ -232,7 +241,7 @@ export class ExplorationAgent extends Agent<Env> {
       system: "You are an expert agent exploring one approach to solve a task." + toolHints +
         "\n\nIf your approach involves code, include it in a ```js code block.",
       messages: [{ role: "user" as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
-      maxOutputTokens: 4096,
+      ...(providerOptions ? { providerOptions } : {}),
     });
 
     const trimmed = text.trim();
@@ -245,14 +254,14 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async generateReflection(task: string): Promise<string> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
-    const model = this.getModel();
+    const { model, providerOptions } = this.resolveLowEffortModel();
     const { text } = await generateText({
       model,
       messages: [{
         role: "user" as const,
         content: `Task: ${task}\nAttempt: ${traces.map(t => t.text).join("\n")}\n\nWhat specifically went wrong? One sentence.`,
       }],
-      maxOutputTokens: 200,
+      ...(providerOptions ? { providerOptions } : {}),
     });
     return text.trim();
   }
@@ -294,7 +303,7 @@ export class ExplorationAgent extends Agent<Env> {
     // supplies its model + scratch tools (sandbox/shared/recursive-split). Abort
     // is driven by abortHead() flipping this.headAborted.
     return runHeadInference(input, {
-      model: this.getModel(input.model),
+      model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
       capture,
       isAborted: () => this.headAborted,
@@ -321,7 +330,7 @@ export class ExplorationAgent extends Agent<Env> {
       ...buildHeadSandboxTools(shell, vfs, capture),
 
       // web_search / web_fetch — live research over the shared provider seam.
-      ...buildHeadWebTools(this.getWebSearchProvider(), capture),
+      ...buildHeadWebTools(this.ownedModelServices.getWebSearchProvider(), capture),
 
       shared_write: tool({
         description:
@@ -454,31 +463,23 @@ export class ExplorationAgent extends Agent<Env> {
 
     const journal = new HeadJournal(this.sql.bind(this) as unknown as SqlExecutor);
     const facet = this;
-    const runtime = {
-      async spawnHead(childInput: HeadInput) {
-        const stub = await facet.subAgent(ExplorationAgent, childInput.id);
-        const owner = facet.getOwnerUserId();
-        if (owner) await stub.setOwner(owner);
-        // Propagate the ROOT orchestrator unchanged so the whole subtree shares
-        // one common findings scratch (not this intermediate head).
-        const sharedParent = facet.getSharedParent();
-        if (sharedParent) await stub.setSharedParent(sharedParent);
-        await stub.initHead(childInput);
-        return {
-          id: childInput.id,
-          async run(): Promise<HeadReport> { return (await stub.runAsHead()) as HeadReport; },
-          async abort(reason: string) {
-            try { await stub.abortHead(reason); } catch {}
-            try { await facet.abortSubAgent(ExplorationAgent, childInput.id); } catch {}
-          },
-        };
+    const runtime: HeadRuntime = {
+      spawnHead(childInput: HeadInput) {
+        return spawnHeadFacet(facet, childInput, {
+          ownerUserId: facet.getOwnerUserId(),
+          capabilityToken: facet.getCapabilityToken(),
+          // The ROOT orchestrator, propagated unchanged so the whole subtree
+          // shares one findings scratch (not this intermediate head).
+          sharedParent: facet.getSharedParent(),
+        });
       },
       async mergeLLM(prompt: string): Promise<MergeOutput> {
+        const { model, providerOptions } = facet.resolveLowEffortModel(parentInput.model);
         return generateJson({
-          model: facet.getModel(parentInput.model),
+          model,
           schema: MergeOutputSchema,
           prompt,
-          maxOutputTokens: 2048,
+          ...(providerOptions ? { providerOptions } : {}),
         });
       },
     };

@@ -4,12 +4,14 @@
  */
 
 import chalk from 'chalk';
-import type { AgentInfo, SearchNode } from '@proteus/core';
+import { BUILTIN_TOOLS } from '@proteus/core';
+import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
+import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
 
 const BRAND = chalk.bold.cyan('🔱 Proteus');
-const VERSION = '0.1.0';
+const VERSION = cliPackage.version;
 const DIM = chalk.dim;
 const ACCENT = chalk.cyan;
 const OK = chalk.green;
@@ -50,17 +52,28 @@ function stripAnsi(s: string): string {
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const isTTY = process.stdout.isTTY ?? false;
 
-export function createSpinner(message: string) {
+export function createSpinner(initialMessage: string) {
   let i = 0;
+  let message = initialMessage;
   let timer: ReturnType<typeof setInterval> | null = null;
   return {
     start() {
       if (!isTTY) return;
       timer = setInterval(() => {
         const frame = ACCENT(SPINNER_FRAMES[i % SPINNER_FRAMES.length]);
-        process.stdout.write(`\r${frame} ${message}`);
+        process.stdout.write(`\r\x1b[K${frame} ${message}`);
         i++;
       }, 80);
+    },
+    /** Replace the live status. Piped output gets one plain line instead. */
+    update(next: string) {
+      message = next;
+      if (!isTTY) console.log(`${DIM('·')} ${next}`);
+    },
+    /** Print a line that stays in the scrollback, above the live status. */
+    note(line: string) {
+      if (isTTY) process.stdout.write(`\r\x1b[K`);
+      console.log(line);
     },
     stop(finalMessage?: string) {
       if (timer) clearInterval(timer);
@@ -107,7 +120,7 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   const w = termWidth();
   const L = (label: string) => DIM(label.padEnd(10));
   console.log('');
-  console.log(`${BRAND} ${DIM('— Agent Created')}`);
+  console.log(`${BRAND} ${DIM('— Workspace Created')}`);
   console.log(boxTop(w));
   console.log(boxRow(L('Name:'), ACCENT(name), w));
   console.log(boxRow(L('Mission:'), purpose.slice(0, w - 18), w));
@@ -119,12 +132,14 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
 
 // ── Agent status card ────────────────────────────────────────────
 
-export function printAgentStatus(info: AgentInfo, dbSize: number, extra?: {
+export function printAgentStatus(info: WorkspaceInfo, dbSize: number, extra?: {
   conversationCount?: number;
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
 }): void {
   const w = termWidth();
   console.log('');
-  console.log(`${BRAND} ${DIM('— Agent Status')}`);
+  console.log(`${BRAND} ${DIM('— Workspace Status')}`);
   console.log(boxTop(w));
 
   const L = (label: string) => DIM(label.padEnd(14));
@@ -132,8 +147,11 @@ export function printAgentStatus(info: AgentInfo, dbSize: number, extra?: {
   // Identity section
   console.log(boxRow(L('Name:'), `${ACCENT(info.name)} ${DIM(`(${info.id.slice(0, 12)}...)`)}`, w));
   console.log(boxRow(L('Mission:'), info.purpose.slice(0, w - 22), w));
-  console.log(boxRow(L('Created:'), DIM(new Date(info.createdAt).toLocaleDateString()), w));
+  const created = info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—';
+  console.log(boxRow(L('Created:'), DIM(created), w));
   console.log(boxRow(L('Database:'), DIM(formatBytes(dbSize)), w));
+  console.log(boxRow(L('Model:'), extra?.model ?? '(default)', w));
+  console.log(boxRow(L('Effort:'), extra?.reasoningEffort ?? 'medium (chat default)', w));
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   // Evolution section
@@ -146,7 +164,7 @@ export function printAgentStatus(info: AgentInfo, dbSize: number, extra?: {
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   // Tools section
-  console.log(boxRow(L('Tools:'), `6 built-in + ${info.craftedToolCount} crafted`, w));
+  console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in + ${info.craftedToolCount} crafted`, w));
   console.log(boxRow(L('Memory:'), formatBytes(info.memorySize), w));
   console.log(boxBot(w));
   console.log('');
@@ -156,6 +174,7 @@ export function printAgentStatus(info: AgentInfo, dbSize: number, extra?: {
 
 export function printAgentList(agents: Array<{
   name: string;
+  mode: 'local' | 'cloud';
   purpose: string;
   scaffoldVersion: number;
   toolCount: number;
@@ -163,29 +182,33 @@ export function printAgentList(agents: Array<{
   dbSize?: number;
 }>): void {
   if (agents.length === 0) {
-    console.log(`\n${DIM('No agents found.')} Create one with: ${ACCENT('proteus create <name>')}\n`);
+    console.log(`\n${DIM('No workspaces found.')} Create one with: ${ACCENT('proteus create <name>')}\n`);
     return;
   }
 
   console.log('');
-  console.log(`${BRAND} ${DIM(`— ${agents.length} agent${agents.length === 1 ? '' : 's'}`)}`);
+  console.log(`${BRAND} ${DIM(`— ${agents.length} workspace${agents.length === 1 ? '' : 's'}`)}`);
   console.log('');
 
   // Adaptive column widths
   const maxName = Math.max(4, ...agents.map(a => a.name.length));
   const nameW = Math.min(maxName + 2, 22);
-  const purposeW = Math.max(20, termWidth() - nameW - 24);
+  const modeW = 8;
+  const purposeW = Math.max(20, termWidth() - nameW - modeW - 24);
 
-  const hdr = `  ${MUTED('NAME'.padEnd(nameW))}${MUTED('PURPOSE'.padEnd(purposeW))} ${MUTED('VER')}  ${MUTED('SIZE')}`;
+  const hdr = `  ${MUTED('NAME'.padEnd(nameW))}${MUTED('MODE'.padEnd(modeW))}${MUTED('PURPOSE'.padEnd(purposeW))} ${MUTED('VER')}  ${MUTED('SIZE')}`;
   console.log(hdr);
   console.log(`  ${DIM('─'.repeat(termWidth() - 4))}`);
 
   for (const a of agents) {
-    const name = ACCENT(a.name.padEnd(nameW));
+    // Clip as well as pad: a name longer than the column would otherwise run
+    // into MODE and shear the whole table.
+    const name = ACCENT(a.name.slice(0, nameW - 1).padEnd(nameW));
+    const mode = DIM(a.mode.padEnd(modeW));
     const purpose = DIM(a.purpose.slice(0, purposeW - 2).padEnd(purposeW));
     const ver = `v${a.scaffoldVersion}`.padEnd(4);
     const size = a.dbSize ? DIM(formatBytes(a.dbSize).padStart(8)) : DIM('    —   ');
-    console.log(`  ${name}${purpose} ${ver}  ${size}`);
+    console.log(`  ${name}${mode}${purpose} ${ver}  ${size}`);
   }
   console.log('');
 }
@@ -260,7 +283,7 @@ export function printError(message: string, hint?: string): void {
 export function printHelp(): void {
   console.log('');
   console.log(`${BRAND} ${DIM(`v${VERSION}`)}`);
-  console.log(`${DIM('Self-evolving AI agent with MCTS exploration')}\n`);
+  console.log(`${DIM('Self-evolving workspaces with MCTS exploration')}\n`);
   console.log(`${chalk.bold('Usage:')}  proteus <command> [options]\n`);
   console.log(`${chalk.bold('Commands:')}`);
   console.log(`  ${ACCENT('setup')}              Connect your account; optionally configure local models`);
@@ -268,32 +291,33 @@ export function printHelp(): void {
   console.log(`  ${ACCENT('auth')}               Sign into your Proteus account`);
   console.log(`  ${ACCENT('whoami')}             Show the signed-in account`);
   console.log(`  ${ACCENT('tokens')}             Manage long-lived CI access tokens`);
-  console.log(`  ${ACCENT('create')} [name]      Create a cloud or local agent`);
+  console.log(`  ${ACCENT('create')} [name]      Create a cloud or local workspace`);
+  console.log(`  ${ACCENT('workspace delete')} <name>  Permanently delete a cloud workspace`);
   console.log(`  ${ACCENT('run')}    <name>      Run once, open chat, or use JSON/RPC mode`);
   console.log(`  ${ACCENT('exec')}   "task"      Headless one-shot run for scripts and CI (--json)`);
   console.log(`  ${ACCENT('chat')}   <name>      Interactive conversation`);
-  console.log(`  ${ACCENT('sessions')} [agent]   List recorded CLI sessions`);
-  console.log(`  ${ACCENT('alias')}  <agent>     Create an executable alias command`);
+  console.log(`  ${ACCENT('sessions')} [workspace]  List recorded CLI sessions`);
+  console.log(`  ${ACCENT('alias')}  <workspace>  Create an executable alias command`);
   console.log(`  ${ACCENT('connect')}            Link this computer as the execution engine`);
-  console.log(`  ${ACCENT('daemon')}             Manage local scheduled agent wakeups`);
-  console.log(`  ${ACCENT('status')} <name>      Show agent state and evolution history`);
+  console.log(`  ${ACCENT('daemon')}             Manage local scheduled workspace wakeups`);
+  console.log(`  ${ACCENT('status')} <name>      Show workspace state and evolution history`);
   console.log(`  ${ACCENT('model')}  <name>      Show or change the active model`);
-  console.log(`  ${ACCENT('tools')}  <name>      List the agent tool surface`);
+  console.log(`  ${ACCENT('tools')}  <name>      List the workspace tool surface`);
   console.log(`  ${ACCENT('triggers')} <name>    List, schedule, or cancel triggers`);
   console.log(`  ${ACCENT('jobs')}   <name>      List or cancel background jobs`);
   console.log(`  ${ACCENT('evolve')} <name>      Trigger a local MCTS evolution cycle`);
   console.log(`  ${ACCENT('update')}             Update the installed command`);
   console.log(`  ${ACCENT('doctor')}             Inspect local installation state`);
-  console.log(`  ${ACCENT('list')}               List all agents`);
+  console.log(`  ${ACCENT('list')}               List all workspaces`);
   console.log(`\n${chalk.bold('Options:')}`);
   console.log(`  ${DIM('--origin <url>')}      Proteus app origin`);
-  console.log(`  ${DIM('--mode <mode>')}       Agent mode: cloud or local`);
+  console.log(`  ${DIM('--mode <mode>')}       Workspace mode: cloud or local`);
   console.log(`  ${DIM('--alias <name>')}      Alias command for create`);
   console.log(`  ${DIM('--session <id>')}      Resume a recorded CLI session`);
   console.log(`  ${DIM('--model <id>')}        Model ID ${DIM('(env: PROTEUS_MODEL)')}`);
   console.log(`  ${DIM('--base-url <url>')}    LLM API base URL ${DIM('(env: PROTEUS_BASE_URL)')}`);
   console.log(`  ${DIM('--auth <header>')}     Auth header ${DIM('(env: PROTEUS_AUTH)')}`);
-  console.log(`  ${DIM('--purpose <text>')}    Agent purpose (for create)`);
+  console.log(`  ${DIM('--purpose <text>')}    Workspace purpose (for create)`);
   console.log(`\n${chalk.bold('Examples:')}`);
   console.log(`  ${DIM('$')} proteus setup`);
   console.log(`  ${DIM('$')} proteus provider connect codex`);

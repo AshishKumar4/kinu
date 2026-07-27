@@ -1,223 +1,149 @@
 /**
- * OrchestratorAgent — self-evolving chat agent extending Think.
+ * OrchestratorAgent — the self-evolving top-level workspace DO.
  *
- * Tool surface (constructed in @proteus/core/tools/builtins) — kept small so
- * the LLM selects well:
- *   execute_tools — codemode sandbox: workspace.* + sandbox.* + codemode.*
- *                   (crafted) + llm.query (Recursive Language Models)
- *   run           — shell command, runtime-dispatched (workspace / nimbus / sandbox / laptop)
- *   skills        — Claude-Code/Hermes-compatible SKILL.md store, one tool / multiple actions
- *   think         — unified exploration dispatcher (single-shot / mcts / heads);
- *                   subsumes the old bare `explore` (MCTS) + `split_heads` (heads) tools
- *   memory        — long-term prose notes: save / search (hybrid FTS5 + Vectorize)
- *   fact          — typed keyed world model: remember / recall / forget (agent_facts)
+ * The actor-agnostic substrate (runtime assembly, BackendHost, the shared
+ * AgentOrchestrator, turn pipeline, tool/model/prompt caches) lives in
+ * ActorAgent (actor-agent.ts); this class is the workspace-facing actor on
+ * top of it: owner claim + schema, the @callable RPC surface, evolution /
+ * scaffold / GEPA / alternate-takes flows, onChatResponse sequencing, peer
+ * teams, email + webhook ingress, product changes, and fork.
  *
- * This file is a THIN ADAPTER: tool factory, system prompt, and crafted-tool
- * injection all live in @proteus/core so the CLI surface shares them verbatim.
+ * Tool factory, system prompt, and crafted-tool injection all live in
+ * @proteus/core so the CLI surface shares them verbatim.
  */
 
-import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
-import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/ws-rpc-gate.js";
-import { createProteusCompactFunction } from "./lib/compaction.js";
+import { callable, type AgentContext } from "agents";
+import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
+import { initCompactionStateTable } from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
-import { Think, Session } from "@cloudflare/think";
-// preamble-injection pattern: we construct the codemode tool
-// directly via createCodeTool + PreambleCraftedExecutor. The executor reads
-// craftStore.list() on every call and splices a `const tools = {...}`
-// preamble into the LLM's sandbox arrow, so mid-turn additions are visible
-// on the next execute_tools call and tool bodies share lexical scope with
-// workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
-import { streamText, generateText, tool, jsonSchema, stepCountIs } from "ai";
-import type { LanguageModel, ModelMessage, ToolSet } from "ai";
+import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
-import type { SerializableToolDescriptor } from "./user/mcp.js";
-import type { TimelineSpan, DirEntry } from "./lib/protocol.js";
+import type {
+  TimelineSpan,
+  DirEntry,
+  WorkspaceAgent,
+  SubordinateActivityEvent,
+} from "./lib/protocol.js";
+import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
-import { nextCronFire } from "./lib/cron.js";
-import { compactionThreshold, compactionThresholdForWindow, catalogContextWindow } from "./lib/context-window.js";
+import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
-import { parseReaddirEntries, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
-import { deriveAgentTitle } from "./lib/agent-naming.js";
-import type {
-  TurnContext, TurnConfig, ChatResponseResult,
-  ToolCallResultContext, StepContext, ChunkContext, StreamableResult,
-} from "@cloudflare/think";
+import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
+import type { ChatResponseResult, StreamableResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
   bootstrapScaffold,
   initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
-  resolveMaxSteps,
-  // canonical tool + prompt surface — single source of truth
-  buildBuiltinTools,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
-  buildSystemPromptSync,
-  currentDateForPrompt,
-  appendVolatileContextMessage, hashSystemPrompt,
-  // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
-  TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
-  type BuiltinToolName,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
-  ACTIVE_TOOLS,
+  argumentDigest,
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
+  migrateWorkspaceStorage,
   // Fork feature
-  forkAgentStorage, readForkLineage,
-  nanoid,
-  // Branching heads
-  HeadController, HeadJournal, initHeadsTables,
-  type SerializedMessage, type SplitPhaseEvent, type HeadRunView, type HeadRuntime, type MergeResult,
+  forkWorkspaceStorage, readForkLineage,
+  nanoid, initHeadsTables, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventsToUIStream, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldInferenceTransform, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
   // Auto-judge shadow eval — sampled per-turn shadow rollout closure
   runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
-  type StructuredJudgeFn, type JudgeOutput,
+  type StructuredJudgeFn,
   // Durable run-event log
-  initRunEventTables, RunEventRecorder,
+  initRunEventTables,
   // R3 outcome ledger (schema + take_pick CHECK rebuild) — eager in ensureSchema
   initTurnOutcomeTables,
   type RunEvent, type RunEventQuery,
   // agent_facts world model
-  initFactsTable, createFactsStore, renderFactsBlock, type FactsStore,
-  // Per-turn device awareness (laptop runtime presence + change notice)
-  observeDevicePresence,
-  // Typed agent_config store
-  createAgentConfigStore, DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
+  initFactsTable, DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
   // Voyager curriculum + Absolute Zero learnability proposer
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, type HybridHit,
-  // SKILL.md export/import (git-friendly crafted-tool format)
-  exportAllSkillsToVfs, importSkillsFromVfs,
-  type ExportSkillsResult, type ImportSkillsResult,
-  type CompletedTurn, type ToolCallRecord, type AgentRuntime,
-  type SessionWriter, type SessionMessage, type SqlExecutor,
+  type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor,
-  // Unified strategy dispatch
-  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
-  createHeadsStrategy, createThinkTool,
-  // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold, type BackgroundJob,
-  // EventsHub primitives (spec §1)
-  EventLog, TriggerRegistry, ReactorBudget, ReplyChannelStore,
+  effortFor, reasoningEffortOptions, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  isReasoningEffort, type ReasoningEffort,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
-  type RevisitCondition,
-  // Skills (Claude-Code / Hermes SKILL.md spec, VFS-backed)
-  discoverSkills, resolveActiveSkills, extractExplicitInvocations,
-  unionAllowedTools, toolAllowedBySkills, BUILTIN_SKILLS,
-  type ActiveSkillSet, type SkillsVfs,
   // GEPA offline optimisation (scaffold + crafted-tool)
-  runScaffoldGepa, runCraftedToolGepa,
+  runScaffoldGepa,
   initGepaTables, startGepaRun, finishGepaRun, makePersistingHook, listGepaRuns,
   loadGepaCandidates,
   type EvalInstance, type MetricOutcome, type GepaRunSummary,
   // Turn-outcome signal + replay-eval loss curve (audit R3)
-  buildOutcomeEvalSplit, listReplayEvals,
+  buildOutcomeEvalSplit, describeSplitDegeneracy, listReplayEvals,
+  clampGepaEvalBudget, type ScoreInterval,
   type OutcomeEvalExpectation, type ReplayEvalSummary,
+  // K_align — the correction-rate trend over the same outcome ledger
+  alignmentConvergence, type AlignmentConvergence,
   // Evolution Changelog — the self-change digest + revert dispatch
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
-  recordTakePick, recordHeadsTakeSet, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
+  recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type ProductChangeApproval, type ProductChangeCheck, type ProductChangeStatus,
-  type ProductDeploymentRecord, type ProductChangeToolDeps, type ProductSourceBindingInput,
+  type ProductChangeApproval, type ProductChangeStatus,
+  type ProductChangeToolDeps, type ProductSourceBindingInput,
+  // Product-change execution engine — the driver beneath the governance ledger
+  ProductChangeEngine, createSandboxProductChangeExec,
+  type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
+  // Peer-agent teams (the `team` tool contract)
+  type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
+  type EnqueueTurnResult,
+  slugifyName,
   readSoul, SOUL_PATH, summarizeSoul, writeSoul,
-  parseModelSpec,
-  // AGENTS.md (agents.md standard) — cloud workspace discovery
-  collectWorkspaceAgentsMd,
+  // Automatic workspace titling (first turn + legacy slug heal)
+  applyWorkspaceTitle, isPlaceholderWorkspaceTitle, parseWorkspaceIdentityOutput,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT, workspaceIdentityPrompt,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
 } from "@proteus/core";
-import { combineAbortSignals } from "@proteus/agent-utils";
-import { createCodeTool } from "@cloudflare/codemode/ai";
-import { createCFRuntime, type CFRuntime } from "./runtime.js";
-import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
-import { createCFHeadRuntime } from "./heads/head-runtime.js";
-import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey } from "@proteus/core";
+import { ActorAgent, extractLastUserText, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { SubordinateAgent } from "./subordinate-agent.js";
+import {
+  SubordinateRosterStore,
+  admitSubordinateReport,
+  createTeamToolDeps,
+  type SubordinatesChangedEvent,
+} from "./subordinate-support.js";
+import type { CodemodeProvider } from "./rlm.js";
 import { timingSafeEqual } from "./lib/crypto.js";
-import { markLastToolForAnthropicCache } from "./providers/anthropic-cache.js";
-import { createRLMProvider } from "./rlm.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
+import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
+import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
 import {
   initWebhookRateLimitTables,
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
 } from "./events/webhook-rate-limit.js";
+import { acceptInboundEmail } from "./events/ingress/email.js";
+import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
+import {
+  createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
+} from "./email/outbound.js";
+import { EmailOutbox } from "./email/outbox.js";
 
-const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
+const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** Extract plain text from the last user message in a ModelMessage[]. Used
- *  by skills resolution to look for `/skill-name` invocations and keyword
- *  matches without needing to know the AI SDK content-part union shape.
- *  Deliberately text-only: file/image attachment parts are dropped here, but
- *  they still reach the model — the evolved-scaffold path hands this flattened
- *  text to the scaffold as `task` while `host.defaultInference()` streams the
- *  original opts.messages with all parts intact (see runStreamText). */
-function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== 'user') continue;
-    const c = m.content;
-    if (typeof c === 'string') return c;
-    if (Array.isArray(c)) {
-      return c
-        .map((p) => (p && typeof p === 'object' && 'text' in p ? String((p as { text: unknown }).text ?? '') : ''))
-        .filter(Boolean)
-        .join('\n');
-    }
-    return '';
-  }
-  return '';
-}
-
-function readCliCwd(body?: Record<string, unknown>): string | null {
-  const cwd = body?.cwd;
-  return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null;
-}
-
-function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
-  const prefix = `Current terminal working directory: ${cwd}\n\n`;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.role !== 'user') continue;
-    const next = [...messages];
-    next[i] = {
-      ...message,
-      content: prefixCliCwdContent(message.content, prefix) as ModelMessage['content'],
-    } as ModelMessage;
-    return next;
-  }
-  return [...messages];
-}
-
-function prefixCliCwdContent(content: unknown, prefix: string): unknown {
-  if (typeof content === 'string') return `${prefix}${content}`;
-  if (Array.isArray(content)) return [{ type: 'text', text: prefix }, ...content];
-  return prefix;
-}
+// Inbound-email budget per agent (all senders combined). Email is a wake
+// channel, not a data plane — mail beyond this is dropped at the gate.
+const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
 function executorOutputIsError(output: string): boolean {
   const text = output.trim();
@@ -270,9 +196,9 @@ interface ForkPayload {
 }
 
 /**
- * Build an ephemeral SqlExecutor that answers the queries forkAgentStorage
+ * Build an ephemeral SqlExecutor that answers the queries forkWorkspaceStorage
  * makes against the source DB, using the serialized payload as the source
- * of truth. Only the exact SELECT shapes that forkAgentStorage issues are
+ * of truth. Only the exact SELECT shapes that forkWorkspaceStorage issues are
  * supported — this is a minimal shim, not a general SQL engine.
  */
 function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
@@ -308,7 +234,7 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
       if (query.startsWith("SELECT key, value FROM agent_config")) {
         return payload.agentConfig;
       }
-      if (query.startsWith("SELECT id, name FROM agent_identity")) {
+      if (query.startsWith("SELECT id, name FROM workspace_identity")) {
         return [{ id: payload.lineage.forkOriginAgentId, name: payload.lineage.forkOriginAgentName }];
       }
       // Think-Session messages: the source DO already time-filtered the
@@ -327,106 +253,92 @@ function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
   return rawSql as unknown as SqlExecutor;
 }
 
-export class OrchestratorAgent extends Think<Env> {
-  override maxSteps = resolveMaxSteps();
-
+export class OrchestratorAgent extends ActorAgent {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
-    // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
-    // websockets, and the REST scope gate never sees websocket frames — so
-    // out-of-scope @callable requests are rejected here, ahead of the
-    // agents-SDK rpc dispatcher (installed as an own-property onMessage
-    // wrapper by the Agent constructor, hence the re-wrap instead of an
-    // onMessage override). Chat frames pass through untouched.
-    const dispatchMessage = this.onMessage;
-    this.onMessage = async (connection, message) => {
-      const rejection = rejectOutOfScopeRpc(connection.tags, message);
-      if (rejection) {
-        connection.send(rejection);
-        return;
+    sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+  }
+
+  override async onBeforeSubAgent(
+    request: Request,
+    child: { className: string; name: string },
+  ): Promise<Request | Response | void> {
+    if (child.className !== SubordinateAgent.name) {
+      return new Response('Not found', { status: 404 });
+    }
+    const rosterEntry = this.subordinateRoster.get(child.name);
+    if (!rosterEntry || rosterEntry.status === 'dismissed'
+      || !this.hasSubAgent(child.className, child.name)) {
+      return new Response('Not found', { status: 404 });
+    }
+    return request;
+  }
+
+  private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
+    try {
+      const replies = await dispatchEmailRepliesForTurn(
+        { log: this.eventLog, replies: this.replyChannels },
+        turnId, assistantText, Date.now(),
+      );
+      if (replies.pending) {
+        console.warn(`[proteus] event reply remains pending for ${turnId}; keeping delivery lease open`);
+        return false;
       }
-      return dispatchMessage.call(this, connection, message);
-    };
+      this.eventLog.markTurnCompleted(turnId);
+      return true;
+    } catch (err) {
+      console.warn('[proteus] event reply dispatch failed:', err);
+      return false;
+    }
   }
 
-  /** Persist the verified connect-ticket scopes (edge-set header, see
-   *  appendIdentityHeaders) as a connection tag — tags ride the WebSocket
-   *  attachment, so the rpc gate survives DO hibernation. */
-  override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
-    const tags = await super.getConnectionTags(connection, ctx);
-    const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
-    return scopeTag ? [...tags, scopeTag] : tags;
-  }
-
-  /** Scoped access-token connections may chat but never write agent state. */
-  override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
-    return super.shouldConnectionBeReadonly(connection, ctx)
-      || !!ctx.request.headers.get(CLI_SCOPES_HEADER);
-  }
-
-  private _rt: CFRuntime | null = null;
   private _engine: EvolutionEngine | null = null;
-  /** Backend-agnostic per-turn accounting (tool calls, steps, usage, errors).
-   *  Lazily built with cf sinks → activity_log + the durable run-event recorder.
-   *  Shared with the CLI backend (core/orchestrator/turn-accumulator). */
-  // The backend-agnostic agent logic (per-turn accounting + session-evolution
-  // cadence + the event→turn reactor). The DO provides the BackendHost
-  // (broadcast + programmatic-turn via saveMessages) + the cf sinks. The CLI
-  // backend builds the same AgentOrchestrator with its own host.
-  private _orch: AgentOrchestrator | null = null;
-  private get orch(): AgentOrchestrator {
-    if (!this._orch) {
-      this._orch = new AgentOrchestrator({
-        host: this.host,
-        engine: this.engine,
-        eventLog: this.eventLog,
-        sessionReflectionInterval: SESSION_REFLECTION_INTERVAL,
-        sinks: {
-          logActivity: (e, d) => this.logActivity(e, d),
-          onToolCallEvent: (ev) => {
-            try {
-              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
-            } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
-          },
-          onStepEvent: (ev) => {
-            try {
-              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
-            } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
-          },
-        },
-      });
-    }
-    return this._orch;
-  }
-  private get acc(): TurnAccumulator { return this.orch.acc; }
+  private _subordinateRoster: SubordinateRosterStore | null = null;
+  private _emailOutbox: EmailOutbox | null = null;
 
-  // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
-  // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
-  // the resume path for the reactor + background-job wake + consent.
-  private _host: BackendHost | null = null;
-  private get host(): BackendHost {
-    if (!this._host) {
-      const agent = this;
-      this._host = {
-        broadcast: (event) => { try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ } },
-        enqueueTurn: async ({ text, metadata }) => {
-          const result = await this.saveMessages([{
-            id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }],
-            ...(metadata ? { metadata } : {}),
-          }]);
-          return { status: result.status === 'skipped' ? 'skipped' : 'queued' };
-        },
-        // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
-        // heads need the owner for UserDO auth, set by first-turn time. undefined
-        // before then ⇒ heads degrade (getHeadController throws the no-owner error).
-        get headRuntime() { return agent.getCFHeadRuntime(); },
-      };
+  private get subordinateRoster(): SubordinateRosterStore {
+    if (!this._subordinateRoster) {
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
+      this._subordinateRoster.ensureSchema();
     }
-    return this._host;
+    return this._subordinateRoster;
   }
-  /** Executors whose tools ran this turn — debounces the last-active-executor
-   *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
-  private _executorsUsedThisTurn = new Set<string>();
+
+  /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
+   *  replies and owner notifications (SPEC §7.4). */
+  private get emailOutbox(): EmailOutbox {
+    if (!this._emailOutbox) {
+      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql);
+      this._emailOutbox.ensureSchema();
+    }
+    return this._emailOutbox;
+  }
+
+  private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
+    try {
+      this.broadcast(JSON.stringify(event ?? {
+        type: 'subordinates_changed',
+        subordinates: this.subordinateRoster.list(),
+      }));
+    } catch { /* no connected clients */ }
+  }
+
+  private broadcastSubordinateEvent(
+    event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
+  ): void {
+    try {
+      this.broadcast(JSON.stringify({
+        type: 'subordinate_event',
+        id: event.id ?? nanoid(),
+        kind: event.kind,
+        subordinate: event.subordinate,
+        ...(event.status ? { status: event.status } : {}),
+        content: event.content,
+        ...(event.task ? { task: event.task } : {}),
+        timestamp: event.timestamp,
+      } satisfies SubordinateActivityEvent));
+    } catch { /* no connected clients */ }
+  }
   /** /workspace backups are debounced via the persisted last-backup time +
    *  this optimistic gate. Restore happens lazily in the sandbox handle on
    *  first actual sandbox use, not at turn startup. */
@@ -437,106 +349,29 @@ export class OrchestratorAgent extends Think<Env> {
   // Session-reflection cadence (_sessionTurnCount/Turns/StartedAt) now lives on
   // the core AgentOrchestrator; read the turn index via this.orch.sessionTurnIndex.
 
-  // ── Tool cache: avoid rebuilding the built-in ToolSet + codemode types every turn ──
-  private _cachedTools: ToolSet | null = null;
-  private _cachedToolsKey: string = "";
-
-  // ── User MCP tools cache ─────────────────────────────────────────────
-  // Per-user MCP tools live in UserDO. Per turn we ask UserDO for the
-  // current tool descriptors (cheap RPC) and cache them against UserDO's
-  // monotonic mcp_updated_at watermark so we only rebuild closures when
-  // the user has actually added/removed/edited a server.
-  private _cachedMcpTools: ToolSet = {};
-  private _cachedMcpToolsKey: number = -1;
-
-  // Preamble-injection: the codemode tool is built once per DO lifetime.
-  // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
-  // execute call, so newly-saved tools appear on the next execute_tools
-  // invocation without any registry or cache coherence work.
-  private _craftExecTool: unknown = null;
-
-  // Branching-heads controller — lazily built once per DO lifetime. Wraps a
-  // HeadJournal + HeadRuntime (Facet spawner + merge LLM). The `think` tool's
-  // heads strategy drives it, injecting inheritedContext + an onPhase event
-  // sink via defaultOptions().
-  private _headController: HeadController | null = null;
-
   // Steer-as-Branch redirects launched against the in-flight turn — each runs
   // as one budgeted head (ExplorationAgent Facet) and settles into Alternate
   // Takes when the turn completes (onChatResponse).
   private _pendingBranches: PendingBranch[] = [];
 
-  // The orchestrator's view of head activity (journal + runs + steps). Shared by
-  // getHeadController (write path) and getHeadRuns (read path).
-  private _headJournal: HeadJournal | null = null;
-  private get headJournal(): HeadJournal {
-    if (!this._headJournal) this._headJournal = new HeadJournal(this.boundSql);
-    return this._headJournal;
-  }
-
-  // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
-  // Backed by `agent_log` rows of kind in {step, tool_call, tool_result,
-  // reactor_decision}. The RunEventRecorder shim adapts the existing emit()
-  // API to the unified log so the SSE stream and the events sidebar share
-  // one source of truth.
-  private _eventRecorder: RunEventRecorder | null = null;
-  private get eventRecorder(): RunEventRecorder {
-    if (!this._eventRecorder) {
-      this._eventRecorder = new RunEventRecorder(this.boundSql);
-    }
-    return this._eventRecorder;
-  }
-
-  // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
-  // Six load-bearing primitives (spec §1):
-  //   - `agent_log`     unified append-only ledger (initEventsHubTables)
-  //   - EventLog        publish/pending/defer/dismiss/query
-  //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
-  //   - ReactorBudget   per-turn/-trace/-hour caps on reactor invocations
-  //   - ReplyChannelStore  durable reply-channel rows + dispatchers
-  //   - TurnRunner      phase machine; built but currently unused (chat
-  //                     flows through Think; webhook/timer/etc. publish
-  //                     events that wake the agent via Think's chat
-  //                     injection mechanism)
-  // Spec: docs/EVENTS-HUB-SPEC.md
-  private _eventLog: import('@proteus/core').EventLog | null = null;
   private _triggerRegistry: import('@proteus/core').TriggerRegistry | null = null;
-  private _reactorBudget: import('@proteus/core').ReactorBudget | null = null;
   private _replyChannels: import('@proteus/core').ReplyChannelStore | null = null;
   /** Per-activation guard so the full table-init DDL runs once, not on every
    *  onStart + claimOwner. Resets on DO eviction, so a cold start always
    *  re-creates any newly-added tables (no schema-version bookkeeping). */
   private _schemaReady = false;
 
-  protected get eventLog(): EventLog {
-    if (!this._eventLog) {
-      this._eventLog = new EventLog(this.ctx.storage.sql);
-    }
-    return this._eventLog;
-  }
   protected get triggerRegistry(): TriggerRegistry {
     if (!this._triggerRegistry) {
       const orchestrator = this;
       const alarmScheduler: AlarmScheduler = {
-        scheduleAt(ts: number) {
-          // Idempotent: pick the soonest of (existing alarm, new ts).
-          void Promise.resolve(orchestrator.ctx.storage.getAlarm()).then((c) => {
-            if (c === null || ts < c) {
-              orchestrator.ctx.storage.setAlarm(ts);
-            }
-          }).catch(() => orchestrator.ctx.storage.setAlarm(ts));
-        },
+        // Idempotent: pick the soonest of (existing alarm, new ts).
+        scheduleAt(ts: number) { orchestrator.scheduleAlarmAt(ts); },
         currentAlarm(): number | null { return null; },
       };
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
     }
     return this._triggerRegistry;
-  }
-  protected get reactorBudget(): ReactorBudget {
-    if (!this._reactorBudget) {
-      this._reactorBudget = new ReactorBudget(this.ctx.storage.sql);
-    }
-    return this._reactorBudget;
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
@@ -569,368 +404,324 @@ export class OrchestratorAgent extends Think<Env> {
           }
         },
       };
+      // email_thread dispatcher: a drained email turn's answer goes back onto
+      // the inbound mail's thread via the send_email binding. Context resolves
+      // per dispatch so binding/display-name changes never go stale.
+      const emailDispatcher = createEmailThreadDispatcher(() => ({
+        email: orchestrator.env.EMAIL,
+        agentDisplayName: orchestrator.safeDisplayName(),
+        outbox: orchestrator.emailOutbox,
+      }));
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
         ws_session: wsDispatcher,
+        // peer_back: route the answer to a peer ask back over the outbox
+        // transport. Lazily bound — PeerHub needs this store to construct.
+        peer_back: {
+          dispatch: (channel, payload) => orchestrator.peerHub.dispatchPeerBack(channel, payload),
+        },
+        email_thread: emailDispatcher,
       });
     }
     return this._replyChannels;
   }
 
-  // agent_facts world model — typed, idempotent, keyed.
-  private _factsStore: FactsStore | null = null;
-  private get facts(): FactsStore {
-    if (!this._factsStore) this._factsStore = createFactsStore(this.boundSql);
-    return this._factsStore;
+  /** Display name for outbound email From headers — never throws pre-schema. */
+  private safeDisplayName(): string {
+    try { return this.config.getDisplayName() ?? this.name; }
+    catch { return this.name; }
   }
 
-  // Background-job registry — work auto-detached past the 30s threshold (#173).
-  private _jobs: BackgroundJobStore | null = null;
-  private get jobs(): BackgroundJobStore {
-    if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
-    return this._jobs;
-  }
-  // The backend-agnostic background-job lifecycle (detach → settle → wake +
-  // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
-  // and the BackendHost programmatic-turn wake. Owns the cancel-controller map.
-  private _jobRunner: BackgroundJobRunner | null = null;
-  private get jobRunner(): BackgroundJobRunner {
-    if (!this._jobRunner) {
-      this._jobRunner = new BackgroundJobRunner({
-        store: this.jobs,
-        fiber: this.rt.schedule.fiber,
-        host: this.host,
-        logActivity: (event, detail) => this.logActivity(event, detail),
+  // ── Peer transport endpoint (agent teams) ────────────────────────────────
+  // Sender: peer_outbox rows dispatched via DO RPC (inline + alarm retry).
+  // Receiver: the receivePeerMessage cross-DO RPC below. The `team` tool's
+  // ask/send/reply actions ride this hub; spawn adds the create-agent path.
+  private _peerHub: PeerHub | null = null;
+  protected get peerHub(): PeerHub {
+    if (!this._peerHub) {
+      const orchestrator = this;
+      this._peerHub = new PeerHub({
+        sql: this.ctx.storage.sql,
+        log: this.eventLog,
+        replyChannels: this.replyChannels,
+        selfAgentName: () => orchestrator.name,
+        selfUserId: () => {
+          const userId = orchestrator.getOwnerUserId();
+          if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+          return userId;
+        },
+        deliver: async (receiverAgentName, msg) => {
+          const stub = orchestrator.env.OrchestratorAgent.get(
+            orchestrator.env.OrchestratorAgent.idFromName(receiverAgentName),
+          ) as DurableObjectStub<OrchestratorAgent>;
+          return await stub.receivePeerMessage(msg);
+        },
+        isSameOwner: async (senderUserId) => senderUserId === orchestrator.getOwnerUserId(),
+        hasGrant: async (senderAgentName, senderUserId) => {
+          try {
+            const { stub, caller } = await orchestrator.userHub();
+            return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
+          } catch (err) {
+            console.warn('[proteus] hasPeerGrant lookup failed:', (err as Error).message);
+            return false;   // default deny on lookup failure
+          }
+        },
+        scheduleDispatch: (at) => orchestrator.scheduleAlarmAt(at),
+        onAdmitted: () => { orchestrator.orch.scheduleDrain(); },
       });
     }
-    return this._jobRunner;
-  }
-  /** Foreground long-tool controllers before they cross the background
-   *  threshold. Once detached, BackgroundJobRunner owns cancellation. */
-  private readonly _activeToolControllers = new Set<AbortController>();
-
-  // Typed accessors over the `agent_config` key/value table — replaces
-  // scattered raw SQL with a single deep module.
-  private _config: import('@proteus/core').AgentConfigStore | null = null;
-  private get config(): import('@proteus/core').AgentConfigStore {
-    if (!this._config) this._config = createAgentConfigStore(this.boundSql);
-    return this._config;
+    return this._peerHub;
   }
 
-  // StrategyRegistry — single-shot + MCTS + Heads adapters. Powers the
-  // unified `think(strategy, task, budget)` tool.
-  private _strategyRegistry: import('@proteus/core').StrategyRegistry | null = null;
-  private get strategyRegistry(): import('@proteus/core').StrategyRegistry {
-    if (this._strategyRegistry) return this._strategyRegistry;
-    const reg = createStrategyRegistry();
-    reg.register(createSingleShotStrategy());
-    reg.register(createMCTSStrategy());
-    reg.register(createHeadsStrategy());
-    this._strategyRegistry = reg;
-    return reg;
+  /** Idempotent soonest-wins alarm arm (shared shape with the TriggerRegistry
+   *  scheduler above). */
+  private scheduleAlarmAt(ts: number): void {
+    void Promise.resolve(this.ctx.storage.getAlarm()).then((current) => {
+      if (current === null || ts < current) {
+        this.ctx.storage.setAlarm(ts);
+      }
+    }).catch(() => this.ctx.storage.setAlarm(ts));
   }
 
-  private _thinkTool: ToolSet[string] | null = null;
-  private getThinkTool(): ToolSet[string] {
-    if (this._thinkTool) return this._thinkTool;
-    this._thinkTool = createThinkTool({
-      registry: this.strategyRegistry,
-      rt: this.rt,
-      model: this.getModel(),
-      // Host-injected infrastructure the LLM must not set. Recomputed per
-      // think() call: MCTS gets a fresh SessionWriter + the operator's stored
-      // overrides (mcts_c/iterations/depth/branches — an explicit LLM budget
-      // still wins); heads get the shared controller, the live conversation as
-      // inheritedContext, and an onPhase sink that streams head_split /
-      // head_merge into the durable event log.
-      defaultOptions: () => ({
-        mcts: { session: this.createMCTSSession(), ...this.config.getMctsOverrides() },
-        heads: {
-          controller: this.getHeadController(),
-          inheritedContext: this.readInheritedContext(),
-          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
-          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
-        },
-      }),
-    });
-    return this._thinkTool;
-  }
-
-  /** Convenience: current runId for event emission. One run per turn. */
-  private _currentRunId = '';
-
-  // ── Skills (turn-scoped) ───────────────────────────────────────
-  /** Skill names invoked this turn (via /name or skills({action:'invoke'})).
-   *  Cleared at beforeTurn; closures from the skills tool mutate via .add(). */
-  private readonly _turnInvokedSkills = new Set<string>();
-  /** Resolved active set for the current turn. Built in beforeTurn, read by
-   *  the system-prompt assembly via TurnConfig.system override. */
-  private _turnActiveSkills: ActiveSkillSet | null = null;
-  /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
-  private _skillsVfs: SkillsVfs | null = null;
-  private getSkillsVfs(): SkillsVfs {
-    if (this._skillsVfs) return this._skillsVfs;
-    const vfs = this.rt.storage.vfs;
-    this._skillsVfs = {
-      exists: (p) => vfs.exists(p),
-      readFile: (p, opts) => vfs.readFile(p, opts),
-      writeFile: (p, data) => vfs.writeFile(p, data),
-      readdir: (p) => vfs.readdir(p),
-      unlink: (p) => vfs.unlink(p),
-      mkdir: (p, opts) => vfs.mkdir(p, opts),
-    };
-    return this._skillsVfs;
-  }
-
-  // ── Activity logging: persisted + broadcast to Logs pane ──
-  private _turnT0 = 0;
-
-  // Per-turn in-flight flag — forkAgent rejects with "agent busy" while set.
-  // Set in beforeTurn, cleared in onChatResponse (after durable persist;
-  // evolution is fire-and-forget and does not extend the busy window).
-  private _inFlight = false;
-  private _cliCwd: string | null = null;
-  // Current turn identity for the device daemon's pre-mutation shadow-git
-  // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
-  // turn so background tool continuations keep tagging their originating turn.
-  private _turnCheckpoint: { turnId: string; sessionId: string } | null = null;
-
-  // The fully-prepared streamText opts of the LAST live chat inference
-  // (stashed by runStreamText, the single production chat path). The shadow
-  // eval replays these for the pending scaffold's host.defaultInference so
-  // the A/B measures the scaffold delta, not a context handicap: the live
-  // answer saw the whole conversation while the shadow's reconstruction used
-  // to see only the task text — structurally tie-prone. In-memory only:
-  // turns are serialized on the TurnQueue and the shadow eval captures the
-  // reference synchronously in the same onChatResponse, so it cannot be
-  // overwritten by a later turn; after a DO restart the shadow falls back to
-  // the task-only reconstruction.
-  private _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
-
-  getCliCwdForDevice(): string | null {
-    return this._cliCwd;
-  }
-
-  getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
-    return this._turnCheckpoint;
-  }
-
-  // ── Bound SQL executor ────────────────────────────────────────────────
-  // `this.sql` is a plain method on the Agent base class — it needs `this`
-  // bound to reach `this.ctx.storage.sql`. Passing `this.sql` as a bare
-  // function reference to any helper (readForkLineage, forkAgentStorage)
-  // loses the binding and fails with `Cannot read properties of undefined
-  // (reading 'ctx')`. This closure captures `this` once and can be safely
-  // passed by reference.
-  private _boundSql: SqlExecutor | null = null;
-  private get boundSql(): SqlExecutor {
-    if (!this._boundSql) {
-      this._boundSql = ((strings: TemplateStringsArray, ...values: unknown[]) =>
-        (this.sql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown[])(strings, ...values)
-      ) as SqlExecutor;
-    }
-    return this._boundSql;
-  }
-
-  private logActivity(event: string, detail?: string) {
-    const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
-    const now = Date.now();
-    console.log(`[proteus:${String(elapsed).padStart(6)}ms] ${event}${detail ? ` — ${detail}` : ""}`);
-    try {
-      this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
-        VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
-    } catch { /* table may not exist on very first start */ }
-  }
-
-  private get rt(): CFRuntime {
-    if (!this._rt) {
-      // No onToolRegistered hook: PreambleCraftedExecutor reads craftStore.list()
-      // fresh on every execute_tools call, so mid-turn saves propagate
-      // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
-      // `this` (a subclass) DOES have access to its protected env/ctx; cast to
-      // the AgentHost view createCFRuntime needs.
-      this._rt = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0]);
-    }
-    return this._rt;
-  }
-
-  private get engine(): EvolutionEngine {
+  protected get engine(): EvolutionEngine {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        onMctsProgress: (iteration, remaining) => {
-          this.broadcastMctsProgress("iteration", iteration, remaining);
+        onMctsProgress: (event) => {
+          const phase = event.type === "phase" ? event.phase : event.type;
+          const budget = event.type === "branch-failed" ? undefined : event.remainingBudget;
+          this.broadcastMctsProgress(phase, event.iteration, budget);
         },
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
       });
+      // Mission Inbox: the session-end changelog digest also goes to the
+      // owner's inbox — the "what I changed about myself" email.
+      this._engine.onEvent((event) => {
+        if (event.type !== 'changelog_digest') return;
+        this.emailOwnerNotification('Evolution changelog digest', event.message);
+      });
     }
     return this._engine;
   }
 
-  /**
-   * Build (or return cached) the execute_tools AI tool for this DO.
-   *
-   * Construction (once per DO lifetime):
-   *   - Build the list of codemode providers: a `codemode` provider seeded
-   *     with the pre-existing crafted tools at CONSTRUCTION time (for
-   *     type-generation in the description string), plus every registered
-   *     executor provider (workspace / nimbus / sandbox / laptop).
-   *   - Wire a `PreambleCraftedExecutor` as the executor. It wraps
-   *     upstream `DynamicWorkerExecutor` and injects a `const tools = {...}`
-   *     preamble per execute, reading craftStore.list() fresh — so tools
-   *     saved mid-turn are callable on the next execute_tools step and
-   *     crafted-tool bodies inherit lexical scope with `workspace.*` and
-   *     `codemode.*` (Phase A + C of CRAFT-ARCHITECTURE.md).
-   *
-   * Newly-named crafted tools (saved after this tool is constructed) are
-   * NOT reflected in the LLM-visible description string, but codemode's
-   * sandbox Proxy forwards any property access to the dispatcher — so
-   * `codemode.<new_name>(args)` still dispatches into the preamble's
-   * `tools.<new_name>` via regular lexical lookup.
-   */
-  private getExecuteToolsTool(): unknown {
-    if (!this._craftExecTool) {
-      const env = this.env as Env & Record<string, unknown>;
-      if (!env.LOADER) throw new Error("CF runtime missing LOADER binding");
+  /** The hash of the token this workspace holds — not the secret, and not
+   *  invertible, so it is safe for the owner's UserDO to ask for. It is what
+   *  lets the one-shot backfill skip workspaces that already agree instead of
+   *  rotating every token it touches. Worker-side DO RPC only. */
+  async getWorkspaceCapabilityHash(): Promise<string | null> {
+    return this.workspaceCapabilityHash();
+  }
 
-      const executor = new PreambleCraftedExecutor(env.LOADER, this.rt.craftStore, this.boundSql);
-
-      // Seed the `codemode` provider with the INJECTABLE crafted tools at
-      // construction time so the LLM's initial description string lists them
-      // — the same selection the preamble makes, so the advertised set can't
-      // disagree with the callable set. No-op bodies suffice.
-      const seededCraftedTools: Record<string, { description: string; execute: (arg: unknown) => Promise<unknown> }> = {};
-      for (const t of selectInjectableCraftedTools(this.rt.craftStore, this.boundSql)) {
-        seededCraftedTools[t.name] = {
-          description: t.description || `Crafted tool: ${t.name}`,
-          // This execute is never invoked — the preamble injects the real
-          // body as a `tools.<name>` literal in-sandbox. The dispatcher
-          // miss that would otherwise occur is irrelevant because the
-          // sandbox's `codemode.<name>(args)` goes to the local `tools`
-          // object, not through the dispatcher. We provide an execute
-          // stub only because createCodeTool's ToolProvider shape requires it.
-          execute: async () => ({ error: 'crafted tools run through the preamble, not the dispatcher' }),
-        };
+  /** Install the capability token the UserDO minted for this workspace, then
+   *  push it to every live subordinate. Facets present the PARENT workspace's
+   *  identity, so the token is pushed to them rather than read back out of this
+   *  DO — nothing name-addressable ever hands the secret to a caller. */
+  override async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
+    this.ensureSchema();
+    const result = await super.installWorkspaceCapability(token);
+    for (const entry of this.subordinateRoster.list()) {
+      try {
+        const stub = await this.subAgent(SubordinateAgent, entry.name);
+        await stub.installWorkspaceCapability(token);
+      } catch (err) {
+        console.warn(`[proteus] capability push to subordinate ${entry.name} failed:`, (err as Error).message);
       }
-
-      const executionRouter = this.rt.executionRouter;
-      const executorProviders = executionRouter?.getProviders() ?? [];
-      const craftedProvider = { name: 'codemode', tools: seededCraftedTools };
-      // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
-      // Sub-call has no llm.query in scope, so depth is bounded at 1.
-      const rlmProvider = createRLMProvider(
-        this.providerRegistry(),
-        () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
-      );
-      // `agent.*` — the agent steers itself (curriculum + self-scheduling).
-      const agentSelfProvider = createAgentSelfProvider(this);
-      // `web.*` — same web search/fetch provider that backs the web_* tools.
-      const webProvider = createWebCodemodeProvider(this.getWebSearchProvider());
-      // Record which executor the agent actually works in, so the UI (diff /
-      // file manager) defaults to where work happened. One upsert per executor
-      // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
-      const recordExecutor = (name: string) => {
-        if (this._executorsUsedThisTurn.has(name)) return;
-        this._executorsUsedThisTurn.add(name);
-        try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
-      };
-      const allProviders = [craftedProvider, rlmProvider, agentSelfProvider, webProvider, ...executorProviders.map(p => {
-        const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-        const wrapped: typeof tools = {};
-        for (const [k, tool] of Object.entries(tools)) {
-          wrapped[k] = { ...tool, execute: async (...args) => { const r = await tool.execute(...args); recordExecutor(p.name); return r; } };
-        }
-        return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
-      })];
-
-      this._craftExecTool = createCodeTool({
-        tools: allProviders as Parameters<typeof createCodeTool>[0]["tools"],
-        executor: executor as unknown as Parameters<typeof createCodeTool>[0]["executor"],
-      });
     }
-    return this._craftExecTool;
+    return result;
   }
 
-  // ── Model resolution ───────────────────────────────────────────
-
-  private _providerRegistry: AgentProviderRegistry | null = null;
-  protected providerRegistry(): AgentProviderRegistry {
-    if (this._providerRegistry) return this._providerRegistry;
-    const userId = this.getOwnerUserId();
-    if (!userId) {
-      throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
-    }
-    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-    this._providerRegistry = createAgentProviderRegistry({
-      env: this.env,
-      userDOStub,
-      appTitle: 'Proteus',
-      workersAI: { sessionAffinity: agentAffinityKey(this.name) },
-    });
-    return this._providerRegistry;
-  }
-
-  /** Read the owner userId from agent_identity; '' (empty) means unclaimed. */
+  /** Read the owner userId from workspace_identity; '' (empty) means unclaimed. */
   protected getOwnerUserId(): string | null {
     try {
-      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_identity LIMIT 1`;
+      const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
       const v = rows[0]?.owner_user_id;
       return v && v !== '' ? v : null;
     } catch { return null; }
   }
 
-  private getOwnerUserDO(): DurableObjectStub<UserDO> | null {
-    const userId = this.getOwnerUserId();
-    if (!userId) return null;
-    return this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  /** The `peers` tool over the cross-workspace peer transport. Owner
+   *  resolution is lazy inside each action (the toolset is cached across
+   *  turns — including a pre-claim build — so deps must not capture owner
+   *  state at construction). */
+  private getPeersToolDeps(): PeersToolDeps {
+    const orchestrator = this;
+    const requireOwner = () => {
+      const userId = orchestrator.getOwnerUserId();
+      if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+      return userId;
+    };
+    /** Same-owner roster check so a typo'd name errors clearly instead of
+     *  materializing a fresh unowned DO that rejects the message. */
+    const requirePeer = async (agent: string): Promise<void> => {
+      requireOwner();
+      if (agent === orchestrator.name) throw new Error('that is this agent — pick another peer (action:"list")');
+      const { stub, caller } = await orchestrator.userHub();
+      const known = await stub.hasWorkspace(caller, agent);
+      if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
+    };
+    return {
+      listPeers: async () => {
+        requireOwner();
+        const { stub, caller } = await orchestrator.userHub();
+        return teamPeers(orchestrator.name, await stub.listWorkspaces(caller));
+      },
+      ask: async ({ agent, topic, message, timeoutMs }) => {
+        await requirePeer(agent);
+        return orchestrator.peerHub.ask({ agent, userId: requireOwner(), topic, message, timeoutMs });
+      },
+      send: async ({ agent, topic, message }) => {
+        await requirePeer(agent);
+        return orchestrator.peerHub.send({ agent, userId: requireOwner(), topic, message });
+      },
+      reply: async ({ eventId, message }) => orchestrator.peerHub.reply({ eventId, message }),
+      spawnWorkspace: async ({ name, purpose, message, timeoutMs }): Promise<PeerSpawnOutcome> => {
+        const userId = requireOwner();
+        const { stub: userDO, caller } = await orchestrator.userHub();
+        let agentName = name;
+        let created = false;
+        if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
+          const entry = await createCloudWorkspaceForUser(orchestrator.env, userId, userDO, caller, {
+            ...(agentName ? { name: agentName } : {}),
+            purpose,
+          });
+          agentName = entry.name;
+          created = true;
+        }
+        const outcome = await orchestrator.peerHub.ask({
+          agent: agentName, userId, topic: 'task', message, timeoutMs,
+        });
+        return { agent: agentName, created, ...outcome };
+      },
+    };
   }
 
-  private requireOwnerUserDO(): DurableObjectStub<UserDO> {
-    const stub = this.getOwnerUserDO();
-    if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
-    return stub;
-  }
-
-  private _webSearchProvider: WebSearchProvider | null = null;
-  /** The web search + fetch provider — built once per DO lifetime. Key-less by
-   *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
-   *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
-   *  routes through env.AI.toMarkdown when the AI binding is present. */
-  private getWebSearchProvider(): WebSearchProvider {
-    if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined;
-    const ai = (this.env as { AI?: { toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>> } }).AI;
-    this._webSearchProvider = createDefaultWebSearchProvider({
-      fetch: globalThis.fetch,
-      ...(getAuth ? { getAuth } : {}),
-      ...(ai?.toMarkdown
-        ? {
-            htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
-              const name = (opts?.url ?? 'page') + '.html';
-              const blob = new Blob([html], { type: 'text/html' });
-              const out = await ai.toMarkdown!([{ name, blob }]);
-              return out[0]?.data ?? '';
-            },
+  private getTeamToolDeps(): TeamToolDeps {
+    const orchestrator = this;
+    return createTeamToolDeps({
+      roster: this.subordinateRoster,
+      now: () => Date.now(),
+      inheritedContext: () => orchestrator.readInheritedContext(),
+      createName: (role) => {
+        const base = slugifyName(role).slice(0, 48) || 'subordinate';
+        return `${base}-${nanoid(6)}`;
+      },
+      broadcast: (event) => orchestrator.broadcastSubordinatesChanged(event),
+      broadcastTask: (event) => orchestrator.broadcastSubordinateEvent({
+        kind: 'task',
+        ...event,
+      }),
+      runtime: {
+        async spawn(input) {
+          const ownerUserId = orchestrator.getOwnerUserId();
+          if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
+          const stub = await orchestrator.subAgent(SubordinateAgent, input.name);
+          const capabilityToken = await orchestrator.workspaceCapabilityToken();
+          try {
+            await stub.setSubordinateIdentity({
+              name: input.name,
+              displayName: input.displayName,
+              role: input.role,
+              mission: input.mission,
+              ...(input.model ? { model: input.model } : {}),
+              ...(capabilityToken ? { capabilityToken } : {}),
+            });
+          } catch (error) {
+            await orchestrator.deleteSubAgent(SubordinateAgent, input.name).catch(() => {});
+            throw error;
           }
-        : {}),
+        },
+        async assign(name, input) {
+          const stub = await orchestrator.subAgent(SubordinateAgent, name);
+          await stub.enqueueSubordinateTask({
+            kind: 'task',
+            body: input.body,
+            ...(input.deliverable ? { deliverable: input.deliverable } : {}),
+            ...(input.deadlineHint ? { deadlineHint: input.deadlineHint } : {}),
+            ...(input.inheritedContext ? { inheritedContext: input.inheritedContext } : {}),
+          });
+        },
+        async status(name) {
+          return (await orchestrator.subAgent(SubordinateAgent, name)).getSubordinateStatus();
+        },
+        async message(name, content) {
+          await (await orchestrator.subAgent(SubordinateAgent, name))
+            .enqueueSubordinateTask({ kind: 'message', body: content });
+        },
+        async dismiss(name, keepHistory) {
+          if (!keepHistory) await orchestrator.deleteSubAgent(SubordinateAgent, name);
+        },
+      },
     });
-    return this._webSearchProvider;
   }
 
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
-    const userDO = this.getOwnerUserDO();
-    if (!userDO) return undefined;
+    if (!this.getOwnerUserDO()) return undefined;
+    const hub = () => this.userHub();
     return {
-      board: () => userDO.getProductChangeBoard(this.name, 20),
-      bindSource: (input) => userDO.upsertProductSourceBinding(input),
-      create: (input) => userDO.createProductChange(this.name, input),
-      update: (changeId, patch) => userDO.updateProductChange(changeId, patch),
-      transition: (changeId, status) => userDO.transitionProductChange(changeId, status),
-      recordCheck: (changeId, input) => userDO.recordProductChangeCheck(changeId, input),
-      requestApproval: (changeId, approvalType) => userDO.requestProductChangeApproval(changeId, approvalType),
-      recordDeployment: (changeId, input) => userDO.recordProductDeployment(changeId, input),
+      board: async () => { const { stub, caller } = await hub(); return stub.getProductChangeBoard(caller, this.name, 20); },
+      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertProductSourceBinding(caller, input); },
+      create: async (input) => { const { stub, caller } = await hub(); return stub.createProductChange(caller, this.name, input); },
+      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
+      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, status); },
+      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
+      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestProductChangeApproval(caller, changeId, approvalType); },
+      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
+      engine: this.getProductChangeEngine(),
     };
+  }
+
+  private _productChangeEngine: ProductChangeEngine | null = null;
+  /** The execution engine beneath the product-change ledger: apply/checks in
+   *  the agent's sandbox container (raw exit codes), preview through the
+   *  path-style preview proxy, deploy/rollback verified against real command
+   *  output. Ledger writes go through the owner's UserDO so the engine's
+   *  results land on the same governed board the UI reads. */
+  private getProductChangeEngine(): ProductChangeEngine {
+    if (this._productChangeEngine) return this._productChangeEngine;
+    const handle = this.rt.sandboxHandle;
+    const provider = this.rt.executionRouter?.getProvider('sandbox');
+    const hub = () => this.userHub();
+    this._productChangeEngine = new ProductChangeEngine({
+      exec: handle && provider ? createSandboxProductChangeExec(handle, provider) : null,
+      ledger: {
+        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getProductChangeDetail(caller, changeId); },
+        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
+        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, to); },
+        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
+        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
+      },
+      // A stored `github` credential (POST /api/user/credentials/github with a
+      // bearer PAT) authorizes clone/push for github source bindings; absent →
+      // the engine's honest add-a-credential error.
+      gitHubAuth: async () => {
+        const { stub, caller } = await this.userHub();
+        const headers = await stub.getAuthHeaders(caller, 'github');
+        return headers?.Authorization ?? null;
+      },
+    });
+    return this._productChangeEngine;
+  }
+
+  /** The actor profile (ActorAgent): the orchestrator wires the full
+   *  user-facing tool surface — cross-workspace peers + the product-change
+   *  lane. */
+  protected actorToolDeps(): ActorToolDeps {
+    return {
+      team: this.getTeamToolDeps(),
+      productChanges: this.getProductChangeToolDeps(),
+      peers: this.getPeersToolDeps(),
+    };
+  }
+
+  /** `agent.*` — the agent steers itself (curriculum + self-scheduling). */
+  protected extraCodemodeProviders(): CodemodeProvider[] {
+    return [createAgentSelfProvider(this)];
+  }
+
+  /** Mission Inbox: owner notifications go out as email. */
+  protected notifyOwner(subject: string, body: string): void {
+    this.emailOwnerNotification(subject, body);
   }
 
   /** Worker calls this on every authenticated request before any other RPC.
@@ -941,469 +732,39 @@ export class OrchestratorAgent extends Think<Env> {
    *  ensureSchema() creates all required tables so the SELECT/UPDATE never hits
    *  a missing table or column, and is flag-gated so onStart won't repeat it.
    */
-  @callable()
-  async claimOwner(userId: string): Promise<{ owner: string }> {
+  async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
     if (!userId) throw new Error('userId required');
     try {
       this.ensureSchema();
     } catch (err) {
       console.error('[orchestrator] claimOwner ensureSchema failed:', (err as Error).message);
     }
+    // The HASH, not a boolean: the owner's UserDO compares it against what it
+    // has registered, so any disagreement — a workspace holding nothing, or one
+    // holding a token the UserDO no longer knows — is repaired rather than
+    // mistaken for "already provisioned".
+    const capabilityHash = await this.workspaceCapabilityHash();
     const current = this.getOwnerUserId();
     if (current === null) {
       // Unclaimed — first touch. Ensure identity has the owner marker.
-      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM agent_identity LIMIT 1`;
+      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
       if (exists.length === 0) {
         this.sql`
-          INSERT INTO agent_identity (id, name, owner_user_id, created_at)
+          INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
           VALUES (${this.ctx.id.toString()}, ${this.name}, ${userId}, ${Date.now()})
         `;
       } else {
-        this.sql`UPDATE agent_identity SET owner_user_id = ${userId}`;
+        this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
       this.invalidateModelCaches();
-      return { owner: userId };
+      return { owner: userId, capabilityHash };
     }
     if (current !== userId) {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
-    return { owner: current };
+    return { owner: current, capabilityHash };
   }
 
-  /** Stored model spec, or null when unset (registry will pick the default). */
-  private getStoredModelId(): string | null {
-    return this.config.getModel();
-  }
-
-  // ── Think lifecycle overrides ──────────────────────────────────
-
-  /** Think calls `getModel()` synchronously per turn — cache to avoid
-   *  reconstructing on every turn when the stored spec hasn't changed. */
-  private _cachedModel: LanguageModel | null = null;
-  private _cachedModelSpec: string | null = null;
-  getModel(): LanguageModel {
-    this.logActivity("getmodel");
-    const stored = this.getStoredModelId();
-    if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
-    const reg = this.providerRegistry();
-    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
-    this._cachedModel = model; this._cachedModelSpec = stored;
-    return model;
-  }
-
-  /**
-   * Delegates to @proteus/core's canonical prompt builder (F1 fix: documents
-   * `codemode.*` — the real namespace crafted tools land in — instead of the
-   * former `tools.*` lie). Cached across turns; invalidated when the soul
-   * text or the registered executor set changes.
-   */
-  private _cachedSystemPrompt: string | null = null;
-  private _cachedSystemPromptKey: string = "";
-  /** Cached SOUL.md text. Loaded lazily on first read, invalidated by
-   *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
-  private _cachedSoulText: string | null = null;
-  private getSoulText(): string {
-    if (this._cachedSoulText === null) {
-      this._cachedSoulText = readSoul(this.boundSql) ?? '';
-    }
-    return this._cachedSoulText;
-  }
-
-  getSystemPrompt(): string {
-    this.logActivity("getsystemprompt_start");
-    const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const execKey = execs.map(e =>
-      `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
-    ).join(",");
-    const model = this.promptModelContext();
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}`;
-    let base: string;
-    if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
-      base = this._cachedSystemPrompt;
-      this.logActivity("getsystemprompt_end", "cache hit");
-    } else {
-      // Always build the BASE prompt here — no turn-scoped state. The
-      // authoritative per-turn prompt (skills, MCP tools, fresh device
-      // status, change notice) is assembled in `beforeTurn` and ALWAYS
-      // returned via TurnConfig.system, which overrides this one for chat
-      // turns (Think calls getSystemPrompt() BEFORE beforeTurn()). Mixing
-      // turn state in here would poison the cache across turns.
-      base = buildSystemPromptSync(this.rt, {
-        executors: execs,
-        availableTools: ACTIVE_TOOLS,
-        backend: 'cf',
-        model,
-      });
-      this._cachedSystemPrompt = base;
-      this._cachedSystemPromptKey = key;
-      this.logActivity("getsystemprompt_end", `${base.length} chars`);
-    }
-    // BYTE-STABLE: no per-turn state rides here. The volatile half (facts,
-    // executor status, device notice, skill activations) is appended to the
-    // turn's MESSAGES in beforeTurn — see prompting/volatile-context.ts.
-    return base;
-  }
-
-  /** The recent-facts block for the volatile turn-context message — rendered
-   *  fresh each turn (facts change), so it stays out of the cacheable system
-   *  prefix. Undefined when there are no facts yet. */
-  private renderFactsForTurn(): string | undefined {
-    try {
-      return renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 }) || undefined;
-    } catch { return undefined; /* facts table not yet initialized */ }
-  }
-
-  /**
-   * Compute a lightweight cache key from CraftStore + score state.
-   * Includes craft_scores.MAX(last_used_at) because effective-score filtering
-   * depends on recency — without it, the cached ToolSet would keep re-using a
-   * stale score-filtered view across turns even as usage shifts.
-   */
-  private _craftCacheKey(): string {
-    try {
-      const craft = this.sql<{ cnt: number; latest: number }>`
-        SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest FROM crafted_tools`;
-      const scores = (() => {
-        try {
-          return this.sql<{ lastUsed: number }>`
-            SELECT COALESCE(MAX(last_used_at), 0) as lastUsed FROM craft_scores`;
-        } catch { return [{ lastUsed: 0 }]; }
-      })();
-      const { cnt, latest } = craft[0] ?? { cnt: 0, latest: 0 };
-      const lastUsed = scores[0]?.lastUsed ?? 0;
-      return `${cnt}:${latest}:${lastUsed}`;
-    } catch { return ""; }
-  }
-
-  getTools(): ToolSet {
-    // The Think chat loop's tool source (first hook called by _runInferenceLoop).
-    // Returns the CHAT view = the raw surface + the auto-background wrap (#173).
-    // Internal eval side-streams use getRawTools() instead, so a >30s tool run
-    // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
-    // injects an unsolicited "job completed" turn into the user's chat.
-    this._turnT0 = performance.now();
-    this.logActivity("gettools_start");
-    return this.wrapToolsForBackground(this.getRawTools());
-  }
-
-  /** The UNWRAPPED tool surface — built + cached. Shared by the chat path (via
-   *  getTools, which adds the background wrap) and by internal eval side-streams
-   *  that must run tools to completion inline (never auto-background). */
-  private getRawTools(): ToolSet {
-    // Cache key includes CraftStore updated_at AND craft_scores last_used_at
-    // because effective-score filtering depends on recency.
-    const cacheKey = this._craftCacheKey();
-    if (this._cachedTools && cacheKey === this._cachedToolsKey) {
-      return this._cachedTools;
-    }
-    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
-
-    try {
-      const orchestrator = this;
-
-      // No registry sync: PreambleCraftedExecutor reads craftStore.list()
-      // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
-
-      const shellApprovalMode = this.config.getShellApprovalMode();
-
-      const tools = buildBuiltinTools({
-        rt: this.rt,
-        preBuiltExecuteTool: this.getExecuteToolsTool(),
-        // Unified strategy dispatcher (single-shot / mcts / heads). Internally
-        // owns the HeadController + MCTS session — the bare `explore` /
-        // `split_heads` tools were folded into this single entry point.
-        thinkTool: this.getThinkTool(),
-        // Vectorize-backed semantic memory. memory.search auto-uses
-        // hybrid retrieval when this is provided + available; FTS5-only fallback.
-        vectorStore: this.rt.vectorStore,
-        // Per-agent approval policy for shell exec.
-        shellApprovalMode,
-        // Typed, keyed world-model store — exposes the `fact` tool.
-        facts: this.facts,
-        // Single `skills` tool — list/read/invoke/create/edit/delete actions.
-        // Per-turn invocation state lives on the orchestrator; closures here
-        // mutate / read it without ever recreating the Set, so the binding
-        // stays stable across the cached toolset.
-        skills: {
-          vfs: orchestrator.getSkillsVfs(),
-          recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
-          currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
-        },
-        productChanges: this.getProductChangeToolDeps(),
-        // Web research — key-less default, codemode web.* wired below.
-        webSearch: this.getWebSearchProvider(),
-      });
-
-      // Anthropic prompt-caching: one breakpoint on the last tool caches the
-      // whole stable tool surface (tools precede system+messages in Anthropic's
-      // cache hierarchy). Namespaced → inert for non-Anthropic providers.
-      markLastToolForAnthropicCache(tools);
-
-      this._cachedTools = tools;
-      this._cachedToolsKey = cacheKey;
-      this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
-      return tools;
-    } catch (err) {
-      console.error("[proteus] getRawTools() FAILED:", err);
-      throw err;
-    }
-  }
-
-  /**
-   * Lazily build the HeadController that spawns ExplorationAgent Facets in
-   * head mode (initHead / runAsHead / abortHead). Driven by the `think` tool's
-   * heads strategy; inheritedContext + the onPhase event sink are injected
-   * per call via readInheritedContext() / emitHeadPhase().
-   */
-  private getHeadController(): HeadController {
-    if (this._headController) return this._headController;
-    // The HeadRuntime flows through the BackendHost seam (CLI supplies a
-    // subprocess-backed one or undefined → single-shot degrade).
-    const runtime = this.host.headRuntime;
-    if (!runtime) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
-    this._headController = new HeadController(runtime, this.headJournal);
-    return this._headController;
-  }
-
-  /** Record the comparable heads of a completed think({strategy:'heads'}) run as
-   *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
-   *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only grounded
-   *  scores are a real preference signal, so emit nothing when ungrounded. */
-  private recordHeadsTake(merge: MergeResult, task: string): void {
-    if (!merge.grounded) return;
-    const heads = merge.headScores
-      .filter((s) => s.status === 'completed')
-      .map((s) => ({ id: s.id, text: s.text, score: s.score }));
-    try {
-      recordHeadsTakeSet(this.boundSql, { task, heads });
-    } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
-  }
-
-  /** Build the CF HeadRuntime (Facet spawner + merge LLM) once per DO lifetime,
-   *  lazily — heads need the agent's owner for UserDO auth. undefined when the
-   *  agent has no owner; surfaced via host.headRuntime. */
-  private _cfHeadRuntime: HeadRuntime | null = null;
-  private getCFHeadRuntime(): HeadRuntime | undefined {
-    if (this._cfHeadRuntime) return this._cfHeadRuntime;
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) return undefined;
-    this._cfHeadRuntime = createCFHeadRuntime(this as unknown as Parameters<typeof createCFHeadRuntime>[0], ownerUserId, {
-      executor: this.rt.executor,
-      explorer: this.rt.llm,
-      ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
-    });
-    return this._cfHeadRuntime;
-  }
-
-  /**
-   * The parent's recent conversation, handed to each spawned head so it sees
-   * the full context. Capped to the last N messages to bound head LLM context
-   * over long sessions (Think Session already compacts the table at the
-   * orchestrator level; this is a second safety net for head spawns).
-   */
-  private readInheritedContext(): SerializedMessage[] {
-    const INHERITED_CONTEXT_CAP = 50;
-    try {
-      type Row = { id: string; role: string; content: string; created_at: string };
-      const rows = this.sql<Row>`
-        SELECT id, role, content, created_at
-        FROM (
-          SELECT id, role, content, created_at
-          FROM assistant_messages
-          ORDER BY created_at DESC
-          LIMIT ${INHERITED_CONTEXT_CAP}
-        ) sub
-        ORDER BY created_at ASC`;
-      return rows.map((r) => ({
-        id: r.id,
-        role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
-          ? r.role
-          : 'assistant',
-        content: uiMessageText(r.content),
-        createdAt: Date.parse(r.created_at) || 0,
-      }));
-    } catch {
-      // assistant_messages table may not yet exist on a fresh agent.
-      return [];
-    }
-  }
-
-  /** Stream head_split / head_merge into the durable event log so SSE
-   *  subscribers + MCP `list_run_events` see the split lifecycle. */
-  private emitHeadPhase(event: SplitPhaseEvent): void {
-    try {
-      if (!this._currentRunId) return;
-      if (event.kind === 'split') {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'head_split',
-          rootId: event.rootId,
-          headIds: [...event.headIds],
-          rationale: event.rationale,
-        });
-      } else {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'head_merge',
-          rootId: event.rootId,
-          headCount: event.headCount,
-          mergedNarrative: event.mergedNarrative,
-        });
-      }
-    } catch (err) {
-      console.warn('[proteus] event emit failed at head onPhase:', err);
-    }
-  }
-
-  /**
-   * Fetch the user's MCP tool descriptors and reconstruct AI-SDK Tool
-   * adapters whose `execute` closures dispatch back to UserDO via RPC.
-   *
-   * Cache invalidation:
-   *   - UserDO holds a monotonic `mcp_updated_at` watermark, bumped on
-   *     add/remove/edit + on OAuth-callback completion.
-   *   - We cache descriptors + closures by that integer; rebuild only when
-   *     it changes. Result is stable across turns until the user actually
-   *     reconfigures something.
-   *
-   * Closure boundary: the descriptor that crosses RPC carries only the JSON
-   * Schema + name + serverId; we re-construct the AI-SDK `Tool` here so the
-   * `execute` arrow can capture `userDOStub`, `serverId`, and `name` lexically.
-   */
-  private async buildUserMcpTools(): Promise<ToolSet> {
-    const userId = this.getOwnerUserId();
-    if (!userId) return {};
-    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-
-    let watermark: number;
-    try { watermark = await userDOStub.userMcp_updatedAt(); }
-    catch (err) {
-      console.warn('[proteus] mcp watermark fetch failed:', (err as Error).message);
-      return this._cachedMcpTools;
-    }
-    if (watermark === this._cachedMcpToolsKey && Object.keys(this._cachedMcpTools).length > 0) {
-      return this._cachedMcpTools;
-    }
-    // Watermark = 0 means UserDO has never seen an MCP mutation. Skip the
-    // descriptor fetch entirely so cold UserDOs don't pay for MCP plumbing.
-    if (watermark === 0) {
-      this._cachedMcpTools = {};
-      this._cachedMcpToolsKey = 0;
-      return this._cachedMcpTools;
-    }
-
-    let descriptors: SerializableToolDescriptor[];
-    try { descriptors = await userDOStub.userMcp_toolDescriptors(); }
-    catch (err) {
-      console.warn('[proteus] mcp descriptor fetch failed:', (err as Error).message);
-      return this._cachedMcpTools;
-    }
-
-    const tools: ToolSet = {};
-    for (const d of descriptors) {
-      const serverId = d.serverId;
-      const mcpName = d.name;
-      tools[d.toolKey] = tool({
-        description: d.description ?? `${d.serverName}/${mcpName}`,
-        inputSchema: jsonSchema<Record<string, unknown>>(
-          (d.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0],
-        ),
-        execute: async (args: unknown) => {
-          try { return await userDOStub.userMcp_callTool(serverId, mcpName, args); }
-          catch (err) { return { isError: true, error: (err as Error).message }; }
-        },
-      });
-    }
-
-    this._cachedMcpTools = tools;
-    this._cachedMcpToolsKey = watermark;
-    this.logActivity('mcp_tools_rebuilt', `${Object.keys(tools).length} tools @ wm=${watermark}`);
-    return tools;
-  }
-
-  configureSession(session: Session): Session {
-    // The agent's durable context is `getSystemPrompt()` (soul + tools) plus
-    // the persisted conversation and the per-turn volatile context message —
-    // a single source of truth, not Think's freezable context blocks. The only Session
-    // policy we attach is compaction: the chat window compacts at ~85% of the
-    // active model's context window (≈15% headroom for the streaming response),
-    // and a registered summarizer turns the middle of the transcript into a
-    // summary overlay instead of dropping messages (hermes head/tail protection).
-    return session
-      .compactAfter(this.sessionCompactionThreshold())
-      .onCompaction(this.summarizeForCompaction());
-  }
-
-  /** Resolved `<provider>/<modelId>` the next turn will actually use — the
-   *  same resolution getModel() applies. Computing the threshold from the RAW
-   *  stored spec was the 41%-of-Kimi bug: an unset model gave "" → the 128k
-   *  default window instead of the resolved default model's real 262k. Falls
-   *  back to the raw spec only pre-claim (no provider registry yet). */
-  private effectiveModelSpec(): string {
-    const stored = this.getStoredModelId();
-    try {
-      return this.providerRegistry().normalizeSpecSync(stored);
-    } catch {
-      return stored ?? '';
-    }
-  }
-
-  /** Prompt model context from the RESOLVED spec. The raw stored id is null
-   *  on default-configured agents, which left family gating (the Kimi bare
-   *  tool-name index + operating guidance) inert on the primary hosted path —
-   *  the same raw-spec class of bug effectiveModelSpec() fixed for the
-   *  compaction threshold. */
-  private promptModelContext(): { id?: string; provider?: string } {
-    const spec = this.effectiveModelSpec();
-    if (!spec) return {};
-    try {
-      const { provider, modelId } = parseModelSpec(spec);
-      return { id: modelId, provider };
-    } catch {
-      return { id: spec };
-    }
-  }
-
-  /** Catalog-reported context window for the resolved spec, cached per spec.
-   *  Arms an async catalog lookup on first sight of a spec; until (and unless)
-   *  it lands, the static fallback table answers. */
-  private _catalogWindow: { spec: string; window: number | null } | null = null;
-  private sessionCompactionThreshold(): number {
-    const spec = this.effectiveModelSpec();
-    if (this._catalogWindow?.spec !== spec) {
-      this._catalogWindow = { spec, window: null };
-      void this.lookupCatalogWindow(spec);
-    }
-    const reported = this._catalogWindow.window;
-    return reported ? compactionThresholdForWindow(reported) : compactionThreshold(spec);
-  }
-
-  private async lookupCatalogWindow(spec: string): Promise<void> {
-    if (!spec) return;
-    try {
-      const { provider, modelId } = parseModelSpec(spec);
-      const reg = this.providerRegistry();
-      const window = await catalogContextWindow(reg.registry.get(provider), reg.deps, modelId);
-      if (window && this._catalogWindow?.spec === spec) this._catalogWindow.window = window;
-    } catch { /* catalog unavailable — the static fallback table stays authoritative */ }
-  }
-
-  /** Hermes-style compaction fn: summarizes the middle of an over-long
-   *  transcript via the agent's own model with the structured handoff
-   *  template, protecting head + a 40k-token recent tail and pruning old
-   *  tool outputs before the summarizer call (lib/compaction.ts). */
-  private summarizeForCompaction() {
-    return createProteusCompactFunction({
-      summarize: (prompt) =>
-        generateText({ model: this.getModel(), prompt }).then((r) => r.text),
-    });
-  }
-
-  // ── Think lifecycle hooks ──────────────────────────────────────
-
-  // Tools the model is allowed to call. Think merges workspace tools (read, write,
-  // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
-  // activeTools restricts the model to the built-in tools + session context tools,
-  // preventing Think's workspace tools from being sent in the request payload.
-  // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
   /** Snapshot /workspace to R2 if the agent used the sandbox this turn and the
    *  debounce window elapsed. Fire-and-forget (never blocks the turn loop); the
    *  handle is persisted only on success, so a failed backup keeps the last good
@@ -1422,238 +783,16 @@ export class OrchestratorAgent extends Think<Env> {
 
   // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
   // (it binds selected pending events via markConsumed, then injects one
-  // programmatic turn via host.enqueueTurn → saveMessages). Callers below use
-  // `this.orch.drainPendingEvents()`.
-
-  async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    this.acc.reset(Date.now());
-    this._executorsUsedThisTurn.clear();
-    this._cliCwd = readCliCwd(ctx.body);
-    this._inFlight = true;
-    this.logActivity("beforeturn", "streamText() called next");
-    // Re-arm the compaction threshold each turn: configureSession runs at
-    // onStart, which can precede claimOwner (no resolvable model yet) and
-    // never sees mid-activation model switches or the async catalog window
-    // landing. compactAfter is a cheap setter.
-    this.session.compactAfter(this.sessionCompactionThreshold());
-    // A real user message is the verdict on the previous turn — dispatch the
-    // detached outcome review (Hermes-style forked background review). Runs
-    // concurrently with this turn; never blocks it. Programmatic turns
-    // (reactor / job wake) are not user verdicts.
-    if (!this.lastUserTurnIsProgrammatic()) {
-      this.orch.observeUserTurn(extractLastUserText(ctx.messages));
-    }
-    // Start a new run for the event log, with provenance so cross-run history
-    // (Supervise altitude) can show what kicked each run off. This is the chat
-    // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
-    this._currentRunId = `run-${nanoid()}`;
-    // Tag this turn for device-side file checkpoints: the user message id is
-    // what the web turn card holds, so restore-by-turn resolves directly.
-    {
-      const userMessages = this.messages.filter((m) => m.role === 'user');
-      const lastUserId = userMessages[userMessages.length - 1]?.id;
-      this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
-    }
-    try {
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'run_start',
-        agentId: this.name,
-        caused_by: 'chat',
-        userMessage: extractLastUserText(ctx.messages)?.slice(0, 500),
-      });
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'turn_start',
-        turnIndex: this.orch.sessionTurnIndex,
-      });
-    } catch (err) {
-      console.warn('[proteus] event emit failed at beforeTurn:', err);
-    }
-
-    // ── Skills resolution for this turn ──────────────────────────
-    // Reset per-turn invocation set (don't reassign — closures from the
-    // skills tool hold a stable reference).
-    this._turnInvokedSkills.clear();
-    this._turnActiveSkills = null;
-    const activeTools: BuiltinToolName[] = [...ACTIVE_TOOLS];
-    let activeSetForPrompt: ActiveSkillSet | undefined;
-    try {
-      const lastUserText = extractLastUserText(ctx.messages);
-      const explicit = extractExplicitInvocations(lastUserText);
-      const alwaysActive = this.config.getAlwaysActiveSkills();
-
-      // Only do the (async) VFS scan when there's a real chance a skill
-      // activates — explicit invocation, always_active config, OR any
-      // built-in that auto_activates on keywords. Avoids a per-turn
-      // filesystem walk for vanilla turns.
-      const anyAutoActivate = BUILTIN_SKILLS.some(s => s.auto_activate);
-      const mightActivate = explicit.length > 0 || alwaysActive.length > 0 || anyAutoActivate;
-
-      if (mightActivate) {
-        const available = await discoverSkills(this.getSkillsVfs());
-        const activeSet = resolveActiveSkills({
-          available, explicit, userMessage: lastUserText, alwaysActive,
-        });
-        if (activeSet.active.length > 0) {
-          this._turnActiveSkills = activeSet;
-          activeSetForPrompt = activeSet;
-          // Mirror the resolved explicit set onto the turn-invoked tracker so
-          // skills.list reflects what's active right now.
-          for (const r of activeSet.reasons) this._turnInvokedSkills.add(r.name);
-
-          // Intersect activeTools with the union of allowed_tools across the
-          // active skills. Empty union (skills don't restrict) = leave the
-          // base set untouched. Glob-suffix matching is owned by
-          // `toolAllowedBySkills` — orchestrator + render share the same impl.
-          const allowedUnion = unionAllowedTools(activeSet.active);
-          if (allowedUnion.length > 0) {
-            const filtered = activeTools.filter(t => toolAllowedBySkills(t, allowedUnion));
-            // Always keep the skills tool itself reachable so the LLM can
-            // list / read / invoke more skills mid-turn. Filtering it out
-            // would lock the agent into the first activation.
-            if (!filtered.includes('skills')) filtered.push('skills');
-            activeTools.length = 0;
-            activeTools.push(...(filtered as BuiltinToolName[]));
-          }
-
-          this.logActivity('skills_active',
-            activeSet.active.map(s => s.name).join(',') || '(none)');
-        }
-      }
-    } catch (err) {
-      console.warn('[proteus] skills resolution failed:', (err as Error).message);
-      // Don't fail the turn — vanilla path is fine.
-    }
-
-    // Per-user MCP tools — fetched from UserDO, dispatched back via RPC.
-    // Failure is non-fatal; the turn proceeds with builtins only and the UI
-    // surfaces the broken-server status via /api/user/mcp/servers polling.
-    let mcpTools: ToolSet = {};
-    try { mcpTools = await this.buildUserMcpTools(); }
-    catch (err) { console.warn('[proteus] buildUserMcpTools failed:', (err as Error).message); }
-
-    // Expose MCP tool keys to the active-tools allowlist so Think doesn't
-    // strip them out. Builtin names + MCP `tool_<id>_<name>` keys are
-    // disjoint by construction (assertion above).
-    const mcpToolNames = Object.keys(mcpTools);
-    const effectiveActiveTools = mcpToolNames.length > 0
-      ? [...activeTools, ...mcpToolNames]
-      : activeTools;
-    const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
-
-    // ── Per-turn device awareness ────────────────────────────────
-    // One authoritative hub check (a cheap DO-to-DO RPC) so the executor list
-    // below reflects the CURRENT device state — the transport's TTL-cached
-    // snapshot can lag a mid-session `proteus connect` by a turn. The persisted
-    // watermark is only a diff anchor for the one-turn change notice; the hub
-    // stays the single source of truth.
-    let deviceNotice: string | null = null;
-    try {
-      const status = await this.rt.deviceTransport.refreshStatus();
-      deviceNotice = observeDevicePresence(this.config, status).notice;
-    } catch (err) {
-      console.warn('[proteus] device status refresh failed:', (err as Error).message);
-    }
-
-    // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
-    // when one is already active. Like skills/MCP, this is turn-scoped state,
-    // so it rides the beforeTurn system override, not the cached base prompt.
-    const agentsMd = await collectWorkspaceAgentsMd(
-      this.rt.storage.vfs,
-      this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
-    );
-
-    // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
-    // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
-    // this path can reflect the turn's active skills and MCP tools. It is the
-    // byte-stable cache prefix: it changes only on real agent events (soul,
-    // model, skill set, tool surface, AGENTS.md). Per-turn state — facts,
-    // live executor status, the device notice, activation reasons — rides in
-    // ONE volatile context message appended at the END of the turn's messages
-    // (prompting/volatile-context.ts), so it never re-prefills the prefix.
-    const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const systemOverride = buildSystemPromptSync(this.rt, {
-      executors: execs,
-      availableTools: activeTools,
-      ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
-      ...(agentsMd.length > 0 ? { agentsMd } : {}),
-      externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
-      backend: 'cf',
-      model: this.promptModelContext(),
-      currentDate: currentDateForPrompt(),
-    });
-    this.recordSystemPromptHash(systemOverride);
-
-    const cfg: TurnConfig = { activeTools: effectiveActiveTools, system: systemOverride };
-    const baseMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
-    cfg.messages = appendVolatileContextMessage(baseMessages, {
-      factsBlock: this.renderFactsForTurn(),
-      executors: execs,
-      deviceNotice,
-      ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
-    });
-    if (effectiveTools) cfg.tools = effectiveTools;
-    return cfg;
-  }
-
-  /** The byte-stability invariant as telemetry: the system prompt hash should
-   *  change only on real agent events (soul/skill/craft/device/model), never
-   *  between two vanilla consecutive turns. A "(changed)" entry in the
-   *  activity log without a nearby skills_active / device / craft event is a
-   *  cache-prefix regression. */
-  private _lastSystemPromptHash: string | null = null;
-  private recordSystemPromptHash(system: string): void {
-    const hash = hashSystemPrompt(system);
-    const prev = this._lastSystemPromptHash;
-    this._lastSystemPromptHash = hash;
-    this.logActivity('system_prompt_hash', `${hash}${prev === null ? '' : prev === hash ? ' (stable)' : ' (changed)'}`);
-  }
-
-  onChunk(_ctx: ChunkContext): void {
-    this.acc.onFirstChunk();
-  }
-
-  /** Whether the in-flight turn was injected programmatically (reactor drain,
-   *  background-job wake, consent resume) — enqueueTurn stamps proteusEvent
-   *  metadata on the saved user message; real chat messages carry none. */
-  private lastUserTurnIsProgrammatic(): boolean {
-    const userMessages = this.messages.filter(m => m.role === "user");
-    const last = userMessages[userMessages.length - 1] as { metadata?: unknown } | undefined;
-    return isRecord(last?.metadata) && typeof last.metadata.proteusEvent === 'string';
-  }
-
-  afterToolCall(ctx: ToolCallResultContext): void {
-    // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
-    // accumulator records it + fires the activity log + run-event sinks.
-    this.acc.recordToolCall(ctx as unknown as Parameters<TurnAccumulator['recordToolCall']>[0]);
-  }
-
-  onStepFinish(ctx: StepContext): void {
-    this.acc.recordStep(ctx as unknown as StepLike);
-  }
+  // programmatic turn via host.enqueueTurn → saveMessages). Ingress paths use
+  // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
+  // immediately via `this.orch.drainPendingEvents()`.
 
   async onChatResponse(result: ChatResponseResult) {
-    this.logActivity("response_complete", result.status);
-    // Clear the in-flight flag once the turn is durably completed — forkAgent
-    // is allowed again from here forward. Evolution (engine.reviewTurnDetached)
-    // runs fire-and-forget and does NOT extend the busy window.
-    this._inFlight = false;
-    this._cliCwd = null;
-    // Emit turn_end + run_end into the durable event log.
-    try {
-      if (this._currentRunId) {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'turn_end',
-          turnIndex: this.orch.sessionTurnIndex,
-          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
-        });
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'run_end',
-          reason: result.status,
-        });
-      }
-    } catch (err) {
-      console.warn('[proteus] event emit failed at onChatResponse:', err);
-    }
+    // The actor-generic settle spine lives on ActorAgent; everything after it
+    // here is orchestrator sequencing (takes, branches, evolution, naming).
+    const { drainTurnId, programmaticUserMessage, errorText, completed, injectedEvents } =
+      this.settleTurnEvents(result);
+    this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     if (result.status !== "completed") {
       // An aborted/errored live turn leaves nothing to compare a branch
       // against — and any takes its think-mcts runs captured competed for an
@@ -1664,7 +803,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     const userMessages = this.messages.filter(m => m.role === "user");
-    const lastUserMsg = userMessages[userMessages.length - 1];
+    const lastUserMsg = programmaticUserMessage ?? userMessages[userMessages.length - 1];
     const userText = lastUserMsg?.parts
       ?.filter(p => p.type === "text")
       .map(p => (p as { type: "text"; text: string }).text)
@@ -1674,6 +813,14 @@ export class OrchestratorAgent extends Think<Env> {
       ?.filter(p => p.type === "text")
       .map(p => (p as { type: "text"; text: string }).text)
       .join("") ?? "";
+
+    // Extension seam: the turn settled and was durably persisted — the same
+    // onTurnEnd contract runChat fires on the CLI (final text + the turn's
+    // response messages in ModelMessage shape).
+    await this.extensions.emitTurnEnd({
+      text: assistantText,
+      responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
+    });
 
     // Persist the completed turn into the `messages` table (session_id='default')
     // so the fork feature has a durable row to cut against. AIChatAgent's
@@ -1735,6 +882,24 @@ export class OrchestratorAgent extends Think<Env> {
     // answer — detached, so a slow branch never blocks the TurnQueue.
     this.settlePendingBranches(msgId ?? null, assistantText);
 
+    // Mission Inbox: a turn injected by the event drain carries the synthetic
+    // turn id its events were bound to — reply their open email_thread
+    // channels with this turn's answer (threaded outbound email). Detached.
+    if (typeof drainTurnId === 'string') {
+      this._pendingDrainReplyTurns.set(result.requestId, drainTurnId);
+      void this.completeEventBatch(drainTurnId, assistantText).then((completed) => {
+        if (completed && this._pendingDrainReplyTurns.get(result.requestId) === drainTurnId) {
+          this._pendingDrainReplyTurns.delete(result.requestId);
+        }
+      });
+    }
+    // Mid-turn injected batches feed the SAME dispatch, keyed by the batch
+    // turn ids this turn absorbed at its step boundaries.
+    for (const injected of injectedEvents.absorbed) {
+      void this.completeEventBatch(injected.turnId, assistantText);
+    }
+
+    const turnUsage = this.acc.reportedUsage();
     const turn: CompletedTurn = {
       userMessage: userText,
       assistantResponse: assistantText,
@@ -1747,7 +912,8 @@ export class OrchestratorAgent extends Think<Env> {
       hadError: this.acc.hadError,
       turnId: msgId,
       sessionId: 'default',
-      origin: this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
+      origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
+      ...(turnUsage ? { usage: turnUsage } : {}),
     };
 
     // CRITICAL: Evolution hooks make LLM calls (outcome classification,
@@ -1783,8 +949,9 @@ export class OrchestratorAgent extends Think<Env> {
     void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
     // On the first turn, replace the creation-time slug with a concise
-    // AI-generated session title. Fire-and-forget; once-only (name_origin gate).
-    void this.maybeGenerateTitle(userText);
+    // AI-generated title derived from the opening request. Fire-and-forget;
+    // once-only (persisting an auto title marks name_origin).
+    void this.maybeAutoTitleWorkspace(userText);
 
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
     // work survives the container sleeping. Debounced + fire-and-forget.
@@ -1796,7 +963,9 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Reactor drain-then-stop: handle any external events still pending (arrived
     // during this turn, or queued before a chat turn). No-op when none — so this
-    // self-terminates once the external event backlog is empty.
+    // self-terminates once the external event backlog is empty. Deliberately
+    // IMMEDIATE (not scheduleDrain): the just-finished turn already coalesced
+    // everything that arrived during it, so there is no burst left to debounce.
     void this.orch.drainPendingEvents();
   }
 
@@ -1808,9 +977,9 @@ export class OrchestratorAgent extends Think<Env> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
       const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@proteus/core');
-      const currentFacts = this.facts.recentTopK(30).map(f => ({
-        key: f.key, value: f.value, confidence: f.confidence,
-      }));
+      const currentFacts = this.facts.all()
+        .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
+        .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
       const update = await runSleepTimeCompute(this.rt.llm, {
         task: task.slice(0, 2000),
         output: output.slice(0, 4000),
@@ -1843,11 +1012,10 @@ export class OrchestratorAgent extends Think<Env> {
 
       const judge: StructuredJudgeFn = async (prompt) =>
         generateJson({
-          model: this.getModelForReview(),
+          model: await this.getModelForReview(),
           schema: JudgeOutputSchema,
           prompt,
-          maxOutputTokens: 512,
-          providerOptions: effortFor('judge').providerOptions,
+          providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
         });
 
       const judgeTask = task.slice(0, 2000);
@@ -1902,36 +1070,40 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Once, on the first turn, replace the creation-time slug with a concise
-   *  AI-generated title derived from the opening request. Skipped if the user
-   *  named the agent (name_origin='user') or it's already auto-titled. */
-  private async maybeGenerateTitle(userText: string): Promise<void> {
+  /** Automatic titling — one path, two triggers: the first turn of a workspace
+   *  that was never titled, and the wake of a legacy workspace still showing
+   *  its raw slug (created before mission-derived titling existed). The shared
+   *  policy decides; a title the operator chose is never touched, and persisting
+   *  an auto title marks name_origin='auto', so this runs at most once. */
+  private async maybeAutoTitleWorkspace(mission: string): Promise<void> {
     try {
-      if (this.config.getNameOrigin() !== null) return; // already user- or auto-named
-      // Show a deterministic provisional title instantly (header parity with the
-      // roster), then replace it with the AI title below. name_origin stays
-      // unset so this retries the AI step on the next turn if generation fails.
-      if (!this.config.getDisplayName()) {
-        const provisional = deriveAgentTitle(userText);
-        if (provisional) await this.propagateDisplayName(provisional);
-      }
-      const prompt =
-        `Generate a concise 3–6 word title (Title Case, no quotes, no trailing ` +
-        `punctuation) for a session that opens with this request:\n\n` +
-        `"${userText.slice(0, 600)}"\n\nReply with ONLY the title.`;
-      const { text } = await generateText({
-        model: this.getModelForReview(), prompt, maxOutputTokens: 24,
-        ...effortFor('judge'),
+      const title = await applyWorkspaceTitle({
+        slug: this.name,
+        displayName: this.config.getDisplayName(),
+        nameOrigin: this.config.getNameOrigin(),
+        mission,
+      }, {
+        persist: async (name) => { await this.setAutoDisplayName(name); },
+        suggest: (text) => this.suggestWorkspaceTitle(text),
       });
-      const title = text.trim().replace(/^["'#\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ').slice(0, 60);
-      if (title.length >= 2) {
-        await this.propagateDisplayName(title);
-        this.config.setNameOrigin('auto');
-        console.log(`[proteus] auto-titled agent → "${title}"`);
-      }
+      if (title) console.log(`[proteus] auto-titled workspace → "${title}"`);
     } catch (err) {
-      console.warn('[proteus] title generation failed:', err instanceof Error ? err.message : err);
+      console.warn('[proteus] workspace titling failed:', err instanceof Error ? err.message : err);
     }
+  }
+
+  /** The shared workspace-naming round-trip (same prompt and parser the create
+   *  path uses), against this workspace's review model. */
+  private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
+    const { text } = await generateText({
+      model: await this.getModelForReview(),
+      system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+      prompt: workspaceIdentityPrompt(mission),
+      // No output cap: reasoning models spend their budget thinking before the
+      // JSON, and a cap starves them into empty text.
+      ...effortFor('judge'),
+    });
+    return parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null;
   }
 
   /** Push a display name to all three homes: agent_config (source of truth),
@@ -1940,16 +1112,15 @@ export class OrchestratorAgent extends Think<Env> {
    *  auto-titling (a provisional title leaves it open; user/auto titles set it). */
   private async propagateDisplayName(displayName: string): Promise<void> {
     this.config.setDisplayName(displayName);
-    const userId = this.getOwnerUserId();
-    if (userId) {
+    if (this.getOwnerUserId()) {
       try {
-        const stub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-        await stub.setAgentDisplayName(this.name, displayName);
+        const { stub, caller } = await this.userHub();
+        await stub.setWorkspaceDisplayName(caller, this.name, displayName);
       } catch (err) {
         console.warn('[proteus] propagateDisplayName roster sync failed:', err instanceof Error ? err.message : err);
       }
     }
-    try { this.broadcast(JSON.stringify({ type: 'agent_renamed', displayName })); } catch { /* nop */ }
+    try { this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName })); } catch { /* nop */ }
   }
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
@@ -1958,7 +1129,6 @@ export class OrchestratorAgent extends Think<Env> {
   // the cf adapter over it + the BackgroundJobStore.
 
   /** Read a background job's result (the synthesis turn calls this). */
-  @callable()
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
     try { return this.jobs.get(jobId); } catch { return null; }
   }
@@ -2113,43 +1283,6 @@ export class OrchestratorAgent extends Think<Env> {
     }));
   }
 
-  /** Tools whose work can be long enough to auto-detach to the background. */
-  private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
-
-  /** Return a SHALLOW CLONE of the raw toolset with the long-running tools'
-   *  execute wrapped in the 30s background threshold. Never mutates the cached
-   *  raw toolset — so getRawTools() stays unwrapped for the eval side-streams. */
-  private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    const wrapped: ToolSet = { ...raw };
-    for (const key of OrchestratorAgent.BACKGROUNDABLE_TOOLS) {
-      const orig = wrapped[key];
-      const exec = orig?.execute;
-      if (!orig || typeof exec !== 'function') continue;
-      wrapped[key] = {
-        ...orig,
-        execute: (input, options) => {
-          // Per-call AbortController so a hard-cancel aborts the underlying work.
-          // Merge it with the turn's own signal so a turn abort still propagates.
-          const controller = new AbortController();
-          const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
-          const deps = this.jobRunner.thresholdDeps(key, input, controller);
-          this._activeToolControllers.add(controller);
-          return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps)
-            .finally(() => this._activeToolControllers.delete(controller));
-        },
-      };
-    }
-    return wrapped;
-  }
-
-  /** Model for review/judge tasks. Same resolution as chat — review LLM tracks
-   *  the user's chosen model so quality assessments stay consistent. */
-  private getModelForReview(): import('ai').LanguageModel {
-    const reg = this.providerRegistry();
-    return reg.resolveModel(reg.normalizeSpecSync(this.getStoredModelId()));
-  }
-
   // ── DO initialization ──────────────────────────────────────────
 
   // Device connection moved to the user level (UserDO owns the tunnel socket +
@@ -2192,6 +1325,9 @@ export class OrchestratorAgent extends Think<Env> {
     } catch { /* tables don't exist yet — fine */ }
 
     initAllTables(execRaw);
+    // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound
+    // SOUL.md rows) — repaired here so every read path stays a pure read.
+    migrateWorkspaceStorage(this.boundSql);
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftScoreTables(execRaw);
@@ -2201,7 +1337,7 @@ export class OrchestratorAgent extends Think<Env> {
     // constructs the engine, and the legacy CHECK would reject the insert.
     initTurnOutcomeTables(execRaw, this.boundSql);
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + reactor_budget_log + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
+    // + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
     initEventsHubTables(this.ctx.storage.sql);
     initWebhookRateLimitTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
@@ -2223,6 +1359,14 @@ export class OrchestratorAgent extends Think<Env> {
 
     // Background-job registry — work auto-detached past the 30s threshold.
     initBackgroundJobsTable(execRaw);
+    // Durable MCTS search checkpoints — an evicted think(mcts) resumes from here.
+    initMctsSearchTable(execRaw);
+
+    // Compaction: the replayable plan snapshot + the measured prompt-token
+    // trigger signal, one row per session (@proteus/compaction stores).
+    initCompactionStateTable(execRaw);
+
+    this.subordinateRoster.ensureSchema();
 
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -2252,6 +1396,12 @@ export class OrchestratorAgent extends Think<Env> {
   async onStart() {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
     this.ensureSchema();
+    let reconciledEventIds: string[] = [];
+    try {
+      reconciledEventIds = this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS);
+    } catch (err) {
+      console.warn('[proteus] startup event reconciliation failed:', err);
+    }
 
     // one-time per-agent migration that merges case-collision
     // duplicates in crafted_tools + craft_scores left over from older
@@ -2282,9 +1432,9 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     try {
-      const identity = this.sql<{ id: string }>`SELECT id FROM agent_identity LIMIT 1`;
+      const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
       if (identity.length === 0) {
-        this.sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
+        this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
       // Bootstrap scaffold if it doesn't exist — needed for scaffold mutation to work
       const scaffoldExists = await this.rt.identity.scaffold.exists();
@@ -2294,6 +1444,18 @@ export class OrchestratorAgent extends Think<Env> {
       }
     } catch (err) {
       console.error("[proteus] onStart init failed:", err);
+    }
+    if (reconciledEventIds.length > 0) {
+      console.warn(`[proteus] startup event reconciliation re-pended ${reconciledEventIds.length} event(s)`);
+      this.orch.scheduleDrain();
+    }
+
+    // Workspaces created before mission-derived titling still show their raw
+    // slug. Title them from SOUL.md's mission the first time one is opened —
+    // every other workspace is already titled, so it costs a config read.
+    // Fire-and-forget: boot never waits on a model call.
+    if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
+      void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''));
     }
   }
 
@@ -2340,20 +1502,43 @@ export class OrchestratorAgent extends Think<Env> {
       }
 
       // Wake the agent to act on the freshly-published timer events (and any
-      // other pending events) — an autonomous turn. Fire-and-forget.
-      if (due.length > 0) void this.orch.drainPendingEvents();
+      // other pending events) — an autonomous turn, debounced so events
+      // arriving alongside the alarm coalesce into it.
+      if (due.length > 0) this.orch.scheduleDrain();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
 
-    // Reschedule the next-soonest alarm.
+    // Re-drive pending outbound peer messages (crash/eviction recovery + the
+    // exponential-backoff retry path — inline tool dispatch handles the happy
+    // path, this alarm is the durable one).
     try {
-      const all = this.triggerRegistry.list({ state: 'active' });
-      const upcoming = all
-        .map(t => t.next_fire_at)
-        .filter((t): t is number => typeof t === 'number' && t > now)
-        .sort((a, b) => a - b)[0];
-      if (upcoming) this.ctx.storage.setAlarm(upcoming);
+      await this.peerHub.dispatchOutbox(now);
+    } catch (err) {
+      console.warn('[proteus] peer outbox dispatch failed:', (err as Error).message);
+    }
+
+    // Reconcile indeterminate outbound email: an intent left `pending` (crash
+    // between the send and its status write) is safely re-driven here — the
+    // stored Message-ID makes the re-send idempotent downstream (SPEC §7.4).
+    try {
+      if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
+    } catch (err) {
+      console.warn('[proteus] email outbox reconcile failed:', (err as Error).message);
+    }
+
+    // Reschedule the next-soonest alarm (triggers ∪ peer-outbox ∪ email-outbox
+    // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
+    // and the arm is soonest-wins so this reschedule never clobbers a sooner
+    // retry alarm armed during dispatch.
+    try {
+      const next = nextAlarmTime(
+        now,
+        this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
+        this.peerHub.nextRetryAt(),
+        this.emailOutbox.nextRetryAt(),
+      );
+      if (next !== null) this.scheduleAlarmAt(next);
     } catch (err) {
       console.warn('[proteus] alarm reschedule failed:', (err as Error).message);
     }
@@ -2372,75 +1557,49 @@ export class OrchestratorAgent extends Think<Env> {
 
   @callable()
   async getProductChangeBoard(limit: number = 20) {
-    return this.requireOwnerUserDO().getProductChangeBoard(this.name, limit);
-  }
-
-  @callable()
-  async listProductSourceBindings() {
-    return this.requireOwnerUserDO().listProductSourceBindings();
+    const { stub, caller } = await this.userHub();
+    return stub.getProductChangeBoard(caller, this.name, limit);
   }
 
   @callable()
   async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }) {
-    return this.requireOwnerUserDO().upsertProductSourceBinding(input);
+    const { stub, caller } = await this.userHub();
+    return stub.upsertProductSourceBinding(caller, input);
   }
 
   @callable()
   async createProductChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
-    return this.requireOwnerUserDO().createProductChange(this.name, input);
+    const { stub, caller } = await this.userHub();
+    return stub.createProductChange(caller, this.name, input);
   }
 
-  @callable()
-  async updateProductChange(
-    changeId: string,
-    patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
-  ) {
-    return this.requireOwnerUserDO().updateProductChange(changeId, patch);
-  }
-
-  @callable()
   async transitionProductChange(changeId: string, status: ProductChangeStatus) {
-    return this.requireOwnerUserDO().transitionProductChange(changeId, status);
-  }
-
-  @callable()
-  async recordProductChangeCheck(
-    changeId: string,
-    input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
-  ) {
-    return this.requireOwnerUserDO().recordProductChangeCheck(changeId, input);
+    const { stub, caller } = await this.userHub();
+    return stub.transitionProductChange(caller, changeId, status);
   }
 
   @callable()
   async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']) {
-    return this.requireOwnerUserDO().requestProductChangeApproval(changeId, approvalType);
+    const { stub, caller } = await this.userHub();
+    return stub.requestProductChangeApproval(caller, changeId, approvalType);
   }
 
   @callable()
   async decideProductChangeApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
-    const userDO = this.requireOwnerUserDO();
-    const decided = await userDO.decideProductChangeApproval(approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+    const { stub, caller } = await this.userHub();
+    const decided = await stub.decideProductChangeApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
     if (decision === 'rejected') {
-      try { await userDO.transitionProductChange(decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
+      try { await stub.transitionProductChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
     }
     return decided;
   }
 
-  @callable()
-  async recordProductDeployment(
-    changeId: string,
-    input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
-  ) {
-    return this.requireOwnerUserDO().recordProductDeployment(changeId, input);
-  }
-
-  @callable()
   async getAgentStatus() {
     try {
       const soul = readSoul(this.boundSql) ?? "";
       const purpose = summarizeSoul(soul);
       const identity = this.sql<{ id: string; name: string; created_at: number }>`
-        SELECT id, name, created_at FROM agent_identity LIMIT 1`;
+        SELECT id, name, created_at FROM workspace_identity LIMIT 1`;
       const scaffoldVersion = this.sql<{ v: number }>`
         SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
       const searchNodes = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
@@ -2448,7 +1607,7 @@ export class OrchestratorAgent extends Think<Env> {
       // Message count reflects the persisted `messages` table, which is the
       // authoritative turn history used for fork cut-points. For non-fork
       // agents this table is populated by onChatResponse's mirror; for forks
-      // it's populated by forkAgentStorage's copy. Falling back to the
+      // it's populated by forkWorkspaceStorage's copy. Falling back to the
       // in-memory AIChatAgent array keeps behavior sane before the first
       // turn has been mirrored.
       const tableCount = this.sql<{ c: number }>`
@@ -2469,17 +1628,18 @@ export class OrchestratorAgent extends Think<Env> {
         craftedToolCount: craftedTools[0]?.c ?? 0,
         messageCount,
         model: this.getStoredModelId(),
+        reasoningEffort: this.config.getReasoningEffort(),
         forkLineage,
       };
     } catch {
       return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", soul: "", createdAt: 0,
         scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
         model: this.getStoredModelId(),
+        reasoningEffort: this.config.getReasoningEffort(),
         forkLineage: null };
     }
   }
 
-  @callable()
   async getChatHistory(limit = 100): Promise<Array<{ id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string | number }>> {
     const bounded = Math.max(1, Math.min(200, Math.floor(limit)));
     try {
@@ -2515,7 +1675,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  @callable() async getToolList() {
+  async getToolList() {
     const crafted = this.rt.craftStore.list().map(t => {
       const scoreRow = this.sql<{ score: number; uses: number }>`
         SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;
@@ -2530,8 +1690,6 @@ export class OrchestratorAgent extends Think<Env> {
       crafted,
     };
   }
-
-  @callable() async doSearchMemory(query: string) { return this.rt.memory.search(query, 10); }
 
   @callable() async getMctsTree() {
     return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
@@ -2594,11 +1752,6 @@ export class OrchestratorAgent extends Think<Env> {
       path,
       children: children.map(summarize),
     };
-  }
-
-  @callable() async getEvolutionEvents(limit: number = 50) {
-    return this.sql`SELECT id, type, message, data, created_at
-      FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
   // ── Evolution Changelog — the self-change digest + revert (core builder) ──
@@ -2739,11 +1892,18 @@ export class OrchestratorAgent extends Think<Env> {
     }
     let continuationQueued = false;
     if (record.changedAnswer) {
-      void this.host.enqueueTurn({
-        text: buildTakeContinuationPrompt(record.set, record.chosen),
-        metadata: { proteusEvent: 'take_pick' },
-      }).catch((err) => console.warn('[proteus] take_pick continuation enqueue failed:', err));
-      continuationQueued = true;
+      try {
+        const result = await this.host.enqueueTurn({
+          text: buildTakeContinuationPrompt(record.set, record.chosen),
+          metadata: { proteusEvent: 'take_pick' },
+        });
+        continuationQueued = result.status === 'queued';
+        if (result.status === 'skipped') {
+          console.warn('[proteus] take_pick continuation enqueue skipped');
+        }
+      } catch (err) {
+        console.warn('[proteus] take_pick continuation enqueue failed:', err);
+      }
     }
     this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
     return { ...record, continuationQueued };
@@ -2818,55 +1978,6 @@ export class OrchestratorAgent extends Think<Env> {
     return spans.slice(-limit);
   }
 
-  // ── Fiber recovery — durable execution surviving DO eviction ──
-  //
-  // The MCTS engine (mcts/engine.ts) calls rt.schedule.fiber('mcts', fn) which
-  // delegates to agent.runFiber(). Per-iteration ctx.stash(phase) checkpoints
-  // progress to cf_agents_runs. If the DO is evicted mid-MCTS, the Agent SDK
-  // re-invokes onFiberRecovered with the last snapshot on cold-start.
-  //
-  // The default base implementation just warns; we override to:
-  //   • log the recovery into evolution_events for the UI
-  //   • broadcast a "recovered" event so the chat panel can show the resume
-  //   • write a memory note so future turns know about the interruption
-  override async onFiberRecovered(ctx: {
-    id: string;
-    name: string;
-    snapshot: unknown;
-    createdAt: number;
-  }): Promise<void> {
-    try {
-      const summary = ctx.snapshot && typeof ctx.snapshot === 'object'
-        ? JSON.stringify(ctx.snapshot).slice(0, 400)
-        : String(ctx.snapshot ?? 'null');
-      console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
-      // Background-job fiber (bg:*) is operational plumbing, not an evolution
-      // event: the runner re-fails + wakes an orphaned 'running' job (a 'settled'
-      // one already recorded its outcome + woke), skipping the MEMORY.md note +
-      // evolution_events INSERT that the user-facing recovery path emits.
-      if (ctx.name.startsWith('bg:')) {
-        await this.jobRunner.recover(ctx.snapshot);
-        return;
-      }
-      // Persist for the UI's evolution-events stream.
-      this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-        VALUES (${nanoid()}, 'fiber_recovered',
-                ${`Fiber "${ctx.name}" recovered after interruption`},
-                ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot: ctx.snapshot, createdAt: ctx.createdAt })},
-                ${Date.now()})`;
-      try {
-        await this.rt.memory.append(
-          'memory/MEMORY.md',
-          `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
-          `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
-          `Snapshot at interruption: ${summary}\n`,
-        );
-      } catch { /* memory may not be initialized yet */ }
-    } catch (err) {
-      console.error('[proteus] onFiberRecovered handler failed:', err);
-    }
-  }
-
   // ── Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
 
   /**
@@ -2878,7 +1989,6 @@ export class OrchestratorAgent extends Think<Env> {
    * When `useShadowOverride` is true, runs the pending scaffold instead of
    * the current one (if a pending exists).
    */
-  @callable()
   async runScaffoldOnce(
     task: string,
     opts?: { useShadowOverride?: boolean; timeoutMs?: number },
@@ -2905,7 +2015,6 @@ export class OrchestratorAgent extends Think<Env> {
    * gate (runShadowEvalSampled) like any other proposal — no new safety
    * surface.
    */
-  @callable()
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
     const result = await modifyScaffold(
       this.rt, rationale, code,
@@ -2923,7 +2032,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
-  @callable()
   async getShadowStatus() {
     const pending = getPendingScaffold(this.boundSql);
     if (!pending) {
@@ -3090,10 +2198,10 @@ export class OrchestratorAgent extends Think<Env> {
 
   @callable()
   async checkpointStatus(): Promise<CheckpointAvailability> {
-    const hub = this.getOwnerUserDO();
-    if (!hub) return { available: false, reason: 'agent has no owner user yet' };
+    if (!this.getOwnerUserDO()) return { available: false, reason: 'agent has no owner user yet' };
     try {
-      return await hub.deviceRpc('checkpointStatus', []) as CheckpointAvailability;
+      const { stub, caller } = await this.userHub();
+      return await stub.deviceRpc(caller, 'checkpointStatus', []) as CheckpointAvailability;
     } catch (err) {
       if (isDeviceNotConnectedError(err)) {
         return { available: false, reason: 'no device connected — connect one with `proteus connect`' };
@@ -3104,10 +2212,10 @@ export class OrchestratorAgent extends Think<Env> {
 
   @callable()
   async listFileCheckpoints(limit = 50): Promise<FileCheckpointEntry[]> {
-    const hub = this.getOwnerUserDO();
-    if (!hub) return [];
+    if (!this.getOwnerUserDO()) return [];
     try {
-      return await hub.deviceRpc('checkpointList', [this.name, Math.max(1, Math.min(500, limit))]) as FileCheckpointEntry[];
+      const { stub, caller } = await this.userHub();
+      return await stub.deviceRpc(caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))]) as FileCheckpointEntry[];
     } catch (err) {
       if (isDeviceNotConnectedError(err)) return [];
       throw err;
@@ -3116,12 +2224,14 @@ export class OrchestratorAgent extends Think<Env> {
 
   @callable()
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
-    return await this.requireOwnerUserDO().deviceRpc('checkpointPlan', [this.name, dir, id]) as FileRestorePlan;
+    const { stub, caller } = await this.userHub();
+    return await stub.deviceRpc(caller, 'checkpointPlan', [this.name, dir, id]) as FileRestorePlan;
   }
 
   @callable()
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
-    return await this.requireOwnerUserDO().deviceRpc('checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
+    const { stub, caller } = await this.userHub();
+    return await stub.deviceRpc(caller, 'checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
   }
 
   /**
@@ -3181,18 +2291,6 @@ export class OrchestratorAgent extends Think<Env> {
     return { ok: true, messageId, feedback, rescored };
   }
 
-  /** Read recorded feedback for a message. Returns null if none. */
-  @callable()
-  async getTurnFeedback(messageId: string): Promise<{ feedback: 'positive' | 'negative' | null }> {
-    try {
-      const rows = this.sql<{ feedback: 'positive' | 'negative' }>`
-        SELECT feedback FROM turn_feedback WHERE message_id = ${messageId} LIMIT 1`;
-      return { feedback: rows[0]?.feedback ?? null };
-    } catch {
-      return { feedback: null };
-    }
-  }
-
   /** All recorded feedback keyed by message id — one round-trip so the chat
    *  hydrates its thumbs marks on load instead of forgetting them. */
   @callable()
@@ -3204,36 +2302,6 @@ export class OrchestratorAgent extends Think<Env> {
     } catch {
       return {};
     }
-  }
-
-  /**
-   * Generic agent_config setter. Used by the Settings page for tunables
-   * like shadow_sample_rate, auto_promote_scaffold. Allow-listed keys only —
-   * anything else throws so callers can't write arbitrary settings.
-   */
-  @callable()
-  async setAgentConfig(key: string, value: string): Promise<{ ok: true; key: string; value: string }> {
-    const allowedKeys = new Set([
-      'shadow_sample_rate',
-      'auto_promote_scaffold',
-      'scaffold_explore_share',
-      'sleep_time_compute',
-      'tool_surfacing_mode',
-      'review_model',
-      'gepa_eval_budget',
-      // shell_approval_mode has its own typed setter; not allowed via this.
-    ]);
-    if (!allowedKeys.has(key)) {
-      throw new Error(`agent_config key not allowed via generic setter: ${key}`);
-    }
-    this.config.set(key, value);
-    return { ok: true, key, value };
-  }
-
-  /** Read an agent_config value by key. Returns null if unset. */
-  @callable()
-  async getAgentConfig(key: string): Promise<{ key: string; value: string | null }> {
-    return { key, value: this.config.get(key) };
   }
 
   /** The scaffold variant archive: recent versions with status, DGM lineage
@@ -3261,18 +2329,21 @@ export class OrchestratorAgent extends Think<Env> {
 
   /**
    * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
-   * Offline + batch: draws a budgeted train/val split from the turn-outcome
-   * ledger (corrected/frustrated turns = the negative train set reflection
-   * must fix; accepted turns = the val regression guards), runs the current
-   * scaffold + reflection-mutated candidates against them, scores each with
-   * an outcome-aware judge, and — if a strictly-better candidate is found —
+   * Offline + batch: draws a budgeted, DISJOINT train/val split from the
+   * turn-outcome ledger (older corrected/frustrated turns = the train set
+   * reflection must fix; the newest failures held out + accepted turns = the
+   * val set the winner is selected on), runs the current scaffold +
+   * reflection-mutated candidates against them, scores each with an
+   * outcome-aware judge, and — if a strictly-better candidate is found —
    * hands the winner to modifyScaffold so it enters the normal shadow-eval →
    * promote pipeline. Persisted to gepa_runs/gepa_candidates so the UI can
    * show lineage.
    *
    * Cost-bounded: the instance budget comes from agent_config
-   * gepa_eval_budget (default 8) unless opts.evalSize overrides it; each
-   * metric call runs a full scaffold + a judge call.
+   * gepa_eval_budget (DEFAULT_GEPA_EVAL_BUDGET) unless opts.evalSize
+   * overrides it; each metric call runs a full scaffold + a judge call.
+   * Scores come back as intervals — with a val set this size, a winner inside
+   * the seed's interval is not evidence of anything.
    */
   @callable()
   async runScaffoldGepaOptimization(opts?: {
@@ -3286,22 +2357,37 @@ export class OrchestratorAgent extends Think<Env> {
     proposed?: boolean;
     pendingVersion?: number | null;
     skipReason?: string;
-    bestScore?: number;
-    seedScore?: number;
+    bestScore?: ScoreInterval;
+    seedScore?: ScoreInterval;
     iterations?: number;
+    /** What the winner was selected on: failures it never trained on plus
+     *  accepted regression guards. */
+    selection?: { heldOutNegatives: number; guards: number };
+    /** Present when the split could not support an out-of-sample selection —
+     *  the result is exploratory, not evidence. */
+    selectionWarning?: string;
   }> {
-    const evalSize = Math.max(2, Math.min(opts?.evalSize ?? this.config.getGepaEvalBudget(), 20));
-    const budget = {
-      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
-      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 40, 200)),
-      minibatchSize: 1,
-    };
+    const evalSize = clampGepaEvalBudget(opts?.evalSize ?? this.config.getGepaEvalBudget());
 
     // 1. Train/val split from outcome-labeled turns (turn_outcomes ledger).
-    const { train: trainSet, val: evalSet } = buildOutcomeEvalSplit(this.boundSql, evalSize);
-    if (evalSet.length === 0) {
-      return { ok: false, error: 'no outcome-labeled turns yet — chat with the agent first' };
+    const split = buildOutcomeEvalSplit(this.boundSql, evalSize);
+    const { train: trainSet, val: evalSet } = split;
+    // Without a failure to optimise toward there is nothing to select on but
+    // judge noise over already-accepted turns — and an empty train set would
+    // hand the eval set straight back to reflection as its minibatch source.
+    if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
+      return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
     }
+    const budget = {
+      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
+      // Seed scoring (|val|) + one minibatch and one full scoring per
+      // iteration; the default covers the default 4 iterations over a
+      // default-budget split with headroom.
+      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 120, 400)),
+      // The paper's 3 — reflection reads three failures per proposal. The
+      // engine caps it at the (now disjoint) train set when fewer exist.
+      minibatchSize: 3,
+    };
 
     const model = this.getModel();
 
@@ -3389,9 +2475,14 @@ export class OrchestratorAgent extends Think<Env> {
       proposed: result.proposed,
       pendingVersion: result.pendingVersion,
       skipReason: result.skipReason,
-      bestScore: result.gepa.winner.aggregateScore,
-      seedScore: result.gepa.history[0]?.aggregateScore,
+      bestScore: result.winnerScore,
+      seedScore: result.seedScore,
       iterations: result.gepa.iterationsRun,
+      selection: {
+        heldOutNegatives: split.heldOutNegatives,
+        guards: evalSet.length - split.heldOutNegatives,
+      },
+      ...(split.degeneracy ? { selectionWarning: describeSplitDegeneracy(split.degeneracy) } : {}),
     };
   }
 
@@ -3404,19 +2495,19 @@ export class OrchestratorAgent extends Think<Env> {
 
   // ── Replay-eval loss curve ──────────────────────────────────────
 
-  /** Run one replay-eval pass now: sample outcome-labeled turns, re-run them
-   *  through the LIVE scaffold, score against the recorded outcomes, persist
-   *  the loss entry. Also runs periodically inside lifetime evolution. */
-  @callable()
-  async runReplayEval(opts?: { sampleSize?: number }): Promise<ReplayEvalSummary | null> {
-    return this.engine.runReplayEval(opts?.sampleSize);
-  }
-
   /** The persisted loss curve (replay_evals), newest first. Read-only — the
    *  data a loss chart would render. */
   @callable()
   async getReplayEvals(limit: number = 50): Promise<ReplayEvalSummary[]> {
     return listReplayEvals(this.boundSql, limit);
+  }
+
+  /** K_align: the correction rate per 100 graded turns, per scaffold version,
+   *  with 95% Wilson intervals — the self-improvement question answered from
+   *  telemetry alone, no benchmark and no judge. */
+  @callable()
+  async getAlignmentConvergence(): Promise<AlignmentConvergence> {
+    return alignmentConvergence(this.boundSql);
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +
@@ -3477,7 +2568,6 @@ export class OrchestratorAgent extends Think<Env> {
    * captured lazily on first call (returns empty + baselineJustCaptured) and
    * re-markable via resetWorkspaceBaseline ("mark reviewed").
    */
-  @callable()
   async getWorkspaceDiff(): Promise<{ files: FileDiff[]; baselineJustCaptured: boolean }> {
     const current = await this.readWorkspaceFiles();
     let baselineRows: Array<{ path: string; content: string }> = [];
@@ -3567,7 +2657,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** A head writes a finding; namespaced under its headId so writes never collide. */
-  @callable()
   async sharedScratchWrite(headId: string, relPath: string, content: string): Promise<{ ok: boolean; path: string }> {
     const ns = (headId || 'head').replace(/[^a-zA-Z0-9_-]/g, '_');
     const rel = this.sanitizeSharedPath(relPath) || 'note.md';
@@ -3580,7 +2669,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Read any head's finding by path relative to shared/findings/. */
-  @callable()
   async sharedScratchRead(relPath: string): Promise<string | null> {
     const rel = this.sanitizeSharedPath(relPath);
     if (!rel) return null;
@@ -3593,7 +2681,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** List every finding in the shared scratch (paths relative to its root). */
-  @callable()
   async sharedScratchList(): Promise<string[]> {
     const vfs = this.rt.storage.vfs;
     const root = OrchestratorAgent.SHARED_FINDINGS_ROOT;
@@ -3615,10 +2702,10 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
-   *  by UserDO.removeAgent on delete so a same-name recreate starts clean and no
+   *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and no
    *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
-   *  the DO wipe (storage + alarm) always runs. */
-  @callable()
+   *  the DO wipe (storage + alarm) always runs. Deliberately NOT @callable:
+   *  destruction goes through UserDO's ownership check, never the raw websocket. */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
     const ownerUserId = this.getOwnerUserId();
@@ -3686,13 +2773,11 @@ export class OrchestratorAgent extends Think<Env> {
    * the last seen `since` index and the recorder returns events strictly
    * after it.
    */
-  @callable()
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return this.eventRecorder.read(runId, opts ?? {});
   }
 
   /** List the agent's recent runs with their latest timestamp + event count. */
-  @callable()
   async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
     return this.eventRecorder.listRuns(limit);
   }
@@ -3731,19 +2816,38 @@ export class OrchestratorAgent extends Think<Env> {
     });
   }
 
-  /** Count events for a single run — for UI badges. */
-  @callable()
-  async countRunEvents(runId: string): Promise<number> {
-    return this.eventRecorder.count(runId);
-  }
-
   // ── MCP server bridge — small RPCs the MCP handler needs ──
   /** Used by the /mcp/v1/<name> save_note tool. Routes through the same
    *  appendMemoryNote primitive as workspace.saveNote + the `memory` builtin. */
-  @callable()
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
     await appendMemoryNote(this.rt.memory, content);
     return { ok: true };
+  }
+
+  /** MCP `run_task`: inject a turn into the SAME serialized loop the event→turn
+   *  reactor and background-job wake use (host.enqueueTurn → Think.saveMessages).
+   *  Not a new execution path — the identical programmatic-turn seam. */
+  async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    if (!trimmed) throw new Error('run_task requires non-empty text');
+    return this.host.enqueueTurn({ text: trimmed, metadata: { proteusEvent: 'mcp' } });
+  }
+
+  /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
+   *  agents over the exact `peers` tool transport (owner + same-owner roster
+   *  gate enforced inside getPeersToolDeps). */
+  async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
+    if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
+    return this.getPeersToolDeps().send({
+      agent: input.agent,
+      topic: (input.topic ?? '').trim() || 'message',
+      message: input.message,
+    });
+  }
+
+  /** MCP `send_peer` roster helper — the owner's other agents (self excluded). */
+  async listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>> {
+    return this.getPeersToolDeps().listPeers();
   }
 
   // ── Hybrid memory search — FTS5 + Vectorize via RRF ──
@@ -3752,16 +2856,17 @@ export class OrchestratorAgent extends Think<Env> {
    * Falls back to pure FTS5 when the Vectorize binding isn't configured.
    *
    * Returns enriched HybridHit[] with sources, RRF score, and individual
-   * lexical/semantic scores when available.
+   * lexical/semantic scores when available. THE one memory-search surface for
+   * every remote caller — browser rpc, the CLI /rpc transport, MCP
+   * search_memory — one behavior everywhere.
    */
-  @callable()
-  async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
+  @callable() async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
       return results.map((r) => ({
-        // Construct a stable id from path + line range — matches how the
-        // VectorStore stores chunks (caller upserts with this same id).
-        id: `${r.path}#${r.startLine}-${r.endLine}`,
+        // Canonical chunk id (`path:start-end`) — matches the id the vector
+        // store returns, so RRF fuses the lexical and semantic hits.
+        id: `${r.path}:${r.startLine}-${r.endLine}`,
         path: r.path,
         startLine: r.startLine,
         endLine: r.endLine,
@@ -3772,33 +2877,8 @@ export class OrchestratorAgent extends Think<Env> {
     return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, { finalK: limit });
   }
 
-  /** Returns whether semantic memory is enabled on this deployment. */
-  @callable()
-  async vectorStoreStatus(): Promise<{ available: boolean }> {
-    return { available: this.rt.vectorStore.available };
-  }
-
   // ── SKILL.md export/import — make crafted tools git-friendly ──
 
-  /**
-   * Export every crafted tool to a SKILL.md file under `skills/` in the VFS.
-   * Returns counts + per-tool error list. Skips tools whose code is empty
-   * or comment-only.
-   */
-  @callable()
-  async exportSkillsToVfs(dir?: string): Promise<ExportSkillsResult> {
-    return exportAllSkillsToVfs(this.rt.storage.vfs, this.rt.craftStore, { dir });
-  }
-
-  /**
-   * Import every SKILL.md file under `skills/` in the VFS back into the
-   * CraftStore. For existing tools: update in place. For new ones: create.
-   * Parse errors are reported per-file but don't halt the import.
-   */
-  @callable()
-  async importSkillsFromVfs(dir?: string): Promise<ImportSkillsResult> {
-    return importSkillsFromVfs(this.rt.storage.vfs, this.rt.craftStore, { dir });
-  }
 
   /** Build a streaming LLM callback the scaffold executor calls via
    *  `host.llmStream(opts)` — text chunks come back as 'text_delta' events.
@@ -3858,21 +2938,6 @@ export class OrchestratorAgent extends Think<Env> {
     catch { return ""; }
   }
 
-  /**
-   * Phase D evidence RPC: returns the LIVE execute_tools.description string —
-   * the exact text the LLM sees in its tool list. Used by the evidence script
-   * to assert that crafted tools appear under `codemode.<name>` in the
-   * generated TypeScript-like interface codemode emits.
-   *
-   * This is introspection-only: it calls the same getTools() the chat loop
-   * does, then extracts the description. No side effects.
-   */
-  @callable() async getExecuteToolsDescription() {
-    const tools = this.getRawTools();
-    const et = tools.execute_tools as { description?: string } | undefined;
-    return { description: et?.description ?? '' };
-  }
-
   @callable() async getToolDescriptions() {
     // Descriptions sourced from @proteus/core/tools/registry — single truth.
     // Fixes F1 (tools.* → codemode.*) by virtue of the canonical source.
@@ -3904,9 +2969,14 @@ export class OrchestratorAgent extends Think<Env> {
     return { displayName };
   }
 
-  @callable() async setAutoDisplayName(displayName: string) {
+  async setAutoDisplayName(displayName: string) {
     await this.propagateDisplayName(displayName);
     this.config.setNameOrigin('auto');
+    return { displayName };
+  }
+
+  async setProvisionalDisplayName(displayName: string) {
+    this.config.setDisplayName(displayName);
     return { displayName };
   }
 
@@ -3914,7 +2984,47 @@ export class OrchestratorAgent extends Think<Env> {
     return this.rt.executionRouter?.listExecutors() ?? [];
   }
 
-  @callable() async getExecutorOutput(executorId: string, limit: number = 50) {
+  /** The workspace mount table — the CompositeVFS data surface behind the
+   *  unified file browser. One row per environment (/local always; /sandbox,
+   *  /nimbus, /pc as configured), with live state + declared policy. */
+  @callable() async listMounts() {
+    return this.rt.compositeVfs.listMounts();
+  }
+
+  /** The agent roster as seen from this workspace: this DO's orchestrator is
+   *  the default agent (always present); durable subordinate facets follow. */
+  @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
+    const self = { name: this.name, displayName: this.getDisplayName() };
+    try {
+      return buildWorkspaceAgents(self, this.subordinateRoster.list());
+    } catch {
+      return buildWorkspaceAgents(self, []);
+    }
+  }
+
+  /** Browser-only subordinate controls. These delegate to the exact same
+   * orchestration policy as the model's team tool, including rollback and the
+   * authoritative roster broadcast. */
+  @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
+    return this.getTeamToolDeps().list();
+  }
+
+  @callable() async spawnSubordinate(role: string, mission: string): Promise<{
+    name: string;
+    displayName: string;
+  }> {
+    return this.getTeamToolDeps().spawn({ role, mission, createdBy: 'user' });
+  }
+
+  @callable() async dismissSubordinate(name: string): Promise<{
+    ok: true;
+    name: string;
+    historyKept: boolean;
+  }> {
+    return this.getTeamToolDeps().dismiss({ name });
+  }
+
+  async getExecutorOutput(executorId: string, limit: number = 50) {
     return this.sql`SELECT id, executor, command, stdout, stderr, exit_code, created_at
       FROM executor_output WHERE executor = ${executorId}
       ORDER BY created_at DESC LIMIT ${limit}`;
@@ -3987,60 +3097,44 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Typed directory listing for the file manager. Workspace is read straight
-   *  off the VFS (accurate types + sizes); other executors' heterogeneous
-   *  `readdir` output is normalized via parseReaddirEntries. */
+  /** Typed directory listing for the file manager — read straight off the
+   *  CompositeVFS for every executor (accurate types + sizes), workspace paths
+   *  as-is and remote executors through their mount prefix. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
-    const dir = path || '/';
-    if (executorId === 'workspace') {
-      try {
-        const names = await this.rt.storage.vfs.readdir(dir);
-        const entries: DirEntry[] = [];
-        for (const name of names) {
-          const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
-          let type: DirEntry['type'] = 'file';
-          let size: number | undefined;
-          try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — leave as file */ }
-          entries.push({ name, type, size });
-        }
-        return { entries: sortDirEntries(entries) };
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    }
-    const provider = this.rt.executionRouter?.getProvider(executorId);
-    if (!provider) return { error: `Executor "${executorId}" not found` };
-    const readdirTool = provider.tools.readdir;
-    if (!readdirTool) return { error: `Executor "${executorId}" has no readdir tool` };
+    const dir = toCompositePath(executorId, path || '/');
+    if (dir === null) return { error: `Executor "${executorId}" not found` };
     try {
-      const result = await readdirTool.execute(dir);
-      return { entries: parseReaddirEntries(result) };
+      const names = await this.rt.storage.vfs.readdir(dir);
+      const entries: DirEntry[] = [];
+      for (const name of names) {
+        const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
+        // Entries of the composite root are mounts — directories by
+        // construction, even when the environment behind one can't answer
+        // a stat right now.
+        let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
+        let size: number | undefined;
+        try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — keep the default */ }
+        entries.push({ name, type, size });
+      }
+      return { entries: sortDirEntries(entries) };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  /** Read a single file's text content for the file-manager viewer. Workspace
-   *  reads off the VFS; other executors via their readFile tool. Caps size and
-   *  refuses binary (NUL byte). */
+  /** Read a single file's text content for the file-manager viewer — off the
+   *  CompositeVFS for every executor (structured bytes, not tool strings). Caps
+   *  size and refuses binary (NUL byte). */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
     if (!path) return { error: 'path required' };
+    const target = toCompositePath(executorId, path);
+    if (target === null) return { error: `Executor "${executorId}" not found` };
     const MAX = 512 * 1024;
     try {
-      let text: string;
-      if (executorId === 'workspace') {
-        const stat = await this.rt.storage.vfs.stat(path);
-        if (stat?.isDir) return { error: 'path is a directory' };
-        const raw = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-        text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      } else {
-        const provider = this.rt.executionRouter?.getProvider(executorId);
-        if (!provider) return { error: `Executor "${executorId}" not found` };
-        const readFileTool = provider.tools.readFile;
-        if (!readFileTool) return { error: `Executor "${executorId}" has no readFile tool` };
-        const raw = await readFileTool.execute(path);
-        text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-      }
+      const stat = await this.rt.storage.vfs.stat(target);
+      if (stat?.isDir) return { error: 'path is a directory' };
+      const raw = await this.rt.storage.vfs.readFile(target, { encoding: 'utf8' });
+      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
       if (text.length > MAX) return { content: text.slice(0, MAX), truncated: true };
       return { content: text };
@@ -4049,34 +3143,12 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Upload one file into an executor (file-manager drop/Upload). Mirrors
-   *  readExecutorFile's dispatch: workspace → VFS (binary-safe), others →
-   *  provider writeFile tool; read-only executors get a typed error. */
+  /** Upload one file into an executor (file-manager drop/Upload) — binary-
+   *  safe through the CompositeVFS for every executor (env-native paths map
+   *  through the executor's mount prefix). */
   @callable() async writeExecutorFile(executorId: string, path: string, contentBase64: string): Promise<ExecutorWriteResult> {
     try {
-      return await writeExecutorFileOp({
-        vfs: this.rt.storage.vfs,
-        getProvider: (id) => this.rt.executionRouter?.getProvider(id),
-      }, executorId, path, contentBase64);
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  /**
-   * Direct RPC to the sandbox executor's exposePort tool. Used by the UI
-   * and by integration tests to pin a port to the preview iframe grid.
-   * Returns the public URL on success.
-   */
-  @callable() async exposeSandboxPort(port: number, name?: string): Promise<{ url?: string; error?: string }> {
-    const provider = this.rt.executionRouter?.getProvider('sandbox');
-    if (!provider) return { error: 'sandbox executor not available' };
-    const tool = provider.tools.exposePort;
-    if (!tool) return { error: 'sandbox executor has no exposePort' };
-    try {
-      const raw = name ? await tool.execute(port, name) : await tool.execute(port);
-      const url = typeof raw === 'string' ? raw : undefined;
-      return { url };
+      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, contentBase64);
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
@@ -4139,31 +3211,14 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
-  /** Invalidate every cache that depends on the resolved model so the next
-   *  getModel() / getThinkTool() / providerRegistry() call rebuilds. */
-  private invalidateModelCaches(): void {
-    this._cachedModel = null;
-    this._cachedModelSpec = null;
-    this._thinkTool = null;
-    // Provider registry caches per-agent OAuth refreshers; rebuild so a
-    // disconnected provider stops being marked available.
-    this._providerRegistry = null;
+  @callable() async getReasoningEffort(): Promise<{ effort: ReasoningEffort | null }> {
+    return { effort: this.config.getReasoningEffort() };
   }
 
-  // ── Credentials & Codex OAuth ─────────────────────────────────────
-  //
-  // All credentials live in UserDO (single source of truth across the user's
-  // agents). The orchestrator no longer stores, refreshes, or even reads
-  // raw credentials — providers resolve auth headers through the UserDO
-  // stub at fetch time. Use the `/api/user/codex/*` routes (or the user
-  // settings UI) to connect ChatGPT / save BYO API keys.
-
-  /** Worker fan-out target (user/agent-access notifyAgentsCredentialsChanged):
-   *  invoked after credential mutations in UserDO so cached provider/model
-   *  state in this agent is dropped. Cheap; no-op if nothing is cached. */
-  async onCredentialsChanged(): Promise<{ ok: true }> {
-    this.invalidateModelCaches();
-    return { ok: true };
+  @callable() async setReasoningEffort(effort: unknown): Promise<{ ok: true; effort: ReasoningEffort }> {
+    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+    this.config.setReasoningEffort(effort);
+    return { ok: true, effort };
   }
 
   // ── Voyager curriculum: propose / list / accept next tasks ─────────
@@ -4200,51 +3255,6 @@ export class OrchestratorAgent extends Think<Env> {
     return { soul: text, purpose: summarizeSoul(text) };
   }
 
-  @callable() async clearMemory() {
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    execRaw("DELETE FROM vfs_files WHERE path LIKE 'memory/%'");
-    execRaw("DELETE FROM memory_chunks");
-    try { execRaw("DELETE FROM memory_chunks_fts"); } catch { /* FTS table may not exist */ }
-    return { cleared: true };
-  }
-
-  @callable() async resetMctsTree() {
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    execRaw("DELETE FROM search_nodes");
-    return { cleared: true };
-  }
-
-  @callable() async getLogs(limit = 100) {
-    type LogType = "connection" | "tool" | "evolution" | "error" | "info";
-    const evoRows = this.sql<{ id: string; type: string; message: string; created_at: number }>`
-      SELECT id, type, message, created_at FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
-    const evoLogs = evoRows.map(e => ({
-      id: e.id,
-      time: e.created_at,
-      type: (e.type.includes("error") ? "error" : "evolution") as LogType,
-      message: `[${e.type}] ${e.message}`,
-    }));
-    let actLogs: Array<{ id: string; time: number; type: LogType; message: string; detail?: string }> = [];
-    try {
-      const actRows = this.sql<{ id: string; event: string; detail: string | null; elapsed_ms: number; created_at: number }>`
-        SELECT id, event, detail, elapsed_ms, created_at FROM activity_log ORDER BY created_at DESC LIMIT ${limit}`;
-      actLogs = actRows.map(a => {
-        // Color-code by latency: info (green) <1s, tool (amber) 1-5s, error (red) >5s
-        const type: LogType = a.elapsed_ms > 5000 ? "error" : a.elapsed_ms > 1000 ? "tool" : "info";
-        return {
-          id: a.id,
-          time: a.created_at,
-          type,
-          message: `[${a.elapsed_ms}ms] ${a.event}`,
-          detail: a.detail ?? undefined,
-        };
-      });
-    } catch { /* table may not exist yet */ }
-    const merged = [...evoLogs, ...actLogs];
-    merged.sort((a, b) => b.time - a.time);
-    return merged.slice(0, limit);
-  }
-
   @callable() async getMctsConfig() {
     // Effective values: stored overrides over the engine defaults — exactly
     // what the think-tool path and lifetime evolution will run with.
@@ -4276,50 +3286,47 @@ export class OrchestratorAgent extends Think<Env> {
    * Called after each MCTS iteration so the UI updates in real-time.
    */
   /**
-   * Inference seam override — THE single production chat path.
+   * Inference seam override — THE single production chat path on Think 0.8.
    *
-   * Think calls this from `_runInferenceLoop` with the fully-prepared
-   * streamText options. We route through the agent's mutable scaffold IFF it
-   * has evolved one (current version > 0). An un-evolved agent (still on the
-   * bootstrap v0) uses the standard `streamText` directly — same behaviour as
-   * before, zero overhead — until the evolution loop proves + promotes a
-   * better scaffold via shadow eval. Once promoted, that scaffold becomes the
-   * agent's live inference loop. One method, one decision, no parallel paths.
+   * Think's `_runInferenceLoop` is private and calls the AI SDK `streamText`
+   * itself; this protected transform is the one seam a subclass gets that can
+   * replace the stream every turn entry path consumes (the old
+   * `runStreamText` override had zero callers on 0.8.2 — the scaffold was
+   * silently dead until this re-wire). We route through the agent's mutable
+   * scaffold IFF it has evolved one (current version > 0). An un-evolved
+   * agent (still on the bootstrap v0) returns Think's result untouched —
+   * same behaviour as before, zero overhead — until the evolution loop
+   * proves + promotes a better scaffold via shadow eval. Once promoted, that
+   * scaffold becomes the agent's live inference loop. One method, one
+   * decision, no parallel paths (core scaffold/inference-transform.ts owns
+   * the routing + orphan-stream semantics).
    *
    * The scaffold runs in the codemode sandbox and reaches the model/tools/
-   * memory only through the `host.*` bridge (the live opts/model object can't
-   * cross the boundary). `host.defaultInference()` runs exactly THIS streamText
-   * and streams its chunks back, so a delegating scaffold is faithful to the
+   * memory only through the `host.*` bridge (the live result object can't
+   * cross the boundary). `host.defaultInference()` streams exactly THIS
+   * prepared result back, so a delegating scaffold is byte-faithful to the
    * default; a custom scaffold can wrap or replace it.
    */
-  protected runStreamText(
-    opts: Parameters<typeof streamText>[0],
-  ): StreamableResult {
-    this._lastTurnOpts = opts; // shadow-eval context parity (see field doc)
+  protected _transformInferenceResult(result: StreamableResult): StreamableResult {
     let version = 0;
     try {
       version = this.sql<{ v: number }>`
         SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
     } catch { /* table not initialized yet → treat as un-evolved */ }
 
-    if (version <= 0) return streamText(opts);
-
-    // Evolved scaffold is live — run it as the inference loop.
-    const orchestrator = this;
-    const task = extractLastUserText((opts.messages ?? []) as ModelMessage[]);
-    return {
-      toUIMessageStream: () => scaffoldEventsToUIStream(
-        (emit) => runScaffold({
-          rt: orchestrator.rt,
-          task,
-          emit,
-          llmStream: orchestrator.makeScaffoldLLMStream(),
-          callTool: orchestrator.makeScaffoldCallTool(),
-          defaultInference: () => streamText(opts).toUIMessageStream(),
-          timeoutMs: 5 * 60 * 1000,
-        }),
-      ),
-    };
+    return scaffoldInferenceTransform({
+      currentVersion: version,
+      result,
+      run: {
+        rt: this.rt,
+        // beforeTurn stashed this turn's prepared opts just before streamText
+        // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
+        task: extractLastUserText((this._lastTurnOpts?.messages ?? []) as ModelMessage[]),
+        llmStream: this.makeScaffoldLLMStream(),
+        callTool: this.makeScaffoldCallTool(),
+        timeoutMs: 5 * 60 * 1000,
+      },
+    });
   }
 
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
@@ -4337,15 +3344,6 @@ export class OrchestratorAgent extends Think<Env> {
     } catch (err) {
       console.warn("[proteus] broadcastMctsProgress failed:", err);
     }
-  }
-
-  @callable()
-  async getActivityLog(limit = 100) {
-    try {
-      return this.sql<{ id: string; event: string; detail: string | null; elapsed_ms: number; created_at: number }>`
-        SELECT id, event, detail, elapsed_ms, created_at FROM activity_log
-        ORDER BY created_at DESC LIMIT ${limit}`;
-    } catch { return []; }
   }
 
   // ── Fork RPCs ──────────────────────────────────────────────────
@@ -4387,7 +3385,7 @@ export class OrchestratorAgent extends Think<Env> {
     }
 
     // 4. Validate name uniqueness by checking if a DO at that name already
-    //    has identity data. Fresh DOs return an empty agent_identity query.
+    //    has identity data. Fresh DOs return an empty workspace_identity query.
     const env = this.env as unknown as {
       OrchestratorAgent: {
         idFromName(name: string): DurableObjectId;
@@ -4397,7 +3395,7 @@ export class OrchestratorAgent extends Think<Env> {
     const forkStubForPrecheck = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
     let existingIdentity: { id: string; name: string } | null = null;
     try {
-      // A bare getAgentStatus call on a fresh DO may create agent_identity,
+      // A bare getAgentStatus call on a fresh DO may create workspace_identity,
       // but it does not seed SOUL.md. Existing agents have either chat history
       // or a SOUL.md file written by the creation path.
       const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; soul: string; name: string }> }).getAgentStatus();
@@ -4424,22 +3422,21 @@ export class OrchestratorAgent extends Think<Env> {
     return {
       id: copyResult.agentId,
       name: forkName,
-      url: `/agent/${forkName}`,
+      url: `/workspace/${forkName}`,
       forkPointMs: hit[0]!.created_at,
     };
   }
 
   /**
    * Receive a fork payload from a source agent. INTERNAL — called only by
-   * the source DO's forkAgent RPC via cross-DO stub. Exposed as @callable
-   * because that's how cross-DO RPC reaches us; there's no hostile client
-   * risk here because the fork DO is freshly-provisioned at call time.
+   * the source DO's forkAgent RPC via cross-DO stub. NOT @callable: cross-DO
+   * stub RPC never needed the decorator, and this is a raw storage write that
+   * must never be reachable over the public agents WS/HTTP transport.
    */
-  @callable()
   async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
     // Apply the FULL schema before copying rows. onStart runs on first access,
     // but this RPC can be invoked before it completes — ensureSchema creates
-    // every table (not just initAllTables') so forkAgentStorage's copy of
+    // every table (not just initAllTables') so forkWorkspaceStorage's copy of
     // events-hub/heads/shadow/etc. rows never hits a missing table.
     this.ensureSchema();
 
@@ -4450,10 +3447,10 @@ export class OrchestratorAgent extends Think<Env> {
     // Copy atomically. `this.boundSql` is a stable closure over `this.sql`
     // that preserves the `this`-binding the Agent base class needs.
     this.ctx.storage.transactionSync(() => {
-      forkAgentStorage(srcSql, this.boundSql, {
+      forkWorkspaceStorage(srcSql, this.boundSql, {
         untilMessageId: payload.lineage.forkOriginMessageId,
-        targetAgentId: this.ctx.id.toString(),
-        targetAgentName: payload.forkName,
+        targetWorkspaceId: this.ctx.id.toString(),
+        targetWorkspaceName: payload.forkName,
         now: payload.lineage.forkedAt,
       });
     });
@@ -4461,18 +3458,12 @@ export class OrchestratorAgent extends Think<Env> {
     return { ok: true, agentId: this.ctx.id.toString() };
   }
 
-  /** Expose the single-row fork_lineage for the UI lineage chip. */
-  @callable()
-  async getForkLineage() {
-    return readForkLineage(this.boundSql);
-  }
-
   /**
    * Snapshot every row the fork helper will need into a JSON-serializable
    * payload. Runs inside the source DO where `this.sql` has direct SQL access.
    */
   private buildForkPayload(untilMessageId: string, forkName: string): ForkPayload {
-    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM agent_identity LIMIT 1`;
+    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
     const hit = this.sql<{ created_at: number }>`
       SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
     `;
@@ -4544,7 +3535,7 @@ export class OrchestratorAgent extends Think<Env> {
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
 
   /** List triggers (webhooks, timers, watches, mcp routes). UI uses this
-   *  for the per-agent Triggers tab. */
+   *  for the Supervise Automations block. */
   @callable()
   async listTriggers() {
     return {
@@ -4569,8 +3560,8 @@ export class OrchestratorAgent extends Think<Env> {
    *
    *  Deliberately NOT @callable: webhook creation is step-up gated, and the
    *  gate (auth/session isFreshAuthTime) lives in the only two entry points —
-   *  the web route POST /api/agents/<name>/triggers and the CLI route
-   *  POST /api/cli/agents/<name>/triggers/webhook. Exposing this over the
+   *  the web route POST /api/workspaces/<name>/triggers and the CLI route
+   *  POST /api/cli/workspaces/<name>/triggers/webhook. Exposing this over the
    *  WebSocket RPC surface would bypass that gate. */
   async createDurableWebhook(opts: {
     label: string;
@@ -4612,7 +3603,7 @@ export class OrchestratorAgent extends Think<Env> {
 
     return {
       trigger_id: id,
-      url: `/api/agents/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
+      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
       auth_mode: opts.auth_mode,
       // For HMAC/bearer modes, the operator needs the secret once to give
       // to the external system; we return it inline now and never again.
@@ -4621,7 +3612,6 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Cancel a trigger (revoke). Idempotent. */
-  @callable()
   async cancelTrigger(trigger_id: string) {
     const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
     return { ok: true, changed };
@@ -4654,32 +3644,6 @@ export class OrchestratorAgent extends Think<Env> {
       next_fire_at: nextFireAt ?? undefined,
     }, now);
     return { id, kind, nextFireAt };
-  }
-
-  /**
-   * Enable/disable continuous self-optimization. Auto-GEPA is TRACE-driven, not
-   * clock-driven: it runs after `everyNTurns` turns of new execution history
-   * accrue (gated on no pending scaffold), so it fires when there's genuinely
-   * new material to learn from and pauses automatically when the agent is idle —
-   * a wall-clock cron would waste passes on identical eval sets. 0/null disables.
-   * Operator-gated; pairs with `auto_promote_scaffold` for a fully-autonomous
-   * improve→shadow-eval→promote/rollback cycle.
-   */
-  @callable()
-  async setAutoGepa(everyNTurns: number | null): Promise<{ ok: true; everyNTurns: number }> {
-    // Clean up any trigger from the prior cron-based design.
-    const prev = this.config.get('auto_gepa_trigger_id');
-    if (prev) { this.triggerRegistry.revoke(prev, Date.now()); this.config.delete('auto_gepa_trigger_id'); }
-    this.config.delete('auto_gepa_cron');
-    this.config.setAutoGepaEveryNTurns(everyNTurns ?? 0);
-    this._turnsSinceGepa = 0;
-    return { ok: true, everyNTurns: this.config.getAutoGepaEveryNTurns() };
-  }
-
-  /** Current auto-GEPA cadence (turns of new traces between passes; 0 = off). */
-  @callable()
-  async getAutoGepa(): Promise<{ everyNTurns: number }> {
-    return { everyNTurns: this.config.getAutoGepaEveryNTurns() };
   }
 
   /**
@@ -4719,7 +3683,6 @@ export class OrchestratorAgent extends Think<Env> {
    *  RPC is invoked by the top-level webhook route (`handleHubRequest`) so
    *  the publish + dedupe + reply channel open run atomically in the agent's
    *  storage context. */
-  @callable()
   async acceptWebhookDelivery(opts: {
     trigger_id: string;
     method: string;
@@ -4845,9 +3808,10 @@ export class OrchestratorAgent extends Think<Env> {
       reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
     });
 
-    // Wake the agent to act on the new webhook event — an autonomous turn.
-    // Only when newly admitted (a duplicate is already bound or in flight).
-    if (admitted) void this.orch.drainPendingEvents();
+    // Wake the agent to act on the new webhook event — an autonomous turn,
+    // debounced so a delivery burst drains as ONE turn. Only when newly
+    // admitted (a duplicate is already bound or in flight).
+    if (admitted) this.orch.scheduleDrain();
 
     return { status: 'admitted', event_id: id, admitted };
   }
@@ -4865,8 +3829,9 @@ export class OrchestratorAgent extends Think<Env> {
   }
 
   /** Look up a webhook secret by trigger id. Used by the webhook ingress at
-   *  request time. Returns null if the trigger has no secret or doesn't exist. */
-  @callable()
+   *  request time. Returns null if the trigger has no secret or doesn't exist.
+   *  Deliberately NOT @callable: secret material must never be readable over
+   *  the browser websocket. */
   async getWebhookSecret(trigger_id: string): Promise<{ secret: string | null }> {
     try {
       const rows = this.ctx.storage.sql.exec(
@@ -4879,9 +3844,209 @@ export class OrchestratorAgent extends Think<Env> {
     }
   }
 
+  /** Peer-agent ingress: a sender agent's DO delivers one outbox message via
+   *  cross-DO RPC. Ownership/grant checks run receiver-side (never trusted
+   *  from the sender's claim beyond intra-Worker honesty); an admitted event
+   *  either resolves the local ask waiter inline (a reply envelope) or wakes
+   *  the agent through the standard drain → programmatic turn path. */
+  async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
+    this.ensureSchema();
+    return this.peerHub.receive(msg);
+  }
+
+  /** Facet bootstrap authority. Worker-side DO RPC only. The child verifies
+   *  its supplied owner/workspace against this source before persisting its
+   *  immutable identity row. */
+  async getSubordinateBootstrapIdentity(): Promise<{
+    parentWorkspace: string;
+    ownerUserId: string;
+    model: string | null;
+  }> {
+    // Deliberately carries no capability token: this method is reachable by any
+    // holder of a stub to this workspace, so it must never hand out a secret.
+    // The token reaches subordinates by push (setSubordinateIdentity +
+    // installWorkspaceCapability), never by read-back.
+    this.ensureSchema();
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
+    return {
+      parentWorkspace: this.name,
+      ownerUserId,
+      model: this.config.getModel(),
+    };
+  }
+
+  /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
+   * `@callable`, and the public route exposes only the subordinate's own chat
+   * surface. Reports use the same EventLog → drain rail as mission inbox. */
+  async receiveSubordinateEvent(input: {
+    fromSubordinate: string;
+    status: SubordinateReportStatus;
+    content: string;
+  }): Promise<{ id: string; admitted: boolean }> {
+    this.ensureSchema();
+    const subordinate = this.subordinateRoster.get(input.fromSubordinate);
+    if (!subordinate || subordinate.status === 'dismissed') {
+      throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
+    }
+    const receivedAt = Date.now();
+    const result = this.ctx.storage.transactionSync(() => {
+      const published = admitSubordinateReport(this.eventLog, {
+        fromSubordinate: input.fromSubordinate,
+        status: input.status,
+        content: input.content,
+        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+        now: receivedAt,
+      });
+      if (published.admitted) {
+        this.subordinateRoster.applyReport(input.fromSubordinate, input.status);
+      }
+      return published;
+    });
+    if (result.admitted) {
+      this.broadcast(JSON.stringify({
+        type: 'subordinate_report',
+        subordinate: {
+          name: subordinate.name,
+          displayName: subordinate.displayName,
+        },
+        status: input.status,
+        content: input.content,
+        task: subordinate.currentTask,
+      }));
+      this.broadcastSubordinatesChanged();
+      this.broadcastSubordinateEvent({
+        id: result.id,
+        kind: 'report',
+        subordinate: input.fromSubordinate,
+        status: input.status,
+        content: input.content,
+        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+        timestamp: receivedAt,
+      });
+      this.orch.scheduleDrain();
+    }
+    return result;
+  }
+
+  // ── Mission Inbox: email ingress + owner notifications ─────────
+
+  /** Owner's verified login email (UserDO profile), or null when unknown. */
+  private async getOwnerEmail(): Promise<string | null> {
+    try {
+      const { stub, caller } = await this.userHub();
+      return (await stub.getProfile(caller))?.email ?? null;
+    } catch { return null; }
+  }
+
+  /** Union of active email_route allowlists (normally zero or one trigger). */
+  private emailAllowlist(): string[] {
+    try {
+      return this.triggerRegistry.list({ kind: 'email_route', state: 'active' })
+        .flatMap((t) => {
+          const allow = (t.spec as { allow?: unknown }).allow;
+          return Array.isArray(allow) ? allow.filter((a): a is string => typeof a === 'string') : [];
+        });
+    } catch { return []; }
+  }
+
+  /** Run an inbound email through the hub from within the agent DO — the
+   *  email counterpart of acceptWebhookDelivery. The Worker `email()` handler
+   *  parses MIME + resolves the agent; the trust gate (owner email /
+   *  email_route allowlist), publish, and thread reply channel run here
+   *  atomically. Unauthorized senders never produce an event row. */
+  async acceptEmailDelivery(opts: {
+    from: string;
+    to: string;
+    subject: string;
+    body_text: string;
+    message_id: string | null;
+    in_reply_to: string | null;
+    references: string | null;
+    attachments: Array<{ filename: string; content_type: string; size: number }>;
+    now: number;
+  }): Promise<{ admitted: boolean; duplicate?: boolean; event_id?: string; reason?: string }> {
+    const ownerEmail = await this.getOwnerEmail();
+    if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
+    const result = acceptInboundEmail({
+      log: this.eventLog,
+      replies: this.replyChannels,
+      owner_email: ownerEmail,
+      allowlist: this.emailAllowlist(),
+      tryConsumeRateLimit: (now) =>
+        tryConsumeWebhookRateLimit(this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now).allowed,
+    }, opts);
+    if (!result.admitted) return { admitted: false, reason: result.reason };
+    // Wake the agent for a turn, debounced — only on fresh admission (a
+    // duplicate delivery is already bound or in flight).
+    if (!result.duplicate) this.orch.scheduleDrain();
+    return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
+  }
+
+  /** The agent's email surface for the operator UI / routes. */
+  async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
+    const domain = this.env.EMAIL_DOMAIN;
+    return {
+      address: domain ? agentEmailAddress(this.name, domain) : null,
+      allowlist: this.emailAllowlist(),
+      notifications: this.config.getEmailNotificationsEnabled(),
+    };
+  }
+
+  /** Replace the inbound-email allowlist. The owner's own verified address is
+   *  always allowed and never needs listing; one active email_route trigger
+   *  (creator_trust recorded like every ingress) holds the extra senders, and
+   *  an empty list just revokes it. Reached only through the owner-
+   *  authenticated + step-up route. */
+  async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
+    const cleaned = [...new Set(
+      allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
+    )];
+    const now = Date.now();
+    for (const t of this.triggerRegistry.list({ kind: 'email_route' })) {
+      if (t.state !== 'revoked') this.triggerRegistry.revoke(t.id, now);
+    }
+    if (cleaned.length > 0) {
+      this.triggerRegistry.register({
+        kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner',
+      }, now);
+    }
+    return { allowlist: cleaned };
+  }
+
+  /** Toggle owner-email notifications (changelog digests, job completions). */
+  async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
+    this.config.setEmailNotificationsEnabled(enabled);
+    return { notifications: this.config.getEmailNotificationsEnabled() };
+  }
+
+  /** Fire-and-forget owner email. `email_notifications='false'` silences it;
+   *  missing platform pieces (binding / domain / owner email) skip quietly.
+   *  Also skipped while an operator socket is live — the owner sees the
+   *  card in-app; email is the away channel, not a duplicate feed. */
+  private emailOwnerNotification(subject: string, text: string): void {
+    try {
+      if (!this.config.getEmailNotificationsEnabled()) return;
+      if (this.ctx.getWebSockets().length > 0) return;
+    } catch { return; }
+    // Idempotency key = content hash: a retry of the same notification dedupes,
+    // while two genuinely distinct notifications (different job/status/digest)
+    // key apart and both send.
+    const key = argumentDigest({ subject, text });
+    void (async () => {
+      await sendOwnerEmail({
+        email: this.env.EMAIL,
+        emailDomain: this.env.EMAIL_DOMAIN,
+        agentName: this.name,
+        agentDisplayName: this.safeDisplayName(),
+        ownerEmail: await this.getOwnerEmail(),
+        outbox: this.emailOutbox,
+      }, { subject, text, key });
+    })().catch((err) => console.warn('[proteus-email] notification failed:', err));
+  }
+
   /** Recent events for the operator UI's events sidebar. Mirrors
    *  events_v ordering (received_at desc). */
-  @callable()
   async listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }) {
     const events = this.eventLog.query({
       variant: opts?.variant as never,
@@ -4904,100 +4069,15 @@ export class OrchestratorAgent extends Think<Env> {
     };
   }
 
-  /** Currently-pending (unbound) events. The agent's LLM calls this via
-   *  the `list_pending_events` tool. */
-  @callable()
-  async listPendingEvents() {
-    const events = this.eventLog.pending({ limit: 50 });
-    return {
-      events: events.map((e) => ({
-        id: e.id,
-        variant: e.variant,
-        trust: e.trust,
-        priority: e.priority,
-        triggered_by: e.ingress,
-        received_at: e.received_at,
-      })),
-    };
-  }
-
-  /** Defer an event with an enumerated revisit condition (LLM-facing). */
-  @callable()
-  async deferEvent(event_id: string, revisit_at: RevisitCondition) {
-    this.eventLog.defer(event_id, revisit_at);
-    return { ok: true };
-  }
-
-  /** Explicit drop (LLM-facing). */
-  @callable()
-  async dismissEvent(event_id: string, reason: string = 'agent dismissed') {
-    this.eventLog.dismiss(event_id, reason, 'tool');
-    return { ok: true };
-  }
-
-  @callable()
-  async triggerEvolution(budget = 5) {
-    // Outer fiber for durability + checkpointing. Nested fibers are supported
-    // in the Agent SDK (each gets its own ID, cf_agents_runs row, ALS context).
-    return this.runFiber("lifetime-evolution", async (ctx) => {
-      ctx.stash({ phase: "starting", budget });
-      this.broadcastMctsProgress("starting", 0, budget);
-      const session = this.createMCTSSession();
-      ctx.stash({ phase: "mcts", budget });
-      await this.engine.onLifetimeEvolution(session);
-      this.broadcastMctsProgress("completed");
-      ctx.stash({ phase: "completed" });
-      return { status: "completed", budget };
-    });
-  }
-
   // ── Internal: timing-safe string compare for webhook auth ──────
 
   // (Defined at module scope at the bottom of the file.)
 
-  // ── Internal: MCTS session writer ──────────────────────────────
-
-  private createMCTSSession(): SessionWriter {
-    const messages: Array<{ id: string; parentId: string | null; role: "user" | "assistant"; content: string }> = [];
-    const agentSql = (strings: TemplateStringsArray, ...values: unknown[]) =>
-      (this.sql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown[])(strings, ...values);
-
-    return {
-      async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
-        const content = msg.parts.map(p => p.text).join("");
-        messages.push({ id: msg.id, parentId: parentId ?? null, role: msg.role, content });
-        agentSql`INSERT INTO messages (id, session_id, parent_id, role, content)
-          VALUES (${msg.id}, ${"mcts"}, ${parentId ?? null}, ${msg.role}, ${content})`;
-      },
-      getHistory(leafId?: string | null): Array<{ role: string; content: string }> {
-        if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
-        const result: Array<{ role: string; content: string }> = [];
-        let current = messages.find(m => m.id === leafId);
-        while (current) {
-          result.unshift({ role: current.role, content: current.content });
-          current = current.parentId ? messages.find(m => m.id === current!.parentId) : undefined;
-        }
-        return result;
-      },
-    };
-  }
 }
 
 // ── Module-scope helpers (referenced by OrchestratorAgent) ────────
 
-function uiMessageText(content: string): string {
-  try {
-    const parsed = JSON.parse(content) as { parts?: unknown };
-    if (Array.isArray(parsed.parts)) {
-      return parsed.parts
-        .flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])
-        .join('');
-    }
-  } catch { /* plain text fallback */ }
-  return content;
-}
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }
-

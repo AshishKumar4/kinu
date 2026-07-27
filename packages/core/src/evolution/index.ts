@@ -7,17 +7,27 @@ export {
   type CompletedTurn,
   type CompletedSession,
   type ToolCallRecord,
+  type TurnUsage,
 } from './types.js';
+export {
+  delegationFeatures, renderDelegationFeatures, executionPathSignals,
+  type DelegationFeatures, type ExecutionPathSignals,
+} from './delegation-features.js';
+export {
+  alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
+  type AlignmentTrend, type RateInterval,
+} from './alignment.js';
 export {
   feedbackToQuality, outcomeToFeedback, outcomeQuality,
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  buildOutcomeEvalSplit,
+  buildOutcomeEvalSplit, describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeClassification, type RecordTurnOutcomeInput, type RealOutcomeRate,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
+  type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus,
 } from './outcomes.js';
 export {
@@ -25,6 +35,9 @@ export {
   DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './replay.js';
+export {
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+} from './session-window.js';
 export {
   buildChangelog, countUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,

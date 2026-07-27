@@ -17,6 +17,7 @@ import {
   type MergeStrategy, type VFS, type WebSearchProvider,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
   buildHeadWebTools, HeadController, HeadJournal, initHeadsTables, budgetExhausted, extractJsonObject,
+  reasoningEffortOptions,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { SqliteFS } from '@proteus/agent-utils/vfs';
@@ -25,6 +26,8 @@ import { makeSql, makeExecRaw } from './runtime.js';
 
 export interface CLIHeadRuntimeDeps {
   model: LanguageModel;
+  /** Provider prefix from the normalized model spec. */
+  providerFamily?: string;
   /** The main agent's VFS — backs the shared findings scratch (shared/findings/).
    *  All heads of a split share it (in-process), so siblings + the agent see
    *  each other's shared writes. Omit ⇒ shared_* tools are not offered. */
@@ -53,7 +56,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
         async abort(reason: string) { flag.aborted = true; flag.reason = reason; },
       };
     },
-    mergeLLM: (prompt) => mergeViaLLM(deps.model, prompt),
+    mergeLLM: (prompt) => mergeViaLLM(deps.model, prompt, deps.providerFamily),
     ...(deps.grounding ? { grounding: deps.grounding } : {}),
   };
 }
@@ -229,7 +232,12 @@ function filterByAllowed(tools: ToolSet, allowed: readonly string[] | undefined)
 
 /** The merge synthesis call — return parsed JSON; the HeadController validates it
  *  against MergeOutputSchema and falls back on a bad/throwing response. */
-async function mergeViaLLM(model: LanguageModel, prompt: string): Promise<MergeOutput> {
-  const { text } = await generateText({ model, prompt, maxOutputTokens: 4096 });
+async function mergeViaLLM(model: LanguageModel, prompt: string, providerFamily?: string): Promise<MergeOutput> {
+  const providerOptions = reasoningEffortOptions('low', providerFamily ?? '');
+  const { text } = await generateText({
+    model,
+    prompt,
+    ...(providerOptions ? { providerOptions } : {}),
+  });
   return extractJsonObject(text) as MergeOutput;
 }

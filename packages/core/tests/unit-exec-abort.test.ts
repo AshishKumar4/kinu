@@ -4,7 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox.js';
-import { createSSHTunnelExecutor, type DeviceTransport } from '../src/execution/ssh.js';
+import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor.js';
 import { createNimbusExecutor, type NimbusSandboxHandle } from '../src/execution/nimbus.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
@@ -58,7 +58,7 @@ describe('remote executor exec abort', () => {
       rpc: () => hangingPromise(),
       isConnected: () => true,
     };
-    const provider = createSSHTunnelExecutor(transport);
+    const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
     const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
@@ -89,7 +89,7 @@ describe('remote executor exec abort', () => {
       rpc: async (method) => { calls.push(method); return { stdout: '', stderr: '', exitCode: 0 }; },
       isConnected: () => true,
     };
-    const provider = createSSHTunnelExecutor(transport);
+    const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
     controller.abort();
 
@@ -103,7 +103,7 @@ describe('remote executor exec abort', () => {
       rpc: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
       isConnected: () => true,
     };
-    const provider = createSSHTunnelExecutor(transport);
+    const provider = createDeviceTunnelExecutor(transport);
     expect(await provider.tools.exec.execute('ls')).toBe('ok');
   });
 });

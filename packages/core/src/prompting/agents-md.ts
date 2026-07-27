@@ -78,35 +78,31 @@ export function renderAgentsMdSection(
 
 /**
  * AGENTS.md discovery for cloud workspaces: the agent VFS root provides
- * defaults; the sandbox workspace — read only when a container is already
- * active, never provisioned for this — is the "nearest" file and wins on
- * conflict. Best-effort: a failed read yields an absent file, never an error.
+ * defaults; a subordinate's `/workspace` parent mount adds the enclosing
+ * workspace instructions; the sandbox workspace — read only when a container
+ * is already active, never provisioned for this — is nearest and wins on
+ * conflict. Files are read through the CompositeVFS as structured bytes, so
+ * an executor error string can never masquerade as file content. Best-effort:
+ * a failed read yields an absent file, never an error.
  */
 export async function collectWorkspaceAgentsMd(
   vfs: VFS,
   sandbox?: ExecutorProvider,
 ): Promise<AgentsMdFile[]> {
   const out: AgentsMdFile[] = [];
-  try {
-    const text = await vfs.readFile('AGENTS.md', { encoding: 'utf8' });
-    if (typeof text === 'string' && text.trim()) {
-      out.push({ path: 'AGENTS.md (agent workspace)', content: text });
-    }
-  } catch { /* absent */ }
-  try {
-    if (sandbox?.getStatus?.().active) {
-      const read = sandbox.tools.readFile;
-      if (read) {
-        const res = await read.execute('/workspace/AGENTS.md');
-        // The sandbox provider returns error strings instead of throwing
-        // ('read error: …' / the not-configured notice) — treat those as absent.
-        if (typeof res === 'string' && res.trim() && !/^read error:|not configured/i.test(res)) {
-          out.push({ path: '/workspace/AGENTS.md (sandbox)', content: res });
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[proteus] sandbox AGENTS.md read failed:', (err as Error).message);
+  const read = async (path: string, label: string): Promise<void> => {
+    try {
+      const raw = await vfs.readFile(path, { encoding: 'utf8' });
+      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      if (text.trim()) out.push({ path: label, content: text });
+    } catch { /* absent, or an unavailable mount */ }
+  };
+  await read('AGENTS.md', 'AGENTS.md (agent workspace)');
+  await read('/workspace/AGENTS.md', '/workspace/AGENTS.md (parent workspace)');
+  // Gate on the live container: the mount is always addressable, but reading it
+  // must not spin a container up just for discovery.
+  if (sandbox?.getStatus?.().active) {
+    await read('/sandbox/workspace/AGENTS.md', '/workspace/AGENTS.md (sandbox)');
   }
   return out;
 }

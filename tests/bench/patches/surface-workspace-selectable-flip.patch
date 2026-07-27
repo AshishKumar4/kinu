@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/surface.ts b/packages/core/src/prompting/surface.ts
+index 583b71b..5b51ff6 100644
+--- a/packages/core/src/prompting/surface.ts
++++ b/packages/core/src/prompting/surface.ts
+@@ -90,7 +90,7 @@ export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executor
+ }
+ 
+ export function executorIsSelectable(exec: PromptExecutorInfo): boolean {
+-  if (exec.name === 'workspace') return exec.available !== false;
++  if (exec.name === 'workspace') return exec.available === false;
+   if (exec.available === false) return false;
+   if (exec.status === 'not_configured' || exec.status === 'disconnected' || exec.status === 'error') return false;
+   return exec.available === true || exec.configured === true || exec.active === true;

@@ -1,7 +1,9 @@
 import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { AGENT_HOME, BIN_DIR, ensureBinDir, loadConfigFile, resolveCloudOrigin } from '../config.js';
-import { ACCENT, DIM, OK, WARN } from '../display.js';
+import { ACCENT, DIM, OK, VERSION, WARN } from '../display.js';
+import { fetchServedVersion, isSameBuild } from '../version-check.js';
+import { updateConfigFile } from '../config.js';
 
 export async function updateCommand(target: string | undefined, opts: { origin?: string; force?: boolean }): Promise<void> {
   const what = target ?? 'self';
@@ -9,10 +11,26 @@ export async function updateCommand(target: string | undefined, opts: { origin?:
   const origin = resolveCloudOrigin(opts);
   ensureBinDir();
   const path = join(BIN_DIR, 'proteus');
+
+  // A null served version means an old server without the endpoint (or an
+  // unreachable one): fall back to the unconditional download rather than
+  // refusing to update because the *check* failed.
+  const served = opts.force ? null : await fetchServedVersion(origin);
+  if (served) {
+    updateConfigFile((c) => { c.updateCheckedAt = Date.now(); c.updateLatestSeen = served.version; });
+    if (isSameBuild(VERSION, served.version) && existsSync(path)) {
+      console.log(`${OK('✓')} Already on the latest version ${ACCENT(VERSION)}`);
+      return;
+    }
+  }
+
   const res = await fetch(`${origin}/downloads/proteus`, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Update download failed: HTTP ${res.status}`);
   const script = await res.text();
   writeFileSync(path, script, { mode: 0o755 });
+  if (served && !isSameBuild(VERSION, served.version)) {
+    console.log(`${OK('✓')} Updated ${ACCENT(VERSION)} ${DIM('→')} ${ACCENT(served.version)}`);
+  }
   chmodSync(path, 0o755);
   console.log(`${OK('✓')} Updated ${ACCENT('proteus')} ${DIM(path)}`);
 }
@@ -46,4 +64,11 @@ export async function doctorCommand(): Promise<void> {
   console.log(`${DIM('PATH:')} ${(process.env.PATH ?? '').split(':').includes(BIN_DIR) ? OK('configured') : WARN(`${BIN_DIR} not in PATH`)}`);
   console.log(`${DIM('Source cache:')} ${join(AGENT_HOME, 'source')}`);
   console.log(`${DIM('Current entry:')} ${process.argv[1] ? dirname(process.argv[1]) : '(unknown)'}`);
+
+  const served = await fetchServedVersion(origin);
+  const servedLabel = !served
+    ? WARN('unreachable')
+    : isSameBuild(VERSION, served.version) ? OK(`${served.version} (current)`)
+    : WARN(`${served.version} — run: proteus update`);
+  console.log(`${DIM('Version:')} ${VERSION} ${DIM('· served:')} ${servedLabel}`);
 }

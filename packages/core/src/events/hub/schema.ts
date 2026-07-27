@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS agent_log (
   payload             TEXT    NOT NULL DEFAULT 'null',
   received_at         INTEGER NOT NULL,
   schema_version      INTEGER NOT NULL DEFAULT 1,
-  dedupe_key          TEXT
+  dedupe_key          TEXT,
+  consumed_at         INTEGER
 )`;
 
 const INDEXES: ReadonlyArray<string> = [
@@ -49,6 +50,11 @@ const INDEXES: ReadonlyArray<string> = [
   `CREATE INDEX IF NOT EXISTS idx_agent_log_events_pending
    ON agent_log (priority, received_at)
    WHERE kind = 'event' AND turn_id IS NULL`,
+
+  // Activation recovery scans only open delivery leases.
+  `CREATE INDEX IF NOT EXISTS idx_agent_log_events_consumed
+   ON agent_log (consumed_at)
+   WHERE kind = 'event' AND consumed_at IS NOT NULL`,
 
   // Phase lookups: latest phase row per turn.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_phase_current
@@ -114,7 +120,7 @@ CREATE TABLE IF NOT EXISTS reply_channels (
   id                  TEXT    PRIMARY KEY,
   event_id            TEXT    NOT NULL,
   kind                TEXT    NOT NULL
-                              CHECK(kind IN ('ws_session', 'http_pending', 'peer_back', 'mcp_pending', 'none')),
+                              CHECK(kind IN ('ws_session', 'http_pending', 'peer_back', 'mcp_pending', 'email_thread', 'none')),
   holder_addr         TEXT    NOT NULL DEFAULT '',
   ttl_expires_at      INTEGER NOT NULL,
   payload_policy      TEXT    NOT NULL DEFAULT 'full',
@@ -141,7 +147,7 @@ CREATE TABLE IF NOT EXISTS triggers (
                                 'webhook_durable', 'webhook_ephemeral',
                                 'timer_oneshot', 'timer_cron',
                                 'process_watch', 'file_watch',
-                                'peer_inbox', 'mcp_route'
+                                'peer_inbox', 'mcp_route', 'email_route'
                               )),
   spec                TEXT    NOT NULL DEFAULT '{}',
   creator_trust       TEXT    NOT NULL
@@ -189,39 +195,40 @@ const PEER_OUTBOX_INDEXES: ReadonlyArray<string> = [
    WHERE state = 'pending'`,
 ];
 
-const BUDGET_DDL = `
-CREATE TABLE IF NOT EXISTS reactor_budget_log (
-  id                  TEXT    PRIMARY KEY,
-  turn_id             TEXT,
-  trace_id            TEXT    NOT NULL,
-  source_key          TEXT    NOT NULL,
-  invoked_at          INTEGER NOT NULL,
-  outcome             TEXT    NOT NULL
-                              CHECK(outcome IN ('decided', 'fallback_defer', 'budget_exhausted'))
-)`;
-
-const BUDGET_INDEXES: ReadonlyArray<string> = [
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_hour
-   ON reactor_budget_log (invoked_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_turn
-   ON reactor_budget_log (turn_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_trace
-   ON reactor_budget_log (trace_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reactor_budget_per_source
-   ON reactor_budget_log (turn_id, source_key)`,
-];
+/** Rebuild a table whose CHECK constraints predate a newly-added enum member.
+ *  SQLite bakes CHECK text into the stored table definition, so `CREATE TABLE
+ *  IF NOT EXISTS` never refreshes it on live DOs — detect the stale definition
+ *  via sqlite_master and rebuild in place. The column set is identical (only
+ *  constraint text changes), so a straight `INSERT … SELECT *` preserves all
+ *  rows; indexes are recreated by the caller's normal index pass. */
+function rebuildIfCheckMissing(sql: SqlExec, table: string, marker: string, ddl: string): void {
+  const rows = sql.exec(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, table,
+  ).toArray() as Array<{ sql: string | null }>;
+  if (rows.length === 0 || (rows[0].sql ?? '').includes(marker)) return;
+  sql.exec(`ALTER TABLE ${table} RENAME TO ${table}_migrating`);
+  sql.exec(ddl);
+  sql.exec(`INSERT INTO ${table} SELECT * FROM ${table}_migrating`);
+  sql.exec(`DROP TABLE ${table}_migrating`);
+}
 
 /** Initialize all hub tables, indexes, and views. Idempotent. */
 export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(AGENT_LOG_DDL);
+  const agentLogColumns = sql.exec(`PRAGMA table_info(agent_log)`).toArray() as Array<{ name: string }>;
+  if (!agentLogColumns.some((column) => column.name === 'consumed_at')) {
+    sql.exec(`ALTER TABLE agent_log ADD COLUMN consumed_at INTEGER`);
+  }
   for (const ix of INDEXES) sql.exec(ix);
   for (const v of VIEWS) sql.exec(v);
+  // CHECK-widening rebuilds for live DOs created before these enum members
+  // existed. Must run before the CREATE IF NOT EXISTS + index passes.
+  rebuildIfCheckMissing(sql, 'reply_channels', "'email_thread'", REPLY_CHANNELS_DDL);
+  rebuildIfCheckMissing(sql, 'triggers', "'email_route'", TRIGGERS_DDL);
   sql.exec(REPLY_CHANNELS_DDL);
   for (const ix of REPLY_CHANNELS_INDEXES) sql.exec(ix);
   sql.exec(TRIGGERS_DDL);
   for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
   sql.exec(PEER_OUTBOX_DDL);
   for (const ix of PEER_OUTBOX_INDEXES) sql.exec(ix);
-  sql.exec(BUDGET_DDL);
-  for (const ix of BUDGET_INDEXES) sql.exec(ix);
 }

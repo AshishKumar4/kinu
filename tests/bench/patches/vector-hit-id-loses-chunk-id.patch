@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/memory/vector-store.ts b/packages/core/src/memory/vector-store.ts
+index ce7150b..b38197d 100644
+--- a/packages/core/src/memory/vector-store.ts
++++ b/packages/core/src/memory/vector-store.ts
+@@ -185,7 +185,7 @@ export function createCloudflareVectorStore(opts: {
+       return (res.matches ?? []).map((m) => ({
+         // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
+         // fuses the two sources. Falls back to the raw id for un-namespaced stores.
+-        id: String(m.metadata?.chunkId ?? m.id),
++        id: String(m.id),
+         path: String(m.metadata?.path ?? ''),
+         startLine: Number(m.metadata?.startLine ?? 0),
+         endLine: Number(m.metadata?.endLine ?? 0),

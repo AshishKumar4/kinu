@@ -69,6 +69,10 @@ else
   ((FAIL++))
 fi
 
+# Eval quality-gate logic (credential-free — stubbed model + judge). The live
+# benchmark that makes real model calls runs in the gated eval.yml workflow.
+check "Eval gate logic (cred-free)" bun test scripts/eval.test.ts
+
 # Secret scan
 SECRET_HITS=$(grep -rn 'A9Z9eTP9\|cfut_' . --include='*.ts' --include='*.tsx' --include='*.json' --include='*.jsonc' --include='*.md' 2>/dev/null | grep -v node_modules | grep -v .wrangler | grep -v .dev.vars | grep -v '.git/' | wc -l)
 if [ "$SECRET_HITS" = "0" ]; then

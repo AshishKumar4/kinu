@@ -51,6 +51,7 @@ export const DEFAULT_FORK_POLICY: Record<TriggerKind, ForkPolicy> = {
   file_watch:        'share',
   peer_inbox:        'copy',
   mcp_route:         'sever',
+  email_route:       'sever',  // a fork has its own address; re-grant deliberately
 };
 
 export interface RegisterSpec {

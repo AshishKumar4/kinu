@@ -11,6 +11,7 @@ import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
+  ReasoningEffort, TurnUsage,
 } from '@proteus/core';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelEntry } from './model-catalog.js';
@@ -41,6 +42,9 @@ export interface AgentTurnResult {
   steps: number;
   durationMs: number;
   hadError: boolean;
+  /** Provider-reported token usage for the turn. Local backend only — the
+   *  cloud websocket protocol does not carry per-turn usage. */
+  usage?: TurnUsage;
 }
 
 export type AgentClientEvent =
@@ -62,6 +66,7 @@ export interface AgentClientStatus {
   name: string;
   purpose: string;
   model: string | null;
+  reasoningEffort: ReasoningEffort | null;
   scaffoldVersion?: number;
   messageCount?: number;
   searchNodeCount?: number;
@@ -282,6 +287,8 @@ export interface AgentClient {
   /** Set the agent's model. Local: the session/agent_config spec; cloud: the
    *  durable agent model (same semantics as the web UI). */
   setModel(spec: string): Promise<{ spec: string }>;
+  getReasoningEffort(): Promise<ReasoningEffort | null>;
+  setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
   listModels(): Promise<AgentModelEntry[]>;
 }
 

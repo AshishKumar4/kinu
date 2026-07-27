@@ -20,6 +20,26 @@
  *    Prose-only branches are judge-only at reduced confidence:
  *      prose → [0.00, 0.75]
  *
+ * ── BAND TABLE (WP-A5) ──────────────────────────────────────────────
+ *   outcome                           multiplier·judge      range
+ *   code ran & PASSED                 0.60 + 0.40·j         [0.60, 1.00]
+ *   code ran & FAILED                 0.05 + 0.25·j         [0.05, 0.30]
+ *   prose only (no sibling code)      0.75·j                [0.00, 0.75]
+ *   prose only (a sibling HAS code)   0.30·j                [0.00, 0.30]
+ *
+ * The last row closes the loophole: without it a branch that dodged code
+ * (prose, cap 0.75) outscored one that attempted code and FAILED (cap 0.30),
+ * rewarding non-attempts. When any sibling in the expansion produced code, a
+ * prose-only branch is capped at the FAIL ceiling (0.30) — it cannot beat a
+ * failed executable sibling by declining to compete on execution.
+ *
+ * The downstream thresholds are pinned to these band boundaries (see
+ * config.ts): craftExtractionThreshold 0.80 = pass-band midpoint (executed +
+ * ≥median judge; unreachable by any prose branch); minAcceptableScore 0.30 =
+ * FAIL ceiling (a converged answer must clear the fail/dodge band);
+ * reflectionThreshold 0.35 = FAIL ceiling + thin margin (every fail-band node
+ * earns a lesson); pruneThreshold 0.25 sits inside the fail band.
+ *
  * The judge is the cross-model rt.judgeModel when configured; falling back to
  * the explorer model is the DOCUMENTED fallback (self-enhancement bias per
  * LLM-as-Judge arXiv:2306.05685), not a hidden default. If every judge sample
@@ -36,11 +56,15 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { DEFAULT_CONFIG } from '../config.js';
 
 /** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
- *  prose confidence is capped below a passing branch with a median judge. */
+ *  prose confidence is capped below a passing branch with a median judge.
+ *  See the BAND TABLE in the module header. */
 const PASS_FLOOR = 0.6;
 const PASS_SPAN = 0.4;
 const FAIL_FLOOR = 0.05;
 const FAIL_SPAN = 0.25;
+/** Top of the fail band (0.30): a code branch that ran and failed can score no
+ *  higher, and neither may a prose branch when siblings actually attempted code. */
+const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;
 const PROSE_CONFIDENCE = 0.75;
 
 export interface EvaluateBranchOptions {
@@ -52,6 +76,10 @@ export interface EvaluateBranchOptions {
   codeUsed?: string | null;
   /** Sibling proposals from the same expansion — judged relative to these. */
   siblings?: readonly string[];
+  /** True when any sibling in this expansion produced runnable code. Caps a
+   *  prose-only branch at the FAIL ceiling so declining to attempt code cannot
+   *  beat a sibling that attempted it and failed (WP-A5 band loophole). */
+  siblingsProducedCode?: boolean;
   executor: Executor;
   /** Cross-model judge. Omitted → explorer judges (documented fallback). */
   judge?: LLM;
@@ -119,8 +147,12 @@ export async function evaluateWithMultiModelJudging(
       : FAIL_FLOOR + FAIL_SPAN * (judgeScore ?? 0);
     return { score, grounding: 'execution', execution, judgeSamplesUsed: parsed.length };
   }
+  // Prose-only: reduced confidence, and capped at the FAIL ceiling when a
+  // sibling actually attempted code (WP-A5) — dodging execution must not
+  // outscore attempting-and-failing.
+  const proseCap = opts.siblingsProducedCode ? FAIL_CEIL : PROSE_CONFIDENCE;
   return {
-    score: PROSE_CONFIDENCE * (judgeScore ?? 0),
+    score: proseCap * (judgeScore ?? 0),
     grounding: 'judge',
     judgeSamplesUsed: parsed.length,
   };

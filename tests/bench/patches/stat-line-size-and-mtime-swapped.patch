@@ -1,0 +1,11 @@
+diff --git a/packages/core/src/vfs/mount-adapters.ts b/packages/core/src/vfs/mount-adapters.ts
+index b14f06d..e50bcad 100644
+--- a/packages/core/src/vfs/mount-adapters.ts
++++ b/packages/core/src/vfs/mount-adapters.ts
+@@ -404,5 +404,5 @@ export function createDeviceMountVFS(transport: DeviceTransport, consent: Device
+ function parseStatLine(stdout: string): Stat {
+   const m = stdout.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+   if (!m) return null;
+-  return { size: Number(m[1]), mtimeMs: Number(m[2]) * 1000, isDir: /directory/i.test(m[3]) };
++  return { size: Number(m[2]), mtimeMs: Number(m[1]) * 1000, isDir: /directory/i.test(m[3]) };
+ }

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/scaffold/auto-judge.ts b/packages/core/src/scaffold/auto-judge.ts
+index 02b562a..6123655 100644
+--- a/packages/core/src/scaffold/auto-judge.ts
++++ b/packages/core/src/scaffold/auto-judge.ts
+@@ -286,7 +286,7 @@ async function judgeTrialOrderSwapped(opts: JudgeTrialOpts): Promise<ShadowTrial
+     rationale: flipped
+       ? `Order-swap flip (${one.winner}, then ${two.winner}) — recorded as a tie. ${one.rationale} | ${two.rationale}`
+       : `${one.rationale} | ${two.rationale}`,
+-    currentScore: (one.currentScore + two.currentScore) / 2,
++    currentScore: (one.currentScore + two.pendingScore) / 2,
+     pendingScore: (one.pendingScore + two.pendingScore) / 2,
+   };
+ }

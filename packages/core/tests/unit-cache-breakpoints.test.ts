@@ -1,0 +1,252 @@
+// Prompt-cache breakpoints — the pure provider-agnostic layer both backends
+// apply at their message-assembly seam (prompting/cache-breakpoints.ts).
+import { describe, test, expect } from 'bun:test';
+import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
+import {
+  applyCacheBreakpoints,
+  cacheableSystem,
+  hasCacheMarkers,
+  markCacheTail,
+  markLastToolForAnthropicCache,
+  promptCacheOptions,
+  resolvePromptCacheStrategy,
+  ANTHROPIC_MAX_BREAKPOINTS,
+} from '../src/index.ts';
+
+const EPHEMERAL = { type: 'ephemeral' };
+
+function history(n: number): ModelMessage[] {
+  return Array.from({ length: n }, (_, i): ModelMessage =>
+    i % 2 === 0 ? { role: 'user', content: `u${i}` } : { role: 'assistant', content: `a${i}` });
+}
+
+function anthropicMarkerCount(messages: ReadonlyArray<ModelMessage>): number {
+  return messages.filter((m) => {
+    const ns = m.providerOptions?.anthropic;
+    return ns !== undefined && 'cacheControl' in ns;
+  }).length;
+}
+
+describe('resolvePromptCacheStrategy', () => {
+  test('closed provider map', () => {
+    expect(resolvePromptCacheStrategy('anthropic')).toEqual({ kind: 'anthropic' });
+    expect(resolvePromptCacheStrategy('openai', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
+    expect(resolvePromptCacheStrategy('codex', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
+    expect(resolvePromptCacheStrategy('openai-compat')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false });
+    expect(resolvePromptCacheStrategy('openai-compat:groq', 'llama-4')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat:groq', markers: false });
+    expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5')).toEqual({ kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false });
+    expect(resolvePromptCacheStrategy('ai-gateway', 'workers-ai/@cf/x')).toEqual({ kind: 'openai-compat', bodyNamespace: 'ai-gateway', markers: false });
+  });
+
+  test('openrouter gets cache_control markers only for Anthropic models', () => {
+    expect(resolvePromptCacheStrategy('openrouter', 'anthropic/claude-sonnet-4.6'))
+      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true });
+    expect(resolvePromptCacheStrategy('openrouter', 'meta-llama/llama-4-maverick'))
+      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: false });
+  });
+
+  test('no-cache-concept providers resolve to none', () => {
+    // workers-ai rides x-session-affinity headers; claude-cli owns its own context.
+    expect(resolvePromptCacheStrategy('workers-ai', '@cf/moonshotai/kimi-k2.6')).toEqual({ kind: 'none' });
+    expect(resolvePromptCacheStrategy('claude-cli', 'claude-opus-4-7')).toEqual({ kind: 'none' });
+    expect(resolvePromptCacheStrategy('something-new')).toEqual({ kind: 'none' });
+    expect(resolvePromptCacheStrategy(undefined)).toEqual({ kind: 'none' });
+  });
+});
+
+describe('cacheableSystem', () => {
+  test('anthropic: system becomes a SystemModelMessage carrying the breakpoint', () => {
+    const s = cacheableSystem('You are Proteus.', { kind: 'anthropic' });
+    expect(s).toEqual({
+      role: 'system',
+      content: 'You are Proteus.',
+      providerOptions: { anthropic: { cacheControl: EPHEMERAL } },
+    });
+  });
+
+  test('openrouter claude: marker rides the openaiCompatible namespace', () => {
+    const s = cacheableSystem('sys', { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true });
+    expect((s as SystemModelMessage).providerOptions).toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
+  });
+
+  test('no-marker strategies keep the plain string', () => {
+    expect(cacheableSystem('sys', { kind: 'none' })).toBe('sys');
+    expect(cacheableSystem('sys', { kind: 'openai-cache-key' })).toBe('sys');
+    expect(cacheableSystem('sys', { kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false })).toBe('sys');
+    expect(cacheableSystem('', { kind: 'anthropic' })).toBe('');
+  });
+});
+
+describe('markCacheTail', () => {
+  const anthropic = { kind: 'anthropic' } as const;
+
+  test('marks exactly the last 2 non-system messages', () => {
+    const marked = markCacheTail(history(5), anthropic);
+    expect(anthropicMarkerCount(marked)).toBe(2);
+    expect(marked[3].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(marked[4].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(marked[0].providerOptions).toBeUndefined();
+  });
+
+  test('pure: the input messages are never mutated (markers cannot leak into durable history)', () => {
+    const input = history(4);
+    markCacheTail(input, anthropic);
+    expect(input.every((m) => m.providerOptions === undefined)).toBe(true);
+  });
+
+  test('rolls forward: stale markers deeper in the conversation are stripped', () => {
+    // Simulates the per-step re-roll — step N's markers must not accumulate
+    // with step N+1's, or the 4-breakpoint budget blows.
+    const step1 = markCacheTail(history(4), anthropic);
+    const step2 = markCacheTail([...step1, { role: 'assistant', content: 'tool step' }, { role: 'user', content: 'result' }], anthropic);
+    expect(anthropicMarkerCount(step2)).toBe(2);
+    expect(step2[step2.length - 1].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(step2[step2.length - 2].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(step2[2].providerOptions).toBeUndefined();
+    expect(step2[3].providerOptions).toBeUndefined();
+  });
+
+  test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {
+    const tools = { a: {}, b: {} } as ToolSet;
+    markLastToolForAnthropicCache(tools);
+    const toolMarkers = Object.values(tools)
+      .filter((t) => (t as { providerOptions?: { anthropic?: unknown } }).providerOptions?.anthropic).length;
+    const system = cacheableSystem('sys', anthropic);
+    const systemMarkers = typeof system === 'string' ? 0 : 1;
+    const marked = markCacheTail(history(30), anthropic);
+    expect(toolMarkers + systemMarkers + anthropicMarkerCount(marked)).toBe(ANTHROPIC_MAX_BREAKPOINTS);
+  });
+
+  test('preserves unrelated providerOptions while stripping/re-marking', () => {
+    const input: ModelMessage[] = [
+      { role: 'user', content: 'old', providerOptions: { anthropic: { cacheControl: EPHEMERAL, other: 'keep' }, google: { thought: true } } },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: 'new' },
+    ];
+    const marked = markCacheTail(input, anthropic);
+    expect(marked[0].providerOptions).toEqual({ anthropic: { other: 'keep' }, google: { thought: true } });
+    expect(marked[2].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+  });
+
+  test('skips system messages and handles short histories', () => {
+    const input: ModelMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+    ];
+    const marked = markCacheTail(input, anthropic);
+    expect(marked[0].providerOptions).toBeUndefined();
+    expect(marked[1].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+  });
+
+  test('openaiCompatible namespace: user/tool markers ride the last content part', () => {
+    const openrouterClaude = { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true } as const;
+    const input: ModelMessage[] = [
+      { role: 'user', content: 'q1' },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'echo', output: { type: 'text', value: 'r' } }],
+      },
+      { role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] },
+    ];
+    const marked = markCacheTail(input, openrouterClaude);
+    // The @ai-sdk/openai-compatible converter only reads part metadata for
+    // tool results and single-text user messages — markers must sit there.
+    const toolParts = (marked[1] as Extract<ModelMessage, { role: 'tool' }>).content;
+    expect(toolParts[0].providerOptions).toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
+    const userParts = (marked[2] as Extract<ModelMessage, { role: 'user' }>).content;
+    expect(typeof userParts).not.toBe('string');
+    expect((userParts as Array<{ providerOptions?: unknown }>)[1].providerOptions)
+      .toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
+    expect(marked[0].providerOptions).toBeUndefined();
+
+    // Rolling strips part-level markers too — re-marking stays at 2 total.
+    const rolled = markCacheTail([...marked, { role: 'user', content: 'next' }], openrouterClaude);
+    const markerCount = JSON.stringify(rolled).match(/"cache_control"/g)?.length ?? 0;
+    expect(markerCount).toBe(2);
+    expect((rolled[1] as Extract<ModelMessage, { role: 'tool' }>).content[0].providerOptions).toBeUndefined();
+  });
+
+  test('no-marker strategies return an untouched copy', () => {
+    const input = history(3);
+    const out = markCacheTail(input, { kind: 'openai-cache-key' });
+    expect(out).toEqual(input);
+    expect(out).not.toBe(input);
+    expect(anthropicMarkerCount(out)).toBe(0);
+  });
+});
+
+describe('promptCacheOptions', () => {
+  test('openai/codex: typed promptCacheKey', () => {
+    expect(promptCacheOptions({ kind: 'openai-cache-key' }, 'proteus-a1'))
+      .toEqual({ openai: { promptCacheKey: 'proteus-a1' } });
+  });
+
+  test('openai-compat family: prompt_cache_key under the provider namespace', () => {
+    expect(promptCacheOptions({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true }, 'k'))
+      .toEqual({ openrouter: { prompt_cache_key: 'k' } });
+    expect(promptCacheOptions({ kind: 'openai-compat', bodyNamespace: 'openai-compat:groq', markers: false }, 'k'))
+      .toEqual({ 'openai-compat:groq': { prompt_cache_key: 'k' } });
+  });
+
+  test('anthropic + none: undefined (breakpoints/affinity do the routing)', () => {
+    expect(promptCacheOptions({ kind: 'anthropic' }, 'k')).toBeUndefined();
+    expect(promptCacheOptions({ kind: 'none' }, 'k')).toBeUndefined();
+    expect(promptCacheOptions({ kind: 'openai-cache-key' }, '')).toBeUndefined();
+  });
+});
+
+describe('applyCacheBreakpoints', () => {
+  test('anthropic plan: system message + tail markers, no request options', () => {
+    const plan = applyCacheBreakpoints({
+      providerId: 'anthropic', modelId: 'claude-opus-4-7',
+      system: 'sys', messages: history(4), sessionKey: 'proteus-x',
+    });
+    expect(plan.strategy).toEqual({ kind: 'anthropic' });
+    expect(hasCacheMarkers(plan.strategy)).toBe(true);
+    expect((plan.system as SystemModelMessage).providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(anthropicMarkerCount(plan.messages)).toBe(2);
+    expect(plan.providerOptions).toBeUndefined();
+  });
+
+  test('none plan is a byte-preserving pass-through', () => {
+    const messages = history(3);
+    const plan = applyCacheBreakpoints({
+      providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6',
+      system: 'sys', messages, sessionKey: 'proteus-x',
+    });
+    expect(plan.system).toBe('sys');
+    expect(plan.messages).toEqual(messages);
+    expect(plan.providerOptions).toBeUndefined();
+    expect(hasCacheMarkers(plan.strategy)).toBe(false);
+  });
+});
+
+// Moved from cf-backend (providers/anthropic-cache.ts was folded into this module).
+describe('markLastToolForAnthropicCache', () => {
+  const tool = (description: string) =>
+    ({ description, inputSchema: { type: 'object' }, execute: async () => ({}) }) as unknown;
+
+  test('sets an ephemeral anthropic cache breakpoint on the LAST tool only', () => {
+    const tools = { a: tool('a'), b: tool('b'), c: tool('c') } as unknown as ToolSet;
+    markLastToolForAnthropicCache(tools);
+    const c = tools.c as { providerOptions?: Record<string, unknown> };
+    const a = tools.a as { providerOptions?: Record<string, unknown> };
+    expect(c.providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(a.providerOptions).toBeUndefined();
+  });
+
+  test('preserves any existing providerOptions on the last tool', () => {
+    const last = { ...(tool('z') as object), providerOptions: { openai: { x: 1 } } };
+    const tools = { z: last } as unknown as ToolSet;
+    markLastToolForAnthropicCache(tools);
+    expect((tools.z as { providerOptions?: Record<string, unknown> }).providerOptions).toEqual({
+      openai: { x: 1 },
+      anthropic: { cacheControl: EPHEMERAL },
+    });
+  });
+
+  test('empty tool set is a no-op', () => {
+    const tools = {} as ToolSet;
+    expect(() => markLastToolForAnthropicCache(tools)).not.toThrow();
+  });
+});

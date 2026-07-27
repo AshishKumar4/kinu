@@ -35,10 +35,20 @@ jobs:
       - name: Core unit tests
         run: bun test --cwd packages/core
 
+      # Credential-free eval-gate verification. The live-model benchmark runs in
+      # the separate, gated eval.yml (manual / nightly / `run-eval` label).
+      - name: Eval gate logic
+        run: bun test scripts/eval.test.ts
+
+      # Bench harness guarantees: sandbox isolation, the seal, anti-self-scoring,
+      # budget enforcement, corpus well-formedness. No model, no credentials.
+      - name: Bench harness guarantees
+        run: bun test scripts/bench.test.ts
+
   verify-lean:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Lean install is slow; gate on label or main pushes only
+    # Main-push gate; pull requests use the path-filtered lean-verify workflow.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -48,5 +58,11 @@ jobs:
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> $GITHUB_PATH
 
-      - name: Verify Lean proofs
+      - name: Cache Lean toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.elan
+          key: lean-${{ hashFiles('lean/lean-toolchain') }}
+
+      - name: Verify Lean proofs, consistency, and traceability
         run: bash scripts/verify-lean.sh

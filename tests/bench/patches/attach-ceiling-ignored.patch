@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/attachment-sanitizer.ts b/packages/core/src/prompting/attachment-sanitizer.ts
+index 6c69ba1..4836367 100644
+--- a/packages/core/src/prompting/attachment-sanitizer.ts
++++ b/packages/core/src/prompting/attachment-sanitizer.ts
+@@ -66,7 +66,7 @@ export function acceptedMediaForModel(opts: {
+   if (!opts.catalogInputModalities) return ceiling;
+   const accepted = new Set<MediaModality>();
+   for (const modality of opts.catalogInputModalities) {
+-    if (modality !== 'text' && ceiling.has(modality)) accepted.add(modality);
++    if (modality !== 'text' || ceiling.has(modality)) accepted.add(modality);
+   }
+   return accepted;
+ }

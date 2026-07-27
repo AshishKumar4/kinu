@@ -57,7 +57,12 @@ export type RunEvent =
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
   | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number; cached?: number } })
-  | (RunEventBase & { type: 'run_end'; reason?: string });
+  | (RunEventBase & { type: 'run_end'; reason?: string;
+      /** The provider/stream error text (truncated) when the run ended in
+       *  status 'error' — the durable evidence a post-hoc investigation needs
+       *  (Think persists only the LAST terminal error, which a later failure
+       *  overwrites). */
+      error?: string });
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {

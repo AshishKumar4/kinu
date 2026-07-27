@@ -20,17 +20,17 @@ import { rollbackScaffold } from '../scaffold/rollback.js';
 import { listGepaRuns } from './gepa/persistence.js';
 import { listReplayEvals } from './replay.js';
 import { listTurnOutcomes } from './outcomes.js';
+import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 
 export type ChangelogEntryKind = 'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes';
 
-export type ChangelogRevertType = 'scaffold_rollback' | 'craft_retire' | 'fact_forget';
+export type ChangelogRevertAction =
+  | { type: 'scaffold_rollback'; target: string }
+  | { type: 'craft_retire'; target: string }
+  | { type: 'fact_forget'; target: string }
+  | { type: 'fact_forget_many'; targets: string[] };
 
-export interface ChangelogRevertAction {
-  type: ChangelogRevertType;
-  /** scaffold_rollback: the version to revert; craft_retire: the tool name;
-   *  fact_forget: the fact key. */
-  target: string;
-}
+export type ChangelogRevertType = ChangelogRevertAction['type'];
 
 export interface ChangelogEntry {
   /** Stable id derived from the source ledger row — safe for revert-by-id. */
@@ -47,6 +47,8 @@ export interface ChangelogEntry {
   revert?: ChangelogRevertAction;
   /** Scaffold entries: the version, so UIs can fetch its diff. */
   scaffoldVersion?: number;
+  /** Aggregate cards reuse the same entry model for expandable child rows. */
+  items?: ChangelogEntry[];
 }
 
 export interface BuildChangelogOptions {
@@ -97,12 +99,20 @@ function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
       : 'shadow untried';
     const trial = e.status === 'pending' ? ' (shadow trial in progress)' : '';
     const revertable = e.status === 'current' || e.status === 'pending';
+    const summary =
+      e.status === 'current'
+        ? `I improved how I work${e.trials > 0 ? ` (won ${e.wins} of ${e.trials} trial runs)` : ''}`
+        : e.status === 'pending'
+          ? 'I am testing an improvement to how I work'
+          : e.status === 'rolled_back'
+            ? 'I reverted a change to how I work'
+            : 'I replaced an earlier way of working';
     return {
       id: `scaffold:v${e.version}:${e.status}`,
       kind: 'scaffold' as const,
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
-      summary: `${verb} v${e.version}${trial} — ${e.rationale.slice(0, 120)}`,
-      evidence: record,
+      summary,
+      evidence: `${verb} v${e.version}${trial} — ${e.rationale} · ${record}`,
       ...(revertable ? { revert: { type: 'scaffold_rollback' as const, target: String(e.version) } } : {}),
       scaffoldVersion: e.version,
     };
@@ -131,12 +141,14 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
       const at = Math.max(r.updated_at, r.created_at);
       const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
       const s = scores.get(r.name);
+      const readableName = r.name.replace(/[._-]+/g, ' ');
+      const score = s ? `EMA ${s.score.toFixed(2)} over ${s.uses} uses` : 'unscored (new)';
       return {
         id: `tool:${r.name}:${at}`,
         kind: 'tool' as const,
         at,
-        summary: `${verb} ${r.name}${r.description ? ` — ${r.description.slice(0, 100)}` : ''}`,
-        evidence: s ? `EMA ${s.score.toFixed(2)} over ${s.uses} uses` : 'unscored (new)',
+        summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
+        evidence: `${verb} ${r.name}${r.description ? ` — ${r.description}` : ''} · ${score}`,
         revert: { type: 'craft_retire' as const, target: r.name },
       };
     });
@@ -145,7 +157,27 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   }
 }
 
-function factEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
+function humanizeFact(key: string, value: string): string {
+  const normalizedKey = key.trim().toLowerCase();
+  const segments = normalizedKey.split('.').filter(Boolean);
+  const leaf = segments.at(-1) ?? normalizedKey;
+  if (segments[0] === 'sandbox' && leaf.endsWith('_version')) {
+    const software = leaf.slice(0, -'_version'.length).replace(/_/g, ' ');
+    const runs = value.toLowerCase().startsWith(software.toLowerCase())
+      ? value
+      : `${software} ${value}`;
+    return `Your sandbox runs ${runs}`;
+  }
+  const subject = normalizedKey.replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return `Your ${subject} is ${value}`;
+}
+
+type FactChangelogEntry = ChangelogEntry & {
+  kind: 'fact';
+  revert: Extract<ChangelogRevertAction, { type: 'fact_forget' }>;
+};
+
+function factEntries(sql: SqlExecutor, limit: number): FactChangelogEntry[] {
   try {
     const rows = sql<{
       key: string; value_json: string; confidence: number;
@@ -160,17 +192,38 @@ function factEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
         value = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
       } catch { /* stored as raw text */ }
       return {
-        id: `fact:${r.key}:${r.last_observed_at}`,
+        id: `fact:${r.key}`,
         kind: 'fact' as const,
         at: r.last_observed_at,
-        summary: `Learned fact ${r.key} = ${value.slice(0, 80)}`,
-        evidence: `confidence ${pct(r.confidence)}${r.source ? ` · via ${r.source}` : ''}`,
+        summary: humanizeFact(r.key, value),
+        evidence: `${r.key} = ${value} · confidence ${pct(r.confidence)}${r.source ? ` · via ${r.source}` : ''}`,
         revert: { type: 'fact_forget' as const, target: r.key },
       };
     });
   } catch {
     return [];
   }
+}
+
+function factAggregate(
+  sql: SqlExecutor,
+  limit: number,
+  since: number | undefined,
+): ChangelogEntry | null {
+  const items = factEntries(sql, limit)
+    .filter((entry) => since === undefined || entry.at > since);
+  if (items.length === 0) return null;
+  const at = items.reduce((newest, entry) => Math.max(newest, entry.at), 0);
+  const ids = items.map((entry) => entry.id).sort();
+  return {
+    id: `facts:${ids.join('|')}`,
+    kind: 'fact',
+    at,
+    summary: `Learned ${items.length} thing${items.length === 1 ? '' : 's'} about your environment`,
+    evidence: '',
+    revert: { type: 'fact_forget_many', targets: items.map((entry) => entry.revert.target) },
+    items,
+  };
 }
 
 function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
@@ -181,9 +234,10 @@ function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
         id: `gepa:${r.runId}`,
         kind: 'gepa' as const,
         at: r.endedAt ?? r.startedAt,
-        summary: `GEPA self-optimization pass over ${r.target}` +
-          (r.winnerId ? ' — found a better candidate' : ' — kept the current'),
-        evidence: `${r.iterations} iterations · ${r.metricCalls} metric calls` +
+        summary: 'Tuned my own instructions',
+        evidence: `GEPA self-optimization pass over ${r.target}` +
+          (r.winnerId ? ` — found a better candidate (${r.winnerId})` : ' — kept the current') +
+          ` · ${r.iterations} iterations · ${r.metricCalls} metric calls` +
           (r.stopReason ? ` · ${r.stopReason}` : ''),
       }));
   } catch {
@@ -192,14 +246,32 @@ function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
 }
 
 function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  return listReplayEvals(sql, limit).map((r) => ({
-    id: `replay:${r.id}`,
-    kind: 'replay' as const,
-    at: r.ranAt,
-    summary: `Replay eval — loss ${r.loss.toFixed(2)}` +
-      (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : ''),
-    evidence: `${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
-  }));
+  const rows = listReplayEvals(sql, limit + 1);
+  return rows.slice(0, limit).map((r, index) => {
+    const previous = rows[index + 1];
+    // A move is only called improved/declined when the two intervals don't
+    // overlap. Two noisy means crossing is not a direction.
+    const direction = previous
+      ? r.interval.lo > previous.interval.hi ? 'improved'
+        : r.interval.hi < previous.interval.lo ? 'declined'
+          : 'held'
+      : 'reached';
+    const scoreSummary = direction === 'reached'
+      ? `Self-test score reached ${formatScoreInterval(r.interval)}`
+      : direction === 'held'
+        ? `Self-test score held within noise at ${formatScoreInterval(r.interval)}`
+        : `Self-test score ${direction} to ${formatScoreInterval(r.interval)}`;
+    return {
+      id: `replay:${r.id}`,
+      kind: 'replay' as const,
+      at: r.ranAt,
+      summary: scoreSummary,
+      evidence: `Replay eval — score ${formatScoreInterval(r.interval)} · ` +
+        `loss ${formatScoreInterval(lossInterval(r.interval))}` +
+        (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
+        ` · ${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
+    };
+  });
 }
 
 function outcomeEntry(sql: SqlExecutor, since: number | undefined): ChangelogEntry | null {
@@ -230,10 +302,11 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
   const entries = [
     ...scaffoldEntries(sql),
     ...toolEntries(sql, limit),
-    ...factEntries(sql, limit),
     ...gepaEntries(sql, limit),
     ...replayEntries(sql, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
+  const facts = factAggregate(sql, limit, opts.since);
+  if (facts) entries.push(facts);
   const outcomes = outcomeEntry(sql, opts.since);
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
@@ -264,7 +337,11 @@ export function renderChangelogText(
   entries.forEach((e, i) => {
     const when = new Date(e.at).toISOString().slice(0, 16).replace('T', ' ');
     lines.push(`${String(i + 1).padStart(3)}. ${KIND_GLYPH[e.kind]} ${e.summary}`);
-    lines.push(`      ${when} · ${e.evidence}${e.revert ? ' · revertable' : ''}`);
+    lines.push(`      ${when}${e.evidence ? ` · ${e.evidence}` : ''}${e.revert ? ' · revertable' : ''}`);
+    for (const item of e.items ?? []) {
+      lines.push(`      - ${item.summary}`);
+      lines.push(`        ${item.evidence}`);
+    }
   });
   return lines.join('\n');
 }
@@ -346,6 +423,27 @@ export async function executeChangelogRevert(
       ctx.facts.forget(action.target);
       return { ok: true, detail: `forgot fact ${action.target}` };
     }
+    case 'fact_forget_many': {
+      const forgotten: string[] = [];
+      const failures: string[] = [];
+      for (const target of action.targets) {
+        try {
+          const result = await executeChangelogRevert(ctx, { type: 'fact_forget', target });
+          if (result.ok) forgotten.push(target);
+          else failures.push(`${target}: ${result.error ?? 'unknown error'}`);
+        } catch (error) {
+          failures.push(`${target}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (failures.length > 0) {
+        return {
+          ok: false,
+          detail: `forgot ${forgotten.length} of ${action.targets.length} facts`,
+          error: `failed to forget ${failures.length} fact${failures.length === 1 ? '' : 's'}: ${failures.join('; ')}`,
+        };
+      }
+      return { ok: true, detail: `forgot ${forgotten.length} fact${forgotten.length === 1 ? '' : 's'}` };
+    }
   }
 }
 
@@ -357,7 +455,15 @@ export async function revertChangelogEntryById(
   id: string,
 ): Promise<ChangelogRevertResult> {
   const entries = buildChangelog(ctx.rt.storage.sql, { limit: 200 });
-  const entry = entries.find((e) => e.id === id);
+  const findEntry = (candidates: ReadonlyArray<ChangelogEntry>): ChangelogEntry | undefined => {
+    for (const candidate of candidates) {
+      if (candidate.id === id) return candidate;
+      const nested = findEntry(candidate.items ?? []);
+      if (nested) return nested;
+    }
+    return undefined;
+  };
+  const entry = findEntry(entries);
   if (!entry) return { ok: false, error: `changelog entry ${id} not found` };
   if (!entry.revert) return { ok: false, error: `changelog entry ${id} is informational — nothing to revert` };
   return executeChangelogRevert(ctx, entry.revert);

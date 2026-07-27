@@ -9,7 +9,7 @@
  * binds the returned ids (markConsumed) before injecting the message, so a
  * concurrent drain can't double-process them.
  */
-import type { ProteusEvent } from './types.js';
+import type { PeerAgentPayload, ProteusEvent } from './types.js';
 import { renderForLLM } from './visibility.js';
 
 export interface DrainBatch {
@@ -17,6 +17,9 @@ export interface DrainBatch {
   readonly ids: string[];
   /** The synthetic user-message text that drives the autonomous turn. */
   readonly text: string;
+  /** The same events rendered for splicing into a LIVE turn's next step —
+   *  the mid-turn delivery must not tell the model to stop what it is doing. */
+  readonly midTurnText: string;
 }
 
 /** Externally-triggered pending events → one drain batch, or null if there are
@@ -26,10 +29,20 @@ export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
   if (drainable.length === 0) return null;
   const lines = drainable.map((e) => {
     const r = renderForLLM(e);
-    return `- [${r.variant}] from ${r.triggered_by}: ${r.brief}`;
+    // Peer asks carry a mechanical reply route: the sender opened a peer-back
+    // channel keyed on this event id and is awaiting the answer.
+    const replyHint = e.variant === 'peer_agent' && (e.payload as PeerAgentPayload).reply_expected
+      ? ` [the sender awaits your answer — reply with peers({action:'reply', event_id:'${e.id}', message:...})]`
+      : '';
+    return `- [${r.variant}] from ${r.triggered_by}: ${r.brief}${replyHint}`;
   });
-  const text =
-    `${drainable.length} event${drainable.length === 1 ? '' : 's'} arrived while you were idle. ` +
-    `Act on each as appropriate, then stop:\n${lines.join('\n')}`;
-  return { ids: drainable.map((e) => e.id), text };
+  const count = `${drainable.length} event${drainable.length === 1 ? '' : 's'}`;
+  const listing = lines.join('\n');
+  return {
+    ids: drainable.map((e) => e.id),
+    text: `${count} arrived while you were idle. Act on each as appropriate, then stop:\n${listing}`,
+    midTurnText:
+      `${count} arrived while you were working. Before finishing this response, ` +
+      `also act on each as appropriate:\n${listing}`,
+  };
 }

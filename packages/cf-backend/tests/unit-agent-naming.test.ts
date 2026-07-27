@@ -1,7 +1,9 @@
 // Agent naming — the P1a single-prompt-box flow: slug for the DO id, a
 // deterministic provisional title, and the roster title-precedence rule.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, test, expect } from "bun:test";
-import { slugifyName, deriveAgentTitle, resolveAgentTitle } from "../src/lib/agent-naming";
+import { slugifyName, deriveWorkspaceTitle, resolveWorkspaceTitle } from "../src/lib/agent-naming";
 
 describe("slugifyName", () => {
   test("lowercases, hyphenates, trims, caps at 24 chars", () => {
@@ -12,43 +14,86 @@ describe("slugifyName", () => {
   });
 });
 
-describe("deriveAgentTitle", () => {
+describe("deriveWorkspaceTitle", () => {
   test("takes the first non-empty line, collapses whitespace, caps at 60", () => {
-    expect(deriveAgentTitle("Compare the top 3 Rust web frameworks\n\nmore detail"))
+    expect(deriveWorkspaceTitle("Compare the top 3 Rust web frameworks\n\nmore detail"))
       .toBe("Compare the top 3 Rust web frameworks");
-    expect(deriveAgentTitle("\n\n  Second line is first content  \nthird"))
+    expect(deriveWorkspaceTitle("\n\n  Second line is first content  \nthird"))
       .toBe("Second line is first content");
-    expect(deriveAgentTitle("word ".repeat(40)).length).toBe(60);
+    expect(deriveWorkspaceTitle("word ".repeat(40)).length).toBe(60);
   });
 
   test("returns '' for blank / whitespace-only text", () => {
-    expect(deriveAgentTitle("")).toBe("");
-    expect(deriveAgentTitle("   \n  \n")).toBe("");
+    expect(deriveWorkspaceTitle("")).toBe("");
+    expect(deriveWorkspaceTitle("   \n  \n")).toBe("");
   });
 });
 
-describe("resolveAgentTitle — roster precedence", () => {
+describe("resolveWorkspaceTitle — roster precedence", () => {
   const slug = "research-rust-3f8a2c";
 
   test("an explicit title wins (AI-titled re-sync)", () => {
-    expect(resolveAgentTitle({ explicit: "Rust Framework Showdown", existing: "old", purpose: "x", slug }))
+    expect(resolveWorkspaceTitle({ explicit: "Rust Framework Showdown", existing: "old", purpose: "x", slug }))
       .toBe("Rust Framework Showdown");
   });
 
   test("no explicit title keeps the existing roster title (no clobber on re-register)", () => {
-    expect(resolveAgentTitle({ existing: "Compare Rust Frameworks", purpose: "ignored", slug }))
+    expect(resolveWorkspaceTitle({ existing: "Compare Rust Frameworks", purpose: "ignored", slug }))
       .toBe("Compare Rust Frameworks");
-    expect(resolveAgentTitle({ explicit: "   ", existing: "Compare Rust Frameworks", slug }))
+    expect(resolveWorkspaceTitle({ explicit: "   ", existing: "Compare Rust Frameworks", slug }))
       .toBe("Compare Rust Frameworks");
   });
 
   test("first registration with no title derives a provisional from the mission", () => {
-    expect(resolveAgentTitle({ purpose: "Benchmark 3 Rust web frameworks\n\nwith load tests", slug }))
+    expect(resolveWorkspaceTitle({ purpose: "Benchmark 3 Rust web frameworks\n\nwith load tests", slug }))
       .toBe("Benchmark 3 Rust web frameworks");
   });
 
   test("falls back to the slug when there is nothing to derive from", () => {
-    expect(resolveAgentTitle({ slug })).toBe(slug);
-    expect(resolveAgentTitle({ purpose: "   ", slug })).toBe(slug);
+    expect(resolveWorkspaceTitle({ slug })).toBe(slug);
+    expect(resolveWorkspaceTitle({ purpose: "   ", slug })).toBe(slug);
+  });
+});
+
+// Where the workspace DO hangs the shared titling policy. The decision and the
+// apply loop are proven in @proteus/core; these pin the wiring that a DO test
+// harness cannot reach.
+describe("workspace titling wiring (OrchestratorAgent)", () => {
+  const orchestrator = readFileSync(join(import.meta.dir, "../src/orchestrator.ts"), "utf8");
+
+  test("opening a legacy workspace titles it from SOUL.md without blocking boot", () => {
+    const onStart = orchestrator.slice(
+      orchestrator.indexOf("async onStart()"),
+      orchestrator.indexOf("async alarm()"),
+    );
+    expect(onStart).toContain("if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
+    expect(onStart).toContain("void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''))");
+  });
+
+  test("the first turn drives the same one titling path, fire-and-forget", () => {
+    expect(orchestrator).toContain("void this.maybeAutoTitleWorkspace(userText)");
+    expect(orchestrator.match(/maybeAutoTitleWorkspace\(/g)).toHaveLength(3);
+  });
+
+  test("titling persists through setAutoDisplayName, which marks name_origin auto", () => {
+    const method = orchestrator.slice(
+      orchestrator.indexOf("private async maybeAutoTitleWorkspace"),
+      orchestrator.indexOf("private async suggestWorkspaceTitle"),
+    );
+    expect(method).toContain("applyWorkspaceTitle({");
+    expect(method).toContain("persist: async (name) => { await this.setAutoDisplayName(name); }");
+    const setAutoDisplayName = orchestrator.slice(orchestrator.indexOf("async setAutoDisplayName("));
+    expect(setAutoDisplayName).toContain("this.config.setNameOrigin('auto')");
+  });
+
+  test("one generator: the shared workspace-identity prompt and parser", () => {
+    const suggest = orchestrator.slice(
+      orchestrator.indexOf("private async suggestWorkspaceTitle"),
+      orchestrator.indexOf("/** Push a display name to all three homes"),
+    );
+    expect(suggest).toContain("system: WORKSPACE_IDENTITY_SYSTEM_PROMPT");
+    expect(suggest).toContain("prompt: workspaceIdentityPrompt(mission)");
+    expect(suggest).toContain("parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null");
+    expect(suggest).not.toContain("maxOutputTokens");
   });
 });

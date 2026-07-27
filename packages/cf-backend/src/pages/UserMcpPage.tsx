@@ -22,13 +22,9 @@ import {
   listMcpServers, addMcpServer, removeMcpServer,
   type McpServerSummary, type McpTransport,
 } from "../lib/user-api";
+import { inputCls } from "@/components/ui/form";
 
 const POLL_MS = 5000;
-
-const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
-  + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
-  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-  + " placeholder:p-text-3";
 
 function statusBadge(status: McpServerSummary['status']): {
   label: string; classes: string; Icon: React.ComponentType<{ size?: number; className?: string }>;
@@ -36,14 +32,14 @@ function statusBadge(status: McpServerSummary['status']): {
   switch (status) {
     case 'ready':
     case 'connected':
-      return { label: status, classes: 'bg-green-500/15 text-green-400', Icon: CheckIcon };
+      return { label: status, classes: 'p-badge-success', Icon: CheckIcon };
     case 'authenticating':
-      return { label: 'auth needed', classes: 'bg-amber-500/15 text-amber-400', Icon: ClockClockwiseIcon };
+      return { label: 'auth needed', classes: 'p-badge-warning', Icon: ClockClockwiseIcon };
     case 'connecting':
     case 'discovering':
-      return { label: status, classes: 'bg-blue-500/15 text-blue-400', Icon: ClockClockwiseIcon };
+      return { label: status, classes: 'p-badge-info', Icon: ClockClockwiseIcon };
     case 'failed':
-      return { label: 'failed', classes: 'bg-red-500/15 text-red-400', Icon: WarningIcon };
+      return { label: 'failed', classes: 'p-badge-danger', Icon: WarningIcon };
     default:
       return { label: status, classes: 'p-card p-text-3', Icon: ClockClockwiseIcon };
   }
@@ -88,7 +84,7 @@ export default function UserMcpPage() {
   }, [authResult, refresh, searchParams, setSearchParams]);
 
   const remove = useCallback(async (id: string, name: string) => {
-    if (!confirm(`Remove "${name}"? All agents will lose access to its tools.`)) return;
+    if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
     try { await removeMcpServer(id); refresh(); } catch (e) { alert((e as Error).message); }
   }, [refresh]);
 
@@ -97,7 +93,7 @@ export default function UserMcpPage() {
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         <header>
           <Link to="/user/settings" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
-            <ArrowLeftIcon size={12} /> Back to user settings
+            <ArrowLeftIcon size={12} /> Back to account settings
           </Link>
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -118,16 +114,16 @@ export default function UserMcpPage() {
         </header>
 
         {authResult === 'ok' && (
-          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 text-green-400">
+          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 p-success">
             <CheckIcon size={14} /> Authorization complete. Discovering tools…
           </div>
         )}
         {authResult === 'failed' && (
-          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 text-red-400">
+          <div className="p-card rounded-lg p-3 text-xs flex items-center gap-2 p-danger">
             <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
           </div>
         )}
-        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
+        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
 
         {showAdd && (
           <AddServerCard
@@ -175,7 +171,7 @@ export default function UserMcpPage() {
                           <badge.Icon size={10} /> {badge.label}
                         </span>
                         {s.error && (
-                          <div className="text-[11px] text-red-400 mt-1 max-w-[260px] truncate" title={s.error}>
+                          <div className="text-[11px] p-danger mt-1 max-w-[260px] truncate" title={s.error}>
                             {s.error}
                           </div>
                         )}
@@ -292,7 +288,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
         <input value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} className={inputCls}
           placeholder="create_issue, list_pulls" />
       </div>
-      {err && <p className="text-xs text-red-400">{err}</p>}
+      {err && <p className="text-xs p-danger">{err}</p>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
           onClick={save}

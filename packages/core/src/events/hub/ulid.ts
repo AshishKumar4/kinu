@@ -1,11 +1,18 @@
 /**
- * Crockford-base32 ULID — monotonic-ish, sortable by creation time.
+ * Crockford-base32 ULID — monotonic (spec's monotonic mode), sortable by
+ * creation time. Within one process, ids minted in the same millisecond
+ * increment the random suffix instead of re-rolling it, so `ORDER BY id`
+ * is true creation order — the peer outbox's per-receiver ordering and the
+ * hub's id-ordered scans rely on this.
  *
  * Format: 10 chars timestamp (48-bit ms since epoch) + 16 chars random.
  * All EventsHub primary keys use this. Keep one canonical implementation.
  */
 
 const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+let lastTs = -1;
+let lastRand: number[] = [];
 
 export function ulid(): string {
   const ts = Date.now();
@@ -15,11 +22,31 @@ export function ulid(): string {
     tsChars[i] = ULID_ALPHABET[t % 32];
     t = Math.floor(t / 32);
   }
-  const rand: string[] = [];
-  for (let i = 0; i < 16; i++) {
-    rand.push(ULID_ALPHABET[Math.floor(Math.random() * 32)]);
+
+  if (ts === lastTs) {
+    // Same millisecond: increment the previous random suffix (base-32,
+    // little chance of overflow across 16 chars; on overflow, re-roll).
+    let i = 15;
+    while (i >= 0) {
+      if (lastRand[i] < 31) { lastRand[i]++; break; }
+      lastRand[i] = 0;
+      i--;
+    }
+    if (i < 0) lastRand = rollRandom();
+  } else {
+    lastTs = ts;
+    lastRand = rollRandom();
   }
-  return tsChars.join('') + rand.join('');
+
+  let rand = '';
+  for (let i = 0; i < 16; i++) rand += ULID_ALPHABET[lastRand[i]];
+  return tsChars.join('') + rand;
+}
+
+function rollRandom(): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < 16; i++) out.push(Math.floor(Math.random() * 32));
+  return out;
 }
 
 /** Extract the timestamp (unix-ms) encoded in a ULID. */

@@ -12,13 +12,18 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import { type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
+import {
+  createCompactionExtension, createVfsTranscriptStore,
+  createCompactionStateStore, initCompactionStateTable, createModelSummarizer,
+  type CompactionStateStore,
+} from '@proteus/compaction';
 import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore,
+  SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
-  IngressDescriptor, ProteusEvent, RevisitCondition, EventVariant,
+  IngressDescriptor, ProteusEvent, EventVariant,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
 } from '@proteus/core';
@@ -29,7 +34,7 @@ import {
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
   initAgentConfigTable, createAgentConfigStore,
-  initFactsTable, createFactsStore, renderFactsBlock,
+  initFactsTable, createFactsStore, renderFactsBlock, readMemoryTail,
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
   HeadController, HeadJournal, initHeadsTables,
@@ -37,8 +42,12 @@ import {
   unionAllowedTools, toolAllowedBySkills,
   BUILTIN_TOOL_NAMES,
   buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
+  parseModelSpec, agentAffinityKey, contextWindowForModel,
+  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
-  appendVolatileContextMessage, hashSystemPrompt,
+  EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
+  acceptedMediaForModel, type MediaModality, type ModelInputModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -50,6 +59,8 @@ import {
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
+  isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  type ReasoningEffort,
 } from '@proteus/core';
 import { combineAbortSignals } from '@proteus/agent-utils';
 import { discoverAgentsMd } from './agents-md.js';
@@ -73,6 +84,11 @@ export function resolveChatModel(llm: LLMProviderConfig): LanguageModel {
   return createChatModel({
     kind: 'openai-compat', name: llm.name, baseURL: llm.baseURL, headers: llm.headers, modelId: llm.model,
   });
+}
+
+function providerFamilyForSpec(spec: string): string | undefined {
+  try { return parseModelSpec(spec).provider; }
+  catch { return undefined; }
 }
 
 /** Tools whose calls auto-detach to the background past the 30s threshold —
@@ -206,6 +222,23 @@ export class LocalAgentSession implements BackendHost {
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
 
+  /** Ephemeral system-state blocks for this CLI session (core
+   *  volatile-context.ts). In-memory only — a new session starts empty, so
+   *  the first turn attaches exactly one fresh block. The compaction
+   *  extension's onOutcome resets it whenever the model-visible stream
+   *  changed shape ('planned'/'invalidated') because the frozen block
+   *  positions are meaningless against a rewritten stream; byte-stable
+   *  replays keep them valid. */
+  private readonly ephemeralLedger = new EphemeralContextLedger();
+
+  /** Durable per-session compaction state (plan snapshot + the measured
+   *  prompt-token trigger signal) in agent.db, and the default compaction
+   *  extension itself — the SAME better-compact transformContext path the
+   *  cloud backend registers, over the same shared stores. Registered on
+   *  every turn's ExtensionHost in processTurn. */
+  private readonly compactionState: CompactionStateStore;
+  private readonly compactionExtension: ProteusExtension;
+
   /** Skills invoked this turn (explicit/auto-activation + the skills tool's
    *  `invoke` action). Cleared at turn start; the skills tool's closures mutate
    *  this stable Set, so the cached toolset never needs rebuilding. */
@@ -256,13 +289,6 @@ export class LocalAgentSession implements BackendHost {
     // this session as the BackendHost (enqueueTurn wakes the agent).
     initBackgroundJobsTable(this.rt.storage.execRaw);
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
-    this.jobRunner = new BackgroundJobRunner({
-      store: this.jobs,
-      fiber: this.rt.schedule.fiber,
-      host: this,
-      logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
-    });
-
     // agent_config (typed key/value) — backs always-active skills, etc.
     initAgentConfigTable(this.rt.storage.execRaw);
     this.config = createAgentConfigStore(this.rt.storage.sql);
@@ -271,11 +297,44 @@ export class LocalAgentSession implements BackendHost {
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
 
+    // Better-compact is THE default (and only) compaction path — the same
+    // staged transformContext ladder the cloud backend registers, over the
+    // same shared stores (transcripts in the composite VFS, plan + trigger
+    // state in agent.db). The summarizer rides the session's active model.
+    initCompactionStateTable(this.rt.storage.execRaw);
+    this.compactionState = createCompactionStateStore(this.rt.storage.sql);
+    this.compactionExtension = createCompactionExtension({
+      ports: {
+        transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
+        plans: this.compactionState.plans,
+        logger: {
+          info: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
+          debug: (message, data) => console.debug(`[proteus:compaction] ${message}`, data ?? ''),
+          warn: (message, data) => console.warn(`[proteus:compaction] ${message}`, data ?? ''),
+          error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
+        },
+      },
+      summarize: createModelSummarizer(() => this.ensureModelState()),
+      onOutcome: ({ outcome }) => {
+        // Fires inside runTransformContext, BEFORE runChat's ledger weave —
+        // a fresh plan ('planned') or a discarded one ('invalidated')
+        // invalidates the frozen block positions; a byte-stable replay
+        // keeps them.
+        if (outcome !== 'replayed') this.ephemeralLedger.reset();
+      },
+    });
+
     // Voyager-style curriculum table (agent.* parity with the DO).
     initCurriculumTable(this.rt.storage.execRaw);
 
     initHeadsTables(this.rt.storage.execRaw);
-    this._headRuntime = createCLIHeadRuntime({ model: this.fallbackModel, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider(), grounding: this.buildHeadGrounding() });
+    this._headRuntime = createCLIHeadRuntime({
+      model: this.fallbackModel,
+      providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
+      sharedVfs: this.rt.storage.vfs,
+      webSearch: this.getWebSearchProvider(),
+      grounding: this.buildHeadGrounding(),
+    });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     // The EventsHub substrate (reactor source of truth). Local external
@@ -300,6 +359,14 @@ export class LocalAgentSession implements BackendHost {
       engine: this.engine,
       eventLog: this.eventLog,
       sessionReflectionInterval: opts.sessionReflectionInterval,
+    });
+    this.jobRunner = new BackgroundJobRunner({
+      store: this.jobs,
+      fiber: this.rt.schedule.fiber,
+      host: this,
+      eventLog: this.eventLog,
+      scheduleDrain: () => this.orch.scheduleDrain(),
+      logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
     this.restoreHistory(opts.historyLimit ?? 40);
     this.ensureModelState();
@@ -379,6 +446,16 @@ export class LocalAgentSession implements BackendHost {
     return { ok: true, spec: normalized };
   }
 
+  getReasoningEffort(): { effort: ReasoningEffort | null } {
+    return { effort: this.config.getReasoningEffort() };
+  }
+
+  setReasoningEffort(effort: unknown): { ok: true; effort: ReasoningEffort } {
+    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+    this.config.setReasoningEffort(effort);
+    return { ok: true, effort };
+  }
+
   listModelProviders() {
     return this.modelResolver?.listProviders() ?? Promise.resolve([]);
   }
@@ -388,14 +465,15 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Local ingress parity with the DO EventsHub routes: publish through the
-   *  append-only EventLog, then wake the same serialized turn queue. */
+   *  append-only EventLog, then wake the same serialized turn queue (debounced,
+   *  so an event burst drains as ONE programmatic turn). */
   async publishEvent(input: LocalPublishEventInput): Promise<LocalPublishEventResult> {
     const { id, admitted } = this.eventLog.publish({
       descriptor: input.descriptor,
       now: input.now ?? Date.now(),
       caused_by: input.caused_by,
     });
-    await this.orch.drainPendingEvents();
+    this.orch.scheduleDrain();
     return { event_id: id, admitted };
   }
 
@@ -405,16 +483,6 @@ export class LocalAgentSession implements BackendHost {
 
   listRecentEvents(opts: { variant?: EventVariant; since?: number; limit?: number } = {}): ProteusEvent[] {
     return this.eventLog.query(opts);
-  }
-
-  deferEvent(eventId: string, revisitAt: RevisitCondition): { ok: true } {
-    this.eventLog.defer(eventId, revisitAt);
-    return { ok: true };
-  }
-
-  dismissEvent(eventId: string, reason: string): { ok: true } {
-    this.eventLog.dismiss(eventId, reason, 'tool');
-    return { ok: true };
   }
 
   listTriggers(): { triggers: LocalTriggerView[] } {
@@ -477,7 +545,7 @@ export class LocalAgentSession implements BackendHost {
       }
     }
 
-    if (fired > 0) await this.orch.drainPendingEvents();
+    if (fired > 0) this.orch.scheduleDrain();
     this.rearmLocalAlarm();
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
   }
@@ -619,6 +687,17 @@ export class LocalAgentSession implements BackendHost {
     return this.extraTools;
   }
 
+  /** The drain-debounce timer (BackendHost seam) — a plain one-shot timeout.
+   *  Skips a window that outlives the session so consumed events are never
+   *  bound to a turn a dead pump will not run. */
+  setTimer(fn: () => Promise<void>, ms: number): void {
+    setTimeout(() => {
+      if (this.ended) return;
+      void fn().catch((err: unknown) =>
+        console.warn('[proteus] drain timer callback failed:', (err as Error).message));
+    }, ms);
+  }
+
   /** Inject a programmatic turn into the same serialized loop the user drives —
    *  backs the reactor + background-job wake. Self-starts the pump when idle so
    *  a job that settles mid-idle wakes the agent immediately. */
@@ -632,6 +711,17 @@ export class LocalAgentSession implements BackendHost {
       });
       void this.pump();
     });
+  }
+
+  /** BackendHost seam — the CLI declines mid-turn event injection: the local
+   *  steer-drain owns the live turn's injection channel with USER semantics a
+   *  platform event must not assume (each steer persists as a verbatim user
+   *  row for the walk-back fork, interrupt() hands pending steers back to the
+   *  composer, and leftover steers rerun as a user-origin turn — which would
+   *  misgrade the outcome review). Events drain as the immediate next
+   *  programmatic turn instead (the enqueueTurn fallback). */
+  injectIntoActiveTurn(): boolean {
+    return false;
   }
 
   // ── Public driver API ──────────────────────────────────────────────
@@ -704,11 +794,29 @@ export class LocalAgentSession implements BackendHost {
     this.mcpClose = conn.close;
   }
 
-  /** End the session: flush a partial evolution window + disconnect MCP. */
+  /** Run any pending event drain to completion NOW, bypassing the ~250ms
+   *  debounce window. The scheduler daemon fires due triggers then ends the
+   *  session immediately, so the debounced drain fireDueTriggers armed would
+   *  never fire (end() sets `ended`, and the drain timer skips when ended) —
+   *  the fired trigger's autonomous turn would be silently dropped. A batch
+   *  tick calls this before end() to flush its work synchronously. A direct
+   *  drain is safe: pending events are durable in the EventLog until
+   *  markConsumed, so drainPendingEvents consumes-or-returns them exactly once.
+   *  Interactive sessions keep the debounced path untouched — end() on Ctrl-C
+   *  must not suddenly run an autonomous turn. */
+  async flushPendingDrains(): Promise<void> {
+    if (this.ended) return;
+    await this.orch.drainPendingEvents();
+  }
+
+  /** End the session: let the evolution this run started finish before the
+   *  process goes away, then disconnect MCP. The evolution window itself is
+   *  durable, so a partial one carries over to the next run rather than being
+   *  force-closed here. */
   async end(): Promise<void> {
     this.ended = true;
     this.clearLocalAlarm();
-    await this.orch.flushSession();
+    await this.orch.settleEvolution();
     try { await this.mcpClose?.(); } catch { /* best effort */ }
   }
 
@@ -781,8 +889,13 @@ export class LocalAgentSession implements BackendHost {
     try {
       let item: QueueItem | undefined;
       while ((item = this.queue.shift())) {
-        try { await this.processTurn(item); }
-        finally { item.resolve(); }
+        try {
+          await this.processTurn(item);
+        } catch (err) {
+          console.error('[proteus] turn processing failed:', err instanceof Error ? err.message : String(err));
+        } finally {
+          item.resolve();
+        }
       }
     } finally {
       this.pumping = false;
@@ -807,10 +920,10 @@ export class LocalAgentSession implements BackendHost {
 
     // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
     // It is per-turn-read live state (lessons/reflections/take-pick
-    // corrections append constantly), so it rides the VOLATILE context
-    // message: in the stable prefix every append would bust the cache and
+    // corrections append constantly), so it rides the ephemeral system-state
+    // ledger: in the stable prefix every append would bust the cache and
     // trip the prompt-hash telemetry with no real agent event.
-    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
+    const memoryTail = await readMemoryTail(this.rt.memory);
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
     const activeSkills = await this.resolveTurnSkills(item.text);
     // Skill-filtered built-ins + the connected MCP tools (always available).
@@ -825,9 +938,9 @@ export class LocalAgentSession implements BackendHost {
     // Nearest-file-wins AGENTS.md chain, re-read each turn so edits land
     // immediately (a handful of stat calls — negligible next to the LLM call).
     const agentsMd = discoverAgentsMd(this.cwd);
-    // The byte-stable cache prefix — per-turn state (facts, executor status,
-    // activation reasons) rides in the volatile context message appended to
-    // the turn's messages below, sharing the seam with the DO backend.
+    // The byte-stable cache prefix — system state (facts, executor status)
+    // rides the ephemeral ledger and activation reasons ride the turn-local
+    // tail below, sharing the seam with the DO backend.
     const systemPrompt = buildSystemPromptSync(this.rt, {
       executors,
       availableTools: availableBuiltins,
@@ -852,15 +965,21 @@ export class LocalAgentSession implements BackendHost {
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
 
-    // The volatile turn context (facts, executor status, activation reasons)
-    // rides as ONE trailing message for THIS turn only — it is never pushed
-    // into the durable history, so the stable prefix stays cacheable.
-    const turnMessages = appendVolatileContextMessage(this.history, {
-      factsBlock: this.renderFactsForTurn(),
-      memoryTail: knowledge || undefined,
-      executors,
-      ...(activeSkills ? { activeSkills } : {}),
-    });
+    // System state (facts, memory tail, executor status) rides the ephemeral
+    // ledger — runChat weaves the frozen blocks into the durable history
+    // AFTER the transformContext seam, appending a fresh block only when the
+    // state fingerprint changed. Turn-local state (activation reasons) rides
+    // one trailing message for THIS turn only. Neither is ever pushed into
+    // the durable history, so the stable prefix stays cacheable.
+    const systemState = {
+      ledger: this.ephemeralLedger,
+      context: {
+        factsBlock: this.renderFactsForTurn(),
+        memoryTail,
+        executors,
+      },
+    };
+    const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
 
     const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
     let fullText = '';
@@ -870,40 +989,60 @@ export class LocalAgentSession implements BackendHost {
     // Steer-drain bookkeeping (Hermes conversation_loop pattern): at each step
     // boundary all pending steers merge into ONE user message appended after
     // the latest tool results (Anthropic groups tool+user into a single turn,
-    // so role alternation holds). streamText rebuilds each step's messages
-    // from scratch, so every drained injection is re-applied at the position
-    // (in base-message coordinates) where it first entered the conversation.
-    const baseLength = turnMessages.length;
-    const injections: Array<{ index: number; message: ModelMessage; texts: string[] }> = [];
-    const prepareStepMessages = ({ messages }: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
-      if (this.pendingSteers.length > 0) {
-        const drained = this.pendingSteers.splice(0);
-        injections.push({
-          index: messages.length,
-          message: steerUserMessage(drained),
-          texts: drained.map((steer) => steer.text),
-        });
-      }
-      if (injections.length === 0) return undefined;
-      const next = [...messages];
-      let offset = 0;
-      for (const injection of injections) {
-        next.splice(injection.index + offset, 0, injection.message);
-        offset += 1;
-      }
-      return next;
+    // so role alternation holds). The splice-at-entry-index math — base
+    // coordinates from the step-0 message count, re-applied every step — is
+    // the shared core StepInjections (the cf backend's background-event
+    // injection rides the same class).
+    const injections = new StepInjections<{ message: ModelMessage; texts: string[] }>();
+    const prepareStepMessages = (ctx: { stepNumber: number; messages: ModelMessage[] }): ModelMessage[] | undefined => {
+      const drained = this.pendingSteers.splice(0);
+      return injections.drain(ctx, drained.length > 0
+        ? [{ message: steerUserMessage(drained), texts: drained.map((steer) => steer.text) }]
+        : []);
     };
+
+    // The compaction extension + the steer-drain ride the public extension
+    // seam — the same host external plugins register on. One hook path, not
+    // a private callback + a plugin API.
+    const extensions = new ExtensionHost()
+      .register(this.compactionExtension)
+      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
+    const cache = this.cacheIdentity();
+    const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
+    const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
+    // The measured trigger: the previous turn's final request as the provider
+    // actually priced it, persisted at turn end below — voided by the length
+    // guard when the durable history shrank (restart truncation) since the
+    // measurement.
+    const historyLength = this.history.length;
+    const lastPromptTokens = this.compactionState.loadPromptTokens(cache.sessionKey, historyLength);
+    // Overflow recovery (armed below on a context_length failure): consume
+    // the flag — at most one forced rebuild per arm, never a loop.
+    const transformTrigger = this.compactionState.takeForceCompaction(cache.sessionKey)
+      ? 'force' as const
+      : 'auto' as const;
 
     try {
       for await (const ev of runChat({
         model,
         modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
         system: systemPrompt,
-        history: turnMessages,
+        history: this.history,
+        // Model-capability attachment sanitization — runChat applies it to
+        // the whole history BEFORE the transform seam and the ledger weave
+        // (same ordering as the DO's beforeTurn); this.history itself is
+        // never mutated.
+        attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
+        systemState,
+        turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
         tools: turnTools,
+        ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
+        transformTrigger,
         maxSteps: resolveMaxSteps(),
         signal: abort.signal,
-        prepareStepMessages,
+        extensions,
+        cache,
+        ...(providerOptions ? { providerOptions } : {}),
       })) {
         switch (ev.type) {
           case 'text-delta':
@@ -918,27 +1057,26 @@ export class LocalAgentSession implements BackendHost {
           case 'tool-result': {
             const idx = findLastIndexBy(pendingCalls, (c) => c.toolName === ev.toolName);
             const call = idx >= 0 ? pendingCalls.splice(idx, 1)[0] : undefined;
-            this.orch.acc.recordToolCall({
-              toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result,
-            });
+            // Real success/error into the accumulator — the outcome signal
+            // (hadError, turn-outcome review) reads it, matching the cf
+            // backend's afterToolCall. A failed tool flags the turn.
+            this.orch.acc.recordToolCall(ev.success
+              ? { toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result }
+              : { toolName: ev.toolName, input: call?.args ?? {}, success: false, error: ev.error ?? ev.result });
             this.emit({ type: 'tool-result', toolName: ev.toolName, result: ev.result });
             break;
           }
           case 'step-finish':
-            this.orch.acc.recordStep({});
+            this.orch.acc.recordStep(
+              ev.inputTokens !== undefined || ev.outputTokens !== undefined || ev.cachedInputTokens !== undefined
+                ? { usage: { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedInputTokens: ev.cachedInputTokens } }
+                : {},
+            );
             break;
           case 'done': {
             // Replay the drained steers into the durable history at the exact
-            // positions the model saw them (indices are base-coordinate, so
-            // relative to responseMessages they sit at index - baseLength).
-            const merged = [...ev.responseMessages];
-            let spliced = 0;
-            for (const injection of injections) {
-              const at = Math.max(0, Math.min(merged.length, injection.index - baseLength + spliced));
-              merged.splice(at, 0, injection.message);
-              spliced += 1;
-            }
-            for (const msg of merged) this.history.push(msg);
+            // positions the model saw them (StepInjections.replayInto).
+            for (const msg of injections.replayInto(ev.responseMessages)) this.history.push(msg);
             if (!fullText.trim() && ev.text.trim()) fullText = ev.text;
             break;
           }
@@ -949,63 +1087,113 @@ export class LocalAgentSession implements BackendHost {
       // rendered them as sent — a failed stream must not erase them from the
       // live context (their exact splice positions died with the stream, so
       // they append in drain order).
-      for (const injection of injections) this.history.push(injection.message);
+      for (const injection of injections.recorded) this.history.push(injection.message);
       this.orch.acc.hadError = true;
-      this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({ type: 'error', message });
+      // Overflow recovery (core turn-failure policy, shared with the cf
+      // backend): a context_length-class failure arms force-compaction for
+      // the next assembly and enqueues ONE retry turn — a failed retry never
+      // enqueues another. Rate limits never force-compact (throughput is not
+      // size) unless the measured PER-REQUEST prompt crossed half the window.
+      const recovery = planOverflowRecovery({
+        error: message,
+        lastPromptTokens: this.orch.acc.lastPromptTokens,
+        contextWindow: contextWindowForModel(this.cachedModelSpec ?? this.fallbackModelSpec),
+        turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
+      });
+      if (recovery.forceCompaction) {
+        this.compactionState.armForceCompaction(cache.sessionKey);
+        if (recovery.enqueueRetry) {
+          void this.enqueueTurn({
+            text: OVERFLOW_RETRY_TEXT,
+            metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
+          });
+        }
+      }
     } finally {
       this.currentAbort = null;
     }
 
-    // Steers that never saw a step boundary (the model was already finishing)
-    // run as the IMMEDIATE next turn — ahead of any programmatic injects.
-    if (this.pendingSteers.length > 0) {
-      const leftover = this.pendingSteers.splice(0);
-      this.queue.unshift({
-        text: leftover.map((steer) => steer.text).join('\n\n'),
-        files: leftover.flatMap((steer) => steer.files ?? []),
-        kind: 'user',
-        resolve: () => {},
-      });
-    }
-
-    // One durable row PER steer (not per drain): the walk-back fork pivot
-    // matches individual user messages verbatim, exactly as surfaces and the
-    // JSONL transcript recorded them.
-    const assistantMsgId = this.persist(item.text, injections.flatMap((injection) => injection.texts), fullText);
-
-    // Alternate Takes captured during this turn's think-mcts runs get the
-    // turn id they competed for, so a pick can credit the right turn. A turn
-    // that settles without an assistant message id cannot be credited — its
-    // captures are purged so the next turn never claims them as its own.
-    try {
-      if (assistantMsgId) {
-        claimAlternateTakesForTurn(this.rt.storage.sql, {
-          turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
-        });
-      } else {
-        purgeUnclaimedAlternateTakes(this.rt.storage.sql);
-      }
-    } catch { /* no takes table yet — the first MCTS run creates it */ }
-
-    // Steer-as-Branch redirects launched during this turn settle against its
-    // answer — detached, so a slow branch never delays turn-end.
-    this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
-
-    const turn: CompletedTurn = {
-      userMessage: item.text,
-      assistantResponse: fullText,
-      toolCalls: this.orch.acc.toolCalls,
-      steps: this.orch.acc.stepCount,
-      durationMs: Date.now() - startedAt,
-      feedback: null,
-      hadError: this.orch.acc.hadError,
-      ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
-      sessionId: this.sessionId,
-      origin: item.kind,
+    let assistantMsgId: string | null = null;
+    const snapshotTurn = (): CompletedTurn => {
+      const usage = this.orch.acc.reportedUsage();
+      return {
+        userMessage: item.text,
+        assistantResponse: fullText,
+        toolCalls: this.orch.acc.toolCalls,
+        steps: this.orch.acc.stepCount,
+        durationMs: Date.now() - startedAt,
+        feedback: null,
+        hadError: this.orch.acc.hadError,
+        ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
+        sessionId: this.sessionId,
+        origin: item.kind,
+        ...(usage ? { usage } : {}),
+      };
     };
-    // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
-    await this.orch.completeTurn(turn);
-    this.emit({ type: 'turn-end', turn });
+
+    try {
+      // Persist the turn's final provider-priced prompt size — the NEXT turn's
+      // measured compaction trigger. Any step that reported was a real priced
+      // request, so errored turns record too. Bound to the turn's durable
+      // history length so a later shrink voids it.
+      if (this.orch.acc.lastPromptTokens > 0) {
+        this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens, historyLength);
+      }
+
+      // Steers that never saw a step boundary (the model was already finishing)
+      // run as the IMMEDIATE next turn — ahead of any programmatic injects.
+      if (this.pendingSteers.length > 0) {
+        const leftover = this.pendingSteers.splice(0);
+        this.queue.unshift({
+          text: leftover.map((steer) => steer.text).join('\n\n'),
+          files: leftover.flatMap((steer) => steer.files ?? []),
+          kind: 'user',
+          resolve: () => {},
+        });
+      }
+
+      // One durable row PER steer (not per drain): the walk-back fork pivot
+      // matches individual user messages verbatim, exactly as surfaces and the
+      // JSONL transcript recorded them.
+      assistantMsgId = this.persist(item.text, injections.recorded.flatMap((injection) => injection.texts), fullText);
+
+      // Alternate Takes captured during this turn's think-mcts runs get the
+      // turn id they competed for, so a pick can credit the right turn. A turn
+      // that settles without an assistant message id — or that errored, whose
+      // captures competed for an answer that no longer exists — cannot be
+      // credited, so its captures are purged (mirroring the cf backend's
+      // purge-on-error) and the next turn never claims them as its own.
+      try {
+        if (assistantMsgId && !this.orch.acc.hadError) {
+          claimAlternateTakesForTurn(this.rt.storage.sql, {
+            turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
+          });
+        } else {
+          purgeUnclaimedAlternateTakes(this.rt.storage.sql);
+        }
+      } catch { /* no takes table yet — the first MCTS run creates it */ }
+
+      // Steer-as-Branch redirects launched during this turn settle against its
+      // answer — detached, so a slow branch never delays turn-end.
+      this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
+
+      const turn = snapshotTurn();
+      // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
+      await this.orch.completeTurn(turn);
+      this.emit({ type: 'turn-end', turn });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.orch.acc.hadError = true;
+      console.error('[proteus] turn finalization failed:', message);
+      // Any response messages runChat produced remain in live history as a
+      // best-effort recovery for later turns in this process. We do not retry
+      // potentially partial side effects, and failed persistence cannot survive
+      // a restart, so surface both the failure and a terminal turn event.
+      this.emit({ type: 'error', message });
+      this.emit({ type: 'turn-end', turn: snapshotTurn() });
+    }
   }
 
   /** Settle every branch launched during the just-finished turn (detached —
@@ -1039,9 +1227,23 @@ export class LocalAgentSession implements BackendHost {
 
   private agentName(): string {
     try {
-      return this.rt.storage.sql<{ name: string }>`SELECT name FROM agent_identity LIMIT 1`[0]?.name ?? 'local';
+      return this.rt.storage.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name ?? 'local';
     } catch {
       return 'local';
+    }
+  }
+
+  /** Prompt-cache identity for runChat: the resolved provider/model plus a
+   *  stable per-conversation key (the agent's affinity key + session id —
+   *  same `proteus-<name>` scheme Workers AI affinity pins with). */
+  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string } {
+    const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
+    const spec = this.cachedModelSpec ?? this.fallbackModelSpec;
+    try {
+      const { provider, modelId } = parseModelSpec(spec);
+      return { providerId: provider, modelId, sessionKey };
+    } catch {
+      return { sessionKey };
     }
   }
 
@@ -1107,11 +1309,11 @@ export class LocalAgentSession implements BackendHost {
 
   /** Re-run a task for the replay-eval harness: the current system prompt
    *  (knowledge tail + soul) and model, the facts world model as the same
-   *  volatile context message live turns get, isolated history, no tools
+   *  ephemeral system-state block live turns get, isolated history, no tools
    *  (see the engine-construction note). */
   private async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
-    const knowledge = (await this.rt.memory.read('memory/MEMORY.md'))?.slice(-2000) ?? '';
+    const memoryTail = await readMemoryTail(this.rt.memory);
     const systemPrompt = buildSystemPromptSync(this.rt, {
       backend: 'cli-local',
       mode: 'chat',
@@ -1123,10 +1325,13 @@ export class LocalAgentSession implements BackendHost {
       model,
       modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       system: systemPrompt,
-      history: appendVolatileContextMessage(
-        [{ role: 'user', content: task }],
-        { factsBlock: this.renderFactsForTurn(), memoryTail: knowledge || undefined },
-      ),
+      history: [{ role: 'user', content: task }],
+      // A fresh ledger per replay: the same seam live turns use, isolated
+      // from the session's own block positions.
+      systemState: {
+        ledger: new EphemeralContextLedger(),
+        context: { factsBlock: this.renderFactsForTurn(), memoryTail },
+      },
       tools: {},
       maxSteps: 1,
     })) {
@@ -1148,7 +1353,7 @@ export class LocalAgentSession implements BackendHost {
    *  agent events (soul/skill/model). Emits only on change to stay quiet. */
   private lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
-    const hash = hashSystemPrompt(system);
+    const hash = fnv1a64(system);
     if (this.lastSystemPromptHash !== null && this.lastSystemPromptHash !== hash) {
       this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
     }
@@ -1294,6 +1499,37 @@ export class LocalAgentSession implements BackendHost {
     throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
   }
 
+  /** Media the active model request can carry — the attachment sanitizer's
+   *  policy input, mirroring the DO's cached non-blocking catalog lookup:
+   *  the provider-class ceiling answers immediately (conservative — errs
+   *  toward sanitizing, never toward a rejected request) and the catalog's
+   *  per-model input modalities narrow it once the async lookup lands. */
+  private _mediaAcceptance: { spec: string; catalogModalities: ModelInputModality[] | null } | null = null;
+  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
+    const spec = this.cachedModelSpec ?? this.fallbackModelSpec;
+    if (this._mediaAcceptance?.spec !== spec) {
+      this._mediaAcceptance = { spec, catalogModalities: null };
+      void this.lookupInputModalities(spec);
+    }
+    let provider: string | undefined;
+    try { provider = parseModelSpec(spec).provider; } catch { /* bare fallback spec */ }
+    const catalog = this._mediaAcceptance.catalogModalities;
+    return acceptedMediaForModel({
+      ...(provider !== undefined ? { provider } : {}),
+      ...(catalog ? { catalogInputModalities: catalog } : {}),
+    });
+  }
+
+  private async lookupInputModalities(spec: string): Promise<void> {
+    if (!this.modelResolver) return;
+    try {
+      const info = await this.modelResolver.modelInfo(spec);
+      if (info?.inputModalities && this._mediaAcceptance?.spec === spec) {
+        this._mediaAcceptance.catalogModalities = info.inputModalities;
+      }
+    } catch { /* catalog unavailable — the conservative default stays */ }
+  }
+
   private ensureModelState(): LanguageModel {
     const spec = this.normalizeModelSpec(this.config.getModel());
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
@@ -1312,7 +1548,13 @@ export class LocalAgentSession implements BackendHost {
   private rebuildModelBoundState(model: LanguageModel): void {
     // Branching heads — in-process runtime + controller (drives think strategy=heads).
     // The agent's VFS backs the shared findings scratch sibling heads write to.
-    this._headRuntime = createCLIHeadRuntime({ model, sharedVfs: this.rt.storage.vfs, webSearch: this.getWebSearchProvider(), grounding: this.buildHeadGrounding() });
+    this._headRuntime = createCLIHeadRuntime({
+      model,
+      providerFamily: providerFamilyForSpec(this.cachedModelSpec ?? this.fallbackModelSpec),
+      sharedVfs: this.rt.storage.vfs,
+      webSearch: this.getWebSearchProvider(),
+      grounding: this.buildHeadGrounding(),
+    });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
 
     const rawTools = buildBuiltinTools({
@@ -1320,12 +1562,9 @@ export class LocalAgentSession implements BackendHost {
       shellApprovalMode: this.config.getShellApprovalMode(),
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
-        vfs: this.rt.storage.vfs,
-        memory: this.rt.memory,
-        shell: this.rt.shell,
         extraProviders: [createLocalAgentSelfProvider(this), createWebCodemodeProvider(this.getWebSearchProvider())],
-      }) as never,
-      codemodeLoader: { __cli: true } as unknown,
+      }),
+      codemodeLoader: { __cli: true },
       thinkTool: this.buildThinkTool(),
       facts: this.factsStore,
       skills: {
@@ -1334,6 +1573,11 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
+      // deps.team is deliberately NOT wired: the `team` peer-messaging tool
+      // needs a cross-agent transport, and local agents are one-per-process
+      // SQLite sessions with no daemon to route between them. Absent deps →
+      // the tool is not registered and the prompt (derived from the built
+      // toolset) never advertises it. Hosted agents get the full team surface.
       webSearch: this.getWebSearchProvider(),
     });
     this.tools = this.wrapToolsForBackground(rawTools);

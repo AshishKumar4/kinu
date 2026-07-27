@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { BrainIcon, GearIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
+import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 
 /**
  * Top-level shell — left rail (Sidebar with user info + agent list) +
@@ -11,6 +12,7 @@ import Sidebar from "./Sidebar";
  */
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const location = useLocation();
 
   // Any navigation (agent link, settings, new-agent create) closes the drawer.
@@ -34,10 +36,10 @@ export default function Layout() {
           </Link>
         </div>
         <div className="flex items-center gap-1">
-          <Link to="/" aria-label="New agent" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <PlusIcon size={16} />
-          </Link>
-          <Link to="/user/settings" aria-label="Settings" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+          </button>
+          <Link to="/user/settings" aria-label="Account settings" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <GearIcon size={16} />
           </Link>
         </div>
@@ -61,6 +63,8 @@ export default function Layout() {
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <Outlet />
       </main>
+
+      {showCreate && <CreateWorkspaceModal onClose={() => setShowCreate(false)} />}
     </div>
   );
 }

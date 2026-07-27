@@ -76,6 +76,21 @@ describe('dedupeKeyFor — process_done', () => {
   });
 });
 
+describe('dedupeKeyFor — peer_agent', () => {
+  const peer = (sender_event_id: string, topic: string): ProteusEvent => ({
+    ...base(),
+    ingress: 'peer_async',
+    variant: 'peer_agent',
+    payload: { from_agent_name: 'scout', from_user_id: 'u1', topic, body: 'hi', sender_event_id },
+  });
+  test('keyed by (sender, sender_event_id) — a crash redelivery is a no-op', () => {
+    expect(dedupeKeyFor(peer('ox1', 'status'))).toBe('peer:scout:ox1');
+  });
+  test('repeated topics from the same sender still admit (distinct outbox ids)', () => {
+    expect(dedupeKeyFor(peer('ox1', 'status'))).not.toBe(dedupeKeyFor(peer('ox2', 'status')));
+  });
+});
+
 describe('dedupeKeyFor — non-deduped variants', () => {
   test('chat returns null', () => {
     const e: ProteusEvent = {

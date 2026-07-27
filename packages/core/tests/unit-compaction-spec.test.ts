@@ -1,9 +1,8 @@
-// The compaction content spec: the structured handoff template, the
-// [CONTEXT CHECKPOINT] wrapper, and the transcript renderer.
+// The compaction content spec: the structured handoff template and the
+// [CONTEXT CHECKPOINT] wrapper.
 import { describe, test, expect } from 'bun:test';
 import {
   buildCompactionSummaryPrompt,
-  renderCompactionTranscript,
   wrapCompactionSummary,
   stripCheckpointPreamble,
   CONTEXT_CHECKPOINT_PREFIX,
@@ -76,23 +75,5 @@ describe('checkpoint preamble', () => {
 
   test('strip is a no-op for non-checkpoint text', () => {
     expect(stripCheckpointPreamble('plain summary')).toBe('plain summary');
-  });
-});
-
-describe('renderCompactionTranscript', () => {
-  test('renders roles, text, and tool call/result parts', () => {
-    const transcript = renderCompactionTranscript([
-      { id: '1', role: 'user', parts: [{ type: 'text', text: 'fix the bug in src/a.ts' }] },
-      {
-        id: '2', role: 'assistant', parts: [
-          { type: 'text', text: 'running tests' },
-          { type: 'tool-run', toolName: 'run', input: { command: 'bun test' }, output: '1 fail: src/a.ts:42' },
-        ],
-      },
-    ]);
-    expect(transcript).toContain('[user]\nfix the bug in src/a.ts');
-    expect(transcript).toContain('[Tool: run]');
-    expect(transcript).toContain('bun test');
-    expect(transcript).toContain('src/a.ts:42');
   });
 });

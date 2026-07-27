@@ -12,6 +12,7 @@ const WINDOWS: Array<[RegExp, number]> = [
   [/^codex\/gpt-5\.3-codex\b/i, 272_000],
   [/(^|\/)gpt-5\.5\b/i, 1_050_000],
   [/claude-(?:opus|sonnet)-4-[67]\b/i, 1_000_000],
+  [/kimi-k3/i, 1_048_576],
   [/kimi-k2/i, 262_144],
   [/llama-4/i, 131_072],
   [/qwen/i, 131_072],
@@ -26,16 +27,4 @@ const DEFAULT_WINDOW = 128_000;
 export function contextWindowForModel(spec: string): number {
   for (const [re, n] of WINDOWS) if (re.test(spec)) return n;
   return DEFAULT_WINDOW;
-}
-
-export const COMPACT_AT_UTILIZATION = 0.85;
-
-/** Threshold from a KNOWN window — use when the provider catalog reported
- *  ModelInfo.contextWindow (the source of truth) for the resolved model. */
-export function compactionThresholdForWindow(contextWindow: number, utilization: number = COMPACT_AT_UTILIZATION): number {
-  return Math.floor(contextWindow * utilization);
-}
-
-export function compactionThreshold(spec: string, utilization: number = COMPACT_AT_UTILIZATION): number {
-  return compactionThresholdForWindow(contextWindowForModel(spec), utilization);
 }

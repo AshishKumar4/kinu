@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, useParams } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
@@ -6,7 +6,6 @@ import WorkspacePage from "./pages/WorkspacePage";
 import SettingsPage from "./pages/SettingsPage";
 import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
-import TriggersTab from "./pages/TriggersTab";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Loader } from "@cloudflare/kumo";
 
@@ -21,13 +20,20 @@ function LazyFallback() {
   );
 }
 
-// Remount the whole workspace — and with it the useAgent/useAgentChat hooks and
-// their message buffer — whenever the agent changes. Without the key, switching
-// /agent/A → /agent/B reuses the same component instance and one session's
-// messages bleed into the next.
+// Remount the whole workspace — and with it the parent useAgent/useAgentChat
+// hooks — when the workspace changes. Subordinate route changes intentionally
+// keep this key stable so the main socket remains mounted while the active
+// facet socket is swapped lazily.
 function KeyedWorkspace() {
   const { agentId } = useParams();
   return <WorkspacePage key={agentId} />;
+}
+
+// Trigger management folded into the Supervise altitude's Automations block;
+// old /triggers deep links land there.
+function TriggersRedirect() {
+  const { agentId } = useParams();
+  return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
 }
 
 export default function App() {
@@ -38,7 +44,8 @@ export default function App() {
           <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
           <Route path="/user/settings" element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
           <Route path="/user/settings/mcp" element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
-          <Route path="/agent/:agentId" element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
+          <Route path="/workspace/:agentId" element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
+          <Route path="/workspace/:agentId/agents/:subName" element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
           <Route path="/mcts/:agentId" element={
             <ErrorBoundary label="mcts-explorer">
               <Suspense fallback={<LazyFallback />}>
@@ -47,7 +54,7 @@ export default function App() {
             </ErrorBoundary>
           } />
           <Route path="/settings/:agentId" element={<ErrorBoundary label="agent-settings"><SettingsPage /></ErrorBoundary>} />
-          <Route path="/triggers/:agentId" element={<ErrorBoundary label="triggers"><TriggersTab /></ErrorBoundary>} />
+          <Route path="/triggers/:agentId" element={<TriggersRedirect />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -39,7 +39,7 @@ export default function MCTSExplorer() {
     <div className="h-full flex flex-col p-bg">
       <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
         <div className="flex items-center gap-3">
-          <Link to={`/agent/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
+          <Link to={`/workspace/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
           <div className="h-4 w-px bg-[var(--c-border)]" />
           <TreeStructureIcon size={16} className="p-accent" />
           <span className="font-semibold text-sm p-text">MCTS Explorer</span>
@@ -53,10 +53,10 @@ export default function MCTSExplorer() {
       </div>
       <div className="flex items-center gap-4 px-5 py-2 border-b p-border text-xs p-text-2">
         <span className="font-medium p-text">Legend:</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-green-500" />High</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-amber-400" />Medium</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-red-400" />Low</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full bg-gray-500 opacity-40" />Pruned</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-success" />High</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-warning" />Medium</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-danger" />Low</span>
+        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-neutral opacity-40" />Pruned</span>
         <span className="ml-auto p-text-3">Node size = visit count</span>
       </div>
       <div ref={containerRef} className="flex-1 relative overflow-hidden">
@@ -78,8 +78,8 @@ export default function MCTSExplorer() {
           <span className="p-text-2">Depth: <span className="p-text font-medium">{depth}</span></span>
           {winner && (
             <>
-              <span className="p-text-2">Winner: <span className="text-green-400 font-medium">{winner.value.toFixed(3)}</span></span>
-              <span className={`flex items-center gap-1 ${winner.status === "terminal" ? "text-green-400" : "text-amber-400"}`}>
+              <span className="p-text-2">Winner: <span className="p-success font-medium">{winner.value.toFixed(3)}</span></span>
+              <span className={`flex items-center gap-1 ${winner.status === "terminal" ? "p-success" : "p-warning"}`}>
                 <span className="size-1.5 rounded-full bg-current animate-pulse" />
                 {winner.status === "terminal" ? "Converged" : "Searching..."}
               </span>

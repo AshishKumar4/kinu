@@ -175,6 +175,47 @@ export function parseAllowedTools(raw: string | null | undefined): string[] | nu
   return null;
 }
 
+/** Decode the `headers` SQL column into a header map. Returns null when unset
+ *  or malformed, which the pipeline treats as "no custom headers". */
+export function parseMcpHeaders(raw: string | null | undefined): Record<string, string> | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (
+      obj && typeof obj === 'object' && !Array.isArray(obj)
+      && Object.values(obj as Record<string, unknown>).every((v) => typeof v === 'string')
+    ) {
+      return obj as Record<string, string>;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+/** Build the transport options that carry custom auth headers for a private/
+ *  bearer MCP server. `requestInit.headers` is the durable carrier: the MCP
+ *  SDK persists it (plain JSON) and re-applies it on every (re)connect —
+ *  including after DO hibernation — to BOTH the SSE GET stream (via the
+ *  transport's `_commonHeaders`) and POST/Streamable requests. The
+ *  `eventSourceInit.fetch` closure only selects the underlying fetch for the
+ *  SSE stream in the Workers runtime; it is not serializable and does not
+ *  carry the auth (the SDK re-derives headers from `requestInit` regardless).
+ *  Returns undefined when the server has no custom headers. */
+export function buildMcpHeaderTransportOpts(
+  headers: Record<string, string> | null,
+): {
+  eventSourceInit: { fetch: (url: string | URL, init?: RequestInit) => Promise<Response> };
+  requestInit: { headers: Record<string, string> };
+} | undefined {
+  if (!headers || Object.keys(headers).length === 0) return undefined;
+  return {
+    eventSourceInit: {
+      fetch: (url: string | URL, init?: RequestInit) =>
+        fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers } }),
+    },
+    requestInit: { headers },
+  };
+}
+
 /** Map the SDK's `MCPConnectionState` strings to our discriminated union.
  *  We avoid importing the SDK enum from a UI-adjacent module so the schema
  *  for the tests doesn't pull half the agents SDK transitively. */

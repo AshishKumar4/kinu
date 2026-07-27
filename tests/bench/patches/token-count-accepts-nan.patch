@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
+index aee7dae..c31330a 100644
+--- a/packages/core/src/bench/types.ts
++++ b/packages/core/src/bench/types.ts
+@@ -120,7 +120,7 @@ export function usageTokens(usage: unknown): number {
+ function tokenField(usage: unknown, key: string): number {
+   if (typeof usage !== 'object' || usage === null) return 0;
+   const value = (usage as Record<string, unknown>)[key];
+-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
++  if (typeof value === 'number') return value;
+   if (typeof value === 'object' && value !== null) {
+     const total = (value as Record<string, unknown>).total;
+     if (typeof total === 'number' && Number.isFinite(total)) return total;

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/events/recorder.ts b/packages/core/src/events/recorder.ts
+index a486968..72613e5 100644
+--- a/packages/core/src/events/recorder.ts
++++ b/packages/core/src/events/recorder.ts
+@@ -72,7 +72,7 @@ export class RunEventRecorder {
+     // Load from DB.
+     const rows = this.sql<{ max_idx: number | null }>`
+       SELECT MAX(event_index) AS max_idx FROM run_events WHERE run_id = ${runId}`;
+-    const max = rows[0]?.max_idx ?? -1;
++    const max = rows[0]?.max_idx ?? 0;
+     const next = max + 1;
+     this.nextIndex.set(runId, next + 1);
+     return next;

@@ -10,6 +10,7 @@ import {
 } from '@proteus/core';
 import type { UserDO } from './user-do.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
+import type { UserCaller } from './workspace-capability.js';
 
 export interface ModelMenuEntry {
   /** Full spec — `<provider>/<modelId>`, used as the agent_config.model value. */
@@ -24,11 +25,11 @@ export interface ModelMenuEntry {
   contextWindow?: number;
 }
 
-export async function listAvailableModels(env: Env, userId: string): Promise<ModelMenuEntry[]> {
+export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
   const { registry, deps } = createAgentProviderRegistry({
     env,
-    userDOStub: stub,
+    userDO: { stub, caller },
     fetch,
   });
 
@@ -42,7 +43,7 @@ export async function listAvailableModels(env: Env, userId: string): Promise<Mod
 
   // openai-compat: user-named — we surface each as a single generic entry.
   // The agent_config.model can be set to `openai-compat:<name>/<modelId>`.
-  const creds = await stub.listCredentials();
+  const creds = await stub.listCredentials(caller);
   for (const c of creds) {
     if (c.key.startsWith('openai-compat.')) {
       const name = c.key.slice('openai-compat.'.length);
@@ -95,12 +96,12 @@ export function buildProviderCatalog(
     .sort((a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name));
 }
 
-export async function listProviderCatalog(env: Env, userId: string): Promise<ProviderCatalogEntry[]> {
+export async function listProviderCatalog(env: Env, userId: string, caller: UserCaller): Promise<ProviderCatalogEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-  const { registry } = createAgentProviderRegistry({ env, userDOStub: stub, fetch });
+  const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
   const [providers, creds] = await Promise.all([
     listModelsDevProviders({ fetch }),
-    stub.listCredentials(),
+    stub.listCredentials(caller),
   ]);
   return buildProviderCatalog(
     providers,

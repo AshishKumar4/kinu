@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/mcts/cost.ts b/packages/core/src/mcts/cost.ts
+index f72a3f5..e954077 100644
+--- a/packages/core/src/mcts/cost.ts
++++ b/packages/core/src/mcts/cost.ts
+@@ -42,7 +42,7 @@ export function estimateCost(
+   evalCallsPerBranch: number = DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
+ ): CostEstimate {
+   const explorationCalls = budget * branches;
+-  const evaluationCalls = budget * branches * evalCallsPerBranch;
++  const evaluationCalls = budget * evalCallsPerBranch;
+   const reflectionCalls = Math.ceil(budget * branches * 0.3);
+   const totalCalls = explorationCalls + evaluationCalls + reflectionCalls;
+   const estimatedUSD = (totalCalls * AVG_TOKENS_PER_CALL / 1000) * USD_PER_1K_TOKENS;

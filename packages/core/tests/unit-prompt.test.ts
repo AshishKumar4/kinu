@@ -42,6 +42,42 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
+  test('renders one imperative delegation ladder when team staffing is available', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      availableTools: ['think', 'team'],
+      registeredExecutors: [],
+    });
+
+    expect(prompt).toContain('## Team');
+    expect(prompt).toMatch(/single short coherent change/);
+    expect(prompt).toMatch(/think\(heads\).*ephemeral breadth-first/);
+    expect(prompt).toMatch(/team subordinate.*durable.*own turn loop/i);
+    expect(prompt).toMatch(/2\+ independent parts/);
+    expect(prompt).toMatch(/Decompose and STAFF it/);
+    expect(prompt).toMatch(/spawn.*assign.*poll.*status.*await reports.*integrate/i);
+    expect(prompt).toMatch(/staffing subordinates for multi-part or long-running work/);
+    expect(prompt.indexOf('delegation ladder')).toBeLessThan(prompt.indexOf('## Tools available this turn'));
+
+    const withoutTeam = buildSystemPromptSync(rt, {
+      availableTools: ['think'],
+      registeredExecutors: [],
+    });
+    expect(withoutTeam).not.toContain('Decompose and STAFF it');
+    expect(withoutTeam).not.toContain('delegation ladder');
+  });
+
+  test('team and peers schema descriptions lead with positive delegation triggers', () => {
+    expect(BUILTIN_TOOL_DESCRIPTIONS.team).toMatch(
+      /Use when: Use whenever the user asks for several fixes or features at once, or a long-running effort/,
+    );
+    expect(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('create one subordinate per independent workstream'))
+      .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('full agent turn'));
+    expect(BUILTIN_TOOL_DESCRIPTIONS.peers).toMatch(/Use when: Use for cross-workspace collaboration or handoff/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.peers.indexOf('cross-workspace collaboration'))
+      .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.peers.indexOf('full agent turn'));
+  });
+
   test('the research doctrine is single-sourced: the registry think spec is the only doctrine string', () => {
     // The prompt renders the registry's whenToUse verbatim — no parallel
     // hardcoded strategy doctrine. Editing registry.ts is the only place that
@@ -268,6 +304,38 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/exposePort/);
   });
 
+  test('names the workspace mount table (/local + per-environment mounts) and keeps exec target-native', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+        { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: true, status: 'active' },
+        { name: 'nimbus', kind: 'nimbus', available: true, configured: true, active: false, status: 'idle' },
+        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(prompt).toContain('mount table');
+    expect(prompt).toContain('/local is the durable base');
+    expect(prompt).toContain('/sandbox');
+    expect(prompt).toContain('/nimbus');
+    expect(prompt).toContain('/pc');
+    expect(prompt).toContain('target-native');
+  });
+
+  test('the CLI-local VFS has no remote mounts — no mount doctrine rendered', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cli-local',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(prompt).not.toContain('mount table');
+    expect(prompt).not.toContain('/pc');
+  });
+
   test('includes output-format guidance', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -374,17 +442,28 @@ describe('buildSystemPromptSync', () => {
     // sizes — raise one ONLY alongside an intentional content change.
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
-      'Operating guidance': 560,
-      'Tools available this turn': 1230,
-      'Execution environments': 2000,
+      // Static pointer to the load-bearing delegation ladder (2026-07).
+      'Operating guidance': 640,
+      // +2 summary lines for the team/peers split + the subordinate report
+      // tool (2026-07, Subordinates A2). Real actors advertise a
+      // deps-filtered subset; this representative surface carries all three.
+      'Tools available this turn': 1800,
+      // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
+      // /pc file plane; exec stays target-native) — deliberate (2026-07).
+      'Execution environments': 2450,
       'Persistence': 700,
       'Memory and facts': 560,
       'Code execution and learned capabilities': 1530,
       // Research doctrine now renders both strategy triggers from the registry
       // (single source) plus the always-on fan-out workflow — a deliberate,
       // load-bearing growth over the old heads-only blurb.
-      'Research and experimentation': 840,
+      // 2026-07-15: +positive fan-out triggers (parallel review/verification,
+      // pre-implementation investigation) — owner-directed delegation steering.
+      'Research and experimentation': 1080,
       'Background work': 260,
+      // Team doctrine now adds the direct → heads → subordinate ladder and
+      // coordination loop alongside the three gated team roles (2026-07).
+      'Team': 1500,
       'Proteus product changes': 290,
       'Output format': 180,
     };

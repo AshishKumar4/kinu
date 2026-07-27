@@ -69,7 +69,7 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
     case "turn_end":
       return { ...base, kind: "llm-turn", label: `Turn ${e.turnIndex} done`, detail: e.tokenUsage ? `${e.tokenUsage.input}+${e.tokenUsage.output} tok` : undefined };
     case "run_end":
-      return { ...base, kind: e.reason === "aborted" ? "abort" : "other", label: e.reason ? `Run ended (${e.reason})` : "Run ended" };
+      return { ...base, kind: e.reason === "aborted" ? "abort" : "other", label: e.reason ? `Run ended (${e.reason})` : "Run ended", detail: e.error };
     default:
       return { ...base, kind: "other", label: (e as { type: string }).type };
   }

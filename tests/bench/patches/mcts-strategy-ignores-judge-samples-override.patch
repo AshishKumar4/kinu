@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/strategy/mcts.ts b/packages/core/src/strategy/mcts.ts
+index 6ac65a7..cdb8af3 100644
+--- a/packages/core/src/strategy/mcts.ts
++++ b/packages/core/src/strategy/mcts.ts
+@@ -57,7 +57,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
+         pruneThreshold: o.pruneThreshold ?? defaults.pruneThreshold,
+         minAcceptableScore: o.minAcceptableScore ?? defaults.minAcceptableScore,
+         maxCostUSD: o.maxCostUSD ?? defaults.maxCostUSD,
+-        judgeSamples: o.judgeSamples ?? defaults.judgeSamples,
++        judgeSamples: defaults.judgeSamples ?? o.judgeSamples,
+         maxEvalLLMCalls: o.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls,
+         takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
+         signal: ctx.signal,

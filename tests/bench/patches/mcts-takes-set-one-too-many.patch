@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/mcts/takes.ts b/packages/core/src/mcts/takes.ts
+index 5d7334c..cb7fa7e 100644
+--- a/packages/core/src/mcts/takes.ts
++++ b/packages/core/src/mcts/takes.ts
+@@ -130,7 +130,7 @@ export function findNearTiedRivals(
+       return true;
+     })
+     .sort((a, b) => b.value - a.value || b.depth - a.depth)
+-    .slice(0, MAX_TAKE_CANDIDATES - 1);
++    .slice(0, MAX_TAKE_CANDIDATES);
+ }
+ 
+ /**

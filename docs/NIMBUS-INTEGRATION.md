@@ -1,5 +1,7 @@
 # Nimbus Integration Plan
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 > **Note:** This is a design plan. The current implementation differs — see "Current Implementation" below.
 
 > Nimbus: cloud-native development environment on Cloudflare Workers.

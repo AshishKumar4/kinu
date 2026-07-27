@@ -77,17 +77,91 @@ export interface EvolutionBaseSelection {
 }
 
 /**
+ * Clade-metaproductivity — a version's score aggregated over its whole
+ * descendant subtree (HGM, ICLR 2026): what a lineage went on to PRODUCE
+ * predicts a good branch base far better than what the node itself scored.
+ * A variant that won its own shadow trial but whose children all regressed is
+ * an evolutionary dead end; a middling variant that every good version descends
+ * from is the productive one to branch off again.
+ *
+ * Aggregation: an evidence-weighted pooled mean of `winRate` over the subtree
+ * INCLUDING the node itself, weighting each scored version by its observation
+ * count. That shape is dictated by what this archive actually holds — a handful
+ * of versions with wildly uneven evidence (a version can carry 40 blended
+ * observations or a single decisive shadow trial, and untried versions carry
+ * none at all). A plain mean over subtree nodes would let one lucky 1-trial
+ * child outvote a 40-observation parent; pooling by evidence does not.
+ *
+ * This is why there is no blend coefficient against the node's own score: the
+ * node is already a term in its own pool, weighted by exactly as much evidence
+ * as backs it. A well-tried node with one barely-tried child stays close to its
+ * own rate; a thinly-tried ancestor of a heavily-tried subtree is dominated by
+ * the clade. Both ends fall out of one formula instead of a tuned mix.
+ *
+ * Cold start is the identity case, not a fallback branch: a version with no
+ * descendants pools over itself alone and scores EXACTLY its own win rate, and
+ * a version nothing in the window has scored yet returns null so the caller
+ * applies the same neutral prior it always did. A lineage-free archive
+ * therefore reproduces the pre-clade policy exactly, term for term.
+ *
+ * Versions unscored (`winRate === null`) contribute nothing rather than an
+ * imputed 0.5 — a large barren subtree must not drag a real signal toward the
+ * prior. Status is ignored: a `current` or `pending` descendant still counts as
+ * something the lineage produced.
+ */
+function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, number | null> {
+  const children = new Map<number, ScaffoldArchiveEntry[]>();
+  for (const e of archive) {
+    if (e.parentVersion === null) continue;
+    const siblings = children.get(e.parentVersion);
+    if (siblings) siblings.push(e);
+    else children.set(e.parentVersion, [e]);
+  }
+
+  const scores = new Map<number, number | null>();
+  for (const root of archive) {
+    let pooled = 0;
+    let evidence = 0;
+    const stack: ScaffoldArchiveEntry[] = [root];
+    const seen = new Set<number>();
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      if (seen.has(node.version)) continue;
+      seen.add(node.version);
+      if (node.winRate !== null) {
+        // Observations backing this rate: shadow trials plus the real turn
+        // outcomes blendRealOutcomeRates folds in. A scored version has ≥ 1.
+        const w = Math.max(1, node.trials);
+        pooled += node.winRate * w;
+        evidence += w;
+      }
+      const kids = children.get(node.version);
+      if (kids) stack.push(...kids);
+    }
+    scores.set(root.version, evidence === 0 ? null : pooled / evidence);
+  }
+  return scores;
+}
+
+/**
  * Pick the version a new scaffold proposal should branch from.
  *
  * Policy: with probability (1 - exploreShare) build on the live current —
  * exploitation keeps the lineage's proven trunk improving. With probability
  * exploreShare, branch from an archived variant instead, weighted by its
- * shadow win-rate plus a novelty bonus that decays with trial count
- * (1/(1+trials), never-tried variants score it in full). This is DGM's
- * archive-sampling insight (arXiv:2505.22954): rolled-back and historical
+ * clade-metaproductivity (above) plus a novelty bonus that decays with trial
+ * count (1/(1+trials), never-tried variants score it in full). This is DGM's
+ * archive-sampling insight (arXiv:2505.22954) — rolled-back and historical
  * variants are stepping stones, and the ones we know least about deserve
- * disproportionate exploration — a pure greedy-on-current policy can never
- * reach improvements whose ancestor lost its first shadow trial.
+ * disproportionate exploration — corrected by HGM's: score the stepping stone
+ * by what its lineage produced, not by how it did itself. A pure
+ * greedy-on-current policy can never reach improvements whose ancestor lost its
+ * first shadow trial; a pure own-score policy keeps re-branching from lucky
+ * dead ends.
+ *
+ * The clade is always complete inside the caller's window: descendants carry
+ * higher version numbers than their parents, and the archive is truncated
+ * newest-first, so any candidate present has all of its descendants present.
  *
  * Pure function of the archive list — deterministic under an injected RNG.
  * Returns null when the archive has no rows at all.
@@ -112,7 +186,11 @@ export function selectEvolutionBase(
     return { version: current.version, mode: 'current' };
   }
 
-  const weight = (e: ScaffoldArchiveEntry): number => (e.winRate ?? 0.5) + 1 / (1 + e.trials);
+  // Scored over the FULL archive, not just the explorable slice — a stepping
+  // stone's best descendant is usually the live current.
+  const clade = cladeScores(archive);
+  const weight = (e: ScaffoldArchiveEntry): number =>
+    (clade.get(e.version) ?? 0.5) + 1 / (1 + e.trials);
   const total = explorable.reduce((acc, e) => acc + weight(e), 0);
   let roll = random() * total;
   for (const e of explorable) {

@@ -10,3 +10,9 @@ export {
   type ApprovalRuleHit,
   type ApprovalResult,
 } from './approval-gate.js';
+
+export {
+  argumentDigest,
+  sha256Hex,
+  stableStringify,
+} from './argument-digest.js';

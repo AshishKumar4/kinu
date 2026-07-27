@@ -21,8 +21,23 @@ transcript*.json
 /external
 /external/
 
+# Python bytecode (bench/clbench is the only Python in the repo)
+__pycache__/
+*.py[cod]
+
 # Compiled test artifacts (sources are .ts)
 packages/core/tests/helpers.js
 packages/core/tests/helpers.js.map
 packages/core/tests/helpers.d.ts
 packages/core/tests/helpers.d.ts.map
+
+# Internal working notes: dated audits, program ledgers, design studies.
+# Useful locally, not part of the published project.
+/*-2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
+
+# External benchmark corpora (downloaded via harbor, not our source)
+/deep-swe/
+/terminal-bench/
+
+# Throwaway output of the bench/harbor bun --compile step
+/.harbor-build-*/

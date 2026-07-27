@@ -38,9 +38,9 @@ function createFullCLIRuntime() {
   const schedule = createMemorySchedule(db);
 
   // Stable identity
-  execRaw('CREATE TABLE IF NOT EXISTS agent_identity (id TEXT, name TEXT)');
+  execRaw('CREATE TABLE IF NOT EXISTS workspace_identity (id TEXT, name TEXT)');
   const agentId = crypto.randomUUID();
-  db.run('INSERT INTO agent_identity (id, name) VALUES (?, ?)', [agentId, 'cli-agent']);
+  db.run('INSERT INTO workspace_identity (id, name) VALUES (?, ?)', [agentId, 'cli-agent']);
 
   const identity: Identity = {
     id: agentId,

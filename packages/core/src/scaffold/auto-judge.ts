@@ -7,9 +7,12 @@
  * count reaches minTrials and the decision is conclusive, optionally
  * auto-promotes or auto-rolls-back.
  *
+ * Judging is order-swapped and double-called — see judgeTrialOrderSwapped for
+ * the bias it removes and what it costs.
+ *
  * Sampling: configurable via `sampleRate` (0.0..1.0). Default 0.25 — every
- * fourth turn. Use 1.0 for full coverage at 2× LLM cost; use 0 to disable
- * automatic evaluation (RPC-driven only).
+ * fourth turn. Use 1.0 for full coverage (one extra scaffold run plus two
+ * judge calls per turn); use 0 to disable automatic evaluation (RPC-driven only).
  *
  * Cost discipline: only fires when a pending scaffold exists. Aborts
  * gracefully on judge LLM failure (logged, not recorded).
@@ -18,27 +21,31 @@
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import * as v from 'valibot';
 import {
-  type PendingScaffold, type ShadowConfig, type JudgeFn,
+  type PendingScaffold, type ShadowConfig, type JudgeFn, type ShadowTrialVerdict,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow.js';
 import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor.js';
 
-/** Structured judge output — compares current vs pending scaffold on the
- *  same task. Valibot schema; AI SDK's generateObject accepts it via the
- *  StandardSchema spec. */
+/**
+ * Structured output of ONE judge call. Deliberately neutral: the judge sees
+ * two unlabelled responses in a randomized order and is never told which one
+ * the live scaffold produced, so it cannot express a status-quo preference.
+ * Valibot schema; AI SDK's generateObject accepts it via the StandardSchema spec.
+ */
 export const JudgeOutputSchema = v.object({
-  winner: v.picklist(['current', 'pending', 'tie']),
+  winner: v.picklist(['a', 'b', 'tie']),
   rationale: v.pipe(v.string(), v.minLength(1)),
-  currentScore: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
-  pendingScore: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
+  scoreA: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
+  scoreB: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
 });
 
 export type JudgeOutput = v.InferOutput<typeof JudgeOutputSchema>;
 
 /**
  * The host supplies one of these — typically a wrapper over generateObject
- * with the JudgeOutputSchema. Lets core stay framework-agnostic.
+ * with the JudgeOutputSchema. Lets core stay framework-agnostic. Called TWICE
+ * per trial (see judgeTrialOrderSwapped).
  */
 export type StructuredJudgeFn = (prompt: string, schema: typeof JudgeOutputSchema) => Promise<JudgeOutput>;
 
@@ -92,7 +99,8 @@ export interface RunAutoShadowEvalOpts {
    *  shadow task. Omitted → host.defaultInference returns an error. */
   defaultInference?: Parameters<typeof runScaffold>[0]['defaultInference'];
   config?: Partial<AutoJudgeConfig>;
-  /** Deterministic sampling override (used by tests). Default Math.random. */
+  /** Deterministic randomness override (used by tests). Drives both the
+   *  sampling roll and the judge's presentation order. Default Math.random. */
   random?: () => number;
 }
 
@@ -121,7 +129,7 @@ export interface AutoShadowEvalResult {
  *   2. Decide to sample (skip if not in the sample)
  *   3. Read pending code (skip if file missing — shouldn't happen)
  *   4. Run pending via runScaffold against the same task
- *   5. Ask judge LLM to compare current vs pending text
+ *   5. Judge the two outputs with the order-swapped double-win rule
  *   6. Record via recordShadowEvaluation
  *   7. If trial count >= minTrials and config.autoApply, applyPromotionDecision
  */
@@ -172,16 +180,15 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
 
   const pendingOutput = pendingEvents.join('') || (pendingResult.error ?? '');
 
-  // Build the judge prompt.
-  const prompt = buildJudgePrompt({
-    task: opts.task,
-    currentOutput: opts.currentOutput,
-    pendingOutput,
-  });
-
-  let judgeResult: JudgeOutput;
+  let judgeResult: ShadowTrialVerdict;
   try {
-    judgeResult = await opts.judge(prompt, JudgeOutputSchema);
+    judgeResult = await judgeTrialOrderSwapped({
+      judge: opts.judge,
+      task: opts.task,
+      currentOutput: opts.currentOutput,
+      pendingOutput,
+      pendingFirst: rng() < 0.5,
+    });
   } catch (err) {
     console.warn('[auto-judge] judge LLM failed:', err instanceof Error ? err.message : err);
     return { skipped: true };
@@ -232,21 +239,92 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   };
 }
 
-function buildJudgePrompt(opts: { task: string; currentOutput: string; pendingOutput: string }): string {
+interface JudgeTrialOpts {
+  judge: StructuredJudgeFn;
+  task: string;
+  currentOutput: string;
+  pendingOutput: string;
+  /** Which candidate is presented as "Response A" in the FIRST call. The
+   *  second call always presents the opposite order. */
+  pendingFirst: boolean;
+}
+
+/**
+ * Judge one trial with the order-swapped double-win rule.
+ *
+ * The bias this removes: the incumbent used to be pinned to "Response A" and
+ * labelled CURRENT, the candidate to "Response B" labelled PENDING. That is
+ * two systematic, DIRECTIONAL handicaps stacked on the pending — position
+ * bias, which peaks exactly when two candidates are close in quality (the
+ * shadow regime by construction), plus a status-quo/novelty bias carried by
+ * the labels themselves. The Monte Carlo that settled DEFAULT_SHADOW_CONFIG
+ * models judge error as SYMMETRIC noise, so a directional bias was never
+ * inside its guarantees.
+ *
+ * The rule: neutral labels, a randomized presentation order, and two calls
+ * with the orders swapped. A candidate takes the trial only by winning BOTH
+ * orders. A flip — each order picking a different candidate — is the exact
+ * signature of an order-driven verdict, and is recorded as a TIE rather than
+ * as a coin-flip win. Scores are averaged across the two orders.
+ *
+ * Cost: 2× judge tokens per sampled trial. Statistical cost: a materially
+ * higher tie rate, which the promotion rule is recalibrated against
+ * (scripts/shadow-veto-monte-carlo.ts, protocol dimension).
+ */
+async function judgeTrialOrderSwapped(opts: JudgeTrialOpts): Promise<ShadowTrialVerdict> {
+  const [first, second] = await Promise.all([
+    opts.judge(buildJudgePrompt(opts, opts.pendingFirst), JudgeOutputSchema),
+    opts.judge(buildJudgePrompt(opts, !opts.pendingFirst), JudgeOutputSchema),
+  ]);
+  const one = attributeCall(first, opts.pendingFirst);
+  const two = attributeCall(second, !opts.pendingFirst);
+
+  const agreed = one.winner === two.winner && one.winner !== 'tie';
+  const flipped = one.winner !== 'tie' && two.winner !== 'tie' && one.winner !== two.winner;
+  return {
+    winner: agreed ? one.winner : 'tie',
+    rationale: flipped
+      ? `Order-swap flip (${one.winner}, then ${two.winner}) — recorded as a tie. ${one.rationale} | ${two.rationale}`
+      : `${one.rationale} | ${two.rationale}`,
+    currentScore: (one.currentScore + two.currentScore) / 2,
+    pendingScore: (one.pendingScore + two.pendingScore) / 2,
+  };
+}
+
+/** Map one neutral a/b verdict back onto current/pending using the order that
+ *  call was presented in. */
+function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdict {
+  const pendingSlot = pendingIsA ? 'a' : 'b';
+  const currentSlot = pendingIsA ? 'b' : 'a';
+  return {
+    winner: out.winner === pendingSlot ? 'pending' : out.winner === currentSlot ? 'current' : 'tie',
+    rationale: out.rationale,
+    currentScore: pendingIsA ? out.scoreB : out.scoreA,
+    pendingScore: pendingIsA ? out.scoreA : out.scoreB,
+  };
+}
+
+/** The judge prompt for one ordering. Carries NO provenance: neither response
+ *  is identified as the incumbent, and the instructions say so explicitly. */
+function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
+  const responseA = pendingIsA ? opts.pendingOutput : opts.currentOutput;
+  const responseB = pendingIsA ? opts.currentOutput : opts.pendingOutput;
   return [
     'You are judging two candidate responses to the SAME task.',
+    'They are shown in a random order and are deliberately unlabelled — their',
+    'position tells you nothing about where they came from or how good they are.',
     'Score each from 0.0 to 1.0 on (a) correctness, (b) helpfulness, (c) clarity.',
-    'Pick a winner ("current" / "pending" / "tie") and give a one-sentence rationale.',
+    'Pick a winner ("a" / "b" / "tie") and give a one-sentence rationale.',
     '',
     `Task:\n${opts.task.slice(0, 1500)}`,
     '',
-    `Response A (CURRENT scaffold's output):\n${opts.currentOutput.slice(0, 2500)}`,
+    `Response A:\n${responseA.slice(0, 2500)}`,
     '',
-    `Response B (PENDING scaffold's output):\n${opts.pendingOutput.slice(0, 2500)}`,
+    `Response B:\n${responseB.slice(0, 2500)}`,
     '',
-    'Respond with the structured JSON {winner, rationale, currentScore, pendingScore}.',
+    'Respond with the structured JSON {winner, rationale, scoreA, scoreB}.',
   ].join('\n');
 }
 
 // Re-export for convenience.
-export type { PendingScaffold, ShadowConfig, JudgeFn };
+export type { PendingScaffold, ShadowConfig, JudgeFn, ShadowTrialVerdict };

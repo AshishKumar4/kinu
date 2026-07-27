@@ -156,6 +156,37 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1]!.content).toBe('hello there');
   });
 
+  test('a post-stream persistence failure ends the turn and does not stall the queue', async () => {
+    const { db, session, events } = setup('streamed answer');
+    db.exec(`CREATE TRIGGER fail_first_turn_persist
+      BEFORE INSERT ON messages
+      WHEN NEW.role = 'assistant'
+        AND EXISTS (SELECT 1 FROM messages WHERE id = NEW.parent_id AND content = 'first')
+      BEGIN
+        SELECT RAISE(FAIL, 'forced persist failure');
+      END`);
+
+    const first = session.send('first');
+    const second = session.send('second');
+
+    await waitFor(() => turnStarts(events).length === 2);
+    await Promise.all([first, second]);
+
+    const errors = events.filter((event): event is Extract<SessionEvent, { type: 'error' }> => event.type === 'error');
+    const turns = events.filter((event): event is Extract<SessionEvent, { type: 'turn-end' }> => event.type === 'turn-end');
+    expect(errors.some((event) => event.message.includes('forced persist failure'))).toBe(true);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.turn).toMatchObject({
+      userMessage: 'first',
+      assistantResponse: 'streamed answer',
+      hadError: true,
+    });
+    expect(turns[1]!.turn.userMessage).toBe('second');
+    expect(turns[1]!.turn.hadError).toBe(false);
+    const assistants = db.query(`SELECT content FROM messages WHERE role = 'assistant'`).all() as Array<{ content: string }>;
+    expect(assistants).toEqual([{ content: 'streamed answer' }]);
+  });
+
   test('attachments reach the model as [file…, text] user content parts', async () => {
     let observed: ModelMessage[] = [];
     const { db, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
@@ -169,8 +200,8 @@ describe('LocalAgentSession.send — a user turn', () => {
       }],
     });
 
-    // The trailing user message is the volatile turn context; the attachment
-    // rides on the user's own message (the one carrying a file part).
+    // The trailing user message is the ephemeral system-state block; the
+    // attachment rides on the user's own message (the one carrying a file part).
     const user = [...observed].reverse().find((m) =>
       m.role === 'user' && Array.isArray(m.content) &&
       (m.content as Array<{ type?: string }>).some((p) => p?.type === 'file'));
@@ -185,10 +216,57 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
   });
 
-  test('facts ride the trailing volatile context message, never the system prompt', async () => {
+  test('a PDF the model cannot accept is sanitized to a VFS reference before the model sees it', async () => {
+    // The production P0: Workers AI's chat schema rejects type:"file" parts,
+    // so an attached PDF 400s every turn forever. The sanitizer replaces the
+    // part with a content-addressed VFS path the agent reads back with its
+    // file tools — and it must run on EVERY turn's assembly, healing the
+    // already-poisoned durable history.
+    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 9, 8, 7]);
+    const captures: ModelMessage[][] = [];
+    const { rt, session } = setup('reading it', historyCapturingModel('reading it', (messages) => { captures.push(messages); }));
+
+    await session.send({
+      text: 'here is my resume',
+      files: [{
+        filename: 'resume.pdf',
+        mediaType: 'application/pdf',
+        url: `data:application/pdf;base64,${btoa(String.fromCharCode(...pdfBytes))}`,
+      }],
+    });
+
+    // No file part survives to the model request.
+    const observed = captures[0]!;
+    const fileParts = observed.flatMap((m) =>
+      Array.isArray(m.content) ? (m.content as Array<{ type?: string }>).filter((p) => p?.type === 'file') : []);
+    expect(fileParts).toHaveLength(0);
+
+    // The replacement text carries the content-addressed path…
+    const referenced = observed.find((m) =>
+      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+    expect(referenced).toBeDefined();
+    const referencedJson = JSON.stringify(referenced!.content);
+    expect(referencedJson).toContain('resume.pdf');
+    const path = /saved to (\S+) — read/.exec(referencedJson)?.[1];
+    expect(path).toStartWith('/local/attachments/');
+
+    // …and the exact payload bytes are readable back through the agent's VFS.
+    const stored = await rt.storage.vfs.readFile(path!);
+    expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(pdfBytes));
+
+    // Second turn: the (unchanged) in-memory history re-sanitizes to the SAME
+    // reference — byte-stable, so the prompt-cache prefix holds.
+    await session.send('continue');
+    const again = captures[1]!.find((m) =>
+      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+    expect(again).toBeDefined();
+    expect(JSON.stringify(again!.content)).toBe(referencedJson);
+  });
+
+  test('facts ride the ephemeral system-state block, never the system prompt', async () => {
     // Cache-prefix stability: the system prompt must stay byte-stable across
-    // turns, so per-turn state (the facts world model, executor status) is
-    // appended as ONE trailing user message instead.
+    // turns, so system state (the facts world model, executor status) rides
+    // the ephemeral ledger's frozen blocks in the messages array instead.
     let observed: ModelMessage[] = [];
     let system = '';
     const model = historyCapturingModel('ok', (messages) => { observed = messages; });
@@ -204,24 +282,30 @@ describe('LocalAgentSession.send — a user turn', () => {
     await session.send('hi');
     const factsBefore = observed.map(messageText).join('\n');
     expect(factsBefore).not.toContain('FACT-MARKER');
+    // Turn 1 froze one block (executor status renders even with no facts).
+    const turn1Block = observed.map(messageText).find((t) => t.startsWith('[Ephemeral context'));
+    expect(turn1Block).toBeDefined();
 
-    // Seed a fact, then run another turn — it must surface in the tail.
+    // Seed a fact, then run another turn — the state fingerprint changed, so
+    // a NEW block appends at the tail while turn 1's block stays frozen.
     db.exec(`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
              VALUES ('test.marker', '"FACT-MARKER"', 1.0, 'tool', ${Date.now()})`);
     await session.send('and now?');
 
     expect(system).not.toContain('FACT-MARKER');
-    const tail = messageText(observed.at(-1)!);
-    expect(tail).toStartWith('[Turn context');
+    const texts = observed.map(messageText);
+    const tail = texts.at(-1)!;
+    expect(tail).toStartWith('[Ephemeral context');
     expect(tail).toContain('World model');
     expect(tail).toContain('FACT-MARKER');
+    expect(texts).toContain(turn1Block!); // byte-identical, still in place
 
-    // The volatile message is turn-scoped — never persisted.
+    // Ephemeral blocks are turn-assembly state — never persisted.
     const rows = db.query(`SELECT content FROM messages`).all() as Array<{ content: string }>;
-    expect(rows.some((r) => r.content.includes('Turn context'))).toBe(false);
+    expect(rows.some((r) => r.content.includes('Ephemeral context'))).toBe(false);
   });
 
-  test('the MEMORY.md tail (newest lessons) rides the volatile message, never the system prefix', async () => {
+  test('the MEMORY.md tail (newest lessons) rides the ephemeral block, never the system prefix', async () => {
     // Two regressions guarded here: slice(0, 2000) once injected the OLDEST
     // bytes of the append-only MEMORY.md, and the tail once lived in the
     // byte-stable system prefix — where every lesson/reflection/take-pick
@@ -237,13 +321,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     const system = observed.find((m) => m.role === 'system');
     expect(system).toBeDefined();
     expect(String(system!.content)).not.toContain('NEW-LESSON-MARKER');
-    const volatile = observed.findLast((m) => m.role === 'user')!;
-    const text = typeof volatile.content === 'string'
-      ? volatile.content
-      : (volatile.content as Array<{ type: string; text?: string }>)
-          .filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
-    expect(text).toContain('NEW-LESSON-MARKER');
-    expect(text).not.toContain('OLD-STALE-MARKER');
+    const block = observed.map(messageText).find((t) => t.startsWith('[Ephemeral context'))!;
+    expect(block).toContain('NEW-LESSON-MARKER');
+    expect(block).not.toContain('OLD-STALE-MARKER');
   });
 
   test('the system prompt advertises the laptop as the direct CLI host machine', async () => {
@@ -296,14 +376,99 @@ describe('LocalAgentSession.send — a user turn', () => {
     await resumed.send('what did I say?');
     await resumed.end();
 
-    // The volatile turn-context message (executor status etc.) trails the
-    // user's message and is never persisted — filter it for the order checks.
-    const text = observed.map(messageText).filter((t) => !t.startsWith('[Turn context'));
+    // The ephemeral system-state blocks (executor status etc.) are woven in
+    // at turn assembly and never persisted — filter them for the order checks.
+    const text = observed.map(messageText).filter((t) => !t.startsWith('[Ephemeral context'));
     expect(text).toContain('remember this');
     expect(text).toContain('remembered answer');
     expect(text.at(-1)).toBe('what did I say?');
     expect(text.indexOf('remember this')).toBeLessThan(text.indexOf('remembered answer'));
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+  });
+});
+
+describe('LocalAgentSession — tool success/error + cache telemetry fidelity', () => {
+  /** step 1: calls the `memory` save tool (which will throw via a stubbed
+   *  runtime), finishing with the caller-supplied usage; step 2: answers text. */
+  function memoryThenTextModel(firstFinishUsage: Record<string, number>, firstProviderMetadata?: Record<string, unknown>) {
+    let step = 0;
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    return {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async () => {
+        step += 1;
+        if (step === 1) {
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
+                  input: JSON.stringify({ action: 'save', content: 'note' }),
+                });
+                controller.enqueue({
+                  type: 'finish', finishReason: 'tool-calls', usage: firstFinishUsage,
+                  ...(firstProviderMetadata ? { providerMetadata: firstProviderMetadata } : {}),
+                });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    } as unknown as LanguageModel;
+  }
+
+  test('a failing tool flags hadError on the turn and still surfaces a tool-result', async () => {
+    const model = memoryThenTextModel({ inputTokens: 9, outputTokens: 2, totalTokens: 11 });
+    const { rt, session, events } = setup('unused', model);
+    // Make the memory-save path throw deterministically at execution time.
+    rt.memory.append = async () => { throw new Error('disk full'); };
+
+    await session.send('save a note please');
+
+    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    expect(turnEnd.turn.hadError).toBe(true);
+    // The error rode the tool-result path (my case), not the stream-abort catch.
+    const toolResult = events.find((e) => e.type === 'tool-result') as Extract<SessionEvent, { type: 'tool-result' }>;
+    expect(toolResult).toBeDefined();
+    expect(toolResult.result).toContain('disk full');
+    await session.end();
+  });
+
+  test('cached-prefix tokens flow from the step into the turn accumulator', async () => {
+    const model = memoryThenTextModel(
+      { inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 12 },
+      { anthropic: { cacheReadInputTokens: 3 } },
+    );
+    const { rt, session } = setup('unused', model);
+    rt.memory.append = async () => { throw new Error('irrelevant'); };
+
+    await session.send('save it');
+
+    // The accumulator is the evolution/telemetry signal — 12 (usage) + 3
+    // (Anthropic providerMetadata) combine into usage.cached (was 0 before the
+    // ChatEvent seam carried cached tokens).
+    const acc = (session as unknown as { orch: { acc: { usage: { cached: number } } } }).orch.acc;
+    expect(acc.usage.cached).toBe(15);
+    await session.end();
   });
 });
 
@@ -378,6 +543,72 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
   });
 });
 
+describe('LocalAgentSession — overflow recovery (context_length turn failures)', () => {
+  /** doStream throws a context-window error for the first `failures` calls,
+   *  then streams normally — the provider-overflow shape end to end. */
+  function overflowingModel(failures: number, answer = 'recovered'): LanguageModel {
+    let calls = 0;
+    const base = fakeModel(answer) as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+    const inner = base.doStream.bind(base);
+    return {
+      ...base,
+      doStream: async (options: unknown) => {
+        calls += 1;
+        if (calls <= failures) throw new Error('context_length_exceeded: prompt is too long');
+        return inner(options);
+      },
+    } as unknown as LanguageModel;
+  }
+
+  test('a context_length failure arms force-compaction and enqueues ONE retry that resumes the work', async () => {
+    const { db, session, events } = setup('unused', overflowingModel(1));
+    await session.send('build the thing');
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+
+    // Turn 1 errored, the ONE retry ran as a programmatic overflow_retry turn.
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    const starts = turnStarts(events);
+    expect(starts.map((s) => s.kind)).toEqual(['user', 'programmatic']);
+    expect(starts[1]!.event).toBe('overflow_retry');
+    expect(starts[1]!.text).toContain('compacted');
+    // The retry turn completed…
+    const streamed = events.filter((e) => e.type === 'text-delta').map((e) => (e as { delta: string }).delta).join('');
+    expect(streamed).toContain('recovered');
+    // …and CONSUMED the armed flag: no compaction_state row stays armed.
+    const armed = db.prepare(`SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`).get() as { c: number };
+    expect(armed.c).toBe(0);
+  });
+
+  test('a retry turn that fails again never enqueues a third turn (never loops)', async () => {
+    const { session, events } = setup('unused', overflowingModel(Number.POSITIVE_INFINITY));
+    await session.send('build the thing');
+    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+    // Give any (wrong) further enqueue a chance to surface, then assert quiet.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(turnStarts(events)).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(2);
+  });
+
+  test('a rate-limit failure never force-compacts or retries', async () => {
+    let calls = 0;
+    const base = fakeModel('n/a') as unknown as Record<string, unknown> & { doStream: (o: unknown) => unknown };
+    const model = {
+      ...base,
+      doStream: async () => {
+        calls += 1;
+        throw new Error('Failed after 3 attempts. Last error: Too Many Requests');
+      },
+    } as unknown as LanguageModel;
+    const { db, session, events } = setup('unused', model);
+    await session.send('build the thing');
+    await new Promise((r) => setTimeout(r, 25));
+    expect(turnStarts(events)).toHaveLength(1);
+    expect(calls).toBe(1);
+    const armed = db.prepare(`SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`).get() as { c: number };
+    expect(armed.c).toBe(0);
+  });
+});
+
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('always-active skills round-trip through agent_config', () => {
     const { session } = setup();
@@ -403,6 +634,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
       listProviders: async () => [],
       listModels: async () => [],
+      modelInfo: async () => null,
     };
     const { session, events } = setupWithResolver(resolver);
 
@@ -418,6 +650,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('second');
     const turns = events.filter((e): e is Extract<SessionEvent, { type: 'turn-end' }> => e.type === 'turn-end');
     expect(turns[1]!.turn.assistantResponse).toBe('from b');
+  });
+
+  test('reasoning effort persists and merges with prompt-cache options on the main chat turn', async () => {
+    let providerOptions: Record<string, Record<string, unknown>> | undefined;
+    const model = fakeModel('reasoned') as unknown as Record<string, unknown> & {
+      doStream: (options: unknown) => unknown;
+    };
+    const stream = model.doStream.bind(model);
+    model.doStream = async (options: { providerOptions?: Record<string, Record<string, unknown>> }) => {
+      providerOptions = options.providerOptions;
+      return stream(options);
+    };
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: () => 'openai/gpt-5.5',
+      resolveModel: () => model as unknown as LanguageModel,
+      listProviders: async () => [],
+      listModels: async () => [],
+      modelInfo: async () => null,
+    };
+    const { session } = setupWithResolver(resolver);
+
+    expect(session.getReasoningEffort()).toEqual({ effort: null });
+    expect(session.setReasoningEffort('high')).toEqual({ ok: true, effort: 'high' });
+    expect(session.getReasoningEffort()).toEqual({ effort: 'high' });
+    expect(() => session.setReasoningEffort('extreme')).toThrow('Invalid reasoning effort');
+
+    await session.send('think hard');
+    expect(providerOptions).toEqual({
+      openai: {
+        promptCacheKey: expect.any(String),
+        reasoningEffort: 'high',
+      },
+    });
   });
 
   test('broadcast fans out as a SessionEvent', () => {
@@ -490,6 +755,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(trigger.fire_count).toBe(1);
   });
 
+  test('daemon-style tick: flushPendingDrains runs the fired trigger turn before end()', async () => {
+    // Regression: the scheduler daemon fires triggers then ends immediately.
+    // fireDueTriggers only ARMS the ~250ms debounced drain, and end() sets
+    // `ended` which makes the drain timer skip — so the fired trigger's
+    // autonomous turn was silently dropped. The daemon now flushes before end.
+    const { session, events } = setup('handled timer');
+    const fireAt = Date.now() + 60_000;
+    session.createTimerTrigger({ atMs: fireAt, label: 'wake', trust: 'owner' });
+
+    const outcome = await session.fireDueTriggers(fireAt);
+    expect(outcome.fired).toBe(1);
+    // The turn runs synchronously as part of the flush (drainPendingEvents
+    // awaits the enqueued turn to completion) — asserted with NO waitFor, so
+    // this proves the flush drained it, not the debounce timer.
+    await session.flushPendingDrains();
+
+    const starts = turnStarts(events);
+    expect(starts.some((s) => s.kind === 'programmatic')).toBe(true);
+    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+    expect(session.pendingEvents()).toEqual([]);
+    await session.end();
+  });
+
+  test('flushPendingDrains is a no-op once the session has ended', async () => {
+    const { session, events } = setup('handled timer');
+    session.createTimerTrigger({ atMs: Date.now() + 60_000, label: 'wake', trust: 'owner' });
+    await session.fireDueTriggers(Date.now() + 60_000);
+    await session.end();
+    events.length = 0;
+    await session.flushPendingDrains();
+    expect(events).toEqual([]);
+  });
+
   test('cron timer triggers reschedule after firing', async () => {
     const { session, events } = setup('handled cron');
     const created = session.createTimerTrigger({ cron: '*/5 * * * *', label: 'heartbeat' });
@@ -509,11 +807,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('Node execute fallback exposes the local agent.schedule namespace', async () => {
-    const { rt } = setup();
     let received: { atMs?: number; label?: string } | null = null;
     const executeTool = createNodeExecuteToolFactory({
-      vfs: rt.storage.vfs,
-      memory: rt.memory,
       extraProviders: [createLocalAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
@@ -634,14 +929,30 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await session.end();
   });
 
-  test('end() reviews the still-pending turn as abandoned', async () => {
-    const { db, session } = setupWithEvolution('unused');
+  // `proteus exec` is one process per turn. The evolution window and the turn
+  // awaiting its verdict therefore have to outlive the session object, or
+  // headless usage never reaches the reflection cadence and every turn is
+  // graded by the same constant.
+  test('the window and the pending review survive end() — the next run grades the turn', async () => {
+    const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
+    const { db, rt, session } = setupWithEvolution(classifierJson);
 
     await session.send('please summarize the deployment runbook for me');
     await session.end();
 
-    const row = db.query(`SELECT outcome, source FROM turn_outcomes`).get() as { outcome: string; source: string } | null;
-    expect(row).toEqual({ outcome: 'abandoned', source: 'session_end' });
+    // Nothing invented about a turn nobody has graded yet…
+    expect((db.query(`SELECT count(*) AS c FROM turn_outcomes`).get() as { c: number }).c).toBe(0);
+    // …and the turn is still in the window, still waiting for its verdict.
+    expect((db.query(`SELECT count(*) AS c FROM session_window WHERE in_window = 1`).get() as { c: number }).c).toBe(1);
+
+    // A second run against the same workspace: its prompt IS the follow-up.
+    const next = new LocalAgentSession({ rt, db, model: fakeModel('here is the runbook'), onEvent: () => {} });
+    await next.send('no — that summary missed the rollback step entirely');
+    await next.end();
+
+    const row = db.query(`SELECT outcome, source FROM turn_outcomes`).get() as { outcome: string; source: string };
+    expect(row).toEqual({ outcome: 'corrected', source: 'classifier' });
+    expect((db.query(`SELECT count(*) AS c FROM session_window WHERE in_window = 1`).get() as { c: number }).c).toBe(2);
   });
 });
 
@@ -973,9 +1284,11 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
                    VALUES ('editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
 
     const view = session.getEvolutionChangelog();
-    const summaries = view.entries.map((e) => e.summary);
-    expect(summaries.some((s) => s.includes('Crafted tool local_helper'))).toBe(true);
-    expect(summaries.some((s) => s.includes('Learned fact editor = helix'))).toBe(true);
+    const tool = view.entries.find((entry) => entry.kind === 'tool')!;
+    const facts = view.entries.find((entry) => entry.kind === 'fact')!;
+    expect(tool.summary).toBe('Created a tool: local helper');
+    expect(facts.summary).toBe('Learned 1 thing about your environment');
+    expect(facts.items?.map((entry) => entry.summary)).toEqual(['Your editor is helix']);
     expect(view.unseenCount).toBe(2);
 
     session.markChangelogSeen();
@@ -993,11 +1306,11 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
 
     const view = session.getEvolutionChangelog();
     const tool = view.entries.find((e) => e.kind === 'tool')!;
-    const fact = view.entries.find((e) => e.kind === 'fact')!;
+    const facts = view.entries.find((e) => e.kind === 'fact')!;
 
     expect((await session.revertChangelogEntry(tool.id)).ok).toBe(true);
     expect(rt.craftStore.get('doomed_tool')).toBeFalsy();
-    expect((await session.revertChangelogEntry(fact.id)).ok).toBe(true);
+    expect((await session.revertChangelogEntry(facts.id)).ok).toBe(true);
     expect(rt.storage.sql`SELECT * FROM agent_facts WHERE key = 'stale'`).toHaveLength(0);
 
     // Both rows are gone from the next digest, and re-reverting refuses.
@@ -1033,6 +1346,35 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     const turnId = rt.storage.sql<{ id: string }>`
       SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
     expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default', chosenNodeId: null });
+    await session.end();
+  });
+
+  test('an errored turn purges its unclaimed takes instead of claiming them', async () => {
+    // A turn whose stream errored produced no durable answer to compare the
+    // captured takes against — claiming them would credit a turn that failed.
+    // Mirrors the cf backend's purge-on-error.
+    const erroringModel = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.error(new Error('provider exploded'));
+          },
+        }),
+        response: { headers: {} },
+      }),
+    } as unknown as LanguageModel;
+    const { session, rt, events } = setup('unused', erroringModel);
+    seedTakes(rt);
+
+    await session.send('solve it');
+
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    expect(turnEnd.turn.hadError).toBe(true);
+    // The seeded (unclaimed) take was purged, not claimed for the failed turn.
+    expect(session.latestAlternateTakes()).toBeNull();
     await session.end();
   });
 

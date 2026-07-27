@@ -1,11 +1,12 @@
 /**
- * Create a new agent — initializes the database and returns an AgentRuntime.
+ * Create a new workspace — initializes the database and returns the
+ * AgentRuntime of its default orchestrator agent.
  *
- * This is the "birth" of an agent. It creates:
+ * This is the "birth" of a workspace. It creates:
  * - All tables (idempotent)
  * - SOUL.md
  * - The initial scaffold
- * - The agent identity (stable UUID)
+ * - The workspace identity (stable UUID) — the ownership root
  */
 
 import { writeVfsFileSync } from '@proteus/agent-utils/vfs';
@@ -26,7 +27,7 @@ import { buildRuntime } from '../runtime-builder.js';
 
 export { wrapDatabase, type AgentDatabase } from './inline-primitives.js';
 
-export interface AgentBirthConfig {
+export interface WorkspaceBirthConfig {
   name: string;
   purpose: string;
   llm: LLMProviderConfig;
@@ -66,18 +67,19 @@ function buildComponents(
   });
 }
 
-/** Create a new agent identity from scratch */
-export function createAgent(db: AgentDatabase, config: AgentBirthConfig): AgentRuntime {
+/** Create a new workspace from scratch. Returns the default agent's runtime. */
+export function createWorkspace(db: AgentDatabase, config: WorkspaceBirthConfig): AgentRuntime {
   const { sql, execRaw } = wrapDatabase(db);
 
   // Initialize all tables
   initAllTables(execRaw);
 
-  // Write the agent identity
-  const agentId = nanoid();
-  sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${agentId}, ${config.name}, ${nowMs()})`;
+  // Write the workspace identity
+  const workspaceId = nanoid();
+  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
 
-  // Seed SOUL.md from the initial mission. It is the canonical agent identity.
+  // Seed SOUL.md from the initial mission. It is the workspace's canonical
+  // identity document, embodied by its default agent.
   seedSoul(sql, { name: config.name, mission: config.purpose });
 
   // Bootstrap scaffold into VFS
@@ -89,6 +91,6 @@ export function createAgent(db: AgentDatabase, config: AgentBirthConfig): AgentR
   writeVfsFileSync(sql, 'memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);
 
   return buildComponents(db, sql, execRaw, {
-    llm: config.llm, judge: config.judge, agentId, agentName: config.name,
+    llm: config.llm, judge: config.judge, agentId: workspaceId, agentName: config.name,
   });
 }

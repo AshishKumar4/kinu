@@ -1,5 +1,7 @@
 # Testing Proteus
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 Proteus uses Bun's test runner across the shared core, Cloudflare backend,
 local backend, and root end-to-end suites. This doc covers the conventions,
 where things live, and how to add tests when shipping a new feature.
@@ -7,11 +9,22 @@ where things live, and how to add tests when shipping a new feature.
 ## TL;DR
 
 ```bash
-bash scripts/test.sh                     # all tests
+bash scripts/test.sh                     # core + cf-backend + cli-backend + cli
 bash scripts/test.sh --coverage          # + coverage report
 bash scripts/test.sh --bail              # exit on first failure
 bash scripts/test.sh packages/core/tests/contract-providers.test.ts   # one file
-bun run check                            # TypeScript type-check
+bun run check                            # TypeScript type-check (every package)
+```
+
+Two things about `scripts/test.sh` worth knowing. It runs four packages —
+`core`, `cf-backend`, `cli-backend`, `cli` — so `agent-utils`, `compaction`, and
+`pc-agent` are **not** in "all tests". And the root `bun run test` script is a
+different, partly disjoint set (`agent-utils`, `core`, `compaction`). To
+actually cover everything:
+
+```bash
+bash scripts/test.sh
+bun test packages/agent-utils/tests packages/compaction/tests
 ```
 
 For focused local checks:
@@ -36,33 +49,41 @@ config:
 | `e2e/*.test.ts` | Full system through public APIs | ~seconds | In-memory but realistic |
 | `smoke-*.test.ts` | "Does it boot / import" | <100ms | None |
 
+The convention holds in `core` and `cf-backend`, where nearly every file carries
+a prefix. `cli-backend/tests` and `cli/tests` use bare `<name>.test.ts` instead,
+so treat the prefix as a strong convention rather than a rule the tooling
+enforces.
+
 ## What lives where
 
 ```
 packages/
-├─ core/tests/
+├─ core/tests/                (115 files)
 │  ├─ unit-*.test.ts          (pure logic)
 │  ├─ integration-*.test.ts   (multi-module flows)
 │  ├─ contract-providers.test.ts  (HTTP wire format per provider)
 │  └─ helpers.ts              (package-local helpers)
-├─ cf-backend/tests/
+├─ cf-backend/tests/           (58 files)
 │  ├─ unit-agent-registry.test.ts  (provider registry composition)
 │  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
 │  ├─ unit-cli-auth-store.test.ts  (D1-backed device-code flow)
 │  ├─ unit-rlm.test.ts             (Recursive Language Model bridge)
 │  └─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
-├─ cli-backend/tests/
+├─ cli-backend/tests/          (16 files)
 │  ├─ local-session.test.ts        (local agent session behavior)
 │  ├─ model-resolver.test.ts       (provider/model selection)
 │  └─ executor.test.ts             (local execution tools)
+├─ cli/tests/                  (25 files — CLI commands, config, TUI)
+├─ agent-utils/tests/          (4 files — SqliteFS, MemoryStore, shell)
+├─ compaction/tests/           (4 files — the ladder and the codec)
 └─ test-utils/src/
    ├─ sql.ts            ── createTestSql()
-   ├─ llm.ts            ── createScriptedLLM / JSONLLM / EchoLLM / FailingLLM
+   ├─ llm.ts            ── createScriptedLLM / createJSONLLM / createEchoLLM / createFailingLLM
    ├─ network.ts        ── createMockFetch(handlers)
    ├─ runtime.ts        ── createTestRuntime()
    ├─ provider.ts       ── createTestProvider / createTestStrategy
    ├─ events.ts         ── assertEventSequence / collectEvents
-   ├─ credentials.ts    ── createTestCredentials / freshOAuthCredential
+   ├─ credentials.ts    ── createTestAuth / codexAuthHeaders / bearerAuth / anthropicAuth
    └─ facts.ts          ── createTestFactsStore
 tests/
 ├─ e2e-lifecycle.test.ts
@@ -82,7 +103,7 @@ to implementation and produce false confidence:
 | Structured-output LLM | `createJSONLLM({ /* the JSON */ })` |
 | HTTP (provider wire) | `createMockFetch([{ match, respond }])` — assert URLs/headers/body |
 | SQL (DO storage) | `createTestSql()` — bun:sqlite `:memory:` + template tag |
-| Credentials | `createTestCredentials({ key: cred })` |
+| Credentials | `createTestAuth({ key: bearerAuth('tok') })` — resolved auth headers, not raw secrets |
 | AgentRuntime | `createTestRuntime()` — full minimal AgentRuntime |
 | RunEvent stream | `collectEvents(loop.run(ctx))` + `assertEventSequence(...)` |
 | Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@proteus/cli-backend` |
@@ -116,7 +137,6 @@ describe('myFunction', () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { runAutoShadowEval } from '../src/index.ts';
 import { createTestRuntime, createJSONLLM } from '@proteus/test-utils';
 
 test('auto-judge picks current when scores tie', async () => {
@@ -132,18 +152,16 @@ test('auto-judge picks current when scores tie', async () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, createTestCredentials } from '@proteus/test-utils';
+import { createMockFetch, createTestAuth, bearerAuth } from '@proteus/test-utils';
 import { createMyProvider, MY_CRED_KEY } from '../src/index.ts';
 
 test('sends Authorization: Bearer', async () => {
-  const credentials = createTestCredentials({
-    [MY_CRED_KEY]: { kind: 'bearer', token: 'sk-x' },
-  });
+  const auth = createTestAuth({ [MY_CRED_KEY]: bearerAuth('sk-x') });
   const mock = createMockFetch([
     { match: 'api.myservice.com', respond: { status: 200, body: { ok: true }}},
   ]);
   const model = createMyProvider().createModel('m', {
-    env: {}, credentials, fetch: mock.fetch,
+    env: {}, getAuth: auth.getAuth, hasCredential: auth.hasCredential, fetch: mock.fetch,
   });
   // call the model via AI SDK generateText
   // …
@@ -177,15 +195,16 @@ test('my-strategy explores within budget', async () => {
 ## What's NOT testable in pure Bun
 
 The `@cloudflare/agents` package transitively imports `cloudflare:email`,
-which only resolves inside the Workers runtime. Anything that imports
-`agents` directly — e.g. `OrchestratorAgent`, `ExplorationAgent`, the
-auth/routes dispatcher — is testable only via miniflare or wrangler dev,
-not from `bun test`.
+which only resolves inside the Workers runtime. Anything that imports the
+`agents` package directly — `ActorAgent` and its subclasses,
+`ExplorationAgent`, the auth/routes dispatcher — is testable only via miniflare
+or wrangler dev, not from `bun test`.
 
-The pattern we use (see `auth/path.ts` vs `auth/routes.ts`): extract pure
-URL/parsing logic into its own file with no `agents` import. Unit-test that
-file in Bun. The orchestration file that wires it to actual DO calls is
-covered by integration / e2e harness.
+The pattern we use: extract the pure URL/parsing/policy logic into its own file
+with no `agents` import, unit-test that in Bun, and leave the orchestration file
+that wires it to actual DO calls to the integration and e2e harness. That is why
+`cf-backend/tests` can still hold 58 passing Bun files despite the constraint —
+most of what matters there was written to be reachable without a DO.
 
 ## Running with coverage
 
@@ -197,14 +216,13 @@ Coverage is per-file with funcs % / lines %. Useful for finding gaps but
 NOT a goal — the goal is "behaviors I care about are tested." Don't game
 the number.
 
-Current baseline (after the 2026-05-27 test-suite work):
-- 321 tests pass, 0 fail
-- Function coverage ~72%
-- Line coverage ~75%
+Current baseline, from `bash scripts/test.sh`:
+- 1975 pass, 3 skip, 0 fail — 1978 tests across 214 files, ~53 s
+- plus 86 more in `agent-utils` + `compaction`, which that script does not run
 
 Areas with intentionally low coverage:
-- `tests/e2e/ai-gateway-llm.ts` — real-LLM helper, expected to be uncovered
-  in the unit pass
+- `packages/core/tests/e2e/ai-gateway-llm.ts` — real-LLM helper, expected to be
+  uncovered in the unit pass
 - `test-utils/src/runtime.ts` — itself a fixture; gets exercised indirectly
 - DO/Worker integration paths — covered by the deploy smoke test, not
   visible to bun test

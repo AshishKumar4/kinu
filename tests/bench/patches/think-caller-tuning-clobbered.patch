@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/strategy/think-tool.ts b/packages/core/src/strategy/think-tool.ts
+index 07eaa13..4343dd7 100644
+--- a/packages/core/src/strategy/think-tool.ts
++++ b/packages/core/src/strategy/think-tool.ts
+@@ -128,7 +128,7 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
+       const options: Record<string, unknown> = { ...defaults };
+       for (const [k, v] of Object.entries(callerOpts)) {
+         const d = options[k];
+-        options[k] = isPlainObject(d) && isPlainObject(v) ? { ...d, ...v } : v;
++        options[k] = isPlainObject(d) && isPlainObject(v) ? { ...v, ...d } : v;
+       }
+ 
+       // Ergonomic heads input: fold the typed top-level fields into

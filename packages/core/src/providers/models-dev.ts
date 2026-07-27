@@ -1,4 +1,5 @@
-import type { ModelCapability, ModelInfo, ProviderDeps } from './types.js';
+import type { ModelCapability, ModelInfo, ModelInputModality, ProviderDeps } from './types.js';
+import { MODEL_INPUT_MODALITIES } from './types.js';
 import { cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
@@ -177,12 +178,15 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
   if (model.tool_call === true) capabilities.push('tools');
   if (model.reasoning === true) capabilities.push('reasoning');
   if (model.modalities?.input?.includes('image')) capabilities.push('vision');
+  const inputModalities = (model.modalities?.input ?? [])
+    .filter((m): m is ModelInputModality => (MODEL_INPUT_MODALITIES as readonly string[]).includes(m));
 
   return {
     id,
     label: nonEmptyString(model.name) ?? id,
     capabilities,
     contextWindow: positiveInteger(model.limit?.context),
+    ...(inputModalities.length > 0 ? { inputModalities } : {}),
   };
 }
 

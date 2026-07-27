@@ -165,6 +165,11 @@ function friendlySource(event: ProteusEvent): string {
     case 'process_watch':   return `sandbox (${(event.payload as { command?: string }).command?.slice(0, 40) ?? 'process'})`;
     case 'file_watch':      return `file (${(event.payload as { path?: string }).path ?? '?'})`;
     case 'peer_async':      return `peer agent (${(event.payload as { from_agent_name?: string }).from_agent_name ?? '?'})`;
+    case 'subordinate':
+      return event.variant === 'subordinate_report'
+        ? `subordinate (${(event.payload as { from_subordinate?: string }).from_subordinate ?? '?'})`
+        : `workspace orchestrator (${(event.payload as { from_workspace?: string }).from_workspace ?? '?'})`;
+    case 'email_inbound':   return `email (${(event.payload as { from?: string }).from ?? '?'})`;
     case 'mcp_streamable':
       if (event.variant === 'mcp_chat') return `MCP (operator)`;
       return `MCP (${(event.payload as { client_label?: string }).client_label ?? 'third party'})`;
@@ -206,13 +211,40 @@ function briefForVariant(event: ProteusEvent): string {
       return p.label ?? JSON.stringify(p.user_payload).slice(0, 100);
     }
     case 'peer_agent': {
+      // Peer messages are delegated tasks/answers — a chat-scale budget, not
+      // the 150-char telemetry brief, so the receiving turn sees the request.
       const p = event.payload as { topic: string; body: unknown };
-      return `${p.topic}: ${JSON.stringify(p.body).slice(0, 150)}`;
+      return `${p.topic}: ${JSON.stringify(p.body).slice(0, 600)}`;
+    }
+    case 'subordinate_task': {
+      // Assignments are the subordinate's whole turn input — chat-scale
+      // budget, same as peer messages.
+      const p = event.payload as {
+        kind: string;
+        body: string;
+        deliverable?: string;
+        inherited_context?: string;
+      };
+      const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
+      const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
+      return `${inheritedContext}${p.kind}: ${p.body.slice(0, 600)}${deliverable}`;
+    }
+    case 'subordinate_report': {
+      const p = event.payload as { status: string; content: string; task?: string };
+      const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
+      return `${p.status}${task}: ${p.content.slice(0, 600)}`;
     }
     case 'file_changed':
       return `${(event.payload as { change: string; path: string }).change} ${
         (event.payload as { path: string }).path
       }`;
+    case 'email': {
+      const p = event.payload as { subject: string; body_text: string; attachments?: unknown[] };
+      const attachNote = p.attachments && p.attachments.length > 0
+        ? ` [${p.attachments.length} attachment${p.attachments.length === 1 ? '' : 's'}]`
+        : '';
+      return `"${p.subject}"${attachNote}: ${p.body_text.slice(0, 300)}`;
+    }
     case 'internal':
       return `${(event.payload as { kind: string }).kind}`;
     case 'reply_request':

@@ -1,5 +1,11 @@
 import { DEFAULT_WORKERS_AI_MODEL_ID, type ModelInfo } from '@proteus/core';
 
+// Prefix-cache reality (verified 2026-07-13 against the account model catalog
+// and live two-shot probes): only kimi-k2.6, kimi-k2.7-code and glm-5.2 bill
+// a discounted cached-input rate — i.e. have a server-side prefix cache the
+// x-session-affinity pin can hit. llama-4-scout, gpt-oss-* and nemotron list
+// no cached rate: their input is always billed full, regardless of affinity.
+
 export const WORKERS_AI_PREFERRED_MODEL_IDS = [
   DEFAULT_WORKERS_AI_MODEL_ID,
   '@cf/nvidia/nemotron-3-120b-a12b',

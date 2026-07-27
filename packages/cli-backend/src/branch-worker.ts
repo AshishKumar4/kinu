@@ -16,7 +16,15 @@
 
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, diversityDirective, formatInheritedContext, type CraftedTool, type LLMProviderConfig } from '@proteus/core';
+import {
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  diversityDirective,
+  formatInheritedContext,
+  parseModelSpec,
+  reasoningEffortOptions,
+  type CraftedTool,
+  type LLMProviderConfig,
+} from '@proteus/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -80,24 +88,39 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
           siblings?: readonly string[];
         };
         const context = formatInheritedContext(history);
-        const response = await complete(
-          `You are an expert exploring one approach to solve a task.${craftedToolHints}\n\n` +
-          `Context:\n${context}\n\n` +
-          `Propose ONE specific concrete approach in 2-3 sentences.${diversityDirective(siblings)}`
-        );
-        const text = response.trim();
-        // Store trace in the branch's own DB
-        db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, text]);
-        result = { text, codeUsed: null };
+        // Mirror cf-backend/src/exploration.ts: ask for a ```js implementation
+        // when applicable so the branch is execution-groundable (the grounded
+        // evaluator runs extracted code) — not prose-only.
+        const { model, providerOptions } = resolveLowEffortModel();
+        const { text } = await generateText({
+          model,
+          system: 'You are an expert agent exploring one approach to solve a task.' + craftedToolHints +
+            '\n\nIf your approach involves code, include it in a ```js code block.',
+          messages: [{ role: 'user' as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
+          ...(providerOptions ? { providerOptions } : {}),
+        });
+        const trimmed = text.trim();
+        const codeMatch = trimmed.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
+        const codeUsed = codeMatch?.[1]?.trim() ?? null;
+        // Persist code_used so reflect + the parent's trace inspection see it.
+        db.run('INSERT INTO traces (step, text, code_used) VALUES (?, ?, ?)', [1, trimmed, codeUsed]);
+        result = { text: trimmed, codeUsed };
         break;
       }
       case 'reflect': {
         const { task } = msg.args as { task: string };
-        const response = await complete(
-          `What specifically went wrong with this approach?\n${task.slice(0, 500)}\n\n` +
-          `One sentence only.`
-        );
-        result = response.trim();
+        // Read the branch's own trace table (mirror cf generateReflection): the
+        // reflection is about the attempt this branch actually made, not the
+        // bare task string.
+        const traces = db.query('SELECT text FROM traces ORDER BY step').all() as Array<{ text: string }>;
+        const attempt = traces.map(t => t.text).join('\n');
+        const { model, providerOptions } = resolveLowEffortModel();
+        const { text } = await generateText({
+          model,
+          messages: [{ role: 'user' as const, content: `Task: ${task}\nAttempt: ${attempt}\n\nWhat specifically went wrong? One sentence.` }],
+          ...(providerOptions ? { providerOptions } : {}),
+        });
+        result = text.trim();
         break;
       }
       default:
@@ -105,7 +128,10 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
     }
     process.send!({ method: msg.method, result });
   } catch (err) {
-    process.send!({ method: msg.method, error: (err as Error).message });
+    // Always carry a message: an empty one reads as "no error" to any
+    // presence-checking caller and hides the real failure.
+    const message = err instanceof Error && err.message ? err.message : String(err) || 'branch worker failed';
+    process.send!({ method: msg.method, error: message });
   }
 });
 
@@ -125,10 +151,12 @@ function readStoredModelSpec(): string | null {
   }
 }
 
-async function complete(prompt: string): Promise<string> {
-  const model = modelResolver.resolveModel(readStoredModelSpec());
-  const { text } = await generateText({ model, prompt, maxOutputTokens: 2048 });
-  return text.trim();
+function resolveLowEffortModel() {
+  const spec = modelResolver.normalizeSpecSync(readStoredModelSpec());
+  return {
+    model: modelResolver.resolveModel(spec),
+    providerOptions: reasoningEffortOptions('low', parseModelSpec(spec).provider),
+  };
 }
 
 function readJson<T>(raw: string | undefined): T | null {

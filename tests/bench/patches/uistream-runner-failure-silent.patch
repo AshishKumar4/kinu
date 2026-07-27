@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/scaffold/ui-stream.ts b/packages/core/src/scaffold/ui-stream.ts
+index 88f0be2..25873bc 100644
+--- a/packages/core/src/scaffold/ui-stream.ts
++++ b/packages/core/src/scaffold/ui-stream.ts
+@@ -109,7 +109,7 @@ export async function* scaffoldEventsToUIStream(
+ 
+   // Close out: emit any failure the runner surfaced, then a single finish.
+   const result = await runPromise;
+-  if (!result.ok && result.error) {
++  if (result.ok && result.error) {
+     yield { type: 'error', errorText: result.error };
+   }
+   yield* closeTextIfOpen();

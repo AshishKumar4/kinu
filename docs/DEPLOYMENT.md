@@ -40,6 +40,11 @@ bun run dev
 
 Open http://localhost:5173 in your browser. The Vite cloudflare() plugin runs real Durable Objects locally via Miniflare.
 
+Those two keys get you the platform AI Gateway fallback provider. For the
+primary path — models billed to the signed-in user's own Cloudflare account —
+you also need `CLOUDFLARE_OAUTH_CLIENT_ID` and `CLOUDFLARE_OAUTH_CLIENT_SECRET`
+in `.dev.vars`, or `DEV_USER_EMAIL` to skip auth entirely for headless work.
+
 ### CLI
 
 ```bash
@@ -186,16 +191,57 @@ To set up the platform AI Gateway:
 4. Create an API token with Workers AI permissions
 5. Set the token as `AI_GATEWAY_AUTH` secret (see above)
 
-### Default Workers AI Models
+### The provider registry
 
-The default model id lives once in `@proteus/core`
-(`DEFAULT_WORKERS_AI_MODEL_ID`); the curated fallback catalog is in
-`packages/cf-backend/src/providers/workers-ai-catalog.ts`.
+Registration order is the default-preference order. The cloud registers, in
+order: `workers-ai`, the user's own `my-gateway`, the platform `ai-gateway`
+fallback, `codex`, `openai`, `anthropic`, `openrouter`, `openai-compat` (plus
+one `openai-compat:<name>` per extra configured credential), and finally a
+**dynamic source backed by the live models.dev catalog** — any provider id there
+becomes usable once you store a `<id>.bearer` credential. The CLI registers the
+same list minus the dynamic catalog, plus two that only make sense locally:
+`claude` (drives your own Claude Code binary) and `opencode`.
 
-| Model ID | Name | Description |
-|----------|------|-------------|
-| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | Default — reasoning + tools + vision, 262k context |
-| `@cf/meta/llama-4-scout-17b-16e-instruct` | Llama 4 Scout 17B | General-purpose instruction model |
+### Model catalogs are live
+
+Model lists are fetched from `https://models.dev/api.json` behind a 5-minute
+cache (`core/src/providers/models-dev.ts`), which is where each model's context
+window and capability flags come from. The static lists —
+`WORKERS_AI_FALLBACK_MODEL_CATALOG` in
+`packages/cf-backend/src/providers/workers-ai-catalog.ts`, and each provider's
+`FALLBACK_MODELS` — are only what you get when that fetch fails, returns
+non-200, or filters to nothing. OpenRouter is the exception: it queries its own
+`/api/v1/models` instead.
+
+The default model id lives once in `@proteus/core` as
+`DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC`
+(`@cf/moonshotai/kimi-k2.6`), and is written into the user's `default_model`
+config on first Cloudflare sign-in. The Workers AI fallback catalog carries five
+entries:
+
+| Model ID | Name | Context |
+|----------|------|---------|
+| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | 262k — default; reasoning + tools + vision |
+| `@cf/nvidia/nemotron-3-120b-a12b` | Nemotron 3 Super 120B | 256k |
+| `@cf/openai/gpt-oss-120b` | GPT OSS 120B | 128k |
+| `@cf/openai/gpt-oss-20b` | GPT OSS 20B | 128k |
+| `@cf/meta/llama-4-scout-17b-16e-instruct` | Llama 4 Scout | 131k |
+
+Model choice interacts with prompt caching: as of the 2026-07-13 catalog check,
+only `kimi-k2.6` (plus `kimi-k2.7-code` and `glm-5.2`) bills a discounted
+cached-input rate, so those are the only Workers AI models where the
+session-affinity pin buys anything. The others bill input at full rate
+regardless.
+
+### Rate limits
+
+Every provider fetch goes through `withRateLimitRetry`
+(`core/src/providers/rate-limit-retry.ts`), so a 429 does not surface as a
+failed turn. It retries 429/529 (and overload-shaped 503s) up to 6 attempts
+within a 180-second budget, honoring `Retry-After` verbatim when present and
+otherwise waiting a full-jitter draw under a ceiling that doubles from 2 s to a
+60 s cap. Requests whose body cannot be replayed pass through untouched, and an
+exhausted budget returns the original response rather than throwing.
 
 ## Environment Variables
 
@@ -214,8 +260,11 @@ The default model id lives once in `@proteus/core`
 | `CLOUDFLARE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Cloudflare OAuth client id |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | Wrangler secret | Cloudflare OAuth client secret |
 | `CLOUDFLARE_OAUTH_SCOPES` | optional override | Defaults to `CLOUDFLARE_WORKERS_AI_SCOPES` in `lib/cloudflare-oauth.ts` |
+| `CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD` | wrangler.jsonc `vars` | Token endpoint auth method (`client_secret_basic` in production) |
 | `CLOUDFLARE_AI_GATEWAY_ID` | wrangler.jsonc `vars` | User account AI Gateway id for Workers AI routing; defaults to `default` |
-| `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity |
+| `GOOGLE_OAUTH_SCOPES` / `GITHUB_OAUTH_SCOPES` | optional override | Per-provider scope overrides |
+| `EMAIL_DOMAIN` | wrangler.jsonc `vars` | Mission Inbox domain; unset disables email entirely (as on staging) |
+| `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity. Production must leave this unset. |
 | `PROTEUS_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
 | `PROTEUS_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
 | `PROTEUS_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
@@ -228,16 +277,28 @@ The default model id lives once in `@proteus/core`
 
 | Binding | Type | Description |
 |---------|------|-------------|
-| `OrchestratorAgent` | Durable Object | Main chat agent (extends Think) |
-| `ExplorationAgent` | Durable Object | MCTS branch agents (Facets) |
+| `OrchestratorAgent` | Durable Object | The workspace agent (extends `ActorAgent` → `Think`) |
+| `ExplorationAgent` | Durable Object | MCTS branches and heads (Facets) |
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, product changes |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk` — built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox) — one container per agent |
 | `AUTH_DB` | D1 database | OAuth users, sessions, one-time OAuth state, and CLI browser approval state |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
+| `MEMORY_VECTORS` | Vectorize | `proteus-memory` (384-dim, cosine) — optional hybrid recall on top of FTS5 |
+| `EMAIL` | `send_email` | Outbound Mission Inbox replies and owner notifications |
 | `BACKUP_BUCKET` | R2 bucket | Sandbox `/workspace` backups (squashfs archives) |
 | `ASSETS` | Static assets | `dist/client` SPA bundle + CLI source archive downloads |
+
+`SubordinateAgent` has no binding of its own — it exists only as a facet of
+`OrchestratorAgent`, reached through the agents SDK's sub-agent mechanism.
+
+`compatibility_date` is `2025-12-01` with `nodejs_compat`. Durable Object
+migrations are two tags in production (`v1` registering `OrchestratorAgent`,
+`ExplorationAgent`, `ProteusSandbox`, `UserDO`; `v2` adding `NimbusSession`) but
+a **different four-tag sequence** under `env.staging`, because the two
+deployments registered their classes in a different order. Wrangler does not
+inherit `env.*` config, so every binding is re-specified there.
 
 ## Deploy Script
 

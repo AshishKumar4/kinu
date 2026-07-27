@@ -1,13 +1,13 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, type DragEvent as ReactDragEvent } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, type DragEvent as ReactDragEvent, type FormEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
-  GearIcon, ArrowSquareOutIcon, GearSixIcon, TimerIcon, TreeStructureIcon, ClockIcon,
+  GearIcon, GearSixIcon, TimerIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
-  ClockCounterClockwiseIcon,
+  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -15,8 +15,8 @@ import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core
 import type { AlternateTakeSet, FileCheckpointEntry, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
-import { cloudflareReconnectPath, touchAgent, listAvailableModels, type ModelMenuEntry } from "@/lib/user-api";
-import { ModelPicker } from "@/components/ModelPicker";
+import { touchWorkspace } from "@/lib/user-api";
+import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { PreviewFrame } from "@/components/PreviewFrame";
@@ -27,7 +27,8 @@ import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
-import type { TimelineSpan, TimelineKind, PendingConsent } from "@/lib/protocol";
+import { SubordinateTabs } from "@/components/SubordinateTabs";
+import type { TimelineSpan, TimelineKind, PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -39,6 +40,77 @@ function getMessageText(msg: UIMessage): string {
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function InlineWorkspaceTitle({ title, onRename }: {
+  title: string;
+  onRename: (displayName: string) => Promise<string>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { if (!editing) setValue(title); }, [editing, title]);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    const displayName = value.trim();
+    if (!displayName || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setValue(await onRename(displayName));
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <form onSubmit={save} className="flex min-w-0 items-center gap-1">
+        <input
+          autoFocus
+          value={value}
+          maxLength={60}
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Escape" && !saving) { setEditing(false); setError(null); } }}
+          className="w-44 rounded-md border p-border p-elevated px-2 py-1 text-sm p-text focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+          aria-label="Workspace display name"
+        />
+        <button
+          type="submit"
+          disabled={!value.trim() || saving}
+          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover disabled:opacity-40"
+          aria-label="Save workspace name"
+        ><CheckIcon size={13} /></button>
+        <button
+          type="button"
+          onClick={() => { setEditing(false); setError(null); }}
+          disabled={saving}
+          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
+          aria-label="Cancel rename"
+        ><XIcon size={13} /></button>
+        {error && <span role="alert" className="text-[10px] p-danger" title={error}>Rename failed</span>}
+      </form>
+    );
+  }
+
+  return (
+    <div className="group/title flex min-w-0 items-center gap-1">
+      <span className="font-medium text-sm p-text truncate max-w-[180px]">{title}</span>
+      <button
+        onClick={() => setEditing(true)}
+        className="shrink-0 rounded p-1 opacity-0 group-hover/title:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all"
+        title="Rename"
+        aria-label={`Rename workspace ${title}`}
+      ><PencilSimpleIcon size={12} /></button>
+    </div>
+  );
 }
 
 /* ── Chat attachments ─────────────────────────────────────────── */
@@ -100,10 +172,10 @@ function ReasoningBlock({ text }: { text: string }) {
 
 /** Color-coded badge for the runtime a `run` tool call dispatched on. */
 const RUNTIME_COLORS: Record<string, string> = {
-  workspace: 'bg-stone-700/60 text-stone-200',
-  nimbus:    'bg-sky-700/60 text-sky-100',
-  sandbox:   'bg-emerald-700/60 text-emerald-100',
-  laptop:    'bg-amber-700/60 text-amber-100',
+  workspace: 'p-badge-neutral',
+  nimbus:    'p-badge-info',
+  sandbox:   'p-badge-success',
+  laptop:    'p-badge-warning',
 };
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
@@ -157,29 +229,29 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   return (
     <div className="my-1.5">
       <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs p-text-2 hover:p-text transition-colors">
-        {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="text-red-400" /> : <CheckCircleIcon size={12} className="text-green-400" />}
+        {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="p-danger" /> : <CheckCircleIcon size={12} className="p-success" />}
         <span className="font-mono">{toolName}</span>
         {runtime && (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'bg-stone-700/60 text-stone-200'}`}
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'p-badge-neutral'}`}
                 title={`Runtime: ${runtime}`}>
             {runtime}
           </span>
         )}
-        {isRunning && <span className="text-amber-400/80 text-[11px]">running...</span>}
+        {isRunning && <span className="p-warning text-[11px]">running...</span>}
         {durationLabel && !isRunning && <span className="p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
         {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
       </button>
       {provisionErr && (
-        <div className="mt-1.5 ml-5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs p-text-2 flex items-start gap-2">
-          <WrenchIcon size={12} className="text-amber-400 mt-0.5 shrink-0" />
+        <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
+          <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono bg-amber-500/10 px-1 rounded">{provisionErr.runtime}</code> runtime
+              The agent asked for the <code className="font-mono p-elevated px-1 rounded">{provisionErr.runtime}</code> runtime
               but it isn't provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
             <div className="p-text-3">
-              Open the <span className="font-medium">Devices</span> surface to provision it.
+              Open the <span className="font-medium">Environment</span> tab to provision it.
             </div>
           </div>
         </div>
@@ -206,9 +278,9 @@ function DeviceConsentCard({ consent, onResolve }: {
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
   return (
-    <div className="rounded-xl border border-amber-500/40 p-3 animate-fade-in" style={{ background: "rgba(245,158,11,0.06)" }}>
+    <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
       <div className="flex items-start gap-2">
-        <DesktopTowerIcon size={16} className="text-amber-400 shrink-0 mt-0.5" weight="fill" />
+        <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">
             This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
@@ -231,12 +303,42 @@ function DeviceConsentCard({ consent, onResolve }: {
   );
 }
 
+/** Terminal chat error — the turn failed (provider error, stream break) and
+ *  produced no visible answer. Shows the honest error body with a retry
+ *  affordance; the hook clears it on the next send. */
+function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
+  message: string;
+  streaming: boolean;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rounded-xl border p-3 animate-fade-in p-elevated" style={{ borderColor: "var(--c-danger)" }}>
+      <div className="flex items-start gap-2">
+        <WarningCircleIcon size={16} className="p-danger shrink-0 mt-0.5" weight="fill" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs p-text font-medium">The last turn failed</div>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-2.5 justify-end">
+        <button onClick={onDismiss}
+          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
+        <button onClick={onRetry} disabled={streaming}
+          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
+          <ArrowsClockwiseIcon size={11} />Retry last message
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** A background task returning into the conversation — rendered as a centered
  *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status }: { kind: string; status: string }) {
-  const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "text-emerald-400", verb: "completed" }
+  const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
     : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
-    : { Icon: WarningCircleIcon, tone: "text-red-400", verb: "failed" };
+    : { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
   return (
     <div className="flex justify-center animate-fade-in py-1">
       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
@@ -244,6 +346,29 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
         <span>Background <span className="font-medium p-text">{kind}</span> task {meta.verb}</span>
         <ClockIcon size={11} className="p-text-3" />
       </div>
+    </div>
+  );
+}
+
+/** A subordinate's task assignment or progress report, mirrored into the main
+ *  chat as a centered marker that links to that subordinate's tab. */
+function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
+  const done = event.status === "completed";
+  const failed = event.status === "failed" || event.status === "error";
+  const Icon = event.kind === "task" ? UserPlusIcon : done ? CheckCircleIcon : failed ? WarningCircleIcon : ClockIcon;
+  const tone = done ? "p-success" : failed ? "p-danger" : "p-text-3";
+  const verb = event.kind === "task" ? "assigned" : done ? "reported done" : failed ? "hit an error" : "reported progress";
+  const detail = event.task || event.content;
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <Link
+        to={`/workspace/${workspace}/agents/${event.subordinate}`}
+        title={detail}
+        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 text-[11px] p-text-2 hover:p-card-hover transition-colors"
+      >
+        <Icon size={13} className={`${tone} shrink-0`} weight="fill" />
+        <span className="truncate"><span className="font-medium p-text">{event.subordinate}</span> {verb}: {detail}</span>
+      </Link>
     </div>
   );
 }
@@ -457,7 +582,7 @@ function MessageFeedback({
         }`}
         title="Mark this response as poor (feeds evolution scoring)"
       >👎</button>
-      {failed && <span className="text-[10px] text-red-400">couldn't save — try again</span>}
+      {failed && <span className="text-[10px] p-danger">couldn't save — try again</span>}
     </div>
   );
 }
@@ -503,11 +628,11 @@ function ForkModal({
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
-        <p>Create a new agent that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+        <p>Create a new workspace that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
           <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
           <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
-          <li>Source agent is unaffected</li>
+          <li>Source workspace is unaffected</li>
         </ul>
       </div>
 
@@ -525,67 +650,11 @@ function ForkModal({
       </div>
 
       {err && (
-        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2" style={{ background: "rgba(248,113,113,0.08)" }}>
+        <div className="p-notice-danger text-xs rounded-md px-3 py-2">
           {err}
         </div>
       )}
     </Modal>
-  );
-}
-
-function ModelSelector({ current, onChange }: { current: string; onChange: (id: string) => void }) {
-  // Tri-state: null = loading, "error" = transient fetch failure (retryable),
-  // [] = the fetch succeeded and genuinely no provider is connected. Only the
-  // last one earns the amber reconnect CTA — flashing it during load or on a
-  // flaky request sent connected users through a full OAuth prompt=login.
-  const [models, setModels] = useState<ModelMenuEntry[] | null | "error">(null);
-  const fetchModels = useCallback(() => {
-    setModels(null);
-    listAvailableModels()
-      .then(setModels)
-      .catch(() => setModels("error"));
-  }, []);
-  useEffect(() => { fetchModels(); }, [fetchModels]);
-  if (models === null) {
-    return (
-      <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 text-[11px] p-text-3" aria-label="Loading models">
-        …
-      </span>
-    );
-  }
-  if (models === "error") {
-    return (
-      <button
-        type="button"
-        onClick={fetchModels}
-        className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 text-[11px] p-text-3 hover:p-text-2"
-        title="Couldn't load the model list — click to retry"
-      >
-        <ArrowsClockwiseIcon size={11} />
-        models unavailable
-      </button>
-    );
-  }
-  if (models.length === 0) {
-    return (
-      <a
-        href={cloudflareReconnectPath(window.location.pathname)}
-        className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10"
-        title="Reconnect Cloudflare with Workers AI permissions"
-      >
-        <WarningCircleIcon size={12} />
-        Connect Workers AI
-      </a>
-    );
-  }
-  return (
-    <ModelPicker
-      models={models}
-      value={current}
-      onChange={onChange}
-      size="xs"
-      className="w-52"
-    />
   );
 }
 
@@ -595,19 +664,120 @@ function surfaceForKind(kind: TimelineKind): SurfaceKind | null {
   switch (kind) {
     case "mcts": case "head-split": case "head-merge": case "gepa": return "Reasoning";
     case "scaffold": case "shadow-eval": case "craft": case "reflection": case "curriculum": case "skills": return "Brain";
-    case "runtime-exec": return "Devices";
+    // Legacy "Workspace"/"Devices" spans predate the merged tab — both live
+    // in Environment now.
+    case "runtime-exec": return "Environment";
     default: return null;
   }
+}
+
+/* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
+
+/** Drives one subordinate's conversation over its own facet socket. The Work
+ *  Surface and Timeline stay workspace-scoped on the parent socket (§A5) — only
+ *  the chat switches here. A focused surface: messages, model pick, send/stop
+ *  (no fork/feedback/takes/restore — the facet exposes none of those). */
+function SubordinateChatColumn({ workspace, subName }: { workspace: string; subName: string }) {
+  const state = useProteus({ workspace, subordinate: subName });
+  const [input, setInput] = useState("");
+  const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
+  const send = useCallback(() => {
+    const t = input.trim();
+    if (!t || state.isStreaming) return;
+    state.sendChat(t);
+    setInput("");
+  }, [input, state]);
+
+  if (state.connectionStatus === "connecting" && !state.agentStatus) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting…</span></div>
+      </div>
+    );
+  }
+
+  const as = state.agentStatus;
+  return (
+    <div className="relative flex flex-col flex-1 min-h-0">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
+        <div className="flex min-w-0 items-center gap-3">
+          <ConnectionIndicator status={state.connectionStatus} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || subName}</span>
+              {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+            </div>
+            {as?.purpose && <span className="block text-[11px] p-text-3 truncate max-w-[220px]">{as.purpose}</span>}
+          </div>
+        </div>
+        <ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs" className="w-52" />
+      </div>
+
+      <ErrorBoundary label="Subordinate chat">
+        <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
+          {state.messages.length === 0 && !state.isStreaming && (
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <BrainIcon size={36} className="p-text-3 mb-3" />
+              <p className="text-sm p-text-3">This subordinate's conversation starts here.</p>
+              {as?.soul && <p className="mt-2 max-w-sm whitespace-pre-wrap text-xs p-text-3">{as.soul}</p>}
+            </div>
+          )}
+          {state.messages.map((msg, i) => (
+            <MessageView
+              key={msg.id}
+              message={msg}
+              isLast={i === state.messages.length - 1}
+              isStreaming={state.isStreaming}
+            />
+          ))}
+          {state.chatError && (
+            <ChatErrorCard
+              message={state.chatError}
+              streaming={state.isStreaming}
+              onRetry={state.retryLastMessage}
+              onDismiss={state.clearChatError}
+            />
+          )}
+        </div>
+      </ErrorBoundary>
+
+      <div className="px-5 py-3 border-t p-border lg:px-7">
+        {state.error && <div className="mb-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+        <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+          <InputArea ref={inputRef} value={input} onValueChange={setInput}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={`Message ${as?.displayName || subName}…`} disabled={state.connectionStatus !== "connected"} rows={1}
+            className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
+          {state.isStreaming
+            ? <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
+            : <button onClick={send} disabled={!input.trim() || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ── Main page ────────────────────────────────────────────────── */
 
 export default function WorkspacePage() {
-  const { agentId } = useParams();
+  const { agentId, subName } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const state = useProteus(agentId);
-  const [altitude, setAltitude] = useState<"run" | "supervise">("run");
+  // ?altitude=supervise deep-links straight to the Supervise altitude (the
+  // /triggers/:id redirect and settings' Automations link use it).
+  const [altitude, setAltitude] = useState<"run" | "supervise">(
+    () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
+  );
   const [surface, setSurface] = useState<SurfaceKind>("Brain");
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
@@ -617,6 +787,7 @@ export default function WorkspacePage() {
   // not an always-on firehose. (feedback: the live timeline was distracting.)
   const timelineRef = usePanelRef();
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const toggleTimeline = useCallback(() => {
     const t = timelineRef.current;
     if (!t) return;
@@ -645,7 +816,7 @@ export default function WorkspacePage() {
       else rejected.push(f.name);
     }
     setAttachError(rejected.length > 0
-      ? `Chat attachments are capped at ${MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files tab on the Devices surface.`
+      ? `Chat attachments are capped at ${MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
       : null);
     if (accepted.length === 0) return;
     const dt = new DataTransfer();
@@ -678,7 +849,18 @@ export default function WorkspacePage() {
     el.style.height = `${el.scrollHeight}px`;
   }, [chatInput]);
 
-  useEffect(() => { if (agentId) touchAgent(agentId).catch(() => {}); }, [agentId]);
+  useEffect(() => { if (agentId) touchWorkspace(agentId).catch(() => {}); }, [agentId]);
+
+  // Bridge the open workspace's live status to the sidebar roster (running dot +
+  // unseen-evolution dot). Only the mounted workspace has a live socket, so the
+  // roster reflects status for workspaces visited this session.
+  useEffect(() => {
+    if (!agentId) return;
+    const running = state.isStreaming || state.runningTaskCount > 0;
+    window.dispatchEvent(new CustomEvent("proteus:workspace-activity", {
+      detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
+    }));
+  }, [agentId, state.isStreaming, state.runningTaskCount, state.changelogUnseen]);
 
   // Auto-switch the work surface to the live Preview the moment a new sandbox
   // port is exposed — the running app becomes the centre of attention.
@@ -703,7 +885,7 @@ export default function WorkspacePage() {
 
   // Send the creation mission as the opening message — once, deterministically,
   // the moment the socket is connected. The mission rides in via navigation
-  // state from CreateAgentModal; we clear it (replace) right after sending so a
+  // state from CreateWorkspaceModal; we clear it (replace) right after sending so a
   // refresh or back-nav never re-fires it.
   useEffect(() => {
     if (initialPromptSent.current) return;
@@ -827,15 +1009,17 @@ export default function WorkspacePage() {
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
     <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
   );
+  if (!agentId) return null;
 
   const as = state.agentStatus;
+  const workspaceTitle = as?.displayName || "Workspace";
   return (
     <div className="h-full flex flex-col">
       {/* Non-destructive disconnect banner. The chat panel below stays
           mounted so the in-flight assistant turn is preserved through
           partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
       {state.connectionStatus === "disconnected" && (
-        <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs text-amber-300 border-b p-border" style={{ background: "var(--c-accent-subtle)" }}>
+        <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
         </div>
       )}
@@ -843,7 +1027,7 @@ export default function WorkspacePage() {
       {/* Altitude toggle: RUN (this run, mission-control) ⇄ SUPERVISE (the
           agent over time — curriculum, runs, automations). */}
       <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
-        <span className="text-xs p-text-2 font-medium truncate">{as?.displayName || agentId}</span>
+        <span className="text-xs p-text-2 font-medium truncate">{workspaceTitle}</span>
         <div className="ml-auto flex items-center gap-0.5 p-elevated rounded-md p-0.5">
           {(["run", "supervise"] as const).map((a) => (
             <button key={a} onClick={() => setAltitude(a)}
@@ -864,8 +1048,22 @@ export default function WorkspacePage() {
       <PanelGroup className="flex-1">
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
         <Panel minSize={24} defaultSize={42}>
-          <div className="relative flex flex-col h-full border-r p-border"
-            onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
+          <div className="flex flex-col h-full border-r p-border">
+            {/* Agent tabs — the workspace's orchestrator + durable subordinates.
+                Roster + live status ride the parent socket; the CHAT below
+                switches per tab while Columns B/C stay workspace-scoped. */}
+            <SubordinateTabs
+              workspace={agentId}
+              subordinates={state.subordinates}
+              activeName={subName}
+              onSpawn={state.spawnSubordinate}
+              onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
+            />
+            {subName ? (
+              <SubordinateChatColumn key={subName} workspace={agentId} subName={subName} />
+            ) : (
+            <div className="relative flex flex-col flex-1 min-h-0"
+              onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
             {dragOver && (
               <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
                 style={{ borderColor: "var(--c-accent)", background: "var(--c-accent-subtle)" }}>
@@ -876,23 +1074,23 @@ export default function WorkspacePage() {
             )}
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-3">
                 <ConnectionIndicator status={state.connectionStatus} />
-                <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || agentId}</span>
+                <InlineWorkspaceTitle title={workspaceTitle} onRename={state.setDisplayName} />
                 {state.isStreaming && <Badge variant="primary">streaming</Badge>}
                 {as?.forkLineage && (
                   <Link
-                    to={`/agent/${as.forkLineage.sourceAgentName}`}
+                    to={`/workspace/${as.forkLineage.sourceWorkspaceName}`}
                     className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
-                    title={`Forked from ${as.forkLineage.sourceAgentName} at message ${as.forkLineage.sourceMessageId} on ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
+                    title={`Open parent workspace from ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
                   >
                     <GitBranchIcon size={10} />
-                    <span className="font-mono">{as.forkLineage.sourceAgentName}</span>
+                    <span>Parent workspace</span>
                   </Link>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <ModelSelector current={as?.model ?? ""} onChange={state.setModel} />
+                <ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs" className="w-52" />
                 <button
                   onClick={toggleTimeline}
                   title={timelineOpen ? "Hide run timeline" : "Show run timeline"}
@@ -903,14 +1101,11 @@ export default function WorkspacePage() {
                 </button>
                 {state.messages.length > 0 && (
                   <Button variant="ghost" shape="square" size="sm"
-                    onClick={() => { if (confirm("Clear this agent's entire conversation history? This cannot be undone.")) state.clearHistory(); }}
+                    onClick={() => setShowClearConfirm(true)}
                     icon={<TrashIcon size={12} />} aria-label="Clear history" />
                 )}
                 <Link to={`/settings/${agentId}`} className="p-text-2 hover:p-text transition-colors" title="Settings">
                   <GearSixIcon size={14} />
-                </Link>
-                <Link to={`/mcts/${agentId}`} className="flex items-center gap-1 text-[11px] p-accent hover:opacity-80 transition-opacity">
-                  <TreeStructureIcon size={12} />MCTS<ArrowSquareOutIcon size={10} />
                 </Link>
               </div>
             </div>
@@ -949,6 +1144,17 @@ export default function WorkspacePage() {
                   onDismiss={() => state.dismissBranchRun(run.branchId)}
                 />
               ))}
+              {state.subordinateEvents.map((event) => (
+                <SubordinateEventCard key={event.id} event={event} workspace={agentId} />
+              ))}
+              {state.chatError && (
+                <ChatErrorCard
+                  message={state.chatError}
+                  streaming={state.isStreaming}
+                  onRetry={state.retryLastMessage}
+                  onDismiss={state.clearChatError}
+                />
+              )}
             </div>
             </ErrorBoundary>
 
@@ -965,10 +1171,10 @@ export default function WorkspacePage() {
                 regardless of which composer child holds focus. */}
             <div className="px-5 py-3 border-t p-border lg:px-7"
               onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
-              {state.error && <div className="mb-2 text-xs text-red-400 p-card rounded-lg px-3 py-1.5">{state.error}</div>}
-              {attachError && <div className="mb-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">{attachError}</div>}
+              {state.error && <div className="mb-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+              {attachError && <div className="mb-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">{attachError}</div>}
               {branchNotice && (
-                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-amber-300 p-card rounded-lg px-3 py-1.5">
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">
                   <span className="truncate">Branch unavailable: {branchNotice}</span>
                   <button onClick={() => setBranchNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
                 </div>
@@ -1013,6 +1219,8 @@ export default function WorkspacePage() {
                   : <button onClick={handleSend} disabled={(!chatInput.trim() && pendingAttachments.length === 0) || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
               </div>
             </div>
+            </div>
+            )}
           </div>
         </Panel>
 
@@ -1053,7 +1261,6 @@ export default function WorkspacePage() {
             executorOutputs={state.executorOutputs}
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
-            agentName={agentId}
             backgroundJobs={state.backgroundJobs}
             runningTaskCount={state.runningTaskCount}
             onRefreshTasks={state.refreshBackgroundJobs}
@@ -1068,7 +1275,7 @@ export default function WorkspacePage() {
 
       {forkFor && (
         <ForkModal
-          sourceName={as?.displayName || agentId || ""}
+          sourceName={workspaceTitle}
           messagesUpToHere={state.messages.findIndex(m => m.id === forkFor) + 1}
           craftedToolsCount={as?.craftedToolCount ?? 0}
           onCancel={() => setForkFor(null)}
@@ -1083,6 +1290,23 @@ export default function WorkspacePage() {
             }
           }}
         />
+      )}
+
+      {showClearConfirm && (
+        <Modal
+          title="Clear conversation history"
+          icon={<TrashIcon size={18} className="p-danger" />}
+          onClose={() => setShowClearConfirm(false)}
+          footer={<>
+            <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
+            <Button size="sm" variant="primary" onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</Button>
+          </>}
+        >
+          <p className="text-xs p-text-2 leading-relaxed">
+            This permanently clears this agent's entire conversation history. It cannot be undone.
+            The agent's memory, SOUL.md, crafted tools, and evolution state are kept.
+          </p>
+        </Modal>
       )}
     </div>
   );

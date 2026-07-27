@@ -29,10 +29,17 @@ import { DEFAULT_CONFIG } from '../config.js';
  * that flowed through it — the correct N for "re-widen the root vs descend").
  * Floored at 2 so ln(2)>0 keeps the root selectable across iterations; it still
  * decays as the root accrues visits, so the tree deepens over time.
+ *
+ * DEPTH CAP (WP-A4): nodes at or beyond `maxDepth` are excluded in the WHERE
+ * clause, not by aborting the whole search when the argmax happens to be deep.
+ * A node at depth d expands children at d+1, so only nodes with depth < maxDepth
+ * can still produce in-bounds children — selection skips the depth-capped ones
+ * and keeps spending the budget on the shallower frontier instead of dying.
  */
 export function selectNode(
   sql: SqlExecutor,
   W: number = DEFAULT_CONFIG.mcts.explorationWeight,
+  maxDepth: number = DEFAULT_CONFIG.mcts.maxDepth,
 ): SearchNode | null {
   // ln(x) in SQLite = log10(x) / log10(e) = log(x) / log(exp(1.0)).
   // parent_visits: real parent's visits for children; the node's own visits
@@ -43,7 +50,7 @@ export function selectNode(
       COALESCE(p.visits, max(2, s.visits)) AS parent_visits
     FROM search_nodes s
     LEFT JOIN search_nodes p ON s.parent_id = p.id
-    WHERE s.status = 'open'
+    WHERE s.status = 'open' AND s.depth < ${maxDepth}
     ORDER BY (
       s.value + ${W} * sqrt(
         (log(max(2.0, COALESCE(p.visits, max(2, s.visits)))) / log(exp(1.0))) /

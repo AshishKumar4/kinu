@@ -10,13 +10,19 @@ import {
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
 } from './auth-store.js';
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store.js';
+import { requiredRpcAccess, rpcAccessScope, type AgentRpcMethod } from './rpc-gate.js';
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
-import { claimOwnedAgent, handleCreateAgentRequest } from '../user/agent-access.js';
+import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
 import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
+import { OWNER_SESSION } from '../user/workspace-capability.js';
 
 const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
 const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
+/** `{ version, sha, builtAt }` for the served build — emitted by
+ *  scripts/build-cli-source-archive.sh from the same stamped package.json the
+ *  archive ships, so an installed CLI can check for updates cheaply. */
+const CLI_VERSION_PATH = '/downloads/proteus-version.json';
 
 export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -36,6 +42,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
   if (url.pathname === CLI_SOURCE_TARBALL_SHA256_PATH && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, CLI_SOURCE_TARBALL_SHA256_PATH, 'text/plain; charset=utf-8', method === 'HEAD');
+  }
+  if (url.pathname === CLI_VERSION_PATH && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, CLI_VERSION_PATH, 'application/json; charset=utf-8', method === 'HEAD');
   }
 
   if (url.pathname === '/cli/auth' && method === 'GET') {
@@ -92,6 +101,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const cli = await authenticateCli(request, env);
   if (cli instanceof Response) return cli;
 
+  // The generic agent RPC endpoint carries its own per-method policy (the
+  // AGENT_RPC_ACCESS table), so it is matched ahead of the route-shaped
+  // access-token gate.
+  const rpcMatch = path.match(/^\/workspaces\/([^/]+)\/rpc$/);
+  if (rpcMatch && method === 'POST') {
+    return handleAgentRpc(request, env, cli, decodeURIComponent(rpcMatch[1]));
+  }
+
   const denied = accessTokenDenial(cli, method, path);
   if (denied) return denied;
 
@@ -104,13 +121,13 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/logout' && method === 'POST') {
-    await cli.userDO.revokeCliTokenHash(cli.tokenHash);
+    await cli.userDO.revokeCliTokenHash(OWNER_SESSION, cli.tokenHash);
     return json({ ok: true });
   }
 
   // ── CI access tokens — interactive-session-only management surface ──
   if (path === '/tokens' && method === 'GET') {
-    return json({ tokens: await cli.userDO.listAccessTokens() });
+    return json({ tokens: await cli.userDO.listAccessTokens(OWNER_SESSION) });
   }
 
   if (path === '/tokens' && method === 'POST') {
@@ -123,7 +140,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
       return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
     }
-    const minted = await cli.userDO.mintAccessToken(cli.userId, body.name, body.scopes);
+    const minted = await cli.userDO.mintAccessToken(OWNER_SESSION, cli.userId, body.name, body.scopes);
     if (!minted.ok) return err(400, minted.error);
     return json({
       token: minted.token,
@@ -136,28 +153,40 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
   if (tokenRevokeMatch && method === 'DELETE') {
     const ref = decodeURIComponent(tokenRevokeMatch[1]);
-    const result = await cli.userDO.revokeAccessToken(ref);
+    const result = await cli.userDO.revokeAccessToken(OWNER_SESSION, ref);
     if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
     return json({ ok: true });
   }
 
-  if (path === '/agents' && method === 'GET') {
-    return json(await cli.userDO.listAgents());
+  if (path === '/workspaces' && method === 'GET') {
+    return json(await cli.userDO.listWorkspaces(OWNER_SESSION));
   }
 
   if (path === '/models' && method === 'GET') {
-    return json(await listAvailableModels(env, cli.userId));
+    return json(await listAvailableModels(env, cli.userId, OWNER_SESSION));
   }
 
-  if (path === '/agents' && method === 'POST') {
-    return handleCreateAgentRequest(request, env, cli.userId, cli.userDO, ctx);
+  if (path === '/workspaces' && method === 'POST') {
+    return handleCreateWorkspaceRequest(request, env, cli.userId, cli.userDO, ctx);
   }
 
-  const connectTicketMatch = path.match(/^\/agents\/([^/]+)\/connect-ticket$/);
+  const workspaceMatch = path.match(/^\/workspaces\/([^/]+)$/);
+  if (workspaceMatch && method === 'DELETE') {
+    try {
+      const name = decodeURIComponent(workspaceMatch[1]);
+      if (!(await cli.userDO.hasWorkspace(OWNER_SESSION, name))) return err(404, `Agent ${name} not found.`);
+      await cli.userDO.removeWorkspace(OWNER_SESSION, name, cli.userId);
+      return json({ ok: true });
+    } catch (e) {
+      return err(400, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
-    if (!(await cli.userDO.hasAgent(name))) return err(404, `Agent ${name} not found.`);
-    const issued = await cli.userDO.issueCliAgentConnectTicket({
+    if (!(await cli.userDO.hasWorkspace(OWNER_SESSION, name))) return err(404, `Agent ${name} not found.`);
+    const issued = await cli.userDO.issueCliAgentConnectTicket(OWNER_SESSION, {
       userId: cli.userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName: name,
@@ -170,81 +199,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     });
   }
 
-  const statusMatch = path.match(/^\/agents\/([^/]+)\/status$/);
-  if (statusMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(statusMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getAgentStatus());
-  }
-
-  const toolsMatch = path.match(/^\/agents\/([^/]+)\/tools$/);
-  if (toolsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(toolsMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getToolDescriptions());
-  }
-
-  const messagesMatch = path.match(/^\/agents\/([^/]+)\/messages$/);
-  if (messagesMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(messagesMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getChatHistory(boundedLimit(url, 100)));
-  }
-
-  const consentsMatch = path.match(/^\/agents\/([^/]+)\/consents$/);
-  if (consentsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(consentsMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.listPendingConsents());
-  }
-
-  const consentResolveMatch = path.match(/^\/agents\/([^/]+)\/consents\/([^/]+)$/);
-  if (consentResolveMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(consentResolveMatch[1]));
-    if (agent instanceof Response) return agent;
-    const body = await safeJson<{ decision?: 'once' | 'always' | 'deny' }>(request);
-    if (body?.decision !== 'once' && body?.decision !== 'always' && body?.decision !== 'deny') {
-      return err(400, 'decision must be once, always, or deny');
-    }
-    return json(await agent.resolveDeviceConsent(decodeURIComponent(consentResolveMatch[2]), body.decision));
-  }
-
-  const modelMatch = path.match(/^\/agents\/([^/]+)\/model$/);
-  if (modelMatch && (method === 'GET' || method === 'PUT')) {
-    const agent = await cliAgent(env, cli, decodeURIComponent(modelMatch[1]));
-    if (agent instanceof Response) return agent;
-    if (method === 'GET') return json(await agent.getStoredModelSpec());
-    const body = await safeJson<{ spec?: string }>(request);
-    if (!body?.spec?.trim()) return err(400, 'spec required');
-    return json(await agent.setModel(body.spec));
-  }
-
-  const triggersMatch = path.match(/^\/agents\/([^/]+)\/triggers$/);
-  if (triggersMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(triggersMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.listTriggers());
-  }
-
-  const timerTriggerMatch = path.match(/^\/agents\/([^/]+)\/triggers\/timer$/);
-  if (timerTriggerMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(timerTriggerMatch[1]));
-    if (agent instanceof Response) return agent;
-    const body = await safeJson<{ cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown> }>(request);
-    try {
-      return json(await agent.createTimerTrigger({
-        cron: body?.cron,
-        atMs: body?.atMs,
-        label: body?.label,
-        payload: body?.payload,
-        trust: 'owner',
-      }), { status: 201 });
-    } catch (e) {
-      return err(400, (e as Error).message);
-    }
-  }
-
-  const webhookTriggerMatch = path.match(/^\/agents\/([^/]+)\/triggers\/webhook$/);
+  const webhookTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/webhook$/);
   if (webhookTriggerMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(webhookTriggerMatch[1]));
     if (agent instanceof Response) return agent;
@@ -275,133 +230,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     }
   }
 
-  const triggerDeleteMatch = path.match(/^\/agents\/([^/]+)\/triggers\/([^/]+)$/);
-  if (triggerDeleteMatch && method === 'DELETE') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(triggerDeleteMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.cancelTrigger(decodeURIComponent(triggerDeleteMatch[2])));
-  }
-
-  const jobsMatch = path.match(/^\/agents\/([^/]+)\/jobs$/);
-  if (jobsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(jobsMatch[1]));
-    if (agent instanceof Response) return agent;
-    const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get('limit') ?? '20', 10) || 20));
-    return json(await agent.listBackgroundJobs(limit));
-  }
-
-  const jobDeleteMatch = path.match(/^\/agents\/([^/]+)\/jobs\/([^/]+)$/);
-  if (jobDeleteMatch && method === 'DELETE') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(jobDeleteMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.cancelBackgroundJob(decodeURIComponent(jobDeleteMatch[2])));
-  }
-
-  const stateMatch = path.match(/^\/agents\/([^/]+)\/state$/);
-  if (stateMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(stateMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getWorkspaceSnapshot());
-  }
-
-  const stopMatch = path.match(/^\/agents\/([^/]+)\/stop$/);
-  if (stopMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(stopMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.cancelCurrentWork());
-  }
-
-  const memoryMatch = path.match(/^\/agents\/([^/]+)\/memory$/);
-  if (memoryMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(memoryMatch[1]));
-    if (agent instanceof Response) return agent;
-    const query = url.searchParams.get('q')?.trim();
-    if (query) return json(await agent.searchMemoryHybrid(query, boundedLimit(url, 10)));
-    return json({ content: await agent.getMemoryContent() });
-  }
-
-  const eventsMatch = path.match(/^\/agents\/([^/]+)\/events$/);
-  if (eventsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(eventsMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.listRecentEvents({
-      variant: url.searchParams.get('variant') ?? undefined,
-      since: readIntParam(url, 'since'),
-      limit: boundedLimit(url, 50),
-    }));
-  }
-
-  const timelineMatch = path.match(/^\/agents\/([^/]+)\/timeline$/);
-  if (timelineMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(timelineMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getRunTimeline({ runId: url.searchParams.get('runId') ?? undefined, limit: boundedLimit(url, 250) }));
-  }
-
-  const mctsDetailMatch = path.match(/^\/agents\/([^/]+)\/mcts\/([^/]+)$/);
-  if (mctsDetailMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(mctsDetailMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getMctsNodeDetail(decodeURIComponent(mctsDetailMatch[2])));
-  }
-
-  const mctsMatch = path.match(/^\/agents\/([^/]+)\/mcts$/);
-  if (mctsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(mctsMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getMctsTree());
-  }
-
-  const headsMatch = path.match(/^\/agents\/([^/]+)\/heads$/);
-  if (headsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(headsMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getHeadRuns(boundedLimit(url, 20)));
-  }
-
-  const gepaDetailMatch = path.match(/^\/agents\/([^/]+)\/gepa\/([^/]+)$/);
-  if (gepaDetailMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(gepaDetailMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getGepaRun(decodeURIComponent(gepaDetailMatch[2])));
-  }
-
-  const gepaMatch = path.match(/^\/agents\/([^/]+)\/gepa$/);
-  if (gepaMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(gepaMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getGepaRuns(boundedLimit(url, 20)));
-  }
-
-  const executorExecMatch = path.match(/^\/agents\/([^/]+)\/executors\/([^/]+)\/exec$/);
-  if (executorExecMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(executorExecMatch[1]));
-    if (agent instanceof Response) return agent;
-    const body = await safeJson<{ command?: string }>(request);
-    if (!body?.command?.trim()) return err(400, 'command required');
-    return json(await agent.executeInExecutor(decodeURIComponent(executorExecMatch[2]), body.command));
-  }
-
-  const executorsMatch = path.match(/^\/agents\/([^/]+)\/executors$/);
-  if (executorsMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(executorsMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getExecutors());
-  }
-
-  const productMatch = path.match(/^\/agents\/([^/]+)\/product$/);
-  if (productMatch && method === 'GET') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(productMatch[1]));
-    if (agent instanceof Response) return agent;
-    return json(await agent.getProductChangeBoard(boundedLimit(url, 20)));
-  }
-
   if (path === '/devices' && method === 'GET') {
-    return json(await cli.userDO.listDevices());
+    return json(await cli.userDO.listDevices(OWNER_SESSION));
   }
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson<{ label?: string }>(request);
-    const { deviceId, token } = await cli.userDO.registerDevice(body?.label);
+    const { deviceId, token } = await cli.userDO.registerDevice(OWNER_SESSION, body?.label);
     return json({ deviceId, token, userId: cli.userId, origin: url.origin }, { status: 201 });
   }
 
@@ -409,9 +243,50 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 }
 
 async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<DurableObjectStub<OrchestratorAgent> | Response> {
-  const result = await claimOwnedAgent(env, cli.userId, name);
+  const result = await claimOwnedWorkspace(env, cli.userId, name);
   if (!result.ok) return err(result.status, result.error);
   return result.agent;
+}
+
+/**
+ * POST /api/cli/workspaces/:name/rpc — the one method-shaped transport:
+ * `{ method: string, args: unknown[] }` dispatched to the named DO method,
+ * gated by the AGENT_RPC_ACCESS table (shared verbatim with the websocket
+ * frame gate). Table membership is the dispatch allowlist — an off-table
+ * method name is never invoked.
+ */
+async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity, name: string): Promise<Response> {
+  const body = await safeJson<{ method?: unknown; args?: unknown }>(request);
+  const rpcMethod = typeof body?.method === 'string' ? body.method : '';
+  if (!rpcMethod) return err(400, 'method required');
+  const args = body?.args === undefined ? [] : body.args;
+  if (!Array.isArray(args)) return err(400, 'args must be an array');
+
+  const access = requiredRpcAccess(rpcMethod);
+  if (access === null || access === 'never') {
+    return err(404, `No such agent RPC method: ${rpcMethod}`);
+  }
+  if (cli.kind === 'access') {
+    const scope = rpcAccessScope(access);
+    if (!scope) return err(403, `${rpcMethod} requires an interactive CLI session token. Sign in with: proteus auth`);
+    if (!tokenAllows(cli, scope)) return err(403, `This access token does not have the ${scope} scope.`);
+  }
+
+  const agent = await cliAgent(env, cli, name);
+  if (agent instanceof Response) return agent;
+  // The table check above is the trust boundary: only methods the policy
+  // names are ever reached, so the string-indexed dispatch cannot touch
+  // anything else on the DO. Args are the method's own responsibility to
+  // validate — the same contract as the websocket rpc dispatcher.
+  const dispatch = agent as unknown as Record<AgentRpcMethod, (...args: unknown[]) => Promise<unknown>>;
+  try {
+    const result = await dispatch[rpcMethod as AgentRpcMethod](...args);
+    return json({ result: result === undefined ? null : result });
+  } catch (e) {
+    // Same contract as a websocket rpc-error frame: the thrown message goes
+    // back to the caller as a request-level failure.
+    return err(400, e instanceof Error ? e.message : String(e));
+  }
 }
 
 /** The CLI's interactive-auth timestamp: the session token's mint time
@@ -419,15 +294,17 @@ async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<
  *  it against the fresh-auth window; access tokens never qualify. */
 async function sessionTokenMintedAt(cli: CliTokenIdentity): Promise<number | null> {
   if (cli.kind !== 'session') return null;
-  const tokens = await cli.userDO.listCliTokens();
+  const tokens = await cli.userDO.listCliTokens(OWNER_SESSION);
   return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
 }
 
-/** Default-deny gate for scoped `pta_…` access tokens: reads need agent.read,
- *  run-a-task surfaces need agent.exec, and everything else — webhook/timer
- *  creation, device registration, agent creation, consent decisions, model
- *  changes, token management — stays interactive-session-only. Routes added
- *  in the future are interactive-only until listed here. */
+/** Default-deny gate for scoped `pta_…` access tokens on the route-shaped
+ *  surface (agent-method calls carry their own per-method policy — the
+ *  AGENT_RPC_ACCESS table behind /workspaces/:name/rpc): workspace/model
+ *  listing needs workspace.read, connect tickets need workspace.exec, and
+ *  everything else — webhook creation, device registration, agent creation,
+ *  token management — stays interactive-session-only. Routes added in the
+ *  future are interactive-only until listed here. */
 function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string): Response | null {
   if (cli.kind !== 'access') return null;
   if (path === '/me' && method === 'GET') return null; // identity introspection works for any valid bearer
@@ -442,28 +319,9 @@ function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string):
 }
 
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
-  if (method === 'GET') {
-    if (path === '/agents' || path === '/models') return 'agent.read';
-    if (/^\/agents\/[^/]+\/[^/]+/.test(path)) return 'agent.read';
-    return null;
-  }
-  if (method === 'POST') {
-    if (/^\/agents\/[^/]+\/(connect-ticket|stop)$/.test(path)) return 'agent.exec';
-    if (/^\/agents\/[^/]+\/executors\/[^/]+\/exec$/.test(path)) return 'agent.exec';
-  }
+  if (method === 'GET' && (path === '/workspaces' || path === '/models')) return 'workspace.read';
+  if (method === 'POST' && /^\/workspaces\/[^/]+\/connect-ticket$/.test(path)) return 'workspace.exec';
   return null;
-}
-
-function readIntParam(url: URL, key: string): number | undefined {
-  const raw = url.searchParams.get(key);
-  if (!raw) return undefined;
-  const value = parseInt(raw, 10);
-  return Number.isFinite(value) ? value : undefined;
-}
-
-function boundedLimit(url: URL, fallback: number, max = 250): number {
-  const value = readIntParam(url, 'limit') ?? fallback;
-  return Math.max(1, Math.min(max, value));
 }
 
 function approvalOrigin(env: Env, url: URL): string {
@@ -1201,4 +1059,3 @@ function isSameOriginPost(request: Request): boolean {
   const referer = request.headers.get('referer');
   return !referer || referer.startsWith(`${url.origin}/`);
 }
-

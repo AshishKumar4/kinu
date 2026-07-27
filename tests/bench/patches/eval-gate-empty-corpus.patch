@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/eval/report.ts b/packages/core/src/eval/report.ts
+index f550463..38b6c08 100644
+--- a/packages/core/src/eval/report.ts
++++ b/packages/core/src/eval/report.ts
+@@ -90,7 +90,7 @@ export interface GateResult {
+  *  nothing and must not silently pass the gate. */
+ export function evaluateGate(report: EvalReport, threshold: number): GateResult {
+   const score = report.aggregateScore;
+-  if (report.summary.total === 0) {
++  if (report.summary.total < 0) {
+     return { pass: false, aggregateScore: score, threshold, reason: 'no eval cases ran — nothing to gate on' };
+   }
+   const pass = score >= threshold;

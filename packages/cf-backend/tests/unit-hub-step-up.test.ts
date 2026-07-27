@@ -1,13 +1,10 @@
 // Step-up gate on the web trigger-creation route (events/routes.ts) —
 // the same isFreshAuthTime rule the CLI webhook route enforces.
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import { STEP_UP_WINDOW_MS, isFreshAuthTime } from '../src/auth/session.js';
+import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
-// The real `agents` package imports cloudflare:email, which bun test can't
-// resolve — stub the one function events/routes.ts uses at this seam.
-mock.module('agents', () => ({
-  getAgentByName: async (ns: DurableObjectNamespace, name: string) => ns.get(ns.idFromName(name)),
-}));
+mockAgentsSdk();
 const { handleHubRequest } = await import('../src/events/routes.js');
 
 function hubEnv() {
@@ -17,7 +14,7 @@ function hubEnv() {
     async setName() {},
     async createDurableWebhook(opts: unknown) {
       calls.push(`webhook:${JSON.stringify(opts)}`);
-      return { trigger_id: 'trg_1', url: '/api/agents/jarvis/webhook/trg_1', auth_mode: 'hmac', secret: null };
+      return { trigger_id: 'trg_1', url: '/api/workspaces/jarvis/webhook/trg_1', auth_mode: 'hmac', secret: null };
     },
   };
   const env = {
@@ -30,7 +27,7 @@ function hubEnv() {
 }
 
 function createTriggerRequest(authTime: number | null) {
-  return new Request('https://proteus.example.com/api/agents/jarvis/triggers', {
+  return new Request('https://proteus.example.com/api/workspaces/jarvis/triggers', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

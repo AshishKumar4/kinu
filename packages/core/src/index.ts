@@ -1,7 +1,7 @@
 // @proteus/core — barrel export
 
 // Identity system
-export { initAllTables } from './identity/schema.js';
+export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -11,19 +11,24 @@ export {
   summarizeSoul,
   writeSoul,
 } from './identity/soul.js';
-export { createAgent, wrapDatabase, type AgentBirthConfig, type AgentDatabase } from './identity/create.js';
-export { openAgent, type AgentResumeConfig, type AgentInfo } from './identity/open.js';
-export { forkAgentStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
+export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
+export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
+export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
 export {
-  AGENT_IDENTITY_SYSTEM_PROMPT,
-  agentIdentityPrompt,
-  createAgentNameFromMission,
-  deriveAgentTitle,
-  fallbackAgentIdentity,
-  parseAgentIdentityOutput,
-  resolveAgentTitle,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+  workspaceIdentityPrompt,
+  applyWorkspaceTitle,
+  createWorkspaceNameFromMission,
+  deriveWorkspaceTitle,
+  fallbackWorkspaceIdentity,
+  isPlaceholderWorkspaceTitle,
+  parseWorkspaceIdentityOutput,
+  planWorkspaceTitle,
+  resolveWorkspaceTitle,
   slugifyName,
-  type SuggestedAgentIdentity,
+  type SuggestedWorkspaceIdentity,
+  type WorkspaceTitlePlan,
+  type WorkspaceTitleState,
 } from './identity/naming.js';
 
 // Evolution engine (3-timescale auto-evolution)
@@ -34,17 +39,29 @@ export {
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
-  type CompletedTurn, type CompletedSession, type ToolCallRecord,
+  type CompletedTurn, type CompletedSession, type ToolCallRecord, type TurnUsage,
 } from './evolution/types.js';
+export {
+  delegationFeatures, renderDelegationFeatures, executionPathSignals,
+  type DelegationFeatures, type ExecutionPathSignals,
+} from './evolution/delegation-features.js';
+// K_align — the correction rate per 100 graded turns, per scaffold version,
+// with 95% Wilson intervals. Pure telemetry: no benchmark, no judge, no LLM.
+export {
+  alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
+  type AlignmentTrend, type RateInterval,
+} from './evolution/alignment.js';
 // Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
 // every evolution surface reads (audit R3: the measurable loss).
 export {
   outcomeToFeedback, outcomeQuality, isTrivialTurn,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
+  describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
+  type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
@@ -53,6 +70,11 @@ export {
   initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay.js';
+// The durable evolution window + pending outcome review — the state neither
+// backend's instance outlives (one process per `proteus exec`; DO eviction).
+export {
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+} from './evolution/session-window.js';
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {
@@ -74,6 +96,7 @@ export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } 
 export {
   createAgentConfigStore, initAgentConfigTable,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
+  DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
   type AgentConfigStore, type AgentConfigKey, type MctsOverrides, type ShellApprovalMode,
 } from './config/index.js';
 
@@ -89,18 +112,35 @@ export type * from './types/evaluation.js';
 // Product self-customization lane — separate from scaffold evolution.
 export {
   assertProductChangeTransition,
+  PRODUCT_CHANGE_STATUSES,
+  ProductChangeEngine,
   ProductChangeStore,
+  approvalTypeForEnvironment,
   createProductChangeStore,
+  createSandboxProductChangeExec,
+  deployApprovalDigest,
+  deployTargetAsCommand,
   initProductChangeTables,
+  isEngineOwnedTransitionTarget,
   isProductChangeTerminal,
   isSecretProductPath,
   normalizeProductSourcePath,
+  parseDeployOutput,
   productChangeSqlFromExec,
   redactProductDiff,
   validateProductPatchPath,
+  type ApplyResult,
+  type CheckRunResult,
+  type DeployApprovalBinding,
+  type DeployResult,
+  type PreviewResult,
   type ProductChangeBoard,
   type ProductChangeApproval,
   type ProductChangeCheck,
+  type ProductChangeDetail,
+  type ProductChangeEngineOptions,
+  type ProductChangeExec,
+  type ProductChangeLedger,
   type ProductChangeRequest,
   type ProductChangeSqlExec,
   type ProductChangeSqlStore,
@@ -112,23 +152,52 @@ export {
   type ProductSourceBinding,
   type ProductSourceBindingInput,
   type ProductSourceKind,
+  type RollbackResult,
+  type RunChecksResult,
 } from './product-change/index.js';
 
 // Chat engine (shared between server and CLI)
 export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 
+// Extension seam (public plugin API — observe + extend a turn)
+export {
+  ExtensionHost,
+  type ProteusExtension,
+  type TurnStartContext,
+  type ToolCallContext,
+  type ToolResultContext,
+  type TurnEndContext,
+  type PrepareStepContext,
+  type TransformContext,
+} from './extension.js';
+export { composePrepareStep, type StepCachePlan } from './prompting/prepare-step.js';
+export {
+  pruneStepToolOutputs,
+  STEP_CONTEXT_BUDGET_RATIO,
+  STEP_RECENT_TOOL_BUDGET_TOKENS,
+  type StepPruneBudget,
+} from './prompting/step-prune.js';
+export { StepInjections, type RecordedInjection } from './prompting/step-injections.js';
+export {
+  classifyTurnFailure,
+  planOverflowRecovery,
+  OVERFLOW_RETRY_EVENT,
+  OVERFLOW_RETRY_TEXT,
+  type TurnFailureClass,
+  type TurnFailureSignals,
+  type OverflowRecoveryInput,
+  type OverflowRecoveryDecision,
+} from './turn-failure.js';
+
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
-export { COMPACT_AT_UTILIZATION, compactionThreshold, compactionThresholdForWindow, contextWindowForModel } from './context-window.js';
+export { contextWindowForModel } from './context-window.js';
 export {
   buildCompactionSummaryPrompt,
-  renderCompactionTranscript,
   wrapCompactionSummary,
   stripCheckpointPreamble,
   CONTEXT_CHECKPOINT_PREFIX,
-  type CompactableMessage,
-  type CompactableMessagePart,
   type CompactionSummaryPromptInput,
 } from './compaction.js';
 
@@ -143,7 +212,13 @@ export {
   type BuiltinToolName,
   type BuiltinToolSpec,
 } from './tools/registry.js';
-export { buildBuiltinTools, type BuiltinToolDeps, type ProductChangeToolDeps } from './tools/builtins.js';
+export {
+  buildBuiltinTools, PEER_REPLY_TOPIC,
+  type BuiltinToolDeps, type ProductChangeToolDeps,
+  type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
+  type PeersToolDeps, type ReportToolDeps,
+  type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
+} from './tools/builtins.js';
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index.js';
 export {
@@ -197,13 +272,37 @@ export {
   type AgentsMdFile,
 } from './prompting/agents-md.js';
 export {
-  appendVolatileContextMessage,
+  acceptedMediaForModel,
+  sanitizeAttachmentsForModel,
+  type AttachmentPolicy,
+  type MediaModality,
+} from './prompting/attachment-sanitizer.js';
+export {
+  EphemeralContextLedger,
   executorAvailabilityLabel,
-  hashSystemPrompt,
-  renderVolatileContext,
-  VOLATILE_CONTEXT_HEADER,
-  type VolatileTurnContext,
+  fnv1a64,
+  fnv1a64Bytes,
+  renderSystemStateBlock,
+  renderTurnLocalContext,
+  turnLocalContextMessage,
+  EPHEMERAL_CONTEXT_HEADER,
+  TURN_CONTEXT_HEADER,
+  type SystemStateContext,
+  type TurnLocalContext,
 } from './prompting/volatile-context.js';
+export {
+  applyCacheBreakpoints,
+  cacheableSystem,
+  hasCacheMarkers,
+  markCacheTail,
+  markLastToolForAnthropicCache,
+  promptCacheOptions,
+  resolvePromptCacheStrategy,
+  ANTHROPIC_MAX_BREAKPOINTS,
+  type CacheBreakpointInput,
+  type CacheBreakpointPlan,
+  type PromptCacheStrategy,
+} from './prompting/cache-breakpoints.js';
 export {
   extractJsonArray,
   extractJsonObject,
@@ -222,7 +321,7 @@ export { backpropagate } from './mcts/backpropagation.js';
 export { recordNode } from './mcts/record-node.js';
 export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/record-node.js';
 export { converge } from './mcts/convergence.js';
-export { pruneAndReflect } from './mcts/pruning.js';
+export { pruneLowValueBranches } from './mcts/pruning.js';
 // Sibling diversity at expansion — backends render this into the explore prompt.
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity.js';
 // Whole-message branch context inheritance (shared by every explore() backend).
@@ -236,12 +335,6 @@ export {
   evaluateWithMultiModelJudging, median,
   type EvaluateBranchOptions, type BranchEvaluation,
 } from './mcts/evaluation.js';
-// Process Reward Models — step-level scoring. Wired into MCTS expansion as the
-// optional beam-prune gate (config.stepPrm, default off; see step-prm.ts header).
-export {
-  scoreStepWithJudge, blendStepScore, beamPruneByStepScore,
-  type StepScore, type StepScoreInput, type StepPrunePlan,
-} from './mcts/step-prm.js';
 export { estimateCost } from './mcts/cost.js';
 // Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
 export {
@@ -263,6 +356,13 @@ export {
 
 // Schemas
 export { initSearchTables } from './mcts/schemas.js';
+export {
+  MctsSearchStore,
+  initMctsSearchTable,
+  persistableMCTSConfig,
+  type PersistedMCTSConfig,
+  type ResumableSearch,
+} from './mcts/search-store.js';
 export { initScaffoldTables } from './scaffold/schemas.js';
 export { initCraftScoreTables } from './craft/schemas.js';
 
@@ -292,6 +392,7 @@ export {
   type ScaffoldEmitFn,
 } from './scaffold/executor.js';
 export { scaffoldEventsToUIStream } from './scaffold/ui-stream.js';
+export { scaffoldInferenceTransform, type InferenceStreamResult } from './scaffold/inference-transform.js';
 export {
   initShadowTables,
   getPendingScaffold,
@@ -309,6 +410,7 @@ export {
   type ShadowConfig,
   type ScaffoldStatus,
   type JudgeFn,
+  type ShadowTrialVerdict,
 } from './scaffold/shadow.js';
 // auto-judge shadow evaluation — sampled-per-turn closure of the
 // shadow-rollout loop. Picks up pending scaffolds, runs them against the
@@ -350,7 +452,7 @@ export {
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   isSandboxTransientError,
-  createSSHTunnelExecutor, type DeviceTransport,
+  createDeviceTunnelExecutor, type DeviceTransport,
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
@@ -360,6 +462,17 @@ export {
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
 } from './execution/index.js';
+
+// File plane — CompositeVFS mount table + raw-handle mount adapters
+export {
+  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
+  makeVfsError, isVfsError, ERRNO,
+  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
+  createParentRpcMountVFS,
+  type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
+  type ResolvedPath, type VfsError, type VfsErrorCode, type DeviceMountConsent,
+  type ParentRpcFileHandle, type ParentRpcWrite, type ParentRpcResult, type ParentRpcError,
+} from './vfs/index.js';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
 export {
@@ -399,7 +512,8 @@ export {
 
 // Memory write primitive — single canonical "save a note to MEMORY.md".
 // Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
-export { appendMemoryNote } from './memory/note.js';
+// readMemoryTail is the shared bounded-tail read both backends weave per turn.
+export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note.js';
 
 // Zero-LLM transcript search over the canonical `messages` table (FTS5).
 // Backs the `memory` tool's `sessions` action on both backends.
@@ -413,7 +527,7 @@ export {
 // Top-K recent facts are auto-rendered into the system prompt every turn.
 export {
   initFactsTable, createFactsStore, renderFactsBlock,
-  type Fact, type FactsStore,
+  type Fact, type FactsStore, type FactUpsertResult,
 } from './memory/facts.js';
 
 // Sleep-time compute — between-turn background memory compression
@@ -443,16 +557,17 @@ export {
 // turn orchestration).
 export * from './events/hub/index.js';
 
-// InferenceLoop — universal contract for "run a turn." Adapts Think /
-// scaffold / Heads / RLM behind one AsyncIterable<RunEvent> stream.
-export * from './loops/types.js';
-
 // ExplorationStrategy — single seam for "search candidate continuations,
 // score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.
 export * from './strategy/index.js';
 
 // Eval harness — A/B test arbitrary strategies/loops on a corpus of tasks.
 export * from './eval/index.js';
+
+// Bench harness — machine-scored, sealed-split, paired-statistics measurement
+// of whether a variant (scaffold, memory, evolved state) actually helps. Pure
+// math + report shapes; the executing runner lives in scripts/bench.ts.
+export * from './bench/index.js';
 
 // Voyager-style automatic curriculum + Absolute Zero learnability filter.
 // Proposes next tasks at the "barely succeeds" sweet spot.
@@ -469,9 +584,14 @@ export * from './providers/index.js';
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store.js';
 
 // Wire constants shared by the cf-backend Worker and the CLI.
-export { DEVICE_CONNECT_PATH, MAX_INLINE_ATTACHMENT_BYTES, ORCHESTRATOR_AGENT_SLUG } from './cloud-wire.js';
+export {
+  DEVICE_CONNECT_PATH,
+  MAX_INLINE_ATTACHMENT_BYTES,
+  ORCHESTRATOR_AGENT_SLUG,
+  SUBORDINATE_AGENT_SLUG,
+} from './cloud-wire.js';
 
-// safety — approval gating for shell exec
+// safety — approval gating for shell exec + digest-bound approvals
 export {
   reviewCommand,
   formatApproval,
@@ -479,10 +599,18 @@ export {
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
+  argumentDigest,
+  sha256Hex,
+  stableStringify,
 } from './safety/index.js';
 
 // Utils
 export { nanoid } from './utils/nanoid.js';
+// Confidence intervals — every score this system reports travels with one.
+export {
+  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
+  type ScoreInterval,
+} from './utils/stats.js';
 export { isoDate, today, nowMs } from './utils/date.js';
 
 // ── branching heads (parallel reasoning streams with merge) ──
@@ -514,9 +642,9 @@ export {
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
-  BackgroundJobRunner,
+  BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
-  type BackgroundJobRunnerDeps,
+  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
 } from './jobs/index.js';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
@@ -527,6 +655,7 @@ export {
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
+export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
@@ -569,3 +698,20 @@ export type {
   RunCraftedToolGepaOpts, RunCraftedToolGepaResult,
   GepaRunSummary,
 } from './evolution/gepa/index.js';
+
+// ── Layer gate ──
+// Deterministic, no-LLM per-layer regression scoring over the turn pipeline.
+// The tier between the structural scaffold gates and the LLM judge: it gives a
+// self-change a per-layer effect size instead of one aggregate that a single
+// user's traffic can never resolve. Uncovered layers report null, never 100%.
+export {
+  LAYERS, FAULTS, LOCKED_BASELINE,
+  LOCALIZATION_OWN_MIN_PP, LOCALIZATION_OTHER_MAX_PP,
+  createPipelineSubjects, SUBJECT_SOURCE,
+  observePipeline, scoreAgainstBaseline, runLayerGate, lockBaseline,
+  renderLayerGateReport, runFaultMatrix, renderFaultMatrix,
+} from './layergate/index.js';
+export type {
+  Layer, Probe, PipelineSubjects, SubjectName,
+  Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
+} from './layergate/index.js';

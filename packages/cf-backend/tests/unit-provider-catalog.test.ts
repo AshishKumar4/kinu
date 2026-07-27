@@ -1,6 +1,7 @@
 // Connectable-provider catalog + models.dev catalog wiring through the
 // per-agent registry composition.
 import { describe, test, expect } from 'bun:test';
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { createMockFetch } from '@proteus/test-utils';
 import type { ModelsDevProviderInfo } from '@proteus/core';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
@@ -21,12 +22,12 @@ function fakeUserDOStub(creds: Record<string, Record<string, string>> = {}) {
   const list = Object.entries(creds).map(([key]) => ({
     key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0,
   }));
-  return {
+  return userCredentialSource({
     getAuthHeaders: async (key: string) => creds[key] ?? null,
     hasCredential: async (key: string) => !!creds[key],
     listCredentials: async () => list,
     getCredentialBaseURL: async () => null,
-  } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
+  });
 }
 
 describe('agent registry × models.dev catalog', () => {
@@ -36,7 +37,7 @@ describe('agent registry × models.dev catalog', () => {
     ]);
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: fakeUserDOStub({ 'groq.bearer': { Authorization: 'Bearer gsk' } }),
+      userDO: fakeUserDOStub({ 'groq.bearer': { Authorization: 'Bearer gsk' } }),
       fetch: mock.fetch,
     });
     const models = await reg.registry.listAllModels(reg.deps);
@@ -49,7 +50,7 @@ describe('agent registry × models.dev catalog', () => {
     ]);
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: fakeUserDOStub({ 'groq.bearer': { Authorization: 'Bearer gsk' } }),
+      userDO: fakeUserDOStub({ 'groq.bearer': { Authorization: 'Bearer gsk' } }),
       fetch: mock.fetch,
     });
     expect(await reg.resolveSpec('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');

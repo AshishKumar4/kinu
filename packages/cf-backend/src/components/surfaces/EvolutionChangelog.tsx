@@ -7,31 +7,22 @@
  * diff (scaffold entries, reusing DiffLines). Viewing marks entries seen.
  */
 import { useState, useEffect, useCallback } from "react";
+import type { ComponentType } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockCounterClockwiseIcon, GitBranchIcon, PackageIcon, BrainIcon,
   SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
+  CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
+import type { ChangelogEntry, ChangelogEntryKind } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
 import { DiffLines } from "./shared";
 import type { DiffLine } from "@/lib/diff";
 
-type ChangelogKind = "scaffold" | "tool" | "fact" | "gepa" | "replay" | "outcomes";
-
-interface ChangelogEntry {
-  id: string;
-  kind: ChangelogKind;
-  at: number;
-  summary: string;
-  evidence: string;
-  revert?: { type: string; target: string };
-  scaffoldVersion?: number;
-}
-
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
 
-const KIND_ICON: Record<ChangelogKind, React.ComponentType<{ size?: number; className?: string }>> = {
+const KIND_ICON: Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>> = {
   scaffold: GitBranchIcon,
   tool: PackageIcon,
   fact: BrainIcon,
@@ -60,6 +51,7 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ id: string; text: string; ok: boolean } | null>(null);
   const [diffFor, setDiffFor] = useState<{ id: string; diff: ScaffoldDiff | null } | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const load = useCallback(() => {
     rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]).then(setView).catch(() => {});
@@ -96,7 +88,62 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
       .catch(() => setDiffFor(null));
   }, [rpc, diffFor]);
 
+  const toggleExpanded = useCallback((id: string) => {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   if (!view) return null;
+
+  const entryActions = (entry: ChangelogEntry) => {
+    const isKept = kept.has(entry.id);
+    if (!entry.revert || isKept) return null;
+    return (
+      <>
+        <Button size="sm" variant="ghost" shape="square" aria-label={`Keep: ${entry.summary}`}
+          onClick={() => setKept((prev) => new Set(prev).add(entry.id))}
+          icon={<CheckIcon size={12} />} />
+        <Button size="sm" variant="ghost" shape="square" aria-label={`Revert: ${entry.summary}`}
+          disabled={busy === entry.id} onClick={() => { void revert(entry); }}
+          icon={busy === entry.id ? <Loader size="sm" /> : <XIcon size={12} />} />
+      </>
+    );
+  };
+
+  const entryNotice = (entry: ChangelogEntry) => notice?.id === entry.id ? (
+    <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>
+      {notice.text}
+    </div>
+  ) : null;
+
+  const renderItem = (item: ChangelogEntry) => {
+    const isKept = kept.has(item.id);
+    return (
+      <li key={item.id} className={`rounded-md border p-border px-2.5 py-2 ${isKept ? "opacity-70" : ""}`}>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs p-text-2 leading-relaxed">{item.summary}</div>
+            {item.evidence && (
+              <div className="mt-1 text-[10px] p-text-3 font-mono leading-relaxed whitespace-pre-wrap break-words">
+                {item.evidence}
+              </div>
+            )}
+            {entryNotice(item)}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">{entryActions(item)}</div>
+        </div>
+        {item.items && item.items.length > 0 && (
+          <ul className="mt-2 space-y-1.5 pl-2 border-l p-border">
+            {item.items.map(renderItem)}
+          </ul>
+        )}
+      </li>
+    );
+  };
 
   return (
     <section>
@@ -114,48 +161,68 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
             const Icon = KIND_ICON[entry.kind];
             const fresh = entry.at > view.seenAt;
             const isKept = kept.has(entry.id);
+            const isExpanded = expanded.has(entry.id);
+            const hasDetails = Boolean(entry.evidence || entry.items?.length);
+            const detailsId = `changelog-details-${encodeURIComponent(entry.id)}`;
             return (
               <div key={entry.id} className={`p-card rounded-lg p-3 ${isKept ? "opacity-70" : ""}`}>
                 <div className="flex items-start gap-2">
                   <Icon size={14} className={`mt-0.5 shrink-0 ${fresh ? "p-accent" : "p-text-3"}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs p-text leading-relaxed flex-1" title={entry.summary}>{entry.summary}</span>
-                      {fresh && !isKept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
+                  {hasDetails ? (
+                    <button type="button" className="min-w-0 flex-1 flex items-start gap-2 text-left rounded-md"
+                      aria-expanded={isExpanded} aria-controls={detailsId}
+                      onClick={() => toggleExpanded(entry.id)}>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs p-text leading-relaxed flex-1" title={entry.summary}>{entry.summary}</span>
+                          {fresh && !isKept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
+                        </div>
+                        <div className="mt-1 text-[10px] p-text-3">{timeAgo(entry.at)}</div>
+                      </div>
+                      {isExpanded
+                        ? <CaretDownIcon size={11} className="mt-0.5 shrink-0 p-text-3" />
+                        : <CaretRightIcon size={11} className="mt-0.5 shrink-0 p-text-3" />}
+                    </button>
+                  ) : (
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs p-text leading-relaxed flex-1" title={entry.summary}>{entry.summary}</span>
+                        {fresh && !isKept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
+                      </div>
+                      <div className="mt-1 text-[10px] p-text-3">{timeAgo(entry.at)}</div>
                     </div>
-                    <div className="flex items-center gap-2 mt-1 text-[10px] p-text-3">
-                      <span className="font-mono tabular-nums">{entry.evidence}</span>
-                      <span>·</span>
-                      <span>{timeAgo(entry.at)}</span>
-                    </div>
-                  </div>
+                  )}
                   <div className="flex items-center gap-1 shrink-0">
                     {entry.scaffoldVersion != null && (
                       <Button size="sm" variant="ghost" shape="square" onClick={() => toggleDiff(entry)}
                         icon={<GitDiffIcon size={12} />} aria-label="Show diff" />
                     )}
-                    {entry.revert && !isKept && (
-                      <>
-                        <Button size="sm" variant="ghost" shape="square" aria-label="Keep"
-                          onClick={() => setKept((prev) => new Set(prev).add(entry.id))}
-                          icon={<CheckIcon size={12} />} />
-                        <Button size="sm" variant="ghost" shape="square" aria-label="Revert" disabled={busy === entry.id}
-                          onClick={() => { void revert(entry); }}
-                          icon={busy === entry.id ? <Loader size="sm" /> : <XIcon size={12} />} />
-                      </>
-                    )}
+                    {entryActions(entry)}
                   </div>
                 </div>
-                {notice?.id === entry.id && (
-                  <div className={`mt-2 text-[11px] ${notice.ok ? "text-emerald-400" : "text-red-400"}`}>{notice.text}</div>
+                {entryNotice(entry)}
+                {hasDetails && (
+                  <div id={detailsId} role="region" aria-label={`Details for ${entry.summary}`} hidden={!isExpanded}
+                    className="mt-2 ml-6 border-t p-border pt-2">
+                    {entry.evidence && (
+                      <div className="text-[10px] p-text-3 font-mono leading-relaxed whitespace-pre-wrap break-words">
+                        {entry.evidence}
+                      </div>
+                    )}
+                    {entry.items && entry.items.length > 0 && (
+                      <ul className={`${entry.evidence ? "mt-2" : ""} space-y-1.5`}>
+                        {entry.items.map(renderItem)}
+                      </ul>
+                    )}
+                  </div>
                 )}
                 {diffFor?.id === entry.id && (
                   diffFor.diff ? (
                     <div className="mt-2 rounded-md border p-border overflow-hidden">
                       <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border text-[11px] p-text-3">
                         <span>v{diffFor.diff.previousVersion ?? "∅"} → v{diffFor.diff.version}</span>
-                        <span className="text-emerald-400">+{diffFor.diff.added}</span>
-                        <span className="text-red-400">−{diffFor.diff.removed}</span>
+                        <span className="p-success">+{diffFor.diff.added}</span>
+                        <span className="p-danger">−{diffFor.diff.removed}</span>
                       </div>
                       <DiffLines lines={diffFor.diff.lines} />
                     </div>

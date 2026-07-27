@@ -77,6 +77,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     resolveModel: () => model,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
     listModels: async () => [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }],
+    modelInfo: async () => null,
   };
 }
 
@@ -283,28 +284,37 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands.js');
 
-    // Seed real ledgers: one crafted tool + one learned fact.
+    // Seed real ledgers: one crafted tool + two learned facts in one aggregate.
     rt.craftStore.create({ name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
     rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                    VALUES ('favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
+    rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+                   VALUES ('editor', '"helix"', 1.0, NULL, ${Date.now() - 500})`;
 
     const listed = await executeSlashCommand(client, '/changelog');
     if (listed.kind !== 'changelog') throw new Error(`expected changelog outcome, got ${listed.kind}`);
     expect(listed.view.unseenCount).toBe(2);
-    const summaries = listed.view.entries.map((entry) => entry.summary);
-    expect(summaries.some((s) => s.includes('Crafted tool csv_summarizer'))).toBe(true);
-    expect(summaries.some((s) => s.includes('Learned fact favorite_shell = fish'))).toBe(true);
+    const tool = listed.view.entries.find((entry) => entry.kind === 'tool')!;
+    const facts = listed.view.entries.find((entry) => entry.kind === 'fact')!;
+    expect(tool.summary).toBe('Created a tool: csv summarizer');
+    expect(facts.summary).toBe('Learned 2 things about your environment');
+    expect(facts.items?.map((entry) => entry.summary)).toEqual([
+      'Your editor is helix',
+      'Your favorite shell is fish',
+    ]);
 
     // Viewing IS the acknowledgement — the next fetch shows nothing unseen.
     const second = await executeSlashCommand(client, '/changelog');
     if (second.kind !== 'changelog') throw new Error('expected changelog outcome');
     expect(second.view.unseenCount).toBe(0);
 
-    // Revert by index (1 = newest = the crafted tool) retires it for real.
-    const reverted = await executeSlashCommand(client, '/changelog revert 1');
+    // The aggregate is one rendered row/index; reverting it forgets every child.
+    const factIndex = second.view.entries.findIndex((entry) => entry.kind === 'fact') + 1;
+    const reverted = await executeSlashCommand(client, `/changelog revert ${factIndex}`);
     if (reverted.kind !== 'text') throw new Error('expected text outcome');
-    expect(reverted.text).toContain('Reverted 1');
-    expect(rt.craftStore.get('csv_summarizer')).toBeFalsy();
+    expect(reverted.text).toContain(`Reverted ${factIndex}`);
+    expect(rt.storage.sql`SELECT * FROM agent_facts`).toHaveLength(0);
+    expect(rt.craftStore.get('csv_summarizer')).toBeTruthy();
 
     // Out-of-range and bad indices answer with usage, never throw.
     const missing = await executeSlashCommand(client, '/changelog revert 99');
@@ -339,7 +349,12 @@ describe('/takes — Alternate Takes over a real local client', () => {
         VALUES ('win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
     rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
         VALUES ('alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
-    captureAlternateTakes(rt.storage.sql, { task: 'choose a plan', winnerId: 'win', epsilon: 0.1 });
+    // Production captures happen mid-turn. This fixture seeds before send(), so
+    // place it inside the upcoming turn's claim window instead of depending on
+    // capture and turn start landing in the same millisecond.
+    captureAlternateTakes(rt.storage.sql, {
+      task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000,
+    });
     await client.send('solve it');
 
     const set = await client.latestTakes();

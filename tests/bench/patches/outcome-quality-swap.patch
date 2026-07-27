@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
+index d90bc58..65e2273 100644
+--- a/packages/core/src/evolution/outcomes.ts
++++ b/packages/core/src/evolution/outcomes.ts
+@@ -35,7 +35,7 @@ export type TurnOutcomeSource = 'explicit' | 'classifier' | 'session_end' | 'tak
+  *  the outcome pipeline AND the async setTurnFeedback re-scoring path
+  *  (cf-backend), so the 0.9/0.2 constants can't drift between them. */
+ export function feedbackToQuality(feedback: 'positive' | 'negative'): number {
+-  return feedback === 'positive' ? 0.9 : 0.2;
++  return feedback === 'positive' ? 0.2 : 0.9;
+ }
+ 
+ /** Outcome → the CompletedTurn.feedback value it populates. Abandoned turns

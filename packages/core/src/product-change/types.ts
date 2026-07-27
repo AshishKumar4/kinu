@@ -1,15 +1,18 @@
-export type ProductChangeStatus =
-  | 'draft'
-  | 'planning'
-  | 'patching'
-  | 'validating'
-  | 'preview_ready'
-  | 'awaiting_approval'
-  | 'applying'
-  | 'deployed'
-  | 'rejected'
-  | 'rolled_back'
-  | 'failed';
+export const PRODUCT_CHANGE_STATUSES = [
+  'draft',
+  'planning',
+  'patching',
+  'validating',
+  'preview_ready',
+  'awaiting_approval',
+  'applying',
+  'deployed',
+  'rejected',
+  'rolled_back',
+  'failed',
+] as const;
+
+export type ProductChangeStatus = (typeof PRODUCT_CHANGE_STATUSES)[number];
 
 export type ProductSourceKind = 'local' | 'github';
 
@@ -59,6 +62,9 @@ export interface ProductChangeApproval {
   decision: 'pending' | 'approved' | 'rejected';
   approvedBy: string | null;
   note: string | null;
+  /** SHA-256 binding the reviewable deploy identity (patch + declared command)
+   *  this approval authorizes — verified at deploy time (SPEC §7.3). */
+  argumentDigest: string;
   createdAt: number;
   decidedAt: number | null;
 }
@@ -71,6 +77,15 @@ export interface ProductDeploymentRecord {
   deploymentId: string | null;
   rollbackTarget: string | null;
   deployedAt: number;
+}
+
+/** Full ledger view of one change — what the execution engine reads. */
+export interface ProductChangeDetail {
+  change: ProductChangeRequest;
+  binding: ProductSourceBinding | null;
+  checks: ProductChangeCheck[];
+  approvals: ProductChangeApproval[];
+  deployments: ProductDeploymentRecord[];
 }
 
 export type ProductChangeTransitionResult =

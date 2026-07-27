@@ -1,0 +1,316 @@
+# Machine-checked by check-traceability.mjs. The Lean models are maintained
+# by hand; a theorem proves its statement only inside the named abstract model.
+edition: 1.0.0
+formalScope: abstract-model-only
+requirements:
+  PR-AGENT-001:
+    statement: Per-turn lifecycle operations reset or increment their modeled counters without mutating the configured step limit.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Agent.Lifecycle.reset_clears_counters
+      - Proteus.Agent.Lifecycle.reset_preserves_turnCount
+      - Proteus.Agent.Lifecycle.step_increments
+      - Proteus.Agent.Lifecycle.tool_increments
+      - Proteus.Agent.Lifecycle.turn_increments
+      - Proteus.Agent.Lifecycle.steps_bounded_by_calls
+      - Proteus.Agent.Lifecycle.maxSteps_invariant
+    tsRefs:
+      - packages/cf-backend/src/orchestrator.ts:1795
+      - packages/cf-backend/src/orchestrator.ts:2085
+      - packages/cf-backend/src/orchestrator.ts:2096
+      - packages/core/src/orchestrator/agent-orchestrator.ts:86
+      - packages/core/src/chat.ts:77
+    remainingEvidence:
+      - WP-F4 differential fixtures for the real hook counters and configured stop condition
+  PR-AGENT-002:
+    statement: The abstract turn queue starts only while idle and completion clears busy state while advancing its counters.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Agent.TurnQueue.enqueue_preserves_busy
+      - Proteus.Agent.TurnQueue.start_requires_idle
+      - Proteus.Agent.TurnQueue.start_makes_busy
+      - Proteus.Agent.TurnQueue.complete_clears_busy
+      - Proteus.Agent.TurnQueue.complete_increments
+      - Proteus.Agent.TurnQueue.enqueue_increases_total
+    tsRefs:
+      - packages/cli-backend/src/local-session.ts:244
+      - packages/cli-backend/src/local-session.ts:680
+      - packages/cli-backend/src/local-session.ts:844
+    remainingEvidence:
+      - The Cloudflare TurnQueue implementation is external to this repository and has no model refinement test
+      - The local queue keeps its pumping flag set across a full drain rather than clearing it after one modeled item
+  PR-BUDGET-001:
+    statement: Positive-budget abstract fiber steps conserve the initial budget, decrease the remaining budget, and use a well-founded natural-number measure.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Agent.FiberDurability.step_preserves_conservation
+      - Proteus.Agent.FiberDurability.step_decreases_remaining
+      - Proteus.Agent.FiberDurability.n_steps_remaining
+      - Proteus.MCTS.StorageIsolation.budget_well_founded
+    tsRefs:
+      - packages/core/src/mcts/engine.ts:83
+      - packages/core/src/mcts/engine.ts:232
+    remainingEvidence:
+      - WP-F4 termination and budget-consumption fixtures on the production loop
+      - The production configuration uses JavaScript numbers rather than a universally quantified natural-number budget
+  PR-FIBER-001:
+    statement: Starting the abstract fiber budget and copying its checkpoint fields witness the declared initial and restore values by construction.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Agent.FiberDurability.start_conserved
+      - Proteus.Agent.FiberDurability.checkpoint_restore_roundtrip
+    tsRefs:
+      - packages/core/src/mcts/engine.ts:74
+      - packages/cf-backend/src/runtime.ts:558
+    remainingEvidence:
+      - Checkpoint field equality does not prove durable persistence or crash recovery
+      - WP-F4 recovery fixtures against the SDK fiber snapshot and stash behavior
+  PR-EVOL-001:
+    statement: The declared evolution postconditions and list operations witness monotone counters, positive nested budgets, and scaffold lookup and append behavior.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Evolution.Timescales.turnCount_increases
+      - Proteus.Evolution.Timescales.scaffoldVersion_nondecreasing
+      - Proteus.Evolution.Timescales.memorySize_nondecreasing
+      - Proteus.Evolution.Timescales.sessionCount_nondecreasing
+      - Proteus.Evolution.Timescales.nested_budget_bounded
+      - Proteus.Evolution.Timescales.deeper_costs_more
+      - Proteus.Evolution.Scaffold.rollback_nonexistent_is_none
+      - Proteus.Evolution.Scaffold.append_increases_length
+    tsRefs:
+      - packages/core/src/evolution/engine.ts:193
+      - packages/core/src/evolution/engine.ts:409
+      - packages/core/src/evolution/engine.ts:577
+      - packages/core/src/scaffold/rollback.ts:10
+      - packages/core/src/orchestrator/agent-orchestrator.ts:86
+      - packages/core/src/scaffold/modify.ts:109
+    remainingEvidence:
+      - The transition postconditions are hand-asserted and need WP-F4 differential lifecycle fixtures
+      - The abstract totalBudget product has no direct production counterpart
+      - Production rollback can lower the current scaffold version and is absent from the monotonicity model
+      - List append models the SQL and VFS version-history write only abstractly
+  PR-EVOL-002:
+    statement: The abstract craft-list operations preserve their stated membership, filtering, length, and non-emptiness properties.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Evolution.CraftStore.consolidate_keeps_above
+      - Proteus.Evolution.CraftStore.search_length_bound
+      - Proteus.Evolution.FullCraftLifecycle.extract_increases
+      - Proteus.Evolution.FullCraftLifecycle.extract_contains
+      - Proteus.Evolution.FullCraftLifecycle.update_preserves
+      - Proteus.Evolution.FullCraftLifecycle.consolidation_never_empties
+      - Proteus.Evolution.FullCraftLifecycle.consolidation_nonincreasing
+      - Proteus.Evolution.FullCraftLifecycle.remove_nonincreasing
+      - Proteus.Evolution.FullCraftLifecycle.full_lifecycle_nonempty
+      - Proteus.Evolution.FullCraftLifecycle.ema_nonneg
+      - Proteus.Evolution.FullCraftLifecycle.below_threshold_filtered
+      - Proteus.Evolution.FullCraftLifecycle.pipeline_preserves_nonempty
+    tsRefs:
+      - packages/core/src/craft/consolidation.ts:28
+      - packages/agent-utils/src/stores/craft.ts:78
+      - packages/agent-utils/src/stores/craft.ts:99
+      - packages/agent-utils/src/stores/craft.ts:117
+      - packages/agent-utils/src/stores/craft.ts:132
+      - packages/core/src/evolution/engine.ts:702
+      - packages/core/src/craft/conflict.ts:40
+    remainingEvidence:
+      - The list models omit SQL persistence details, score decay, and the real craft retirement policy
+      - Production extraction has conflict and misevolution vetoes plus create-versus-update behavior absent from the prepend-only model
+      - WP-F4 differential fixtures for extraction and consolidation behavior
+  PR-EVOL-003:
+    statement: The scaled-natural EMA model remains bounded when both abstract inputs are at most one thousand.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Evolution.FullCraftLifecycle.ema_bounded
+      - Proteus.Evolution.FullCraftLifecycle.ema_stays_bounded
+    tsRefs:
+      - packages/core/src/craft/ema.ts:16
+    remainingEvidence:
+      - The TypeScript uses configurable floating-point arithmetic and unbounded observations rather than this fixed scaled-Nat model
+      - WP-F4 differential fixtures after the production arithmetic is settled
+  PR-EXEC-001:
+    statement: The abstract executor capability lattice is reflexive and transitive, and whenever its router returns an executor that executor is available and has every requested capability.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Execution.Capabilities.container_subsumes_nimbus
+      - Proteus.Execution.Capabilities.ssh_subsumes_container
+      - Proteus.Execution.Capabilities.ssh_subsumes_nimbus
+      - Proteus.Execution.Capabilities.workspace_incomparable_nimbus
+      - Proteus.Execution.Capabilities.chain
+      - Proteus.Execution.Capabilities.route_satisfies_all
+      - Proteus.Execution.Capabilities.route_available
+      - Proteus.Execution.Capabilities.route_has_all_caps
+      - Proteus.Execution.Capabilities.subsumes_refl
+      - Proteus.Execution.Capabilities.subsumes_trans
+    tsRefs:
+      - packages/core/src/execution/types.ts:29
+      - packages/core/src/execution/router.ts:22
+      - packages/core/src/execution/inline.ts:207
+      - packages/core/src/execution/nimbus.ts:352
+      - packages/core/src/execution/sandbox.ts:477
+      - packages/core/src/execution/device-tunnel-executor.ts:156
+    remainingEvidence:
+      - WP-F3.6 must realign stale executor names and the false container-subsumes-Nimbus relation with the current provider set
+      - The production router filters availability but does not implement the modeled required-capability search
+      - WP-F4 differential routing fixtures
+  PR-EXEC-002:
+    statement: The abstract action classifier maps each modeled agent action to its declared top-level tool.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Execution.ToolSystem.action_routes_to_valid_tool
+      - Proteus.Execution.ToolSystem.only_mcts_uses_explore
+      - Proteus.Execution.ToolSystem.shell_uses_run
+      - Proteus.Execution.ToolSystem.memory_search_uses_search
+      - Proteus.Execution.ToolSystem.memory_save_uses_note
+      - Proteus.Execution.ToolSystem.file_ops_use_codemode
+    tsRefs:
+      - packages/core/src/tools/registry.ts:12
+    remainingEvidence:
+      - The Lean five-tool vocabulary is stale relative to the current ten-tool registry and needs WP-F3.6 realignment
+      - Production has no action classifier implementing this abstract mapping
+  PR-EXEC-003:
+    statement: The abstract crafted-tool call list remains in the workspace namespace when a workspace call is appended.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Execution.ToolSystem.empty_is_isolated
+      - Proteus.Execution.ToolSystem.append_workspace_preserves
+    tsRefs:
+      - packages/core/src/execution/inline.ts:186
+      - packages/core/src/tools/builtins.ts:315
+    remainingEvidence:
+      - The workspace-only abstract call list omits the current workspace, codemode, and tools namespace contract
+      - No refinement test currently connects the abstract call list to codemode provider dispatch
+  PR-SAFETY-001:
+    statement: The abstract grantable-operation constructor can produce only provider tool calls and cannot construct privileged internal operations.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Safety.CapabilitySafety.grantableOps_only_toolcalls
+      - Proteus.Safety.CapabilitySafety.sqlwrite_not_grantable
+      - Proteus.Safety.CapabilitySafety.sqlread_not_grantable
+      - Proteus.Safety.CapabilitySafety.scaffoldwrite_not_grantable
+      - Proteus.Safety.CapabilitySafety.spawnsubagent_not_grantable
+      - Proteus.Safety.CapabilitySafety.networkfetch_not_grantable
+    tsRefs:
+      - packages/core/src/types/primitives.ts:74
+      - packages/core/src/tools/builtins.ts:335
+    remainingEvidence:
+      - These are constructor-shape witnesses rather than a proof of the deployed sandbox boundary
+      - Production has no matching Op or grantableOps taxonomy and provider tools can have transitive effects
+      - Integration coverage of provider assembly and privileged-operation denial
+  PR-MCTS-001:
+    statement: Exact scaled-integer backpropagation preserves reward bounds and the reward-sum and visit-count invariants in the abstract model.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.MCTS.Backpropagation.update_preserves_range
+      - Proteus.MCTS.Backpropagation.applyRewards_preserves_range
+      - Proteus.MCTS.Backpropagation.applyRewards_sum_invariant
+      - Proteus.MCTS.Backpropagation.sum_invariant
+    tsRefs:
+      - packages/core/src/mcts/backpropagation.ts:31
+      - packages/core/src/mcts/backpropagation.ts:49
+      - packages/core/src/mcts/schemas.ts:24
+    remainingEvidence:
+      - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers
+      - WP-F4 differential fixtures against the recursive SQL update
+  PR-MCTS-002:
+    statement: Initial-value erasure, numerator shape, zero-state range, and identifier preservation follow directly from the abstract backpropagation constructors.
+    status: by-construction-witness
+    theorems:
+      - Proteus.MCTS.Backpropagation.init_values_equal_at_first_step
+      - Proteus.MCTS.Backpropagation.update_matches_ts_numerator
+      - Proteus.MCTS.Backpropagation.initial_in_range
+      - Proteus.MCTS.Backpropagation.backprop_preserves_ids
+    tsRefs:
+      - packages/core/src/mcts/backpropagation.ts:31
+      - packages/core/src/mcts/backpropagation.ts:49
+    remainingEvidence:
+      - WP-F4 differential fixtures must connect these constructor-shape witnesses to the recursive SQLite update
+  PR-MCTS-003:
+    statement: Storage identity separation is invariant under every transition admitted by the abstract MCTS transition relation.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.MCTS.StorageIsolation.init_isolated
+      - Proteus.MCTS.StorageIsolation.transition_preserves_isolation
+    tsRefs:
+      - packages/cli-backend/src/branch-process.ts:28
+      - packages/cli-backend/src/branch-worker.ts:49
+      - packages/cf-backend/src/runtime.ts:584
+    remainingEvidence:
+      - Transition postconditions are hand-asserted rather than refined from branch spawning and storage code
+      - The abstract Converge transition is identity while production convergence mutates node statuses and persistent memory
+      - Integration assertion that branch storage identity differs from orchestrator storage identity
+  PR-MCTS-004:
+    statement: For non-root nodes beyond the production visit-count plateaus, the implemented UCT-style exploration bonus should decrease as that node's visits increase and increase as its parent's visits increase, but this remains unmodeled in Lean.
+    status: specified-not-modeled
+    theorems: []
+    tsRefs:
+      - packages/core/src/mcts/uct.ts:33
+    remainingEvidence:
+      - The current implementation selects a global open-node argmax rather than performing UCT root descent
+      - The max-one visit clamps create plateaus and root self-parenting defeats a global self-antitonic claim
+      - Decide the production selection algorithm before modeling score monotonicity
+  PR-MCTS-005:
+    statement: Conditions under which repeated global-best-first selection, expansion, evaluation, and backpropagation stabilize on an optimal candidate remain specified but have no Lean probabilistic model.
+    status: specified-not-modeled
+    theorems: []
+    tsRefs:
+      - packages/core/src/mcts/convergence.ts:22
+      - packages/core/src/mcts/engine.ts:83
+      - packages/core/src/mcts/uct.ts:40
+    remainingEvidence:
+      - A convergence claim requires a settled selection algorithm and a formal probabilistic model
+  PR-STORE-001:
+    statement: The abstract memory index preserves new and unrelated chunks and bounds modeled search result length and score sign by construction.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Storage.FTS5Search.index_includes_new
+      - Proteus.Storage.FTS5Search.index_preserves_other
+      - Proteus.Storage.FTS5Search.search_bounded
+      - Proteus.Storage.FTS5Search.fts5_scores_nonneg
+    tsRefs:
+      - packages/agent-utils/src/memory/store.ts:117
+      - packages/agent-utils/src/memory/store.ts:153
+      - packages/agent-utils/src/memory/store.ts:175
+    remainingEvidence:
+      - The model does not encode SQLite tokenization, ranking, fallback-query, or score arithmetic behavior
+      - Chunk identifiers, stale-chunk deletion, and content-table to FTS-table synchronization are not modeled
+      - WP-F4 differential fixtures for indexing, limiting, and score mapping
+  PR-STORE-002:
+    statement: For every indexed chunk that its external matcher declares to match, SQLite FTS5 returns some result with the same path before result limiting.
+    status: trusted-model-assumption
+    theorems: []
+    axioms:
+      - Proteus.Storage.FTS5Search.fts5_indexed_findable
+    tsRefs:
+      - packages/agent-utils/src/memory/store.ts:117
+      - packages/agent-utils/src/memory/store.ts:182
+    remainingEvidence:
+      - No covering integration test exists because MemoryStore indexFile plus search is untested
+  PR-STORE-003:
+    statement: The abstract list-backed filesystem provides write-read round trips, idempotent directory creation, and non-clobbering writes to paths assumed distinct in the model.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.SqliteFSCorrectness.write_read_roundtrip
+      - Proteus.Storage.SqliteFSCorrectness.mkdir_idempotent
+      - Proteus.Storage.SqliteFSCorrectness.writes_commute
+    tsRefs:
+      - packages/agent-utils/src/vfs/sqlite.ts:60
+      - packages/agent-utils/src/vfs/sqlite.ts:135
+      - packages/agent-utils/src/vfs/sqlite.ts:226
+      - packages/agent-utils/src/vfs/sqlite.ts:261
+    remainingEvidence:
+      - Production normalizes paths before writing, so distinct raw strings can alias and the model hypothesis needs a normalization correspondence
+      - Integration tests cover round trips but not repeated mkdir idempotence or concurrent multi-write serialization
+  PR-STORE-004:
+    statement: Positive-size byte chunking in the abstract filesystem reassembles the original byte list and decreases its chunk count one chunk at a time.
+    status: proved-in-abstract-model
+    theorems:
+      - Proteus.Storage.SqliteFSCorrectness.chunkCount_drop
+      - Proteus.Storage.SqliteFSCorrectness.chunk_reassembly
+    tsRefs:
+      - packages/agent-utils/src/vfs/sqlite.ts:96
+      - packages/agent-utils/src/vfs/sqlite.ts:161
+      - packages/agent-utils/src/vfs/encoding.ts:4
+    remainingEvidence:
+      - No covering integration test writes a payload larger than the production chunk size
+      - WP-F4 differential multi-chunk fixtures

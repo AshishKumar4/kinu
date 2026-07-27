@@ -37,8 +37,27 @@ tar \
   -cf - \
   -C "$ROOT" "${paths[@]}" | tar -xf - -C "$stage"
 
+# Stamp the build into the CLI version (semver build metadata) so installed
+# binaries are distinguishable: "0.1.0+abc1234". package.json stays the single
+# version source; the sha only exists in the shipped archive.
+sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
+node -e "
+  const p = require('$stage/packages/cli/package.json');
+  p.version = p.version.split('+')[0] + '+' + process.argv[1];
+  require('fs').writeFileSync('$stage/packages/cli/package.json', JSON.stringify(p, null, 2) + '\n');
+" "$sha"
+
 tar -czf "$tmp/proteus-source.tar.gz" -C "$tmp" proteus
 mv "$tmp/proteus-source.tar.gz" "$OUT"
+
+# Publish the served build's version alongside the archive so an installed CLI
+# can ask "is there anything newer?" without downloading it. Written from the
+# SAME stamped package.json the archive ships — one stamping site, one source.
+node -e "
+  const { version } = require('$stage/packages/cli/package.json');
+  const out = JSON.stringify({ version, sha: process.argv[1], builtAt: new Date().toISOString() });
+  require('fs').writeFileSync(process.argv[2], out + '\n');
+" "$sha" "$(dirname "$OUT")/proteus-version.json"
 
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")

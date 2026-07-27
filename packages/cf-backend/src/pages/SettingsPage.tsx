@@ -9,31 +9,17 @@ import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
+  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon, CopyIcon,
+  DesktopTowerIcon,
 } from "@phosphor-icons/react";
+import { formatScoreInterval, type ScoreInterval } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
-import { listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
-import { ModelPicker } from "@/components/ModelPicker";
-
-const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
-  + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"
-  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-  + " placeholder:p-text-3";
-
-function Card({ title, icon: Icon, children }: {
-  title: string; icon: React.ComponentType<{ size?: number; className?: string }>;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="p-card rounded-xl p-5 space-y-3">
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Icon size={16} className="p-accent" />
-        <span>{title}</span>
-      </h2>
-      {children}
-    </section>
-  );
-}
+import {
+  listDevices, listDeviceConsents, setDeviceConsentScope,
+  type UserDevice, type DeviceConsentScope,
+} from "../lib/user-api";
+import { ConnectedModelPicker } from "@/components/ModelPicker";
+import { Card, inputCls } from "@/components/ui/form";
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
@@ -48,12 +34,13 @@ export default function SettingsPage() {
   const { rpc, connectionStatus, agentStatus, setModel } = state;
 
   const [displayName, setDisplayName] = useState("");
+  const [displayNameDirty, setDisplayNameDirty] = useState(false);
   const [soul, setSoul] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [slugCopied, setSlugCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [models, setModels] = useState<ModelMenuEntry[]>([]);
   const [currentSpec, setCurrentSpec] = useState<string>("");
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("strict");
   const [mcts, setMcts] = useState(DEFAULT_MCTS);
@@ -64,20 +51,21 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!agentStatus || identityHydrated.current) return;
     identityHydrated.current = true;
-    setDisplayName(agentStatus.displayName || agentStatus.name || "");
     setSoul(agentStatus.soul || "");
   }, [agentStatus]);
+
+  useEffect(() => {
+    if (agentStatus && !displayNameDirty) setDisplayName(agentStatus.displayName || "");
+  }, [agentStatus, displayNameDirty]);
 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [m, current, mode, mc] = await Promise.all([
-        listAvailableModels().catch(() => []),
+      const [current, mode, mc] = await Promise.all([
         rpc<{ spec: string | null }>("getStoredModelSpec", []).catch(() => ({ spec: null })),
         rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []).catch(() => ({ mode: 'strict' as ApprovalMode })),
         rpc<typeof DEFAULT_MCTS>("getMctsConfig", []).catch(() => DEFAULT_MCTS),
       ]);
-      setModels(m ?? []);
       setCurrentSpec(current?.spec ?? "");
       setApprovalMode(mode?.mode ?? "strict");
       if (mc) setMcts(mc);
@@ -99,12 +87,13 @@ export default function SettingsPage() {
     setErr(null);
     try {
       await Promise.all([
-        rpc("setDisplayName", [displayName]),
+        displayNameDirty ? rpc("setDisplayName", [displayName]) : Promise.resolve(),
         rpc("setSoul", [soul]),
         currentSpec ? setModel(currentSpec) : Promise.resolve(),
         rpc("setShellApprovalMode", [approvalMode]),
         rpc("setMctsConfig", [mcts]),
       ]);
+      setDisplayNameDirty(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -112,7 +101,18 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [rpc, setModel, displayName, soul, currentSpec, approvalMode, mcts]);
+  }, [rpc, setModel, displayName, displayNameDirty, soul, currentSpec, approvalMode, mcts]);
+
+  const copySlug = useCallback(async () => {
+    if (!agentId) return;
+    try {
+      await navigator.clipboard.writeText(agentId);
+      setSlugCopied(true);
+      setTimeout(() => setSlugCopied(false), 2000);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Could not copy workspace slug");
+    }
+  }, [agentId]);
 
   if (connectionStatus !== "connected") {
     return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
@@ -123,19 +123,27 @@ export default function SettingsPage() {
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
         <header className="flex items-center justify-between">
           <div>
-            <Link to={`/agent/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
+            <Link to={`/workspace/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
               <ArrowLeftIcon size={12} /> Back to chat
             </Link>
-            <h1 className="text-2xl font-semibold">Agent settings</h1>
+            <h1 className="text-2xl font-semibold">Workspace settings</h1>
             <p className="text-xs p-text-3 mt-1 flex items-center gap-1.5">
               <span className="font-mono">{agentId}</span>
+              <button
+                type="button"
+                onClick={copySlug}
+                className="rounded p-0.5 hover:p-card-hover hover:p-text transition-colors"
+                title="Copy workspace slug"
+                aria-label={slugCopied ? "Workspace slug copied" : "Copy workspace slug"}
+              >{slugCopied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}</button>
+              <span className="sr-only" aria-live="polite">{slugCopied ? "Workspace slug copied" : ""}</span>
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
-                <KeyIcon size={11} /> User settings & credentials
+                <KeyIcon size={11} /> Account settings & credentials
               </Link>
               <span>·</span>
-              <Link to={`/triggers/${agentId}`} className="hover:p-text inline-flex items-center gap-1">
-                <PlugIcon size={11} /> Triggers (webhooks, timers)
+              <Link to={`/workspace/${agentId}?altitude=supervise`} className="hover:p-text inline-flex items-center gap-1">
+                <PlugIcon size={11} /> Automations (webhooks, timers)
               </Link>
             </p>
           </div>
@@ -149,13 +157,13 @@ export default function SettingsPage() {
           </button>
         </header>
 
-        {err && <div className="p-card rounded-lg p-3 text-xs text-red-400">{err}</div>}
+        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
 
         {/* Identity */}
         <Card title="Identity" icon={BrainIcon}>
           <div className="space-y-1.5">
             <label className="text-xs p-text-2 font-medium">Display name</label>
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputCls} />
+            <input value={displayName} onChange={(e) => { setDisplayName(e.target.value); setDisplayNameDirty(true); }} className={inputCls} />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs p-text-2 font-medium">SOUL.md</label>
@@ -166,19 +174,17 @@ export default function SettingsPage() {
 
         {/* Model */}
         <Card title="Model" icon={GearSixIcon}>
-          {models.length === 0 ? (
-            <p className="text-xs p-text-3">
-              No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in user settings.
-            </p>
-          ) : (
-            <ModelPicker
-              models={models}
-              value={currentSpec}
-              onChange={setCurrentSpec}
-              clearable
-              placeholder="(default)"
-            />
-          )}
+          <ConnectedModelPicker
+            value={currentSpec}
+            onChange={setCurrentSpec}
+            clearable
+            placeholder="(default)"
+            renderEmpty={() => (
+              <p className="text-xs p-text-3">
+                No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in account settings.
+              </p>
+            )}
+          />
           <p className="text-[11px] p-text-3">
             Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.
           </p>
@@ -210,6 +216,9 @@ export default function SettingsPage() {
         {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
             live on the agent's Brain surface (single source of truth). */}
 
+        {/* Per-agent device file-access tier */}
+        {agentId && <DeviceAccessCard agentName={agentId} />}
+
         {/* Always-active skills */}
         <AlwaysActiveSkillsCard rpc={rpc} />
 
@@ -217,6 +226,94 @@ export default function SettingsPage() {
         <GepaOptimizationCard rpc={rpc} />
       </div>
     </div>
+  );
+}
+
+// ── Per-agent device file-access tier ────────────────────────────
+
+/** The grant surface for the /pc full-filesystem consent tier — a workspace
+ *  concern (this agent's tier on your connected device), while device
+ *  registration itself is account-level (Account settings → Devices). By
+ *  default the /pc mount reaches only the consented folder (connect dir /
+ *  home); this flips THIS agent's tier via setDeviceConsentScope — the same
+ *  remembered policy the hub enforces. */
+function DeviceAccessCard({ agentName }: { agentName: string }) {
+  const [device, setDevice] = useState<UserDevice | null | "loading">("loading");
+  const [scope, setScope] = useState<DeviceConsentScope | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const devices = await listDevices();
+        const connected = devices.find((d) => d.connected) ?? null;
+        if (cancelled) return;
+        setDevice(connected);
+        if (!connected) return;
+        const consents = await listDeviceConsents();
+        if (cancelled) return;
+        const row = consents.find((c) => c.agentName === agentName && c.deviceId === connected.id);
+        setScope(row?.scope === "full_filesystem" ? "full_filesystem" : "all_local_actions");
+      } catch {
+        if (!cancelled) setDevice(null); // device/consent listing unavailable
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [agentName]);
+
+  const full = scope === "full_filesystem";
+  const toggle = async () => {
+    if (device === "loading" || !device) return;
+    const next: DeviceConsentScope = full ? "all_local_actions" : "full_filesystem";
+    setBusy(true);
+    setErr(null);
+    try {
+      await setDeviceConsentScope(device.id, agentName, next);
+      setScope(next);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="Device access" icon={DesktopTowerIcon}>
+      <p className="text-[11px] p-text-3">
+        How far this workspace's agent may reach on your connected PC (the /pc mount).
+        By default it sees only the folder you consented to when connecting.
+      </p>
+      {device === "loading" ? (
+        <p className="text-xs p-text-3">Checking connected devices…</p>
+      ) : !device ? (
+        <p className="text-xs p-text-3">
+          No device connected. Register one under{" "}
+          <Link to="/user/settings#devices" className="p-accent underline">Account settings → Devices</Link>.
+        </p>
+      ) : scope === null ? (
+        <p className="text-xs p-text-3">Loading consent for {device.label}…</p>
+      ) : (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="p-text-3">File access on {device.label}:</span>
+          <span className={`font-medium ${full ? "p-warning" : "p-text-2"}`}>
+            {full ? "Full filesystem" : "Consented folder only"}
+          </span>
+          {err && <span className="p-danger truncate">{err}</span>}
+          <button
+            onClick={() => void toggle()}
+            disabled={busy}
+            className="ml-auto px-2 py-1 rounded p-card hover:p-card-hover p-text-2 disabled:opacity-50"
+            title={full
+              ? "Restrict this agent back to the consented folder on this device"
+              : "Let this agent reach paths outside the consented folder on this device"}
+          >
+            {busy ? "…" : full ? "Restrict to folder" : "Allow full filesystem"}
+          </button>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -253,15 +350,25 @@ function GepaOptimizationCard({
     setRunning(true);
     setMsg('Optimising — running candidate scaffolds against recent tasks (this can take a few minutes)…');
     try {
-      const r = await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4, evalSize: 5 }]) as {
+      // No evalSize override — the agent's configured budget is the one
+      // tuned against cost, and a smaller one cannot resolve a winner.
+      const r = await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }]) as {
         ok: boolean; error?: string; proposed?: boolean; pendingVersion?: number | null;
-        skipReason?: string; bestScore?: number; seedScore?: number;
+        skipReason?: string; bestScore?: ScoreInterval; seedScore?: ScoreInterval;
+        selection?: { heldOutNegatives: number; guards: number }; selectionWarning?: string;
       };
+      const scores = r.bestScore && r.seedScore
+        ? `best ${formatScoreInterval(r.bestScore)} vs seed ${formatScoreInterval(r.seedScore)}`
+        : '';
+      const scoredOn = r.selection
+        ? ` Scored on ${r.selection.heldOutNegatives} unseen failure(s) + ${r.selection.guards} accepted guard(s).`
+        : '';
+      const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}) — it will shadow-eval, then you can promote it from the agent's Brain surface.`);
+        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}) — it will shadow-eval, then you can promote it from the agent's Brain surface.${scoredOn}${caveat}`);
       } else {
-        setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; best ${r.bestScore?.toFixed(2)} vs seed ${r.seedScore?.toFixed(2)}).`);
+        setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }
       await refresh();
     } catch (e) {
@@ -272,7 +379,7 @@ function GepaOptimizationCard({
   }, [rpc, refresh]);
 
   return (
-    <Card title="Scaffold optimisation (GEPA)" icon={SparkleIcon}>
+    <Card title="Scaffold self-tuning" icon={SparkleIcon}>
       <p className="text-[11px] p-text-3">
         Offline genetic-Pareto optimisation: runs candidate inference loops against your
         agent's recent tasks, judges each, and proposes an improved scaffold for shadow eval.
@@ -289,7 +396,7 @@ function GepaOptimizationCard({
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
             <div key={r.runId} className="text-[11px] p-text-3 flex items-center gap-2">
-              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'bg-green-500' : r.status === 'running' ? 'bg-amber-500' : 'bg-stone-500'}`} />
+              <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'p-dot-success' : r.status === 'running' ? 'p-dot-warning' : 'p-dot-neutral'}`} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
               <span className="ml-auto">{r.stopReason ?? r.status}</span>
@@ -378,7 +485,7 @@ function AlwaysActiveSkillsCard({
           className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
         >Pin</button>
       </div>
-      {err && <div className="text-[11px] text-red-400 mt-1">{err}</div>}
+      {err && <div className="text-[11px] p-danger mt-1">{err}</div>}
     </Card>
   );
 }

@@ -1,24 +1,31 @@
 /**
- * Unified schema — ALL agent tables in one place.
+ * Unified schema — ALL workspace tables in one place.
  * Idempotent: every statement uses IF NOT EXISTS.
  *
- * This is the single source of truth for what constitutes an agent's identity.
- * ~20 tables in one SQLite file = one agent.
+ * This is the single source of truth for what constitutes a workspace:
+ * ~20 tables in one SQLite file = one workspace (the container that owns the
+ * file plane, sessions, evolution state, and its default orchestrator agent).
  */
 
 import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
-import type { RawSqlExec } from '../types/primitives.js';
+import { migrateSoulStorage } from './soul.js';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 
-const DDL = [
-  // ── Agent identity ──────────────────────────────────────────────
-  `CREATE TABLE IF NOT EXISTS agent_identity (
+const WORKSPACE_IDENTITY_DDL =
+  // ── Workspace identity — the ownership root ────────────────────
+  // Renamed from agent_identity; hosted deployments are recreated rather than
+  // migrated (owner decision 2026-06-13), but a local ~/.proteus workspace is
+  // a file that outlives the rename, so migrateWorkspaceStorage adopts the
+  // legacy row.
+  `CREATE TABLE IF NOT EXISTS workspace_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
-  `ALTER TABLE agent_identity ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
+  )`;
 
+/** Durable state owned by every full-loop actor, including facet actors. */
+const ACTOR_DDL = [
   // ── MCTS search tree ───────────────────────────────────────────
   // BUG-1 FIX: value defaults to 0, NOT 0.5
   `CREATE TABLE IF NOT EXISTS search_nodes (
@@ -160,32 +167,64 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
 
-  // ── Fork lineage — single-row table populated when this agent is a fork ─
-  // Empty for non-forked agents. Written once by forkAgentStorage and read
-  // by the getForkLineage RPC for the UI lineage chip.
-  `CREATE TABLE IF NOT EXISTS fork_lineage (
-    id                        INTEGER PRIMARY KEY,
-    source_agent_id           TEXT    NOT NULL,
-    source_agent_name         TEXT    NOT NULL,
-    source_message_id         TEXT    NOT NULL,
-    source_message_created_at INTEGER NOT NULL,
-    forked_at                 INTEGER NOT NULL
-  )`,
 ];
 
-/** Initialize all agent tables. Idempotent — safe to call on every startup.
- *  ALTER statements may error if the column already exists; we swallow only
- *  that specific class so re-runs are safe. */
+// ── Fork lineage — single-row table populated when this workspace is a
+// fork. Empty otherwise. Written once by forkWorkspaceStorage and read by
+// the getForkLineage RPC for the UI lineage chip.
+const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
+    id                            INTEGER PRIMARY KEY,
+    source_workspace_id           TEXT    NOT NULL,
+    source_workspace_name         TEXT    NOT NULL,
+    source_message_id             TEXT    NOT NULL,
+    source_message_created_at     INTEGER NOT NULL,
+    forked_at                     INTEGER NOT NULL
+  )`;
+
+const DDL = [WORKSPACE_IDENTITY_DDL, ...ACTOR_DDL, FORK_LINEAGE_DDL];
+
+/** Initialize state local to one full-loop actor without materializing a
+ * workspace ownership root or independent fork lineage. */
+export function initActorTables(execRaw: RawSqlExec): void {
+  for (const ddl of ACTOR_DDL) execRaw(ddl);
+}
+
+/** Initialize all workspace tables. Idempotent — safe to call on every startup. */
 export function initAllTables(execRaw: RawSqlExec): void {
-  for (const ddl of DDL) {
-    try { execRaw(ddl); }
-    catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (/duplicate column name|already exists/i.test(msg) && /^\s*ALTER/i.test(ddl)) {
-        // Idempotent ALTER — column already present. Skip silently.
-        continue;
-      }
-      throw err;
-    }
+  for (const ddl of DDL) execRaw(ddl);
+}
+
+/**
+ * Bring a workspace created against an older schema up to the current one.
+ * Idempotent, and it writes — every workspace-open path runs it right after
+ * initAllTables, which is what keeps the read paths (`proteus list`,
+ * `proteus status`, both of which open the database readonly) pure reads.
+ */
+export function migrateWorkspaceStorage(sql: SqlExecutor): void {
+  adoptLegacyAgentIdentity(sql);
+  migrateSoulStorage(sql);
+}
+
+/** Move the pre-rename `agent_identity` row (identical columns) into
+ *  workspace_identity. Without it an older local workspace loses its id, name
+ *  and creation date, and openWorkspace rejects it as having no identity. */
+function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
+  const legacyTable = sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_identity'
+  `;
+  if (legacyTable.length === 0) return;
+
+  const claimed = sql<{ c: number }>`SELECT COUNT(*) AS c FROM workspace_identity`[0]?.c ?? 0;
+  // `SELECT *`: owner_user_id was added to agent_identity after its first
+  // release, so the oldest workspaces do not carry the column.
+  const legacy = claimed === 0
+    ? sql<{ id: string; name: string; owner_user_id?: string; created_at: number }>`
+        SELECT * FROM agent_identity LIMIT 1
+      `[0]
+    : undefined;
+  if (legacy) {
+    sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+        VALUES (${legacy.id}, ${legacy.name}, ${legacy.owner_user_id ?? ''}, ${legacy.created_at})`;
   }
+  sql`DROP TABLE agent_identity`;
 }

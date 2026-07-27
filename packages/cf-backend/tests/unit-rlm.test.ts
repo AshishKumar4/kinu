@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { createRLMProvider } from '../src/rlm.ts';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry.ts';
 import type { LanguageModel } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
 
 // We don't go through the AI SDK here — we exercise the codemode-tool
 // surface that the LLM's sandbox code calls. The execute() fn is the
@@ -40,6 +41,12 @@ describe('llm provider (Recursive Language Models)', () => {
     expect(r2.error).toMatch(/non-empty string/);
   });
 
+  test('query rejects an invalid reasoning effort at the tool boundary', async () => {
+    const p = createRLMProvider(stubRegistry(), () => 'workers-ai/x');
+    const result = await p.tools.query.execute('hi', { reasoning_effort: 'extreme' }) as { error: string };
+    expect(result.error).toContain('must be low, medium, or high');
+  });
+
   test('query passes opts.model override through normalizeSpecSync', async () => {
     let resolvedSpec: string | undefined;
     const p = createRLMProvider(
@@ -63,6 +70,36 @@ describe('llm provider (Recursive Language Models)', () => {
     );
     await p.tools.query.execute('hi', {});
     expect(currentSpecCalled).toBe(true);
+  });
+
+  test('query defaults to low provider effort with no output cap and honors an explicit cap', async () => {
+    const calls: Array<{
+      maxOutputTokens?: number;
+      providerOptions?: Record<string, Record<string, unknown>>;
+    }> = [];
+    const model = new MockLanguageModelV3({
+      doGenerate: async (options) => {
+        calls.push(options);
+        return {
+          content: [{ type: 'text', text: 'ok' }],
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [],
+        };
+      },
+    });
+    const p = createRLMProvider(
+      stubRegistry({ resolveModel: () => model }),
+      () => 'openai/gpt-5.5',
+    );
+
+    await p.tools.query.execute('uncapped');
+    await p.tools.query.execute('capped', { maxOutputTokens: 77, reasoning_effort: 'high' });
+
+    expect(calls[0]?.maxOutputTokens).toBeUndefined();
+    expect(calls[0]?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
+    expect(calls[1]?.maxOutputTokens).toBe(77);
+    expect(calls[1]?.providerOptions).toEqual({ openai: { reasoningEffort: 'high' } });
   });
 
   test('query surfaces model-resolution errors as {error}, not throws', async () => {

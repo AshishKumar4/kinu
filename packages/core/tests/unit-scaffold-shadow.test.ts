@@ -153,19 +153,29 @@ describe('decidePromotion', () => {
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('promotes only with ZERO regressions and a winning record', () => {
+  test('promotes a clean winning record', () => {
     const p = make({ trialsSoFar: 5, pendingWins: 5, currentWins: 0 });
     const d = decidePromotion(p, cfg);
     expect(d.decision).toBe('promote');
     expect(d.winRate).toBeCloseTo(1, 2);
   });
 
-  test('regression veto: a SINGLE loss rolls back even with a strong win-rate', () => {
-    // 6-1 (winRate 0.86) would promote under win-rate-only logic; the
-    // regression veto (maxRegressions=0) rolls it back. This is the safety core.
+  test('tolerates one loss (maxRegressions=1, Monte-Carlo settled) but vetoes the second', () => {
+    // 6-1 (winRate 0.86): within the regression tolerance → promote. The old
+    // maxRegressions=0 rolled this back and thereby rejected most genuinely-
+    // better variants (see DEFAULT_SHADOW_CONFIG simulation table).
+    const oneLoss = make({ trialsSoFar: 8, pendingWins: 6, currentWins: 1 });
+    expect(decidePromotion(oneLoss, cfg).decision).toBe('promote');
+    // 6-2 (winRate 0.75 — still promotable on win-rate alone): the hard veto
+    // fires on the second decisive loss regardless. This is the safety core.
+    const twoLosses = make({ trialsSoFar: 9, pendingWins: 6, currentWins: 2 });
+    expect(decidePromotion(twoLosses, cfg).decision).toBe('rollback');
+  });
+
+  test('a zero-tolerance config (maxRegressions=0) still vetoes on a single loss', () => {
+    const strict: ShadowConfig = { ...cfg, maxRegressions: 0 };
     const p = make({ trialsSoFar: 8, pendingWins: 6, currentWins: 1 });
-    const d = decidePromotion(p, cfg);
-    expect(d.decision).toBe('rollback');
+    expect(decidePromotion(p, strict).decision).toBe('rollback');
   });
 
   test('rollbacks when the pending clearly loses', () => {
@@ -176,20 +186,38 @@ describe('decidePromotion', () => {
   });
 
   test('continues below minDecisiveTrials even with a perfect win-rate', () => {
-    // 2-0 with 3 ties: winRate 1.0 but only 2 decisive trials < minDecisiveTrials(3).
+    // 2-0 with 3 ties: winRate 1.0 but only 2 decisive trials < minDecisiveTrials(5).
     const p = make({ trialsSoFar: 5, pendingWins: 2, currentWins: 0, ties: 3 });
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('maxTrials force: any regression still rolls back (veto wins over the force)', () => {
-    const p = make({ trialsSoFar: 12, pendingWins: 6, currentWins: 5, ties: 1 });
+  test('maxTrials force: losses beyond tolerance still roll back (veto wins over the force)', () => {
+    const p = make({ trialsSoFar: cfg.maxTrials, pendingWins: 6, currentWins: 5, ties: 9 });
     const d = decidePromotion(p, cfg);
     expect(d.decision).toBe('rollback');
     expect(d.winRate).toBeCloseTo(6 / 11, 2);
   });
 
+  test('maxTrials force decides on a thin decisive record, ignoring minDecisiveTrials', () => {
+    // The ceiling is the forced decision: a bare >0.5 majority promotes even
+    // with 2 decisive trials. That is why maxTrials is budgeted against the
+    // judge's decisive YIELD rather than raw turns (see DEFAULT_SHADOW_CONFIG).
+    const ahead = make({ trialsSoFar: cfg.maxTrials, pendingWins: 2, currentWins: 0, ties: cfg.maxTrials - 2 });
+    expect(decidePromotion(ahead, cfg).decision).toBe('promote');
+    const level = make({ trialsSoFar: cfg.maxTrials, pendingWins: 1, currentWins: 1, ties: cfg.maxTrials - 2 });
+    expect(decidePromotion(level, cfg).decision).toBe('rollback');
+  });
+
   test('returns continue when no decisive trials yet', () => {
     const p = make({ trialsSoFar: 3, pendingWins: 0, currentWins: 0, ties: 3 });
+    expect(decidePromotion(p, cfg).decision).toBe('continue');
+  });
+
+  test('an all-tie record keeps observing PAST the ceiling — the window legitimately extends', () => {
+    // The double-win judge makes long tie runs common; the ceiling is not a
+    // guaranteed stopping point, and a pure-tie record must not be forced into
+    // a coin-flip verdict.
+    const p = make({ trialsSoFar: cfg.maxTrials * 3, ties: cfg.maxTrials * 3 });
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 

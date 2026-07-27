@@ -10,6 +10,41 @@ export interface AgentModelEntry {
   contextWindow?: number;
 }
 
+export function filterModels(models: readonly AgentModelEntry[], query: string): AgentModelEntry[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [...models];
+  return models.filter((model) => [
+    model.label,
+    model.provider,
+    model.spec,
+    ...(model.capabilities ?? []),
+  ].some((value) => value.toLowerCase().includes(normalized)));
+}
+
+export type ModelSpecValidation =
+  | { status: 'known' }
+  | { status: 'unknown-model'; provider: string; suggestions: string[] }
+  | { status: 'unknown-provider'; provider: string; providers: string[] };
+
+export function validateModelSpec(models: readonly AgentModelEntry[], spec: string): ModelSpecValidation {
+  if (models.some((model) => model.spec === spec)) return { status: 'known' };
+
+  const slash = spec.indexOf('/');
+  const provider = slash > 0 ? spec.slice(0, slash) : '';
+  const providers = [...new Set(models.map((model) => model.provider))].sort();
+  if (!provider || !providers.includes(provider)) {
+    return { status: 'unknown-provider', provider: provider || spec, providers };
+  }
+
+  const suggestions = models
+    .filter((model) => model.provider === provider)
+    .sort((a, b) => sharedPrefixLength(spec, b.spec) - sharedPrefixLength(spec, a.spec)
+      || a.spec.localeCompare(b.spec))
+    .slice(0, 3)
+    .map((model) => model.spec);
+  return { status: 'unknown-model', provider, suggestions };
+}
+
 export function normalizeModelEntries(rows: unknown[]): AgentModelEntry[] {
   return rows.flatMap((row) => {
     if (!row || typeof row !== 'object') return [];
@@ -67,6 +102,13 @@ function modelRank(model: AgentModelEntry): number {
   if (model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC) return 0;
   if (model.provider === 'workers-ai') return 1;
   return 2;
+}
+
+function sharedPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) index++;
+  return index;
 }
 
 function stringValue(value: unknown): string | null {

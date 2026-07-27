@@ -44,7 +44,7 @@ graph TB
         MCTS[search_nodes]
         Scaffold[scaffold_versions]
         Evolution[evolution_events]
-        Identity[SOUL.md in VFS + agent_identity]
+        Identity[SOUL.md in VFS + workspace_identity]
     end
 
     subgraph "Execution Router"
@@ -56,7 +56,7 @@ graph TB
         Inline[InlineExecutor<br/>V8 isolate<br/>fastest, JS only]
         Nimbus[NimbusExecutor<br/>DO + Facets<br/>shell, node, npm, git]
         Sandbox[SandboxExecutor<br/>CF Container<br/>full Linux, any language]
-        SSH[SSHTunnelExecutor<br/>User's PC<br/>full hardware, local repos]
+        SSH[DeviceTunnelExecutor<br/>User's PC<br/>full hardware, local repos]
     end
 
     Router --> CapCheck
@@ -201,8 +201,21 @@ interface ExecutorInfo {
   kind: ExecutorKind;
   capabilities: string[];
   available: boolean;
+  configured: boolean;
+  active: boolean;
+  status: ExecutorLifecycleStatus;   // not_configured | idle | active | disconnected | error
+  reason?: string;
 }
 ```
+
+`available`, `configured`, and `active` are three different questions, and the
+UI needs all three: a sandbox can be configured but not yet booted, and a laptop
+can be configured but disconnected. `reason` carries the human-readable "why
+not" the Environment surface shows.
+
+Providers may also implement four optional members the interface above omits:
+`getStatus()`, and `exposePort` / `unexposePort` / `listExposedPorts` for
+runtimes that can serve a preview URL.
 
 **Key difference from original spec**: The router does NOT route individual commands. Instead, it manages providers whose tools are injected into the codemode sandbox. The LLM calls `namespace.tool(args)` directly — the "routing" is the LLM choosing which namespace to use. The `AgentRuntime` keeps both `executor: Executor` (the baseline single-command interface) and `executionRouter?: ExecutionRouter` (optional, additive — not a replacement).
 
@@ -214,24 +227,31 @@ interface ExecutorInfo {
 
 | Capability | workspace | nimbus | sandbox | laptop |
 |------------|-----------|--------|---------|--------|
-| `javascript` | **Yes** | **Yes** | **Yes** | **Yes** |
-| `typescript` | **Yes** | **Yes** | **Yes** | **Yes** |
-| `python` | No | No | **Yes** | **Yes** |
-| `native_binary` | No | No | **Yes** | **Yes** |
+| `javascript` | **Yes** | **Yes** | No | **Yes** |
+| `typescript` | **Yes** | **Yes** | No | **Yes** |
+| `python` | No | **Yes** | No | **Yes** |
+| `native_binary` | No | **Yes** | No | **Yes** |
 | `shell` | **Yes** | **Yes** | **Yes** | **Yes** |
 | `npm` | No | **Yes** | **Yes** | **Yes** |
 | `git` | No | **Yes** | **Yes** | **Yes** |
-| `docker` | No | No | No | **Yes** |
+| `docker` | No | No | **Yes** | **Yes** |
 | `fs_shared` | **Yes** | No | No | No |
 | `fs_owned` | No | **Yes** | **Yes** | **Yes** |
 | `net_outbound` | No | **Yes** | **Yes** | **Yes** |
 | `net_inbound` | No | **Yes** | **Yes** | **Yes** |
 | `process_spawn` | No | **Yes** | **Yes** | **Yes** |
 | `process_long` | No | **Yes** | **Yes** | **Yes** |
-| `process_signal` | No | No | **Yes** | **Yes** |
+| `process_signal` | No | **Yes** | No | **Yes** |
 | `gpu` | No | No | No | **Yes** |
 
-Sources: `inline.ts:150`, `nimbus.ts:166`, `container.ts:164`, `ssh.ts:186`
+Sources: `inline.ts`, `nimbus.ts`, `sandbox.ts`, `device-tunnel-executor.ts` —
+all in `packages/core/src/execution/`.
+
+The sandbox row surprises people: it advertises `shell` but not `javascript` or
+`python`. That is deliberate rather than an oversight — the sandbox is a shell
+container, and you reach a language through the shell (`node x.js`,
+`python3 x.py`) rather than through a language capability. `docker` is the one
+capability sandbox has that nimbus does not.
 
 ### Performance Characteristics
 
@@ -272,51 +292,67 @@ Capabilities: `javascript`, `typescript`, `shell`, `fs_shared`.
 
 ### 4.2 NimbusExecutor **(Implemented)**
 
-Delegates to a `NimbusSession` Durable Object via `NimbusStub._rpc*` methods.
-Namespace: `nimbus`. Kind: `nimbus`. 8 tools.
+The Cloudflare backend builds the real `@nimbus-sh/sdk` handle
+(`Nimbus.fromEnv(...).sandbox(...)`) and passes it in; core consumes a duck-typed
+`NimbusSandboxHandle` so it stays dependency-free.
+Namespace: `nimbus`. Kind: `nimbus`. 18 tools.
 
 From `packages/core/src/execution/nimbus.ts`:
 
 | Tool | Description |
 |------|-------------|
 | `nimbus.exec(command)` | Run shell command (60+ POSIX, npm, node, git) |
+| `nimbus.runCode(code)` | Execute code directly |
 | `nimbus.readFile(path)` | Read file from Nimbus filesystem |
 | `nimbus.writeFile(path, content)` | Write file to Nimbus filesystem |
-| `nimbus.readdir(path)` | List directory contents |
+| `nimbus.listFiles(path)` / `nimbus.readdir(path)` | List directory contents |
 | `nimbus.exists(path)` | Check if path exists |
 | `nimbus.stat(path)` | Get file/directory metadata |
 | `nimbus.mkdir(path)` | Create directory (recursive) |
 | `nimbus.rm(path)` | Delete a file |
+| `nimbus.startProcess` / `killProcess` / `logs` | Long-running process control |
+| `nimbus.exposePort` / `unexposePort` / `listPorts` | Port preview |
+| `nimbus.installRuntime` / `listRuntimes` | Language runtime management |
 
-Capabilities: `javascript`, `typescript`, `shell`, `npm`, `git`, `fs_owned`, `net_outbound`, `net_inbound`, `process_spawn`, `process_long`.
+Capabilities: `javascript`, `typescript`, `python`, `native_binary`, `shell`,
+`npm`, `git`, `fs_owned`, `net_outbound`, `net_inbound`, `process_spawn`,
+`process_long`, `process_signal`.
 
-The `_rpcExec` method is optional — not all Nimbus builds expose it. Binding name: `NIMBUS_SESSION` (currently commented out in wrangler.jsonc).
+Binding name: `NIMBUS_SESSION`, an active Durable Object binding in
+`wrangler.jsonc` (class `NimbusSession`, deployed with this Worker).
 
-### 4.3 ContainerExecutor (sandbox) **(Implemented)**
+### 4.3 SandboxExecutor **(Implemented)**
 
-Uses Cloudflare Containers via `ctx.container.getTcpPort(8080).fetch()` HTTP API.
-Full Linux environment. Namespace: `sandbox`. Kind: `sandbox`. 5 tools.
+Backed by `@cloudflare/sandbox`: the orchestrator obtains a handle with
+`getSandbox(env.SANDBOX, agentId)` and core consumes it duck-typed as
+`SandboxHandle`. Full Linux container. Namespace: `sandbox`. Kind: `sandbox`.
+10 tools.
 
-From `packages/core/src/execution/container.ts`:
+From `packages/core/src/execution/sandbox.ts`:
 
 | Tool | Description |
 |------|-------------|
-| `sandbox.exec(command)` | Execute shell command in Linux container |
+| `sandbox.exec(command)` | Execute shell command in the Linux container |
 | `sandbox.readFile(path)` | Read file from container filesystem |
 | `sandbox.writeFile(path, content)` | Write content to container filesystem |
-| `sandbox.readdir(path)` | List directory contents |
+| `sandbox.listFiles(path)` / `sandbox.readdir(path)` | List directory contents |
+| `sandbox.deleteFile(path)` | Delete a file |
 | `sandbox.exists(path)` | Check if path exists |
+| `sandbox.exposePort` / `unexposePort` / `listPorts` | Preview URLs for servers |
 
-Capabilities: `javascript`, `typescript`, `python`, `native_binary`, `shell`, `npm`, `git`, `fs_owned`, `net_outbound`, `net_inbound`, `process_spawn`, `process_long`, `process_signal`.
+Capabilities: `shell`, `npm`, `git`, `docker`, `process_spawn`, `process_long`,
+`net_inbound`, `net_outbound`, `fs_owned`.
 
-Container port: 8080. Startup: 30s polling at 500ms intervals. Communication is via HTTP fetch to the container's TCP port.
+The DO binding must be named exactly `Sandbox` — the SDK's `proxyToSandbox`
+hardcodes `env.Sandbox`. The container image and instance type are pinned in
+`wrangler.jsonc`'s `containers` block.
 
-### 4.4 SSHTunnelExecutor (laptop) **(Implemented)**
+### 4.4 DeviceTunnelExecutor (laptop) **(Implemented)**
 
 Connects to the user's machine via a WebSocket bridge using JSON-RPC.
 Namespace: `laptop`. Kind: `laptop`. 5 tools.
 
-From `packages/core/src/execution/ssh.ts`:
+From `packages/core/src/execution/device-tunnel-executor.ts`:
 
 | Tool | Description |
 |------|-------------|
@@ -328,8 +364,10 @@ From `packages/core/src/execution/ssh.ts`:
 
 Capabilities: `javascript`, `typescript`, `python`, `native_binary`, `shell`, `npm`, `git`, `docker`, `fs_owned`, `net_outbound`, `net_inbound`, `process_spawn`, `process_long`, `process_signal`, `gpu`.
 
-RPC timeout: 30s. Protocol: JSON-RPC over WebSocket via `TunnelSocket` interface.
-Methods: `setSocket(ws)`, `clearSocket()` for dynamic connection management.
+The executor is constructed with a `DeviceTransport` — `rpc(method, params)`,
+`status()`, `refreshStatus()` — so core never touches a socket. The WebSocket
+half lives in `packages/core/src/execution/device-tunnel.ts` (`TunnelSocket`,
+`class DeviceTunnel`), where the RPC timeout is 30 s.
 
 ---
 
@@ -413,13 +451,14 @@ Uses Linux containers with strong isolation:
 - **Filesystem**: Ephemeral ext4. Destroyed on container death. Backup/restore via R2
 - **Network**: Configurable egress allowlist
 - **Process isolation**: Real process isolation (fork, exec, separate PID namespace)
-- **Lifecycle**: `provisioning → ready → recovering → error` state machine
-  - Transient errors (500, 503, container disconnect) get automatic retry
-  - Non-transient failures increment recovery counter
-  - After `MAX_RECOVERY_ATTEMPTS` (3), destroy and reprovision with same ID
+- **Lifecycle**: the reported states are `ExecutorLifecycleStatus` —
+  `not_configured | idle | active | disconnected | error`. The container is
+  auto-provisioned on first use, so a `run` against an unready sandbox returns a
+  structured `runtime_not_provisioned` error telling the caller to retry rather
+  than blocking.
 - **Risk**: Medium — full Linux means more attack surface, but container boundary is strong
 
-### 6.4 SSHTunnelExecutor Security
+### 6.4 DeviceTunnelExecutor Security
 
 This is the most sensitive executor. The agent running on Cloudflare sends
 commands to the user's personal machine. The security model must prevent:
@@ -438,7 +477,7 @@ sequenceDiagram
     participant CF as Cloudflare Edge
     participant Agent as OrchestratorAgent DO
 
-    User->>Daemon: proteus connect --agent <id>
+    User->>Daemon: proteus connect
     Daemon->>CF: WebSocket connect (mTLS client cert)
     CF->>Agent: Route to DO
     Agent->>Daemon: Challenge (nonce)
@@ -522,7 +561,7 @@ interface DaemonCapabilityReport {
 }
 ```
 
-The `SSHTunnelExecutor` converts this report into `ExecutorCapability` tokens.
+The `DeviceTunnelExecutor` converts this report into `ExecutorCapability` tokens.
 
 #### Session Lifecycle
 
@@ -551,28 +590,58 @@ interface AgentRuntime {
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
   executionRouter?: ExecutionRouter;     // Optional — additive, not a replacement
+  shell?: Shell;                         // The in-VFS POSIX emulator
+  checkpoints?: FileCheckpoints;         // Shadow-git undo, when the backend has one
 }
 ```
 
 ### Per-Backend Construction
 
-From `packages/cf-backend/src/runtime.ts:80-121`:
+From `packages/cf-backend/src/runtime.ts`:
 
 ```typescript
 // CF backend: DefaultExecutionRouter with conditional providers
-const router = new DefaultExecutionRouter();
+const executionRouter: ExecutionRouter = new DefaultExecutionRouter();
 
 // Always registered:
-router.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
-router.register(createSSHTunnelExecutor());
+executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
 
-// Conditional on bindings:
-if (env.NIMBUS_SESSION) router.register(createNimbusExecutor(env.NIMBUS_SESSION));
-if (env.CONTAINER)      router.register(createContainerExecutor(env.CONTAINER));
-else                    router.register(createContainerStub()); // stub for UI listing
+// Conditional on bindings / connection state. Each factory has a zero-arg
+// stub form so the Environment surface can still list the runtime as
+// not-configured rather than hiding it:
+executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
+executionRouter.register(createDeviceTunnelExecutor(deviceTransport));
 ```
 
-The router's `getProviders()` method filters to available providers and passes them to `createExecuteTool()`. The LLM sees all available namespaces and their tools in the codemode type declarations.
+Each registration is paired with a `compositeVfs.mount(...)` for the same
+environment, or a `reserve(...)` when it isn't available — that is how the
+mount table can show `/sandbox` as a reserved-but-unprovisioned row.
+
+The router's `getProviders()` filters to available providers and passes them to
+`createExecuteTool()`. The LLM sees every available namespace and its tools in
+the codemode type declarations.
+
+### The file plane alongside it
+
+Execution and files are two planes over the same set of environments. Where
+`ExecutionRouter` dispatches commands target-native, `CompositeVFS`
+(`packages/core/src/vfs/composite.ts`) gives every environment one address
+space. The mapping from executor key to mount prefix is
+`EXECUTOR_MOUNT_PREFIX`:
+
+| Executor | Mount |
+|---|---|
+| (workspace) | `/local` — the durable base; the composite *is* the workspace VFS |
+| `sandbox` | `/sandbox` |
+| `nimbus` | `/nimbus` |
+| `laptop` | `/pc` |
+
+Each mount declares a `MountPolicy`: `readOnly`, a `MountConsistency` of
+`durable | ephemeral | live-shared`, and whether credentials stay in the host.
+`listMounts()` returns the live table, which is what the Environment surface
+renders. Note that a subordinate agent adds one more mount that has no executor
+at all — `/workspace`, its parent's files over RPC.
 
 ---
 
@@ -681,8 +750,13 @@ Formal proofs for the execution layer live in two files under `lean/Proteus/Exec
 
 ### `Capabilities.lean` (10 theorems)
 
-- `ExecutorCapability` — inductive type with 16 variants matching the TypeScript union
-- `ExecutorKind` — `workspace | nimbus | container | ssh`
+- `Capability` — inductive type with 16 variants matching the TypeScript union
+- `ExecutorKind` — `workspace | nimbus | container | ssh`. **The Lean is stale
+  here**: the runtime union is `workspace | nimbus | sandbox | laptop`, and
+  `container` / `ssh` are dead names. The subsumption chain the theorems prove is
+  also no longer true of the implementation — sandbox does not subsume nimbus
+  (nimbus has `javascript`/`python`/`native_binary`/`process_signal` that sandbox
+  lacks; sandbox has `docker`). Treat this file as modeling an earlier design.
 - `container_subsumes_nimbus` — Container capabilities ⊇ Nimbus capabilities
 - `ssh_subsumes_container` — SSH capabilities ⊇ Container capabilities
 - `ssh_subsumes_nimbus` — Transitivity: SSH ⊇ Nimbus
@@ -695,7 +769,12 @@ Formal proofs for the execution layer live in two files under `lean/Proteus/Exec
 
 ### `ToolSystem.lean` (8 theorems)
 
-Models the 5-tool architecture (execute_tools, run, explore, save_note, search_memory):
+Models a 5-tool architecture (execute_tools, run, explore, save_note,
+search_memory). **Also stale**: three of those five tools no longer exist. The
+real roster is the 12 names in `BUILTIN_TOOLS`; `explore`, `save_note`, and
+`search_memory` were folded into `think`, `memory`, and the `workspace.*`
+sandbox APIs. The theorems below are checked statements about the modeled
+5-tool vocabulary, not about the shipped one:
 
 - `action_routes_to_valid_tool` — Every agent action maps to one of the 5 tools
 - `only_mcts_uses_explore` — Only MCTS exploration uses the explore tool

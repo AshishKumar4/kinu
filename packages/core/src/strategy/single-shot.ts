@@ -19,7 +19,8 @@ export function createSingleShotStrategy(): ExplorationStrategy {
         // which is why single-shot returned empty text.
         model: ctx.model,
         prompt: ctx.task,
-        maxOutputTokens: ctx.budget?.maxOutputTokens ?? 2048,
+        ...(ctx.budget?.maxOutputTokens !== undefined
+          ? { maxOutputTokens: ctx.budget.maxOutputTokens } : {}),
         abortSignal: ctx.signal,
       });
       return {

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/skills/render.ts b/packages/core/src/skills/render.ts
+index 34b9bdf..38d3b34 100644
+--- a/packages/core/src/skills/render.ts
++++ b/packages/core/src/skills/render.ts
+@@ -112,7 +112,7 @@ export function toolAllowedBySkills(
+   toolName: string,
+   allowedUnion: ReadonlyArray<string>,
+ ): boolean {
+-  if (allowedUnion.length === 0) return true;
++  if (allowedUnion.length === 0) return false;
+   for (const pattern of allowedUnion) {
+     if (matchesToolPattern(toolName, pattern)) return true;
+   }

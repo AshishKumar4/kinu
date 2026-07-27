@@ -12,8 +12,8 @@
 // time via the AuthResolver.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider } from './types.js';
-import { createAuthedFetch } from './util.js';
+import type { AuthResolution, ModelInfo, ModelProvider } from './types.js';
+import { createAuthedFetch, isRecord, positiveInteger } from './util.js';
 
 export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
@@ -36,7 +36,9 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
       : `OpenAI-compatible (${providerId.slice('openai-compat:'.length)})`,
     async isAvailable(deps) { return deps.hasCredential(credKey); },
     unavailableReason() { return `No openai-compat credential at key \`${credKey}\` (set baseURL + apiKey).`; },
-    listModels: () => [],   // dynamic — UI prompts user for model id
+    async listModels(deps) {
+      return discoverOpenAICompatibleModels(await deps.getAuth(credKey), deps.fetch);
+    },
 
     createModel(modelId, deps): LanguageModel {
       // baseURL is sourced from the credential, but @ai-sdk needs it at
@@ -59,4 +61,31 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
       }).chatModel(modelId);
     },
   };
+}
+
+export async function discoverOpenAICompatibleModels(
+  auth: AuthResolution | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ModelInfo[]> {
+  try {
+    if (!auth?.baseURL) return [];
+    const response = await fetchImpl(`${auth.baseURL.replace(/\/+$/, '')}/models`, {
+      headers: { ...auth.headers, accept: 'application/json' },
+    });
+    if (!response.ok) return [];
+    const body: unknown = await response.json();
+    if (!isRecord(body) || !Array.isArray(body.data)) return [];
+    return body.data.flatMap((value): ModelInfo[] => {
+      if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) return [];
+      const id = value.id.trim();
+      const contextWindow = positiveInteger(value.context_window);
+      return [{
+        id,
+        label: typeof value.name === 'string' && value.name.trim() ? value.name.trim() : id,
+        ...(contextWindow ? { contextWindow } : {}),
+      }];
+    });
+  } catch {
+    return [];
+  }
 }

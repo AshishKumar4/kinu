@@ -15,8 +15,13 @@
  * with that message pre-filled for editing.
  */
 
-import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
-import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
+import {
+  createCliRenderer,
+  type KeyEvent,
+  type ScrollBoxRenderable,
+  type TextareaRenderable,
+} from '@opentui/core';
+import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import type { AlternateTakeCandidate, AlternateTakeSet, ChangelogEntry } from '@proteus/core';
@@ -40,12 +45,14 @@ import {
   isBranchStatusEvent,
   performUndo,
   resolveCommandDraft,
+  setModelPreference,
   type SlashOutcome,
 } from '../slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
 import { watchDeviceConsents } from '../consent-watch.js';
 import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
 import { requireInteractiveTerminal } from '../prompt.js';
+import { openBrowser } from '../commands/auth.js';
 import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
 import { MessageList, type DisplayMessage } from './messages.js';
@@ -80,6 +87,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   // sibling client pointed at the forked agent.
   const [client, setClient] = useState(initialClient);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
@@ -97,7 +106,12 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
 
   const msgIdRef = useRef(0);
+  const historyRef = useRef<ScrollBoxRenderable | null>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
+  // Mirrors the input's declarative `focused` condition so the mouse handler can
+  // reassert focus imperatively — a click moves OpenTUI's native focus without
+  // re-rendering React, so the declarative prop alone never wins it back.
+  const inputShouldFocusRef = useRef(false);
   const initialPromptSentRef = useRef(false);
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
@@ -269,7 +283,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
 
   const selectModel = useCallback(async (model: AgentModelEntry) => {
     try {
-      const result = await client.setModel(model.spec);
+      const result = await setModelPreference(client, model.spec);
       setModelSpec(result.spec);
       setModelPicker(null);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
@@ -327,6 +341,10 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       case 'model-set':
         setModelSpec(outcome.spec);
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
+        return;
+      case 'effort-set':
+        setStatus((current) => current ? { ...current, reasoningEffort: outcome.effort } : current);
+        addMessage({ role: 'system', content: `Reasoning effort: ${outcome.effort}` });
         return;
       case 'status':
         setStatus(outcome.status);
@@ -648,6 +666,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     consentDecisionRef.current?.(decision);
   }, []);
 
+  const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+
   useEffect(() => {
     if (!ready || initialPromptSentRef.current) return;
     const prompt = initialPrompt?.trim();
@@ -655,6 +675,37 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
     initialPromptSentRef.current = true;
     void handleSubmit(prompt);
   }, [handleSubmit, initialPrompt, ready]);
+
+  // Auto-copy selected text to clipboard (OSC 52) on mouse release.
+  const rendererInstance = useRenderer();
+  useEffect(() => {
+    if (!rendererInstance?.root) return;
+    let copied = false;
+    rendererInstance.root.onMouseUp = () => {
+      // Defer slightly so the selection is finalized by the renderer.
+      setTimeout(() => {
+        if (!rendererInstance.hasSelection) { copied = false; return; }
+        if (copied) return; // already copied this selection
+        const selection = rendererInstance.getSelection();
+        if (!selection) return;
+        // Walk selected renderables and extract text.
+        const parts: string[] = [];
+        for (const r of selection.selectedRenderables ?? []) {
+          const text = (r as unknown as { getSelectedText?: () => string }).getSelectedText?.();
+          if (text) parts.push(text);
+        }
+        const text = parts.join('\n').trim();
+        if (text) {
+          rendererInstance.copyToClipboardOSC52(text);
+          copied = true;
+        }
+        // A click (to scroll, or to select+copy) moves native focus off the
+        // input; reclaim it so the user can keep typing without a manual click.
+        if (inputShouldFocusRef.current) inputRef.current?.focus();
+      }, 10);
+    };
+    return () => { rendererInstance.root.onMouseUp = undefined; };
+  }, [rendererInstance]);
 
   useKeyboard((key) => {
     if (deviceConnect.handleKey(key)) return;
@@ -672,7 +723,16 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         return;
       }
     }
-    const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
+    // Ctrl+L: open the last URL from assistant messages in the browser.
+    if (key.name === 'l' && key.ctrl && !overlayOpen) {
+      const url = lastUrlFromMessages(messagesRef.current);
+      if (url) openBrowser(url);
+      return;
+    }
+    if (key.name === 'p' && key.ctrl) {
+      if (!overlayOpen) void openModelPicker();
+      return;
+    }
     if (key.name === 'b' && key.ctrl) {
       if (!overlayOpen) runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
       return;
@@ -718,6 +778,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const contextTokens = estimateContextTokens(messages);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
+  const inputFocused = ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen;
+  inputShouldFocusRef.current = inputFocused;
 
   return (
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
@@ -725,6 +787,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         name={status?.name ?? client.agentName}
         mode={client.mode}
         model={modelSpec}
+        reasoningEffort={status?.reasoningEffort ?? 'medium'}
+        onModelSelect={() => { if (!overlayOpen) void openModelPicker(); }}
         connected={ready}
         scaffoldVersion={status?.scaffoldVersion}
         toolCount={status?.toolCount}
@@ -735,6 +799,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       />
 
       <scrollbox
+        ref={(value) => { historyRef.current = value; }}
         focused={!isProcessing}
         stickyScroll={true}
         stickyStart="bottom"
@@ -779,11 +844,11 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
           backgroundColor: tuiColors.panelStrong,
           paddingLeft: 1,
         }}
-        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} ›`}
+        title={isProcessing ? '⟳ processing… · Enter steers · Tab queues · Ctrl+B branches · Esc interrupts' : modelPicker ? 'Model picker' : changelogView ? 'Changelog ›' : takesView ? 'Takes ›' : inputState.walkbackOpen ? 'Walk back ›' : sessionPicker ? 'Resume ›' : `${client.agentName} · ${activeSessionId.slice(0, 18)} · Ctrl+P model ›`}
       >
         <textarea
           ref={(value) => { inputRef.current = value; }}
-          focused={ready && !modelPicker && !changelogView && !takesView && !deviceConnect.state && !inputState.walkbackOpen}
+          focused={inputFocused}
           placeholder={!ready ? 'Connecting…' : isProcessing ? 'Type to steer the running turn… (Tab queues · Ctrl+B branches)' : modelPicker ? 'Select a model or Esc' : changelogView ? 'Enter reverts the selected line · Esc keeps everything' : takesView ? 'Enter uses the selected take · Esc keeps the answer' : inputState.walkbackOpen ? 'Pick a message to walk back to, or Esc' : sessionPicker ? 'Type session number/id or /cancel' : 'Type a message or /help · Shift+Enter for a new line'}
           wrapMode="word"
           keyBindings={[
@@ -792,6 +857,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
             { name: 'return', meta: true, action: 'newline' },
             { name: 'j', ctrl: true, action: 'newline' },
           ]}
+          onKeyDown={(event) => {
+            handleHistoryScrollKey(event, inputRef.current?.plainText ?? '', historyRef.current);
+          }}
           onContentChange={() => setDraft(inputRef.current?.plainText ?? '')}
           onSubmit={onInputSubmit}
         />
@@ -833,13 +901,48 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   );
 }
 
+interface HistoryScrollTarget {
+  scrollTop: number;
+  viewport: { height: number };
+  scrollTo(position: number): void;
+}
+
+export function handleHistoryScrollKey(
+  event: Pick<KeyEvent, 'name' | 'preventDefault'>,
+  draft: string,
+  history: HistoryScrollTarget | null,
+): boolean {
+  const isPageKey = event.name === 'pageup' || event.name === 'pagedown';
+  const isEmptyDraftArrow = draft.length === 0 && (event.name === 'up' || event.name === 'down');
+  if (!history || (!isPageKey && !isEmptyDraftArrow)) return false;
+
+  const direction = event.name === 'up' || event.name === 'pageup' ? -1 : 1;
+  const viewportFraction = isPageKey ? 0.5 : 0.2;
+  const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));
+  history.scrollTo(history.scrollTop + direction * delta);
+  event.preventDefault();
+  return true;
+}
+
+/** Extract the last URL from assistant message content. */
+function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
+  const urlRe = /https?:\/\/[^\s)\]\}>'"]+/g;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant' && msg.role !== 'system') continue;
+    const matches = msg.content.match(urlRe);
+    if (matches && matches.length > 0) return matches[matches.length - 1];
+  }
+  return null;
+}
+
 function welcomeMessage(agentName: string): DisplayMessage {
   return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();
-  const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
   const root = createRoot(renderer);
   let currentClient = opts.client;
 

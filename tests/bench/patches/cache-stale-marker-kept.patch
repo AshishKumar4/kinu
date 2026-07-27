@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/cache-breakpoints.ts b/packages/core/src/prompting/cache-breakpoints.ts
+index 921dfdf..effeaef 100644
+--- a/packages/core/src/prompting/cache-breakpoints.ts
++++ b/packages/core/src/prompting/cache-breakpoints.ts
+@@ -140,7 +140,7 @@ function stripMarkerOptions(po: ProviderOptions | undefined): ProviderOptions |
+   const compat = po.openaiCompatible;
+   const hasAnthropicMarker = anthropic !== undefined && 'cacheControl' in anthropic;
+   const hasCompatMarker = compat !== undefined && 'cache_control' in compat;
+-  if (!hasAnthropicMarker && !hasCompatMarker) return po;
++  if (!hasAnthropicMarker || !hasCompatMarker) return po;
+ 
+   const next: ProviderOptions = { ...po };
+   if (hasAnthropicMarker) {

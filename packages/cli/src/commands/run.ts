@@ -1,30 +1,8 @@
 import * as readline from 'node:readline';
-import {
-  createCloudWebhookTrigger,
-  executeCloudExecutor,
-  getCloudAgentModel,
-  getCloudAgentState,
-  getCloudAgentStatus,
-  getCloudAgentTools,
-  getCloudGepaRun,
-  getCloudMctsNode,
-  getCloudMemoryContent,
-  getCloudMctsTree,
-  getCloudProductBoard,
-  listCloudEvents,
-  listCloudExecutors,
-  listCloudGepaRuns,
-  listCloudHeads,
-  listCloudJobs,
-  listCloudTimeline,
-  listCloudTriggers,
-  searchCloudMemory,
-  setCloudAgentModel,
-  stopCloudAgent,
-} from '../cloud-api.js';
+import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
-import { createAgentClient } from '../client-factory.js';
+import { createAgentClient, type AgentClientFlags } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
 import type { CliSessionOptions } from '../session.js';
 import { chatCommand } from './chat.js';
@@ -51,12 +29,6 @@ import {
   searchLocalMemory,
 } from '../local-inspection.js';
 
-interface OneShotLlmOpts {
-  model?: string;
-  baseUrl?: string;
-  auth?: string;
-}
-
 /** Session flags as Commander actually delivers them: `--no-session` arrives
  *  as `session: false` on the shared option key, not as `noSession: true`. */
 interface OneShotSessionFlags {
@@ -69,7 +41,7 @@ interface OneShotSessionFlags {
   fork?: string;
 }
 
-export async function runCommand(name: string, promptParts: string[], opts: OneShotLlmOpts & OneShotSessionFlags & {
+export async function runCommand(name: string, promptParts: string[], opts: AgentClientFlags & OneShotSessionFlags & {
   classic?: boolean;
   mode?: string;
 }): Promise<void> {
@@ -101,9 +73,11 @@ export async function runCommand(name: string, promptParts: string[], opts: OneS
   if (failed) process.exitCode = 1;
 }
 
-export interface ExecOptions extends OneShotLlmOpts {
-  agent?: string;
+export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
+  workspace?: string;
   json?: boolean;
+  /** Commander delivers `--no-auto-evolve` as `autoEvolve: false`. */
+  autoEvolve?: boolean;
   resume?: string;
   session?: string | false;
   sessionDir?: string;
@@ -120,13 +94,14 @@ export interface ExecOptions extends OneShotLlmOpts {
 export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
   const rawPrompt = await buildPrompt(promptParts);
   if (!rawPrompt) {
-    throw new Error('A task prompt is required. Usage: proteus exec "task" [--agent <name>] [--json]');
+    throw new Error('A task prompt is required. Usage: proteus exec "task" [--workspace <name>] [--json]');
   }
-  const target = resolveAgentTarget(resolveExecAgentName(opts.agent));
+  const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
   const failed = await runOneShot(target, rawPrompt, {
     model: opts.model,
     baseUrl: opts.baseUrl,
     auth: opts.auth,
+    noAutoEvolve: opts.autoEvolve === false,
     session: opts.resume ?? opts.session,
     sessionDir: opts.sessionDir,
     name: opts.name,
@@ -137,15 +112,15 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
   process.exitCode = failed ? 1 : 0;
 }
 
-/** exec is non-interactive, so an omitted --agent only works when there is
- *  exactly one configured agent to mean. */
-function resolveExecAgentName(explicit?: string): string {
+/** exec is non-interactive, so an omitted --workspace only works when there
+ *  is exactly one configured workspace to mean. */
+function resolveExecWorkspaceName(explicit?: string): string {
   if (explicit?.trim()) return explicit.trim();
   const agents = listConfiguredAgentRefs();
   if (agents.length === 1) return agents[0]!.name;
   throw new Error(agents.length === 0
-    ? 'No agents configured. Create one with: proteus create <name>, or pass --agent <name>.'
-    : `Multiple agents configured — pass --agent <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
+    ? 'No workspaces configured. Create one with: proteus create <name>, or pass --workspace <name>.'
+    : `Multiple workspaces configured — pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
 /**
@@ -157,7 +132,7 @@ function resolveExecAgentName(explicit?: string): string {
 async function runOneShot(
   target: AgentTarget,
   rawPrompt: string,
-  opts: OneShotLlmOpts & OneShotSessionFlags,
+  opts: AgentClientFlags & OneShotSessionFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
   // Same @path semantics as the chat surfaces: images/PDFs inline as file
@@ -166,7 +141,7 @@ async function runOneShot(
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) });
+  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) });
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
@@ -240,7 +215,7 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
 
 async function runRpc(
   target: AgentTarget,
-  opts: OneShotLlmOpts & OneShotSessionFlags,
+  opts: AgentClientFlags & OneShotSessionFlags,
 ): Promise<void> {
   const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
   const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) };
@@ -248,7 +223,7 @@ async function runRpc(
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const client = createAgentClient(target, clientOpts);
-    output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'cloud', cwd: process.cwd() });
+    output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() });
     const unsubscribe = client.subscribe((event) => output({ type: 'event', event }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     try {
@@ -287,7 +262,7 @@ async function runRpc(
   ensureLocalDaemonRunning();
   const client = createAgentClient(target, clientOpts);
   client.subscribe((event) => output({ type: 'event', event }));
-  output({ type: 'session', id: client.cliSession.id, agent: target.name, backend: 'local', cwd: process.cwd() });
+  output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() });
   // Defer MCP connection and job recovery until the first prompt.
   let connected = false;
   const ensureConnected = async () => {
@@ -327,60 +302,61 @@ async function runRpc(
 }
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: Record<string, unknown>): Promise<unknown> {
+  const rpc = (method: string, args: unknown[] = []) => callAgentRpc(origin, token, name, method, args);
   const type = String(cmd.type);
   switch (type) {
     case 'get_state':
     case 'state':
-      return getCloudAgentState(origin, token, name);
+      return rpc('getWorkspaceSnapshot');
     case 'status':
-      return getCloudAgentStatus(origin, token, name);
+      return rpc('getAgentStatus');
     case 'tools':
-      return getCloudAgentTools(origin, token, name);
+      return rpc('getToolDescriptions');
     case 'model': {
       const spec = stringField(cmd, 'spec');
-      return spec ? setCloudAgentModel(origin, token, name, spec) : getCloudAgentModel(origin, token, name);
+      return spec ? rpc('setModel', [spec]) : rpc('getStoredModelSpec');
     }
     case 'triggers':
-      return listCloudTriggers(origin, token, name);
+      return rpc('listTriggers');
     case 'jobs':
-      return listCloudJobs(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return rpc('listBackgroundJobs', [numberField(cmd, 'limit') ?? 20]);
     case 'memory': {
       const query = stringField(cmd, 'query');
       return query
-        ? searchCloudMemory(origin, token, name, query, numberField(cmd, 'limit') ?? 10)
-        : getCloudMemoryContent(origin, token, name);
+        ? rpc('searchMemoryHybrid', [query, numberField(cmd, 'limit') ?? 10])
+        : { content: await rpc('getMemoryContent') };
     }
     case 'events':
-      return listCloudEvents(origin, token, name, {
+      return rpc('listRecentEvents', [{
         variant: stringField(cmd, 'variant'),
         since: numberField(cmd, 'since'),
         limit: numberField(cmd, 'limit') ?? 50,
-      });
+      }]);
     case 'timeline':
-      return listCloudTimeline(origin, token, name, { limit: numberField(cmd, 'limit') ?? 100 });
+      return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
     case 'mcts': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
-      return nodeId ? getCloudMctsNode(origin, token, name, nodeId) : getCloudMctsTree(origin, token, name);
+      return nodeId ? rpc('getMctsNodeDetail', [nodeId]) : rpc('getMctsTree');
     }
     case 'heads':
-      return listCloudHeads(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return rpc('getHeadRuns', [numberField(cmd, 'limit') ?? 20]);
     case 'gepa': {
       const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-      return runId ? getCloudGepaRun(origin, token, name, runId) : listCloudGepaRuns(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return runId ? rpc('getGepaRun', [runId]) : rpc('getGepaRuns', [numberField(cmd, 'limit') ?? 20]);
     }
     case 'executors':
-      return listCloudExecutors(origin, token, name);
+      return rpc('getExecutors');
     case 'exec': {
       const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
       const command = stringField(cmd, 'command');
       if (!executor) throw new Error('executor required');
       if (!command) throw new Error('command required');
-      return executeCloudExecutor(origin, token, name, executor, command);
+      return rpc('executeInExecutor', [executor, command]);
     }
     case 'product':
-      return getCloudProductBoard(origin, token, name, numberField(cmd, 'limit') ?? 20);
+      return rpc('getProductChangeBoard', [numberField(cmd, 'limit') ?? 20]);
     case 'stop':
-      return stopCloudAgent(origin, token, name);
+      return rpc('cancelCurrentWork');
     case 'webhook': {
       const label = stringField(cmd, 'label');
       if (!label) throw new Error('label required');
@@ -514,7 +490,7 @@ function createJsonEventWriter(client: AgentClient): (event: AgentClientEvent) =
   return (event) => {
     if (!wroteHeader) {
       wroteHeader = true;
-      output({ type: 'session', id: client.cliSession.id, agent: client.agentName, backend: client.mode, cwd: process.cwd() });
+      output({ type: 'session', id: client.cliSession.id, workspace: client.agentName, backend: client.mode, cwd: process.cwd() });
     }
     for (const value of jsonEvents(event)) output(value);
   };
@@ -533,7 +509,13 @@ function jsonEvents(event: AgentClientEvent): unknown[] {
     case 'turn-end':
       return [
         { type: 'message_end', role: 'assistant', text: event.turn.text },
-        { type: 'turn_end', steps: event.turn.steps, durationMs: event.turn.durationMs, hadError: event.turn.hadError },
+        {
+          type: 'turn_end',
+          steps: event.turn.steps,
+          durationMs: event.turn.durationMs,
+          hadError: event.turn.hadError,
+          ...(event.turn.usage ? { usage: event.turn.usage } : {}),
+        },
       ];
     case 'step-finish':
       return [];

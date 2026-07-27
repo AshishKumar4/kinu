@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/heads/head-summary.ts b/packages/core/src/heads/head-summary.ts
+index 0caec7d..ad0ea9a 100644
+--- a/packages/core/src/heads/head-summary.ts
++++ b/packages/core/src/heads/head-summary.ts
+@@ -69,7 +69,7 @@ export function extractFinalText(result: ResultLike): string {
+   const direct = result.text?.trim();
+   if (direct) return direct;
+   const steps = result.steps ?? [];
+-  for (let i = steps.length - 1; i >= 0; i--) {
++  for (let i = 0; i < steps.length; i++) {
+     const t = steps[i]?.text?.trim();
+     if (t) return t;
+   }

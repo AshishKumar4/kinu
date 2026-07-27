@@ -63,6 +63,8 @@ export type IngressKind =
   | 'file_watch'      // sandbox filesystem change
   | 'peer_async'      // receiver-side write from a peer agent
   | 'mcp_streamable'  // MCP tool call from external client
+  | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
+  | 'subordinate'     // same-workspace facet spine: parent↔subordinate task/report
   | 'self_emit'       // emitted by a tool during the agent's own turn
   | 'reply_request';  // operator confirmation reply
 
@@ -74,7 +76,10 @@ export type EventVariant =
   | 'process_done'     // sandbox process completion
   | 'timer'            // alarm fired
   | 'peer_agent'       // cross-agent message
+  | 'subordinate_task'    // parent → subordinate assignment / conversational injection
+  | 'subordinate_report'  // subordinate → parent progress/completion report
   | 'file_changed'     // sandbox FS event
+  | 'email'            // inbound email (Mission Inbox)
   | 'internal'         // tool-emitted within the agent's own turn
   | 'reply_request'    // pending owner-confirmation question
   | 'mcp_chat'         // owner-authenticated MCP call
@@ -97,6 +102,7 @@ export type ReplyChannelKind =
   | 'http_pending'  // held-open HTTP request — 30s TTL
   | 'peer_back'     // async reply to a peer agent — 24h TTL
   | 'mcp_pending'   // open MCP HTTP request — 60s TTL
+  | 'email_thread'  // reply lands back on the inbound email's thread — 24h TTL
   | 'none';         // event has no reply channel (timer, file_watch, etc.)
 
 export interface ReplyChannelRef {
@@ -157,12 +163,64 @@ export interface PeerAgentPayload {
   from_user_id: string;
   topic: string;
   body: unknown;
+  /** Sender-side outbox row id — the receiver-side dedupe key, so redelivery
+   *  after a crash is a no-op and repeated topics are NOT collapsed. */
+  sender_event_id: string;
+  /** True when the sender opened an ask (send-and-await) and holds a
+   *  reply waiter — the receiver should answer via its peer-back channel. */
+  reply_expected?: boolean;
 }
 
 export interface FileChangedPayload {
   path: string;
   change: 'created' | 'modified' | 'deleted';
   size?: number;
+}
+
+/** Parent workspace → subordinate facet. `task` starts/replaces an
+ *  assignment; `message` is a conversational injection into its next turn. */
+export interface SubordinateTaskPayload {
+  from_workspace: string;
+  kind: 'task' | 'message';
+  body: string;
+  deliverable?: string;
+  deadline_hint?: string;
+  inherited_context?: string;
+}
+
+export type SubordinateReportStatus = 'progress' | 'completed' | 'blocked';
+
+/** Subordinate facet → parent workspace. Reports drain into the
+ *  orchestrator's next turn on the standard reactor rail. */
+export interface SubordinateReportPayload {
+  from_subordinate: string;
+  status: SubordinateReportStatus;
+  content: string;
+  /** The assignment this report answers, when one is active. */
+  task?: string;
+}
+
+export interface EmailAttachmentMeta {
+  filename: string;
+  content_type: string;
+  size: number;
+}
+
+export interface EmailPayload {
+  /** Envelope sender (SMTP MAIL FROM) — the address the trust gate verified. */
+  from: string;
+  /** The agent address the mail arrived at (envelope RCPT TO). */
+  to: string;
+  subject: string;
+  /** Top-of-thread text with quoted history stripped. */
+  body_text: string;
+  /** RFC 5322 Message-ID of the inbound mail — threading + dedupe anchor. */
+  message_id: string | null;
+  in_reply_to: string | null;
+  /** Raw References header (space-separated message ids). */
+  references: string | null;
+  /** Attachment metadata only — bytes never enter the event log. */
+  attachments: EmailAttachmentMeta[];
 }
 
 export interface InternalPayload {
@@ -216,7 +274,10 @@ export type ProteusEvent =
   | (BaseEvent & { variant: 'process_done'; payload: ProcessDonePayload })
   | (BaseEvent & { variant: 'timer'; payload: TimerPayload })
   | (BaseEvent & { variant: 'peer_agent'; payload: PeerAgentPayload })
+  | (BaseEvent & { variant: 'subordinate_task'; payload: SubordinateTaskPayload })
+  | (BaseEvent & { variant: 'subordinate_report'; payload: SubordinateReportPayload })
   | (BaseEvent & { variant: 'file_changed'; payload: FileChangedPayload })
+  | (BaseEvent & { variant: 'email'; payload: EmailPayload })
   | (BaseEvent & { variant: 'internal'; payload: InternalPayload })
   | (BaseEvent & { variant: 'reply_request'; payload: ReplyRequestPayload })
   | (BaseEvent & { variant: 'mcp_chat'; payload: McpChatPayload })
@@ -274,9 +335,26 @@ export type IngressDescriptor =
       receiver_grant_present: boolean;   // for cross-owner peers
     }
   | {
+      // Same-workspace facet spine — the parent DO and its subordinate facets
+      // are one trust domain (one owner, one storage shard), so no grant
+      // machinery: possession of the worker-side stub IS the authorization.
+      ingress: 'subordinate';
+      variant: 'subordinate_task' | 'subordinate_report';
+      payload: SubordinateTaskPayload | SubordinateReportPayload;
+    }
+  | {
       ingress: 'mcp_streamable';
       variant: 'mcp_chat' | 'mcp_third_party';
       payload: McpChatPayload | McpThirdPartyPayload;
+    }
+  | {
+      ingress: 'email_inbound';
+      variant: 'email';
+      payload: EmailPayload;
+      /** How the sender passed the gate — the ingress only calls publish AFTER
+       *  verifying the envelope sender against the owner's verified email or
+       *  the agent's email_route allowlist. Unknown senders never publish. */
+      sender_class: 'owner' | 'allowlisted';
     }
   | {
       ingress: 'self_emit';
@@ -350,24 +428,6 @@ export type RevisitCondition =
   | { kind: 'after_event'; variant: EventVariant; source?: string }
   | { kind: 'after_seconds'; n: number };       // n capped at 3600
 
-// ── Budget ───────────────────────────────────────────────────────
-
-export interface ReactorBudgetConfig {
-  per_turn_invocations: number;
-  per_trace_invocations: number;
-  per_hour_agent_invocations: number;
-  per_hour_user_tokens: number;
-  per_source_invocations: number;
-}
-
-export const DEFAULT_REACTOR_BUDGET: ReactorBudgetConfig = {
-  per_turn_invocations: 3,
-  per_trace_invocations: 5,
-  per_hour_agent_invocations: 60,
-  per_hour_user_tokens: 100_000,
-  per_source_invocations: 10,
-};
-
 // ── agent_log row (storage shape) ────────────────────────────────
 
 /** The kinds of rows in `agent_log`. Discriminated by `kind`. */
@@ -408,7 +468,8 @@ export type TriggerKind =
   | 'process_watch'
   | 'file_watch'
   | 'peer_inbox'
-  | 'mcp_route';
+  | 'mcp_route'
+  | 'email_route';   // per-agent inbound-email allowlist (owner is always allowed)
 
 export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
 
@@ -458,19 +519,5 @@ export class IngressRejectedError extends Error {
   constructor(public readonly ingress: IngressKind, public readonly reason: string) {
     super(`Ingress ${ingress} rejected: ${reason}`);
     this.name = 'IngressRejectedError';
-  }
-}
-
-export class LegalityError extends Error {
-  constructor(public readonly decision: ReactorDecision) {
-    super(`Illegal reactor decision: head_op=${decision.head_op.kind} event_op=${decision.event_op.kind}`);
-    this.name = 'LegalityError';
-  }
-}
-
-export class BudgetExhaustedError extends Error {
-  constructor(public readonly axis: string, public readonly limit: number) {
-    super(`Reactor budget exhausted on axis ${axis} (limit ${limit})`);
-    this.name = 'BudgetExhaustedError';
   }
 }

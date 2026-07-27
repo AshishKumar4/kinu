@@ -2,13 +2,29 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-All state is stored in a single Durable Object's SQLite database. The schema is split across several subsystems, each owning its tables.
+A workspace's state lives in one Durable Object's SQLite database — the
+`OrchestratorAgent` DO. The schema is split across several subsystems, each
+owning its tables and creating them idempotently.
+
+Three other Durable Object classes hold their own isolated databases:
+`SubordinateAgent` (the full actor schema plus a one-row `subordinate_identity`),
+`ExplorationAgent` (`facet_owner`, `facet_parent`, `traces` — the isolation MCTS
+branches depend on), and `UserDO` (the per-user `user_*` / `device_*` tables,
+which are the user's, not any workspace's). Three things live outside DO SQLite
+entirely: browser auth in the `AUTH_DB` D1 database
+(`packages/cf-backend/migrations/auth/`), sandbox `/workspace` backups in the
+`BACKUP_BUCKET` R2 bucket, and optional embedding recall in the
+`MEMORY_VECTORS` Vectorize index — which is an addition to FTS5, never the
+source of truth.
 
 ## Entity Relationship
 
+The core workspace tables, as created by `initAllTables`
+(`core/src/identity/schema.ts`) and the agent-utils stores:
+
 ```mermaid
 erDiagram
-    agent_identity {
+    workspace_identity {
         TEXT id "Stable UUID (NOT NULL)"
         TEXT name "Agent name (NOT NULL)"
         INTEGER created_at "Epoch ms"
@@ -187,15 +203,54 @@ Think (via the Session class) manages its own message tables:
 
 These are managed by Think internally — Proteus reads via `this.messages` but never writes directly.
 
+## The rest of the schema
+
+The ER diagram above covers the original core; the subsystems added since each
+own their own DDL, all `IF NOT EXISTS` and all run from the same `ensureSchema()`
+pass:
+
+| Subsystem | Tables | Owner |
+|---|---|---|
+| Events hub | `agent_log`, `reply_channels`, `triggers`, `peer_outbox` (+ views `events_v`, `run_event_v`, `turn_phase_log_v`) | `core/src/events/hub/schema.ts` |
+| Run-event log | `run_events` | `core/src/events/recorder.ts` |
+| Turn outcomes | `turn_outcomes`, `lessons` | `core/src/evolution/outcomes.ts` |
+| Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
+| GEPA | `gepa_runs`, `gepa_candidates`, `gepa_pareto_membership` | `core/src/evolution/gepa/persistence.ts` |
+| Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
+| MCTS | `mcts_search_runs` (durable checkpoints), `alternate_takes` | `core/src/mcts/search-store.ts`, `takes.ts` |
+| Scaffold shadow mode | `scaffold_evaluations` | `core/src/scaffold/shadow.ts` |
+| Facts | `agent_facts` | `core/src/memory/facts.ts` |
+| Session search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/session-search.ts` |
+| Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
+| Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
+| Product change | `product_source_bindings`, `product_change_requests`, `product_change_checks`, `product_change_approvals`, `product_deployments` | `core/src/product-change/sql-store.ts` |
+| Compaction | `compaction_state` | `compaction/src/stores.ts` |
+| Subordinates | `workspace_subordinates` (parent), `subordinate_identity` (child DO) | `cf-backend/src/subordinate-support.ts` |
+| Orchestrator-local | `agent_config`, `vfs_baseline`, `turn_feedback`, `turn_craft_usage`, `webhook_secrets` | `cf-backend/src/orchestrator.ts` |
+| Email + webhooks | `email_outbox`, `webhook_rate_windows` | `cf-backend/src/email/outbox.ts`, `events/webhook-rate-limit.ts` |
+
 ## Schema Initialization
 
-Tables are created in `onStart()` (`orchestrator.ts:538-592`):
-1. Migration checks — detect old schemas (missing `chunk_index` in vfs_files, missing `start_line` in memory_chunks) and drop/recreate
-2. `initAllTables(execRaw)` — core tables (agent_identity, search_nodes, scaffold_versions, scaffold_regression_fixtures, task_history, craft_scores, fibers, vfs_files via the canonical agent-utils `VFS_SCHEMA_DDL`, messages, conversation_history, evolution_events, crafted_tools, executor_output, activity_log, fork_lineage)
-3. `initSearchTables(execRaw)` — search_nodes (idempotent, already in initAllTables)
-4. `initScaffoldTables(execRaw)` — scaffold_versions, regression_fixtures, task_history
-5. `initCraftScoreTables(execRaw)` — craft_scores
-6. Inline `CREATE TABLE IF NOT EXISTS agent_config(key TEXT PRIMARY KEY, value TEXT)`
-7. `sqliteFS.init()` — runs the same canonical `VFS_SCHEMA_DDL` idempotently (self-heals missing indexes on older databases)
-8. `memoryStore.ensureSchema()` — creates memory_chunks + FTS5 virtual table
-9. `craftStore.ensureSchema()` — creates crafted_tools FTS5 + auto-sync triggers
+`ensureSchema()` (`cf-backend/src/orchestrator.ts`) runs once per DO wake, before
+`onStart()` and again at the head of any RPC that can arrive first:
+
+1. Migration checks — old `vfs_files` without `chunk_index` and old
+   `memory_chunks` without `start_line` are dropped and recreated; `search_nodes`
+   gains `code_used` by ALTER.
+2. `initAllTables` — `workspace_identity`, `search_nodes`, `scaffold_versions`,
+   `scaffold_regression_fixtures`, `task_history`, `craft_scores`, `fibers`,
+   `vfs_files` (via the canonical agent-utils `VFS_SCHEMA_DDL`), `messages`,
+   `conversation_history`, `evolution_events`, `crafted_tools`,
+   `executor_output`, `activity_log`, `fork_lineage`.
+3. Each subsystem's own `init*` from the table above.
+4. `subordinateRoster.ensureSchema()` and the orchestrator-local inline tables.
+5. `memoryStore.ensureSchema()` and `craftStore.ensureSchema()` create their
+   FTS5 virtual tables — `crafted_tools_fts` with auto-sync triggers,
+   `memory_chunks_fts` synced in code by `indexFile`.
+
+Two consequences worth knowing. Several tables have deliberately duplicated DDL
+in `identity/schema.ts` and in their owning module; where the two differ
+(`scaffold_versions` gains `status` and `parent_version`), the owning module's
+`init*` reconciles by ALTER. And DO SQLite cannot ALTER a `CHECK` constraint and
+forbids explicit transactions, so widening one — as `turn_outcomes` and the
+events-hub tables have both needed — is an in-place table rebuild.

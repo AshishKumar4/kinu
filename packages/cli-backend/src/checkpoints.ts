@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs, existsSync, statSync } from 'node:fs';
 import { homedir, devNull } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
+import { proteusHome } from './home.js';
 import {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT,
   CHECKPOINT_REF_PREFIX as REF_PREFIX, CHECKPOINT_WORKDIR_MARKER as WORKDIR_MARKER,
@@ -33,7 +34,7 @@ const GIT_TIMEOUT_MS = 30_000;
 
 export interface HostCheckpointsOpts {
   agent: string;
-  /** Shadow store root. Default: ~/.proteus/checkpoints */
+  /** Shadow store root. Default: $PROTEUS_HOME/checkpoints */
   base?: string;
   /** Checkpoints kept per working directory. Default: DEFAULT_CHECKPOINT_KEEP. */
   keep?: number;
@@ -46,7 +47,7 @@ interface GitResult { code: number; stdout: string; stderr: string }
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const agent = opts.agent.replace(/[^A-Za-z0-9_-]/g, '_');
-  const base = opts.base ?? join(homedir(), '.proteus', 'checkpoints');
+  const base = opts.base ?? join(proteusHome(), 'checkpoints');
   const agentBase = join(base, agent);
   const keep = Math.max(1, opts.keep ?? DEFAULT_CHECKPOINT_KEEP);
   const gitBin = opts.gitBin ?? 'git';

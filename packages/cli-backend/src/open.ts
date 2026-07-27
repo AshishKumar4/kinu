@@ -1,21 +1,21 @@
 /**
- * Open an existing agent for CLI — uses the proper cli-backend runtime
+ * Open an existing workspace for CLI — uses the proper cli-backend runtime
  * (FTS5 memory, sandboxed executor, real MCTS branches) instead of the
  * degraded inline implementations in core/identity/open.ts.
  *
- * Provides the same AgentInfo structure as core's openAgent for
+ * Provides the same WorkspaceInfo structure as core's openWorkspace for
  * display compatibility with CLI commands.
  */
 
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initAllTables, readSoul, summarizeSoul } from '@proteus/core';
+import { initAllTables, migrateWorkspaceStorage, readSoul, summarizeSoul } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 
-export interface AgentInfo {
+export interface WorkspaceInfo {
   id: string;
   name: string;
   purpose: string;
@@ -47,9 +47,9 @@ type AgentDb = {
 };
 
 /**
- * Open an existing agent using the full CLI backend runtime.
+ * Open an existing workspace using the full CLI backend runtime.
  *
- * Unlike core's openAgent (which uses degraded inline VFS/Memory/Executor),
+ * Unlike core's openWorkspace (which uses degraded inline VFS/Memory/Executor),
  * this uses:
  * - SqliteFS from agent-utils (chunked, with parent tracking)
  * - MemoryStore with FTS5 (BM25 ranking, markdown chunking)
@@ -57,28 +57,29 @@ type AgentDb = {
  * - Real MCTS branch spawner (child processes with LLM calls)
  * - Proper CraftStore with FTS5 search
  */
-export function openAgentCLI(
+export function openWorkspaceCLI(
   db: AgentDb,
   dbPath: string,
   config: CLIOpenConfig,
-): { rt: AgentRuntime; info: AgentInfo } {
+): { rt: AgentRuntime; info: WorkspaceInfo } {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
   // Ensure all tables exist (idempotent)
   initAllTables(execRaw);
+  migrateWorkspaceStorage(sql);
 
   // Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`
-    SELECT id, name, created_at FROM agent_identity LIMIT 1
+    SELECT id, name, created_at FROM workspace_identity LIMIT 1
   `[0];
-  if (!identity) throw new Error('No agent identity found. Use createAgent() to create one.');
+  if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
   // Read SOUL.md
   const soul = readSoul(sql);
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
-  // Gather stats for AgentInfo display
+  // Gather stats for WorkspaceInfo display
   const scaffoldVersion = sql<{ v: number }>`
     SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
   `[0]?.v ?? 0;

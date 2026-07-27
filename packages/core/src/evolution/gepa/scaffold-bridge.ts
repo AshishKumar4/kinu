@@ -22,6 +22,7 @@ import { modifyScaffold } from '../../scaffold/modify.js';
 import {
   SCAFFOLD_FORBIDDEN_PATTERNS, SCAFFOLD_REQUIRED_SIGNATURE,
 } from '../../scaffold/safety-patterns.js';
+import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats.js';
 import { runGepa } from './engine.js';
 import type {
   EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM,
@@ -63,6 +64,11 @@ export interface RunScaffoldGepaOpts<I = unknown, E = unknown> {
 export interface RunScaffoldGepaResult<I = unknown, E = unknown> {
   /** The raw GEPA output — winner + Pareto front + history. */
   gepa: GepaResult;
+  /** The winner's eval-set score with its 95% interval. Read the two
+   *  intervals against each other before believing the winner is better. */
+  winnerScore: ScoreInterval;
+  /** The seed's eval-set score with its 95% interval. */
+  seedScore: ScoreInterval;
   /** Whether the winner was handed off to modifyScaffold. */
   proposed: boolean;
   /** If proposed, the new scaffold version number; null otherwise. */
@@ -98,35 +104,39 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
     },
   });
 
+  const winner = gepa.winner;
+  const winnerScore = scoreInterval([...winner.scores.values()]);
+  const seedScore = scoreInterval([...(gepa.history[0]?.scores.values() ?? [])]);
+  const scores = { winnerScore, seedScore };
+
   if (opts.dryRun) {
-    return { gepa, proposed: false, pendingVersion: null, skipReason: 'dry_run' };
+    return { gepa, ...scores, proposed: false, pendingVersion: null, skipReason: 'dry_run' };
   }
 
-  const winner = gepa.winner;
   // `bestAggregate` breaks ties by `createdAt` (older wins) and the seed is
   // always the oldest, so any candidate strictly tied or below the seed's
   // aggregate yields `winner === seed`. We only ever reach modifyScaffold
   // when GEPA found a strictly-better candidate.
   if (winner.source === seed) {
-    return { gepa, proposed: false, pendingVersion: null, skipReason: 'winner_equals_seed' };
+    return { gepa, ...scores, proposed: false, pendingVersion: null, skipReason: 'winner_equals_seed' };
   }
-  const seedAggregate = gepa.history[0]?.aggregateScore ?? 0;
 
   // The default rationale is always well over modifyScaffold's 50-char gate-1
-  // minimum, so no padding is needed.
+  // minimum, so no padding is needed. It carries the intervals so whoever
+  // reads the promotion decision later sees how thin the evidence was.
   const rationale = opts.rationale ??
-    `GEPA-optimised scaffold — aggregate ${winner.aggregateScore.toFixed(3)} ` +
-    `over ${gepa.history.length - 1} mutations (seed: ${seedAggregate.toFixed(3)}).`;
+    `GEPA-optimised scaffold — aggregate ${formatScoreInterval(winnerScore, 3)} ` +
+    `over ${gepa.history.length - 1} mutations (seed: ${formatScoreInterval(seedScore, 3)}).`;
 
   const modResult = await modifyScaffold(opts.rt, rationale, winner.source);
   if (!modResult.ok) {
     return {
-      gepa, proposed: false, pendingVersion: null,
+      gepa, ...scores, proposed: false, pendingVersion: null,
       skipReason: 'modify_gate_rejected',
       modifyError: { stage: modResult.stage ?? 0, error: modResult.error ?? 'unknown' },
     };
   }
   return {
-    gepa, proposed: true, pendingVersion: modResult.version ?? null,
+    gepa, ...scores, proposed: true, pendingVersion: modResult.version ?? null,
   };
 }

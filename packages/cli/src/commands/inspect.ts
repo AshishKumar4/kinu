@@ -1,26 +1,12 @@
+import { renderAlignmentConvergence, type AlignmentConvergence } from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
 import { requireAuthConfig } from '../config.js';
-import {
-  createCloudWebhookTrigger,
-  executeCloudExecutor,
-  getCloudAgentState,
-  getCloudGepaRun,
-  getCloudMctsNode,
-  getCloudProductBoard,
-  getCloudMemoryContent,
-  getCloudMctsTree,
-  listCloudEvents,
-  listCloudExecutors,
-  listCloudGepaRuns,
-  listCloudHeads,
-  listCloudTimeline,
-  searchCloudMemory,
-  stopCloudAgent,
-} from '../cloud-api.js';
+import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
 import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display.js';
 import {
   executeLocalExecutor,
   getLocalAgentState,
+  getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
   getLocalProductBoard,
@@ -47,7 +33,7 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const result = await stopCloudAgent(auth.origin, auth.token, target.cloudName);
+    const result = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelCurrentWork');
     if (opts.json) printJson(result);
     else console.log(`${OK('stopped')} ${target.name}`);
     return;
@@ -69,7 +55,7 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
 export async function stateCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => getCloudAgentState(auth.origin, auth.token, target.cloudName),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getWorkspaceSnapshot'),
     local: () => getLocalAgentState(target.localName),
   });
   printData(data, opts);
@@ -80,9 +66,9 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
   const query = queryParts.join(' ').trim();
   const limit = parseLimit(opts.limit, 10);
   const data = await readTarget(target, {
-    cloud: (auth) => query
-      ? searchCloudMemory(auth.origin, auth.token, target.cloudName, query, limit)
-      : getCloudMemoryContent(auth.origin, auth.token, target.cloudName),
+    cloud: async (auth) => query
+      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'searchMemoryHybrid', [query, limit])
+      : { content: await callAgentRpc<string>(auth.origin, auth.token, target.cloudName, 'getMemoryContent') },
     local: () => query
       ? searchLocalMemory(target.localName, query, limit)
       : { content: readLocalMemory(target.localName) },
@@ -100,7 +86,7 @@ export async function eventsCommand(name: string, opts: InspectOpts = {}): Promi
   const limit = parseLimit(opts.limit, 50);
   const since = opts.since ? parseTime(opts.since) : undefined;
   const data = await readTarget(target, {
-    cloud: (auth) => listCloudEvents(auth.origin, auth.token, target.cloudName, { variant: opts.variant, since, limit }),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'listRecentEvents', [{ variant: opts.variant, since, limit }]),
     local: () => listLocalEvents(target.localName, { variant: opts.variant, since, limit }),
   });
   printRows(data, opts, formatEventRow);
@@ -110,7 +96,7 @@ export async function timelineCommand(name: string, opts: InspectOpts = {}): Pro
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 100);
   const data = await readTarget(target, {
-    cloud: (auth) => listCloudTimeline(auth.origin, auth.token, target.cloudName, { limit }),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getRunTimeline', [{ limit }]),
     local: () => listLocalTimeline(target.localName, limit),
   });
   printRows(data, opts, formatTimelineRow);
@@ -120,8 +106,8 @@ export async function mctsCommand(name: string, nodeId: string | undefined, opts
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
     cloud: (auth) => nodeId
-      ? getCloudMctsNode(auth.origin, auth.token, target.cloudName, nodeId)
-      : getCloudMctsTree(auth.origin, auth.token, target.cloudName),
+      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsNodeDetail', [nodeId])
+      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsTree'),
     local: () => nodeId ? getLocalMctsNode(target.localName, nodeId) : listLocalMcts(target.localName),
   });
   if (!nodeId && !opts.json && Array.isArray(data)) {
@@ -135,7 +121,7 @@ export async function headsCommand(name: string, opts: InspectOpts = {}): Promis
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
-    cloud: (auth) => listCloudHeads(auth.origin, auth.token, target.cloudName, limit),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getHeadRuns', [limit]),
     local: () => listLocalHeads(target.localName, limit),
   });
   printRows(data, opts, formatHeadRow);
@@ -146,8 +132,8 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
     cloud: (auth) => runId
-      ? getCloudGepaRun(auth.origin, auth.token, target.cloudName, runId)
-      : listCloudGepaRuns(auth.origin, auth.token, target.cloudName, limit),
+      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRun', [runId])
+      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRuns', [limit]),
     local: () => runId ? getLocalGepaRun(target.localName, runId) : listLocalGepaRuns(target.localName, limit),
   });
   printRows(data, opts, formatGepaRow);
@@ -165,7 +151,7 @@ export async function executorsCommand(
   }
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => listCloudExecutors(auth.origin, auth.token, target.cloudName),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getExecutors'),
     local: () => listLocalExecutors(),
   });
   printRows(data, opts, formatExecutorRow);
@@ -176,7 +162,7 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
   if (!command) throw new Error('command required');
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => executeCloudExecutor(auth.origin, auth.token, target.cloudName, executor, command),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'executeInExecutor', [executor, command]),
     local: () => executeLocalExecutor(target.localName, executor, command),
   });
   if (opts.json) {
@@ -194,11 +180,26 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
   printData(data, opts);
 }
 
+/** K_align — how often the user had to correct this agent, per 100 graded
+ *  turns, split by the scaffold version that served them. */
+export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+  const target = resolveAgentTarget(name);
+  const data = await readTarget(target, {
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAlignmentConvergence'),
+    local: () => getLocalAlignment(target.localName),
+  });
+  if (opts.json) {
+    printJson(data);
+    return;
+  }
+  console.log(renderAlignmentConvergence(data as AlignmentConvergence));
+}
+
 export async function productCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
-    cloud: (auth) => getCloudProductBoard(auth.origin, auth.token, target.cloudName, limit),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getProductChangeBoard', [limit]),
     local: () => getLocalProductBoard(target.localName, limit),
   });
   printData(data, opts);
@@ -212,7 +213,7 @@ export async function webhookCommand(name: string, label: string | undefined, op
 } = {}): Promise<void> {
   if (!label) throw new Error('webhook label required');
   const target = resolveAgentTarget(name);
-  if (target.mode !== 'cloud') throw new Error('Webhook triggers require a cloud agent.');
+  if (target.mode !== 'cloud') throw new Error('Webhook triggers require a cloud workspace.');
   const auth = requireAuthConfig();
   const authMode = normalizeWebhookAuthMode(opts.authMode);
   const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, {

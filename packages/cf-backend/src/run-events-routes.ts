@@ -1,9 +1,9 @@
 /**
  * HTTP routes for the durable run-event log.
  *
- *   GET /api/agents/:agentName/runs            → list recent runs
- *   GET /api/agents/:agentName/runs/:runId/events?since=&limit=&types=
- *   GET /api/agents/:agentName/runs/:runId/stream  → SSE w/ Last-Event-ID resume
+ *   GET /api/workspaces/:agentName/runs            → list recent runs
+ *   GET /api/workspaces/:agentName/runs/:runId/events?since=&limit=&types=
+ *   GET /api/workspaces/:agentName/runs/:runId/stream  → SSE w/ Last-Event-ID resume
  *
  * Routes through to the OrchestratorAgent DO by name, calling its @callable
  * RPCs (getRunEvents / listRuns / countRunEvents). The SSE stream loops a
@@ -49,11 +49,11 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   const url = new URL(request.url);
   const path = url.pathname;
 
-  if (!path.startsWith('/api/agents/')) return null;
+  if (!path.startsWith('/api/workspaces/')) return null;
   if (request.method !== 'GET') return null;
 
-  // /api/agents/<name>/runs
-  const listMatch = path.match(/^\/api\/agents\/([^/]+)\/runs\/?$/);
+  // /api/workspaces/<name>/runs
+  const listMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/?$/);
   if (listMatch) {
     const [, agentName] = listMatch;
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? '50')));
@@ -66,8 +66,8 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
     }
   }
 
-  // /api/agents/<name>/runs/<runId>/events
-  const eventsMatch = path.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/events\/?$/);
+  // /api/workspaces/<name>/runs/<runId>/events
+  const eventsMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/events\/?$/);
   if (eventsMatch) {
     const [, agentName, runId] = eventsMatch;
     const opts: RunEventQuery = {
@@ -84,8 +84,8 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
     }
   }
 
-  // /api/agents/<name>/runs/<runId>/stream — SSE w/ Last-Event-ID resume
-  const streamMatch = path.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/stream\/?$/);
+  // /api/workspaces/<name>/runs/<runId>/stream — SSE w/ Last-Event-ID resume
+  const streamMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/stream\/?$/);
   if (streamMatch) {
     const [, agentName, runId] = streamMatch;
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');

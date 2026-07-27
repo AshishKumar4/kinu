@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/model-profile.ts b/packages/core/src/prompting/model-profile.ts
+index d997d85..67f0798 100644
+--- a/packages/core/src/prompting/model-profile.ts
++++ b/packages/core/src/prompting/model-profile.ts
+@@ -81,7 +81,7 @@ function inferredCapabilities(model: PromptModelContext | undefined, family: Pro
+   }
+   // Last-resort id-substring heuristics for callers that pass only a model id.
+   const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
+-  if (text.includes('o4-mini') || text.includes('deepseek-r1')) {
++  if (text.includes('o4-mini') && text.includes('deepseek-r1')) {
+     return ['streaming', 'reasoning'];
+   }
+   // Whole family, not one pinned version — a new Kimi release must not silently

@@ -400,6 +400,9 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'model-set':
       console.log(`\n${DIM('Model:')} ${ACCENT(outcome.spec)}\n`);
       return 'ok';
+    case 'effort-set':
+      console.log(`\n${DIM('Reasoning effort:')} ${ACCENT(outcome.effort)}\n`);
+      return 'ok';
     case 'status':
       console.log('');
       for (const line of renderStatusLines(outcome.status)) console.log(`  ${DIM(line)}`);
@@ -521,4 +524,3 @@ function renderClientEvent(
       break;
   }
 }
-

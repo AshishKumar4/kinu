@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import {
   LocalAgentSession,
-  openAgentCLI,
+  openWorkspaceCLI,
   resolveChatModel,
   type SessionEvent,
 } from '@proteus/cli-backend';
@@ -25,19 +25,33 @@ const PID_PATH = join(AGENT_HOME, 'daemon.pid');
 const LOG_PATH = join(AGENT_HOME, 'daemon.log');
 const MAX_SLEEP_MS = 30_000;
 const MIN_SLEEP_MS = 500;
+/** SIGTERM grace before escalating — a tick mid-agent-turn takes a moment. */
+const STOP_GRACE_MS = 5_000;
+const STOP_FORCE_MS = 2_000;
 
 export async function daemonCommand(action: string | undefined): Promise<void> {
   const sub = action ?? 'status';
   if (sub === 'start') {
-    const started = startDaemon();
-    console.log(started
-      ? `${OK('✓')} Local scheduler daemon started ${DIM(LOG_PATH)}`
+    const pid = startDaemon();
+    console.log(pid !== null
+      ? `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)}`
       : `${DIM('Local scheduler daemon is already running')} ${DIM(LOG_PATH)}`);
     return;
   }
   if (sub === 'stop') {
-    stopDaemon();
-    console.log(`${OK('✓')} Local scheduler daemon stopped`);
+    const pid = await stopDaemon();
+    console.log(pid !== null
+      ? `${OK('✓')} Local scheduler daemon stopped ${DIM(`pid ${pid}`)}`
+      : DIM('Local scheduler daemon is not running'));
+    return;
+  }
+  if (sub === 'restart') {
+    const stopped = await stopDaemon();
+    const pid = startDaemon();
+    if (pid === null) throw new Error(`Local scheduler daemon failed to start. See ${LOG_PATH}`);
+    console.log(stopped !== null
+      ? `${OK('✓')} Local scheduler daemon restarted ${DIM(`pid ${stopped} → ${pid} · ${LOG_PATH}`)}`
+      : `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)} ${DIM('(it was not running)')}`);
     return;
   }
   if (sub === 'status') {
@@ -58,23 +72,24 @@ export async function daemonCommand(action: string | undefined): Promise<void> {
     await runDaemonLoop();
     return;
   }
-  throw new Error('Usage: proteus daemon [start|stop|status|logs|run]');
+  throw new Error('Usage: proteus daemon [start|stop|restart|status|logs|run]');
 }
 
 export function ensureLocalDaemonRunning(): void {
   startDaemon({ quiet: true });
 }
 
-function startDaemon(opts: { quiet?: boolean } = {}): boolean {
+/** The new daemon's pid, or null when a live daemon already owns the pidfile. */
+function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   ensureAgentHome();
   mkdirSync(AGENT_HOME, { recursive: true });
   chmodSync(AGENT_HOME, 0o700);
-  if (readLivePid()) return false;
+  if (readLivePid()) return null;
 
   const entry = process.argv[1];
   if (!entry) {
     if (!opts.quiet) throw new Error('Cannot locate Proteus CLI entrypoint for daemon startup.');
-    return false;
+    return null;
   }
 
   const logFd = openSync(LOG_PATH, 'a');
@@ -86,18 +101,41 @@ function startDaemon(opts: { quiet?: boolean } = {}): boolean {
     });
     child.unref();
     writePid(child.pid);
-    return true;
+    return child.pid ?? null;
   } finally {
     closeSync(logFd);
   }
 }
 
-function stopDaemon(): void {
-  const pid = readLivePid();
-  if (pid) {
-    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+/**
+ * Stop the daemon and wait for the process to actually be gone — the pidfile
+ * is the daemon's own, and it unlinks it on exit, so starting a replacement
+ * before the old one dies lets the corpse delete the new daemon's pidfile.
+ *
+ * Returns the pid that was stopped, or null when nothing was running.
+ */
+async function stopDaemon(): Promise<number | null> {
+  const pid = readLivePid(); // clears a stale pidfile on its way out
+  if (pid === null) return null;
+
+  try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  if (!await waitForExit(pid, STOP_GRACE_MS)) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    if (!await waitForExit(pid, STOP_FORCE_MS)) {
+      throw new Error(`Local scheduler daemon (pid ${pid}) did not exit.`);
+    }
   }
   try { unlinkSync(PID_PATH); } catch { /* already gone */ }
+  return pid;
+}
+
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { process.kill(pid, 0); } catch { return true; }
+    if (Date.now() >= deadline) return false;
+    await sleep(50);
+  }
 }
 
 async function runDaemonLoop(): Promise<void> {
@@ -105,7 +143,9 @@ async function runDaemonLoop(): Promise<void> {
   writePid(process.pid);
   log('local scheduler daemon started');
   let stopping = false;
-  const stop = () => { stopping = true; };
+  // A stop must not wait out the poll interval — cut the sleep short.
+  let wakeFromSleep: (() => void) | null = null;
+  const stop = () => { stopping = true; wakeFromSleep?.(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 
@@ -123,7 +163,15 @@ async function runDaemonLoop(): Promise<void> {
     const delay = nextAt === null
       ? MAX_SLEEP_MS
       : Math.min(MAX_SLEEP_MS, Math.max(MIN_SLEEP_MS, nextAt - Date.now()));
-    await sleep(delay);
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(wake, delay);
+      wakeFromSleep = wake;
+      function wake() {
+        clearTimeout(timer);
+        wakeFromSleep = null;
+        resolve();
+      }
+    });
   }
 
   log('local scheduler daemon stopped');
@@ -141,7 +189,7 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
     const providerCredentials = resolveProviderCredentials();
     const codexAuthStore = createCodexAuthStore();
     const mcpServers = resolveMcpServers();
-    const { rt } = openAgentCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
+    const { rt } = openWorkspaceCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
     const session = new LocalAgentSession({
       rt,
       db,
@@ -154,6 +202,10 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
       await session.recoverBackgroundJobs();
       const result = await session.fireDueTriggers(now);
       if (result.fired > 0) log(`${name}: fired ${result.fired} timer trigger${result.fired === 1 ? '' : 's'}`);
+      // fireDueTriggers only ARMS the debounced drain; end() would disarm it
+      // before it fires. Flush synchronously so the fired trigger's autonomous
+      // turn actually runs (also drains any recovered background-job wake).
+      await session.flushPendingDrains();
     } finally {
       await session.end().catch(() => {});
     }

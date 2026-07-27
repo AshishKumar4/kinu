@@ -134,7 +134,7 @@ export class SqliteFS implements VFS {
 
 	async readFile(
 		path: string,
-		options?: { encoding?: "utf8" },
+		options?: { encoding?: string },
 	): Promise<Uint8Array | string> {
 		const normalized = normalizePath(path);
 
@@ -319,6 +319,9 @@ export class SqliteFS implements VFS {
 		mode: number;
 		size: number;
 		mtimeMs: number;
+		/** Core VFS stat field (Node fs.Stats convention) — lets SqliteFS satisfy
+		 *  the core VFS interface directly, with no adapter. */
+		isDir: boolean;
 		dev: number;
 		ino: number;
 		uid: number;
@@ -365,6 +368,7 @@ export class SqliteFS implements VFS {
 			mode: isDir ? 0o040755 : 0o100644,
 			size,
 			mtimeMs: row.mtime,
+			isDir,
 			dev: 0,
 			ino: 0,
 			uid: 0,

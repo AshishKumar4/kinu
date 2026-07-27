@@ -17,14 +17,15 @@ describe('BackgroundJobStore', () => {
     const s = newStore();
     s.create({ id: 'j1', kind: 'think', label: 'heads', now: 1 });
     expect(s.get('j1')?.status).toBe('running');
-    s.settle('j1', 'the result', 2);
+    expect(s.get('j1')?.epoch).toBe(0);
+    s.settle('j1', 0, 'the result', 2);
     const j = s.get('j1');
     expect(j?.status).toBe('completed');
     expect(j?.result).toBe('the result');
     // A duplicate completion wake must NOT overwrite.
-    s.settle('j1', 'DIFFERENT', 3);
+    s.settle('j1', 0, 'DIFFERENT', 3);
     expect(s.get('j1')?.result).toBe('the result');
-    s.fail('j1', 'late error', 4);
+    s.fail('j1', 0, 'late error', 4);
     expect(s.get('j1')?.status).toBe('completed');
   });
 
@@ -32,7 +33,7 @@ describe('BackgroundJobStore', () => {
     const s = newStore();
     s.create({ id: 'a', kind: 'run', now: 1 });
     s.create({ id: 'b', kind: 'think', now: 2 });
-    s.fail('a', 'boom', 3);
+    s.fail('a', 0, 'boom', 3);
     expect(s.get('a')?.status).toBe('failed');
     expect(s.get('a')?.error).toBe('boom');
     expect(s.list().length).toBe(2);
@@ -42,12 +43,48 @@ describe('BackgroundJobStore', () => {
   test('cancel marks a running job cancelled; no-op once settled', () => {
     const s = newStore();
     s.create({ id: 'c', kind: 'think', now: 1 });
-    s.cancel('c', 2);
+    s.cancel('c', 0, 2);
     expect(s.get('c')?.status).toBe('cancelled');
     expect(s.get('c')?.error).toMatch(/cancelled/i);
     // A settle after cancel must NOT revive it.
-    s.settle('c', 'late', 3);
+    s.settle('c', 0, 'late', 3);
     expect(s.get('c')?.status).toBe('cancelled');
+  });
+
+  test('lease-epoch fencing: a stale-epoch completion write is rejected, monotonic', () => {
+    const s = newStore();
+    s.create({ id: 'e', kind: 'think', now: 1 });
+    expect(s.epochOf('e')).toBe(0);
+
+    // Evict + recover: reclaim bumps the epoch (fences the dead executor) + attempts.
+    const claim = s.reclaim('e', 2);
+    expect(claim).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.epochOf('e')).toBe(1);
+
+    // The zombie executor from the dead process still holds epoch 0 → its settle is
+    // a no-op: the job stays running under the new lease.
+    s.settle('e', 0, 'zombie result', 3);
+    expect(s.get('e')?.status).toBe('running');
+
+    // The reclaiming executor writes under the current epoch → accepted.
+    s.settle('e', 1, 'live result', 4);
+    expect(s.get('e')?.status).toBe('completed');
+    expect(s.get('e')?.result).toBe('live result');
+
+    // Monotonic: a second reclaim would only ever raise the epoch — but a settled
+    // job is no longer running, so reclaim declines it.
+    expect(s.reclaim('e', 5)).toBeNull();
+  });
+
+  test('reclaim bumps epoch + attempts monotonically across repeated eviction', () => {
+    const s = newStore();
+    s.create({ id: 'r', kind: 'think', now: 1 });
+    expect(s.reclaim('r', 2)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('r', 3)).toEqual({ epoch: 2, attempts: 2 });
+    expect(s.reclaim('r', 4)).toEqual({ epoch: 3, attempts: 3 });
+    expect(s.get('r')?.epoch).toBe(3);
+    expect(s.get('r')?.resumeAttempts).toBe(3);
+    expect(s.reclaim('missing', 5)).toBeNull();
   });
 
   test('create stores input_json; getInput round-trips it for retry', () => {
@@ -61,14 +98,14 @@ describe('BackgroundJobStore', () => {
     const s = newStore();
     s.create({ id: 'run1', kind: 'run', now: 1 });
     s.create({ id: 'done1', kind: 'think', now: 2 });
-    s.settle('done1', 'ok', 3);
+    s.settle('done1', 0, 'ok', 3);
     // Can't dismiss a running job.
     s.dismiss('run1');
     expect(s.get('run1')).not.toBeNull();
     s.dismiss('done1');
     expect(s.get('done1')).toBeNull();
     // clearSettled drops settled, keeps running.
-    s.create({ id: 'done2', kind: 'think', now: 4 }); s.fail('done2', 'x', 5);
+    s.create({ id: 'done2', kind: 'think', now: 4 }); s.fail('done2', 0, 'x', 5);
     s.clearSettled();
     expect(s.get('done2')).toBeNull();
     expect(s.get('run1')?.status).toBe('running');

@@ -8,29 +8,48 @@
  */
 
 import type {
-  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, HeadReport, MergeLLMFn,
+  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, MergeLLMFn,
 } from "@proteus/core";
-import { type MergeOutput, MergeOutputSchema, effortFor, createAgentConfigStore } from "@proteus/core";
+import {
+  type MergeOutput,
+  MergeOutputSchema,
+  createAgentConfigStore,
+  parseModelSpec,
+  reasoningEffortOptions,
+} from "@proteus/core";
 import type { Think } from "@cloudflare/think";
-import { ExplorationAgent } from "../exploration.js";
+import { spawnHeadFacet } from "../facet-spawn.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
 import { agentAffinityKey } from "@proteus/core";
 import { generateJson } from "../lib/generate-json.js";
 import type { UserDO } from "../user/user-do.js";
+import type { UserCaller } from "../user/workspace-capability.js";
 
 /** Agent surface this head runtime needs — `env` is protected on the DO base
  *  but the orchestrator (a subclass) passes `this` cast to this view. */
 type HeadHost = Think<Env> & { readonly env: Env };
 
-export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string, grounding?: HeadGrounding): HeadRuntime {
+export function createCFHeadRuntime(
+  orchestrator: HeadHost,
+  ownerUserId: string,
+  capabilityToken: () => Promise<string | null>,
+  parentWorkspaceName: string,
+  grounding?: HeadGrounding,
+): HeadRuntime {
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
-  // is read once from agent_identity by the orchestrator and threaded down.
+  // is read once from workspace_identity by the orchestrator and threaded down,
+  // as is the workspace capability token every privileged call presents.
   const userDOStub = orchestrator.env.UserDO.get(
     orchestrator.env.UserDO.idFromName(ownerUserId),
   ) as DurableObjectStub<UserDO>;
+  const caller = async (): Promise<UserCaller> => {
+    const workspaceToken = await capabilityToken();
+    if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
+    return { workspaceToken };
+  };
   const reg = createAgentProviderRegistry({
     env: orchestrator.env,
-    userDOStub,
+    userDO: { stub: userDOStub, caller },
     appTitle: 'Proteus (heads)',
     workersAI: { sessionAffinity: agentAffinityKey(orchestrator.name) },
   });
@@ -40,33 +59,27 @@ export function createCFHeadRuntime(orchestrator: HeadHost, ownerUserId: string,
   );
   const mergeLLM: MergeLLMFn = async (prompt): Promise<MergeOutput> => {
     const stored = config.getModel();
-    const model = reg.resolveModel(reg.normalizeSpecSync(stored));
+    const spec = reg.normalizeSpecSync(stored);
+    const model = reg.resolveModel(spec);
+    const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
     return generateJson({
       model,
       schema: MergeOutputSchema,
       prompt,
-      maxOutputTokens: 4096,
-      providerOptions: effortFor('head_merge').providerOptions,
+      ...(providerOptions ? { providerOptions } : {}),
     });
   };
 
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
-      const stub = await orchestrator.subAgent(ExplorationAgent, input.id);
-      await stub.setOwner(ownerUserId);
-      // The root orchestrator is the shared point for head findings.
-      await stub.setSharedParent(orchestrator.name);
-      await stub.initHead(input);
-      return {
-        id: input.id,
-        async run(): Promise<HeadReport> {
-          return (await stub.runAsHead()) as HeadReport;
-        },
-        async abort(reason: string): Promise<void> {
-          try { await stub.abortHead(reason); } catch { /* nop */ }
-          try { await orchestrator.abortSubAgent(ExplorationAgent, input.id); } catch { /* nop */ }
-        },
-      };
+      // Facet actors share their parent workspace's identity for UserDO/MCP
+      // ownership. The spawning actor's facet name is not a registered
+      // workspace and must never escape as caller identity.
+      return spawnHeadFacet(orchestrator, input, {
+        ownerUserId,
+        capabilityToken: await capabilityToken(),
+        sharedParent: parentWorkspaceName,
+      });
     },
     mergeLLM,
     ...(grounding ? { grounding } : {}),

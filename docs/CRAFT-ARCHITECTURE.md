@@ -1,5 +1,7 @@
 # Proteus Crafted-Tool Architecture — Prior-Art Comparison
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## 0. Background
 
 Three user-visible failures motivate this analysis:
@@ -70,7 +72,7 @@ Normalization of stored code is a single `.trim()`. No semicolon stripping, no d
 
 ## 5. Proteus Pre-Phase-A State
 
-Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). All paths are relative to repo root (`/workspace/proteus/`).
+Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). All paths are relative to the repo root, and describe the tree **as it was then** — several of these files have since moved or been deleted (`craft-executor.ts` on the CF side is gone; `getExecuteToolsTool` now lives in `actor-agent.ts`; `BUILTIN_TOOLS` is 12 names, not 5).
 
 ### 5.1 Files observed
 
@@ -141,6 +143,23 @@ Crafted tools were surfaced ONLY inside `execute_tools` as `codemode.*`. They we
 
 ## 7. Upgrade Plan — 5 Phases
 
+Where each phase actually landed, verified against the tree:
+
+| Phase | Status |
+|---|---|
+| A — preamble pattern | **Shipped.** `PreambleCraftedExecutor` in `cf-backend/src/crafted-tool-registry.ts` delegates to upstream `DynamicWorkerExecutor` and splices the preamble; `LiveCraftedExecutor` and `CraftedToolRegistry` survive only in that file's header comment. |
+| B — structured error payload | **Shipped**, flat rather than nested (see below). |
+| C — helpers inside crafted-tool bodies | **Shipped.** The three namespaces are documented in `tools/registry.ts`. |
+| D — signature enforcement + hint | **Partly.** The *description* now says "must be an async arrow", but no check enforces it — `createTool` still validates only argument presence, identifier sanitization, and case collision. The `types` block also still promises SAME-turn callability while the AI-SDK-visible description says next-call. |
+| E — dual surfacing | **Not shipped**, as recommended. Crafted tools are still not top-level `ToolSet` entries. |
+
+Note the wiring point moved: what the phases below call
+`orchestrator.getExecuteToolsTool()` is now
+`ActorAgent.getExecuteToolsTool()` in `cf-backend/src/actor-agent.ts`, shared by
+every actor. It also seeds the `codemode` provider with no-op stub executes so
+the provider's type declaration lists crafted tools — the real dispatch happens
+through the preamble, not that dispatcher.
+
 ### Phase A — Adopt the preamble pattern
 
 **Title.** `refactor(crafted): delegate sandbox to DynamicWorkerExecutor with preamble injection`
@@ -173,7 +192,7 @@ Crafted tools were surfaced ONLY inside `execute_tools` as `codemode.*`. They we
 
 **Before.** Error surfaces as a string: `{ error: "something broke" }` — no stack, no attribution.
 
-**After.** Error surfaces as a JSON object: `{ error: { message, stack, toolName, providerName } }`. The LLM sees the tool name that failed and a truncated stack (first 10 frames).
+**After (as shipped).** The envelope is **flat**, not nested — `StructuredExecutionError` in `crafted-tool-registry.ts` is `{ error: true, message, stack?, toolName?, providerName? }`. The LLM sees the tool name that failed and a truncated stack (first 10 frames). Errors are *returned as values*, not thrown, so a failing crafted tool does not abort the surrounding arrow.
 
 **Empirical test.**
 - Create a tool `async () => { throw new Error("boom") }`. Call it. Inspect the tool-output-available payload in the activity log — should contain `error.message === "boom"`, `error.toolName === "boom_tool"`, `error.stack` starting with `Error: boom`.
@@ -262,4 +281,4 @@ Crafted tools were surfaced ONLY inside `execute_tools` as `codemode.*`. They we
 1. **Do we keep `globalOutbound: null`?** The pre-refactor Proteus pinned `globalOutbound: null` at both the per-tool Worker and the live executor. Delegating to DWE means picking the codemode default (no outbound `fetch`) or overriding. **Decision needed:** should crafted tools ever `fetch(...)`? If so, what is the allow-list policy?
 2. **Live-dispatch vs static preamble for same-arrow visibility.** The reference preamble is built once per `execute_tools` call and is frozen for that arrow. The pre-refactor `LiveCraftedExecutor` re-read the registry *inside* the execute path, so in theory a tool created by `workspace.createTool` earlier in the SAME arrow was dispatchable. Is that capability worth keeping, or do we accept "next-step, not next-arrow"? (Recommendation: accept the contract — same-arrow dispatch is a rare pattern and the architectural cost is high.)
 3. **Top-level surfacing (Phase E).** Under what conditions would we want crafted tools as direct AI SDK tools? Is there a specific agent-side failure mode (e.g. "LLM forgets `codemode.*` prefix") that would motivate it, and is that failure mode more cheaply fixed by prompt engineering?
-4. **Error payload format.** `{ error: { message, stack, toolName, providerName } }` — or flatten to `{ error_message, error_stack, error_tool }`? The flat form is friendlier to Vercel AI SDK's `tool-output-available` JSON-stringification in activity logs; the nested form is more extensible. Decide before Phase B lands.
+4. ~~**Error payload format.**~~ **Answered: flat.** Phase B shipped `{ error: true, message, stack?, toolName?, providerName? }` — the flat form, because it survives the Vercel AI SDK's `tool-output-available` JSON-stringification in activity logs intact.

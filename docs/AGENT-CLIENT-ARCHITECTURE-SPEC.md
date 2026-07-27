@@ -1,5 +1,7 @@
 # Agent Client Architecture Specification
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 > Version 0.1 - June 2026
 > Status: proposed implementation spec
 > Theme: one cloud agent, many clients; one presentation contract, multiple adapters.
@@ -83,7 +85,7 @@ These are the important current facts this spec is based on.
 | State | Cloud source of truth | Local source of truth | Client rule |
 |---|---|---|---|
 | User identity | D1 auth store plus `UserDO` | local config for local-only user prefs | Cloud identity never comes from local config. |
-| Agent roster | `UserDO.user_agents` | local config plus local DB discovery | CLI may cache aliases, not authoritative cloud roster. |
+| Agent roster | `UserDO.user_workspaces` | local config plus local DB discovery | CLI may cache aliases, not authoritative cloud roster. |
 | Agent identity / soul | `SOUL.md` in the agent DO VFS | local VFS / SQLite | Keep one `SOUL.md` source per backend. |
 | Chat history | Think / Agents session store in `OrchestratorAgent` | local SQLite / local session store | Cloud TUI reads DO history, never JSONL. |
 | Model selection | DO `agent_config` and user provider catalogs | local `agent_config` and local provider resolver | Cloud model changes go to DO only. |
@@ -206,7 +208,7 @@ CLI bearer tokens must not be placed in websocket URLs. Add a narrow ticket
 exchange:
 
 ```text
-POST /api/cli/agents/:name/connect-ticket
+POST /api/cli/workspaces/:name/connect-ticket
 Authorization: Bearer ptc_...
 
 -> { ticket: "pat_...", expiresAt: 1780970000000 }
@@ -219,7 +221,7 @@ Ticket properties:
 - Stored hashed in `UserDO`.
 - Short lived, single use.
 - Scoped to user id, agent name, agent class, and capabilities.
-- Minting verifies the CLI token and `UserDO.hasAgent(name)`.
+- Minting verifies the CLI token and `UserDO.hasWorkspace(name)`.
 - Consumption verifies expiry, use status, user, agent, and ownership.
 - Reuse fails.
 - Wrong-agent and wrong-user use fails.
@@ -272,32 +274,38 @@ or bootstrap APIs, not agent turn execution:
 
 - Auth start / poll / approve / logout.
 - `GET /api/cli/me`.
-- `GET /api/cli/agents` for cloud roster.
-- `POST /api/cli/agents` for explicit cloud agent creation.
+- `GET /api/cli/workspaces` for cloud roster.
+- `POST /api/cli/workspaces` for explicit cloud agent creation.
 - `GET /api/cli/models` for user/account model catalog.
-- `POST /api/cli/agents/:name/connect-ticket`.
+- `POST /api/cli/workspaces/:name/connect-ticket`.
 - Device registration and device websocket ticket APIs.
 
 ### 8.2 Agent APIs
 
-Agent-scoped chat and live control should go through the agent websocket and
-`@callable` RPC where possible.
+Agent-scoped chat goes through the agent websocket; live-session control uses
+`@callable` RPC on that socket.
 
-Do not keep HTTP duplicates for status, tools, messages, model, triggers, jobs,
-memory, timeline, MCTS, executors, or product surfaces unless a concrete
-non-websocket external boundary requires them.
+Method-shaped agent operations that need HTTP (inspection commands, consent
+polling before a socket exists, CI tokens) go through the ONE generic
+transport — `POST /api/cli/workspaces/:name/rpc` with `{ method, args }` —
+gated by the `AGENT_RPC_ACCESS` table in `cf-backend/src/cli/rpc-gate.ts`.
+That table is the single scope policy for both the HTTP dispatcher and the
+websocket frame gate; table membership is the dispatch allowlist.
 
-If a route remains temporarily for implementation sequencing, the spec and code
-must mark it transitional and list the deletion condition.
+Do not add per-method HTTP routes for status, tools, messages, model,
+triggers, jobs, memory, timeline, MCTS, executors, or product surfaces —
+those N-per-operation duplicates were deleted when the generic transport
+landed. Only resource-shaped routes (streams, downloads, webhooks, step-up
+gated creation, capability minting) may exist as dedicated paths.
 
 ### 8.3 Forbidden Cloud APIs
 
 These are incompatible with the target architecture:
 
-- `/api/cli/agents/:name/turn`
-- `/api/cli/agents/:name/local-turn/prepare`
-- `/api/cli/agents/:name/local-turn/tool`
-- `/api/cli/agents/:name/local-turn/commit`
+- `/api/cli/workspaces/:name/turn`
+- `/api/cli/workspaces/:name/local-turn/prepare`
+- `/api/cli/workspaces/:name/local-turn/tool`
+- `/api/cli/workspaces/:name/local-turn/commit`
 - `cliTurn`
 - `cliPrepareLocalTurn`
 - `cliInvokeLocalTool`
@@ -344,8 +352,8 @@ TUI correctness requirements:
 Cloud creation has one canonical server path:
 
 ```text
-POST /api/cli/agents
-POST /api/user/agents
+POST /api/cli/workspaces
+POST /api/user/workspaces
         -> createCloudAgentForUser()
         -> UserDO.registerAgent()
         -> OrchestratorAgent.claimOwner()
@@ -376,8 +384,8 @@ Delete or fully retire:
 - `packages/cli/src/cloud-local-turn.ts`
 - `runCloudTurnWithLocalModel` imports and call sites
 - `runCloudTurn()` in `cloud-api.ts`
-- `/api/cli/agents/:name/turn`
-- `/api/cli/agents/:name/local-turn/*`
+- `/api/cli/workspaces/:name/turn`
+- `/api/cli/workspaces/:name/local-turn/*`
 - Orchestrator local-turn callables and helper types
 - Cloud tests that assert prepare/tool/commit behavior
 
@@ -476,7 +484,7 @@ Classification rule:
    - Classify existing partial files as keep, replace, or delete.
 2. Add failing/guard tests and proof-search expectations for current issues.
 3. Add CLI websocket ticket schema and `UserDO` issue/verify methods.
-4. Add `/api/cli/agents/:name/connect-ticket`.
+4. Add `/api/cli/workspaces/:name/connect-ticket`.
 5. Extend `/agents/orchestrator-agent/:name` auth to accept browser session or
    scoped CLI ticket.
 6. Validate the Agents / Think chat websocket protocol from installed package or
@@ -637,7 +645,7 @@ not verified. Say exactly what was not verified and why.
 
 | Design | Reason rejected |
 |---|---|
-| Keep `/api/cli/agents/:name/turn` as cloud mode | Creates a second agent turn path. |
+| Keep `/api/cli/workspaces/:name/turn` as cloud mode | Creates a second agent turn path. |
 | Keep local model prepare/tool/commit for cloud agents | Violates actual DO-agent invariant. |
 | Commit local answer back to DO | Synchronization is not source-of-truth. |
 | Read cloud history from local JSONL | Hides DO bugs and causes web/TUI divergence. |

@@ -76,6 +76,18 @@ describe('runScaffoldGepa', () => {
 
     // The LIVE scaffold/agent.js MUST still hold the seed (Phase 0 invariant).
     expect(await rt.identity.scaffold.read()).toBe(VALID_SEED);
+
+    // Both scores come back as intervals, and the rationale the promotion
+    // decision is read against carries them — 0.9 over two instances is not
+    // a fact about the scaffold.
+    expect(result.winnerScore).toEqual({ mean: 0.9, lo: expect.any(Number), hi: expect.any(Number), n: 2 });
+    expect(result.winnerScore.lo).toBeCloseTo(0.2787, 4);
+    expect(result.winnerScore.hi).toBeCloseTo(0.9953, 4);
+    expect(result.seedScore.mean).toBe(0.5);
+    const [rationale] = rt.storage.sql<{ rationale: string }>`
+      SELECT rationale FROM scaffold_versions WHERE version = ${result.pendingVersion!}`;
+    expect(rationale.rationale).toContain('0.900 (95% CI 0.279–0.995)');
+    expect(rationale.rationale).toContain('seed: 0.500 (95% CI 0.095–0.905)');
   });
 
   test('does NOT propose when winner equals seed', async () => {

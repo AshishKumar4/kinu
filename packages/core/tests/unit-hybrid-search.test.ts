@@ -82,4 +82,22 @@ describe('hybridSearch', () => {
     const shared = out.find((h) => h.id === 'shared')!;
     expect(shared.snippet).toBe('shared snippet');
   });
+
+  test('fuses lexical + semantic hits keyed on the canonical chunk id', async () => {
+    // The production id both sources emit for a chunk: `path:start-end`.
+    const chunkId = 'memory/MEMORY.md:1-5';
+    const lex: LexicalHit[] = [
+      { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.4, snippet: 'the actual chunk text' },
+    ];
+    const sem: VectorSearchHit[] = [
+      { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.9 },
+    ];
+    const out = await hybridSearch('q', async () => lex, vectorStore(sem));
+    // One fused hit, not two — the matching ids merge.
+    expect(out.length).toBe(1);
+    expect(out[0].sources.sort()).toEqual(['lexical', 'semantic']);
+    expect(out[0].snippet).toBe('the actual chunk text');
+    expect(out[0].lexicalScore).toBe(0.4);
+    expect(out[0].semanticScore).toBe(0.9);
+  });
 });

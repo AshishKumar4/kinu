@@ -34,12 +34,20 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
 
 /** A v2 generateText model that answers differently for a head run vs the merge
  *  synthesis (the merge prompt says "merging the findings of N … heads"). */
-function fakeHeadsModel(): LanguageModel {
+function fakeHeadsModel(capture?: (options: {
+  maxOutputTokens?: number;
+  providerOptions?: Record<string, Record<string, unknown>>;
+}, isMerge: boolean) => void): LanguageModel {
   const usage = { inputTokens: 8, outputTokens: 12 };
   return {
     specificationVersion: 'v2', provider: 'fake', modelId: 'fake', supportedUrls: {},
-    doGenerate: async (opts: { prompt?: unknown }) => {
+    doGenerate: async (opts: {
+      prompt?: unknown;
+      maxOutputTokens?: number;
+      providerOptions?: Record<string, Record<string, unknown>>;
+    }) => {
       const isMerge = JSON.stringify(opts.prompt ?? '').includes('merging the findings');
+      capture?.(opts, isMerge);
       const text = isMerge
         ? '{"narrative":"Unified: both heads agree the parser is sound.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}'
         : 'This head examined its angle and found it solid.';
@@ -54,11 +62,11 @@ function fakeHeadsModel(): LanguageModel {
   } as unknown as LanguageModel;
 }
 
-function controllerWithCLIRuntime(model: LanguageModel) {
+function controllerWithCLIRuntime(model: LanguageModel, providerFamily?: string) {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
   const journal = new HeadJournal(makeSql(db));
-  return new HeadController(createCLIHeadRuntime({ model }), journal);
+  return new HeadController(createCLIHeadRuntime({ model, providerFamily }), journal);
 }
 
 describe('createCLIHeadRuntime — full split → run → merge', () => {
@@ -81,6 +89,29 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(result.recommendations).toContain('ship it');
     expect(result.costSummary.headCount).toBe(2);
     expect(result.headIds).toHaveLength(2);
+  });
+
+  test('merge synthesis uses low provider effort without an output cap', async () => {
+    let mergeOptions: {
+      maxOutputTokens?: number;
+      providerOptions?: Record<string, Record<string, unknown>>;
+    } | undefined;
+    const controller = controllerWithCLIRuntime(
+      fakeHeadsModel((options, isMerge) => { if (isMerge) mergeOptions = options; }),
+      'openai',
+    );
+    await controller.run({
+      parentHeadId: null,
+      inheritedContext: [],
+      request: {
+        rationale: 'compare two views',
+        heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }],
+      },
+      parentBudget: { maxDepth: 2, maxTokens: 12_000, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    });
+
+    expect(mergeOptions?.maxOutputTokens).toBeUndefined();
+    expect(mergeOptions?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
   });
 
   test('a head is offered the FULL surface: record + sandbox + shared + split', async () => {

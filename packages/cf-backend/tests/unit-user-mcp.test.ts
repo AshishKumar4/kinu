@@ -17,6 +17,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   validateMcpServerInput, mcpToolKey,
   parseAllowedTools, mapConnectionStatus,
+  parseMcpHeaders, buildMcpHeaderTransportOpts,
 } from '../src/user/mcp.ts';
 import { tool, jsonSchema } from 'ai';
 
@@ -164,6 +165,52 @@ describe('mapConnectionStatus', () => {
   });
 });
 
+// ── 3b. parseMcpHeaders ────────────────────────────────────────────────────
+
+describe('parseMcpHeaders', () => {
+  test('parses a valid flat string→string map', () => {
+    expect(parseMcpHeaders('{"Authorization":"Bearer x"}')).toEqual({ Authorization: 'Bearer x' });
+  });
+  test('null / empty / malformed / wrong-shape → null', () => {
+    expect(parseMcpHeaders(null)).toBeNull();
+    expect(parseMcpHeaders(undefined)).toBeNull();
+    expect(parseMcpHeaders('')).toBeNull();
+    expect(parseMcpHeaders('not-json')).toBeNull();
+    expect(parseMcpHeaders('["a"]')).toBeNull();
+    expect(parseMcpHeaders('{"n":1}')).toBeNull();
+  });
+});
+
+// ── 3c. buildMcpHeaderTransportOpts + hibernation survival ─────────────────
+
+describe('buildMcpHeaderTransportOpts', () => {
+  test('no headers → undefined (nothing to inject)', () => {
+    expect(buildMcpHeaderTransportOpts(null)).toBeUndefined();
+    expect(buildMcpHeaderTransportOpts({})).toBeUndefined();
+  });
+
+  test('headers → requestInit.headers + an SSE eventSourceInit fetch', () => {
+    const opts = buildMcpHeaderTransportOpts({ Authorization: 'Bearer live' });
+    expect(opts?.requestInit.headers).toEqual({ Authorization: 'Bearer live' });
+    expect(typeof opts?.eventSourceInit.fetch).toBe('function');
+  });
+
+  // The SDK snapshots a server's transport via JSON.stringify (functions are
+  // silently dropped). This proves the DURABLE carrier is requestInit.headers,
+  // not the eventSourceInit.fetch closure — so custom bearer headers still
+  // authenticate the SSE GET stream + POST after DO hibernation, because MCP
+  // SDK 1.29.0's SSEClientTransport._commonHeaders re-derives them from
+  // requestInit on every reconnect. (Audit finding "c": already covered by
+  // the SDK; no restore-time re-injection needed.)
+  test('requestInit.headers survives a storage round-trip; the fetch closure does not', () => {
+    const opts = buildMcpHeaderTransportOpts({ Authorization: 'Bearer live' });
+    const persisted = JSON.parse(JSON.stringify({ ...opts, type: 'sse' }));
+    expect(persisted.requestInit).toEqual({ headers: { Authorization: 'Bearer live' } });
+    expect(persisted.eventSourceInit).toEqual({}); // fetch closure gone
+    expect(persisted.type).toBe('sse');
+  });
+});
+
 // ── 4. tool_ prefix collision guard in buildBuiltinTools ───────────────────
 
 describe('buildBuiltinTools tool_ prefix guard', () => {
@@ -178,15 +225,16 @@ describe('buildBuiltinTools tool_ prefix guard', () => {
 // ── 5. Orchestrator MCP tool adapter (closure dispatch) ────────────────────
 //
 // We can't boot OrchestratorAgent in a bun test, so we replay the closure
-// construction the same way buildUserMcpTools() does and assert that
-// invoking `.execute()` dispatches to the stub with the exact (serverId,
-// name, args) the LLM produced.
+// construction the same way buildUserMcpTools() does and assert that invoking
+// `.execute()` dispatches to the stub with the caller's workspace name plus
+// the exact (serverId, name, args) the LLM produced. The caller name is the
+// input to UserDO's caller-ownership gate (userMcp_callTool → hasWorkspace).
 
 interface FakeUserDOStub {
-  userMcp_callTool(serverId: string, name: string, args: unknown): Promise<unknown>;
+  userMcp_callTool(callerAgentName: string, serverId: string, name: string, args: unknown): Promise<unknown>;
 }
 
-function buildAdapter(stub: FakeUserDOStub, serverId: string, name: string) {
+function buildAdapter(stub: FakeUserDOStub, callerAgentName: string, serverId: string, name: string) {
   return tool({
     description: `${serverId}/${name}`,
     inputSchema: jsonSchema<Record<string, unknown>>({
@@ -194,32 +242,52 @@ function buildAdapter(stub: FakeUserDOStub, serverId: string, name: string) {
       properties: { x: { type: 'string' } },
     }),
     execute: async (args: unknown) => {
-      try { return await stub.userMcp_callTool(serverId, name, args); }
+      try { return await stub.userMcp_callTool(callerAgentName, serverId, name, args); }
       catch (err) { return { isError: true, error: (err as Error).message }; }
     },
   });
 }
 
 describe('orchestrator MCP tool adapter', () => {
-  test('dispatches (serverId, name, args) to the UserDO stub verbatim', async () => {
-    let captured: { id: string; name: string; args: unknown } | null = null;
+  test('threads the caller workspace name + (serverId, name, args) to the stub', async () => {
+    let captured: { caller: string; id: string; name: string; args: unknown } | null = null;
     const stub: FakeUserDOStub = {
-      async userMcp_callTool(id, name, args) {
-        captured = { id, name, args };
+      async userMcp_callTool(caller, id, name, args) {
+        captured = { caller, id, name, args };
         return { content: [{ type: 'text', text: 'ok' }] };
       },
     };
-    const adapter = buildAdapter(stub, 'srv1', 'echo');
+    const adapter = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
     const result = await (adapter.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' });
-    expect(captured).toEqual({ id: 'srv1', name: 'echo', args: { x: 'hi' } });
+    expect(captured).toEqual({ caller: 'my-workspace', id: 'srv1', name: 'echo', args: { x: 'hi' } });
     expect(result).toEqual({ content: [{ type: 'text', text: 'ok' }] });
+  });
+
+  // The UserDO gate rejects a caller that isn't one of the user's workspaces;
+  // the adapter must surface that rejection as a structured tool error rather
+  // than throw through the model loop. (Fail-closed propagation.)
+  test('surfaces a caller-ownership rejection as a structured tool error', async () => {
+    const owned = new Set(['my-workspace']);
+    const stub: FakeUserDOStub = {
+      async userMcp_callTool(caller) {
+        if (!owned.has(caller)) throw new Error(`MCP call rejected: '${caller}' is not one of your workspaces.`);
+        return { content: [{ type: 'text', text: 'ok' }] };
+      },
+    };
+    const rejected = buildAdapter(stub, 'not-mine', 'srv1', 'echo');
+    expect(await (rejected.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' }))
+      .toEqual({ isError: true, error: "MCP call rejected: 'not-mine' is not one of your workspaces." });
+
+    const allowed = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
+    expect(await (allowed.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' }))
+      .toEqual({ content: [{ type: 'text', text: 'ok' }] });
   });
 
   test('catches dispatch errors and surfaces them as structured tool errors', async () => {
     const stub: FakeUserDOStub = {
       async userMcp_callTool() { throw new Error('upstream MCP server unavailable'); },
     };
-    const adapter = buildAdapter(stub, 'srv1', 'echo');
+    const adapter = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
     const result = await (adapter.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' });
     expect(result).toEqual({ isError: true, error: 'upstream MCP server unavailable' });
   });

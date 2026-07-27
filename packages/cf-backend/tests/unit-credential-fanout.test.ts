@@ -17,11 +17,13 @@ function setup() {
   const notified: string[] = [];
   const stub = {
     async ensureProfile() {},
+    async userMcp_warmConnections() { return { servers: 0 }; },
+    async backfillWorkspaceCapabilities() { return { provisioned: 0 }; },
     async setCredential() {},
     async deleteCredential() {},
     async disconnectCodex() {},
     async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
-    async listAgents() {
+    async listWorkspaces() {
       return [
         { name: 'jarvis', displayName: 'Jarvis', createdAt: 1, lastVisited: 1, archivedAt: null },
         { name: 'old-bot', displayName: 'Old', createdAt: 1, lastVisited: 1, archivedAt: 123 },

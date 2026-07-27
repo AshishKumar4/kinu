@@ -1,8 +1,8 @@
 /**
  * The one preview-iframe pipeline. Every surface that renders an exposed-port
- * app — the chat inline preview card, the Output surface, and the Devices
- * (ExecutorsPanel) preview tab — uses this frame, so the chrome (copy /
- * reload / open-in-new-tab) and the sandbox policy never drift apart.
+ * app — the chat inline preview card, the Output surface, and the Environment
+ * preview pane — uses this frame, so the chrome (copy / reload /
+ * open-in-new-tab) and the sandbox policy never drift apart.
  *
  * Fills its parent: render inside a sized container (flex-1 min-h-0 column,
  * or a fixed-height wrapper for the inline chat card).
@@ -22,7 +22,7 @@ export function PreviewFrame({ url, label }: {
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-elevated shrink-0">
-        <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
+        <span className="size-1.5 rounded-full p-dot-success shrink-0" />
         {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
         <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
         <button

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/eval/report.ts b/packages/core/src/eval/report.ts
+index f550463..97674ce 100644
+--- a/packages/core/src/eval/report.ts
++++ b/packages/core/src/eval/report.ts
+@@ -73,7 +73,7 @@ export function buildEvalReport(results: EvalResult[], meta: EvalReportMeta): Ev
+     ...(meta.corpus ? { corpus: meta.corpus } : {}),
+     summary,
+     aggregateScore: summary.avgScoreB,
+-    regressionDelta: summary.avgScoreB - summary.avgScoreA,
++    regressionDelta: summary.avgScoreA - summary.avgScoreB,
+     cases,
+   };
+ }

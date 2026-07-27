@@ -14,15 +14,17 @@
 
 import type {
   AgentRuntime, BranchHandle,
-  VFS as CoreVFS, Memory, Executor, LLM, Schedule, Identity,
+  VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor as CoreSqlExecutor, RawSqlExec,
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
 } from "@proteus/core";
 import {
+  CompositeVFS, type MountPolicy,
+  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   DefaultExecutionRouter, createInlineExecutor,
-  createSandboxExecutor, createSSHTunnelExecutor, type DeviceTransport,
+  createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
@@ -40,10 +42,13 @@ import type { SqlExecutor } from "@proteus/agent-utils";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Think } from "@cloudflare/think";
-import { ExplorationAgent } from "./exploration.js";
+import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
-import { createAgentProviderRegistry, type AgentProviderRegistry } from "./providers/agent-registry.js";
-import { agentAffinityKey, diversityDirective } from "@proteus/core";
+import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
+import { resolveJudgeModelSelection } from "./providers/judge-model.js";
+import type { UserCaller } from "./user/workspace-capability.js";
+import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
+import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,
@@ -64,19 +69,49 @@ type AgentHost = Think<Env> & {
   readonly ctx: DurableObjectState;
 };
 
-/** Read owner_user_id from the orchestrator's agent_identity. Empty/missing -> null. */
-function readOwnerUserId(agent: AgentHost): string | null {
-  try {
-    const rows = agent.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM agent_identity LIMIT 1`;
-    const v = rows[0]?.owner_user_id;
-    return v && v !== '' ? v : null;
-  } catch { return null; }
+/**
+ * The actor's identity bootstrap + exec-plane keying — the two things that
+ * differ between a top-level workspace DO and a facet actor riding it.
+ *
+ * The orchestrator passes its own owner lookup (workspace_identity) and its
+ * DO name; a facet actor passes its own owner row and the PARENT workspace
+ * name, so it shares the workspace's sandbox container, Nimbus session, and
+ * device consent instead of materializing fresh planes keyed by facet name.
+ * Mounts need no parameter here: `CFRuntime.compositeVfs.mount()` attaches
+ * additional planes (e.g. a facet's /workspace RPC mount) post-construction.
+ */
+export interface ActorRuntimeIdentity {
+  /** Owner userId, or null while unclaimed. Resolved per call — never cached
+   *  here, so a first use before owner claim can't bake in null. */
+  ownerUserId(): string | null;
+  /** The workspace whose exec planes (sandbox, nimbus, /pc consent) this
+   *  actor rides. */
+  workspaceName: string;
+  /** The workspace capability token this actor presents to the UserDO — its
+   *  own for a workspace DO, its parent's for a facet. Null until claimed. */
+  capabilityToken(): Promise<string | null>;
 }
 
-function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
-  const userId = readOwnerUserId(agent);
+function userDOStubFor(agent: AgentHost, actor: ActorRuntimeIdentity): DurableObjectStub<UserDO> | null {
+  const userId = actor.ownerUserId();
   if (!userId) return null;
   return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+}
+
+/** This actor's identity for a privileged UserDO call. Rejects — rather than
+ *  degrading to some weaker principal — when the workspace has no token. */
+async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
+  const workspaceToken = await actor.capabilityToken();
+  if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
+  return { workspaceToken };
+}
+
+/** The credential source for a provider registry built inside an actor. Null
+ *  when the workspace is unclaimed, leaving only env-bound providers usable —
+ *  the pre-existing behaviour for an ownerless agent. */
+function userCredentialSourceFor(agent: AgentHost, actor: ActorRuntimeIdentity): UserCredentialSource | null {
+  const stub = userDOStubFor(agent, actor);
+  return stub ? { stub, caller: () => userCallerFor(actor) } : null;
 }
 
 /** Extended runtime that exposes the raw SqliteFS for shell emulation, the
@@ -84,6 +119,9 @@ function userDOStubFor(agent: AgentHost): DurableObjectStub<UserDO> | null {
  *  backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   sqliteFS: SqliteFS;
+  /** Storage.vfs, typed — the mount-table data surface (listMounts) for the
+   *  file-manager UI and cross-environment copy. */
+  compositeVfs: CompositeVFS;
   /** The laptop runtime's hub transport. `refreshStatus()` is awaited at turn
    *  start so the turn's context reflects the CURRENT device state. */
   deviceTransport: DeviceTransport;
@@ -107,7 +145,7 @@ export interface CFRuntimeHooks {
 /**
  * Build a full AgentRuntime from a Think agent's DO context.
  */
-export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): CFRuntime {
+export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, hooks: CFRuntimeHooks = {}): CFRuntime {
   const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
@@ -119,15 +157,27 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   const memoryStore = new MemoryStore(sqliteFS, sql);
   memoryStore.ensureSchema();
 
+  // Vectorize-backed semantic memory, scoped to this workspace's namespace.
+  // Noop when env.AI / env.MEMORY_VECTORS aren't configured, so hybrid search
+  // degrades to FTS5-only. Built before the memory adapter so writes embed.
+  const vectorStore = buildVectorStore(agent, actor);
+  // One-time backfill of chunks indexed before the vector store existed.
+  // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
+  // per boot, idempotent, and a no-op once the marker is set.
+  void backfillMemoryVectors(memoryStore, createAgentConfigStore(sql as unknown as CoreSqlExecutor), vectorStore);
+
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
 
-  // Adapt SqliteFS to core's VFS interface (SqliteFS has a superset of methods)
-  const vfs = adaptVFS(sqliteFS);
+  // Storage.vfs is the CompositeVFS mount table; /local is SqliteFS directly
+  // (it implements the core VFS interface — a superset of methods). Dynamic
+  // mounts (/sandbox, /nimbus, /pc) attach below once their handles exist.
+  const compositeVfs = new CompositeVFS({ local: sqliteFS });
+  const vfs: CoreVFS = compositeVfs;
 
-  // Adapt MemoryStore to core's Memory interface
-  const memory = adaptMemory(memoryStore);
+  // Adapt MemoryStore to core's Memory interface (writes sync to vectorStore)
+  const memory = adaptMemory(memoryStore, vectorStore);
 
   // Adapt CraftStore to core's CraftStore interface
   const craftStore = adaptCraftStore(craftStoreImpl);
@@ -137,7 +187,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
   const executor = createExecutor(envForExec.LOADER);
-  const llm = createDualPathLLM(agent);
+  const llm = createDualPathLLM(agent, actor);
   const schedule = createRealSchedule(agent);
   const identity = createIdentity(agent, vfs, sql as unknown as CoreSqlExecutor);
 
@@ -147,7 +197,7 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell,
     // sql is used by workspace.listTools() to look up EMA craft_scores.
-    // Cast because adaptVFS returns core's SqlExecutor shape.
+    // Cast bridges the agent SDK's sql binding to core's SqlExecutor shape.
     sql: sql as unknown as import("@proteus/core").SqlExecutor,
     // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
@@ -161,7 +211,11 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
   const previewHostname = typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0
     ? env.PREVIEW_HOSTNAME
     : undefined;
-  const sandboxId = `proteus-${agent.name}`;
+  const sandboxId = `proteus-${actor.workspaceName}`;
+  // Every remote mount exposes the environment's REAL root ('/'); the
+  // ergonomic working dir is metadata, not a path rewrite.
+  const sandboxMountPolicy: MountPolicy =
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
@@ -174,87 +228,100 @@ export function createCFRuntime(agent: AgentHost, hooks: CFRuntimeHooks = {}): C
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+      // File plane: /sandbox over the same (restoring) raw handle the
+      // codemode sandbox.* tools use — two consumers of one handle.
+      compositeVfs.mount('sandbox', {
+        vfs: createSandboxMountVFS(handle),
+        policy: sandboxMountPolicy,
+        workingDir: '/workspace',
+      });
       console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
+      compositeVfs.reserve('sandbox', (err as Error).message, sandboxMountPolicy);
     }
   } else {
     if (!previewHostname) console.warn("[proteus] PREVIEW_HOSTNAME not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
+    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOSTNAME missing)', sandboxMountPolicy);
   }
 
   // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
   // official SDK against the local NIMBUS_SESSION binding, so there are no
   // endpoint/token secrets. The handle is lazy: no session is touched until
   // the agent actually calls nimbus.*.
+  const nimbusMountPolicy: MountPolicy =
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
   if (env.NIMBUS_SESSION) {
     try {
-      executionRouter.register(createNimbusExecutor({
-        box: createAgentNimbusHandle(agent),
-      }));
+      const nimbusBox = createAgentNimbusHandle(agent, actor);
+      executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
+      compositeVfs.mount('nimbus', {
+        vfs: createNimbusMountVFS(nimbusBox),
+        policy: nimbusMountPolicy,
+        workingDir: '/home/user',
+      });
       console.log('[proteus] NimbusExecutor registered (NIMBUS_SESSION binding)');
     } catch (err) {
       console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
+      compositeVfs.reserve('nimbus', (err as Error).message, nimbusMountPolicy);
     }
   } else {
     executionRouter.register(createNimbusExecutor());
+    compositeVfs.reserve('nimbus', 'NIMBUS_SESSION binding not configured', nimbusMountPolicy);
   }
 
   // Register the laptop executor. The device socket lives on the user's UserDO
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
   // one connected device serves all of the user's agents.
+  const cliCwdForDevice = () =>
+    typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
+      ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
+      : null;
   const deviceTransport = createHubDeviceTransport({
-    hub: () => userDOStubFor(agent),
-    agentName: agent.name,
-    cliCwd: () =>
-      typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
-        ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
-        : null,
+    hub: () => userDOStubFor(agent, actor),
+    caller: () => userCallerFor(actor),
+    agentName: actor.workspaceName,
+    cliCwd: cliCwdForDevice,
     checkpointMeta: () => {
       const host = agent as unknown as { getCheckpointMetaForDevice?: () => { turnId: string; sessionId: string } | null };
       return typeof host.getCheckpointMetaForDevice === 'function' ? host.getCheckpointMetaForDevice() : null;
     },
   });
   void deviceTransport.refreshStatus();
-  executionRouter.register(createSSHTunnelExecutor(deviceTransport));
-
-  // Vectorize-backed semantic memory. Only constructs when both
-  // env.AI (Workers AI binding) and env.MEMORY_VECTORS (Vectorize index
-  // binding) are configured. Otherwise falls back to a noop that lets
-  // hybrid search degrade to FTS5-only.
-  const aiBinding = (agent.env as Env & Record<string, unknown>).AI;
-  const vectorizeBinding = (agent.env as Env & Record<string, unknown>).MEMORY_VECTORS;
-  let vectorStore: VectorStore;
-  if (aiBinding && typeof aiBinding !== 'string' && vectorizeBinding) {
-    try {
-      const embedder = createWorkersAIEmbedder({
-        aiBinding: aiBinding as Parameters<typeof createWorkersAIEmbedder>[0]['aiBinding'],
-        model: '@cf/baai/bge-small-en-v1.5',
-        dimensions: 384,
-      });
-      vectorStore = createCloudflareVectorStore({
-        index: vectorizeBinding as VectorizeIndex,
-        embedder,
-      });
-      console.log('[proteus] VectorStore (Cloudflare Vectorize) registered');
-    } catch (err) {
-      console.warn('[proteus] VectorStore construction failed; falling back to noop:', (err as Error).message);
-      vectorStore = createNoopVectorStore();
-    }
-  } else {
-    vectorStore = createNoopVectorStore();
-  }
+  executionRouter.register(createDeviceTunnelExecutor(deviceTransport));
+  // File plane: /pc over the same transport the laptop.* tools use. The mount
+  // is live only while a device is connected; the adapter scopes paths to the
+  // consented subtree (connect dir / home) unless the agent holds the
+  // full-filesystem consent tier on the hub. Action consent (ask-once-then-
+  // remember) still applies to every RPC underneath.
+  compositeVfs.mount('pc', {
+    vfs: createDeviceMountVFS(deviceTransport, {
+      consentedRoot: cliCwdForDevice,
+      hasFullFilesystem: async () => {
+        const hub = userDOStubFor(agent, actor);
+        if (!hub) return false;
+        try {
+          return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
+        }
+        catch { return false; } // consent unverifiable → subtree scope (fail closed)
+      },
+    }),
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    live: () => deviceTransport.status().connected,
+  });
 
   return {
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
-    judgeModel: createJudgeLLM(agent),
-    spawnBranch: createFacetSpawner(agent),
+    judgeModel: createJudgeLLM(agent, actor),
+    spawnBranch: createFacetSpawner(agent, actor),
     abortBranch: createFacetAborter(agent),
     executionRouter,
     shell,
     sqliteFS,
+    compositeVfs,
     deviceTransport,
     vectorStore,
     sandboxHandle,
@@ -272,15 +339,15 @@ function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
   return "https://proteus.local";
 }
 
-function createAgentNimbusHandle(agent: AgentHost): NimbusSandboxHandle {
+function createAgentNimbusHandle(agent: AgentHost, actor: ActorRuntimeIdentity): NimbusSandboxHandle {
   let cachedKey = "";
   let cachedBox: any = null;
 
   const current = () => {
     const env = agent.env as Env & Record<string, unknown>;
-    const tenant = nimbusTenantForUser(readOwnerUserId(agent));
-    const subject = nimbusSubjectForAgent(agent.name);
-    const sessionId = nimbusSandboxIdForAgent(agent.name);
+    const tenant = nimbusTenantForUser(actor.ownerUserId());
+    const subject = nimbusSubjectForAgent(actor.workspaceName);
+    const sessionId = nimbusSandboxIdForAgent(actor.workspaceName);
     const origin = publicOriginForNimbus(env);
     const key = `${origin}|${tenant}|${subject}|${sessionId}`;
     if (!cachedBox || cachedKey !== key) {
@@ -305,6 +372,7 @@ function createAgentNimbusHandle(agent: AgentHost): NimbusSandboxHandle {
     runCode: (code, options) => current().runCode(code, options),
     files: {
       read: (path) => current().files.read(path),
+      readBytes: (path) => current().files.readBytes(path),
       write: (path, content) => current().files.write(path, content),
       list: (path) => current().files.list(path),
       exists: (path) => current().files.exists(path),
@@ -349,8 +417,8 @@ function createRestoringSandboxHandle(
   };
   return {
     exec: (command, opts) => before(() => handle.exec(command, opts)),
-    readFile: (path) => before(() => handle.readFile(path)),
-    writeFile: (path, content) => before(() => handle.writeFile(path, content)),
+    readFile: (path, opts) => before(() => handle.readFile(path, opts)),
+    writeFile: (path, content, opts) => before(() => handle.writeFile(path, content, opts)),
     listFiles: (path, opts) => before(() => handle.listFiles(path, opts)),
     deleteFile: (path) => before(() => handle.deleteFile(path)),
     exposePort: (port, opts) => before(() => handle.exposePort(port, opts)),
@@ -362,37 +430,40 @@ function createRestoringSandboxHandle(
 }
 
 // ── Adapters: agent-utils → core interfaces ──────────────────────
+// adaptMemory + backfillMemoryVectors live in ./memory-sync (dependency-light,
+// unit-tested against a fake VectorStore).
 
-function adaptVFS(fs: SqliteFS): CoreVFS {
-  return {
-    // SqliteFS narrows encoding to the "utf8" literal; CoreVFS allows any
-    // string. Only "utf8" selects text mode — anything else is binary.
-    readFile: (path, opts) => fs.readFile(path, opts?.encoding === 'utf8' ? { encoding: 'utf8' } : undefined),
-    writeFile: (path, data) => fs.writeFile(path, data),
-    readdir: (path) => fs.readdir(path),
-    async stat(path) {
-      try {
-        const s = await fs.stat(path);
-        return { size: s.size, mtime: s.mtimeMs, isDir: s.type === "dir" };
-      } catch { return null; }
-    },
-    unlink: (path) => fs.unlink(path),
-    mkdir: (path, opts) => fs.mkdir(path, opts),
-    exists: (path) => fs.exists(path),
-  };
-}
-
-function adaptMemory(store: MemoryStore): Memory {
-  return {
-    write: (path, content) => store.writeFile(path, content),
-    append: (path, content) => store.appendToFile(path, content),
-    async index(path) {
-      const content = await store.readFile(path);
-      if (content) await store.indexFile(path, content);
-    },
-    search: (query, limit) => Promise.resolve(store.search(query, limit)),
-    read: (path) => store.readFile(path),
-  };
+/**
+ * Build the workspace's semantic memory store. Constructs a Cloudflare-Vectorize
+ * store (scoped to this workspace's namespace) only when both env.AI (Workers AI
+ * embedder) and env.MEMORY_VECTORS (Vectorize index) are bound; otherwise a noop
+ * that makes hybrid search degrade to FTS5-only.
+ */
+function buildVectorStore(agent: AgentHost, actor: ActorRuntimeIdentity): VectorStore {
+  const aiBinding = (agent.env as Env & Record<string, unknown>).AI;
+  const vectorizeBinding = (agent.env as Env & Record<string, unknown>).MEMORY_VECTORS;
+  if (!aiBinding || typeof aiBinding === 'string' || !vectorizeBinding) {
+    return createNoopVectorStore();
+  }
+  try {
+    const embedder = createWorkersAIEmbedder({
+      aiBinding: aiBinding as Parameters<typeof createWorkersAIEmbedder>[0]['aiBinding'],
+      model: '@cf/baai/bge-small-en-v1.5',
+      dimensions: 384,
+    });
+    const store = createCloudflareVectorStore({
+      index: vectorizeBinding as VectorizeIndex,
+      embedder,
+      // Shared index across all of the user's workspaces — scope every write
+      // and query to this workspace so memories never leak across agents.
+      namespace: actor.workspaceName,
+    });
+    console.log(`[proteus] VectorStore (Cloudflare Vectorize) registered (namespace=${actor.workspaceName})`);
+    return store;
+  } catch (err) {
+    console.warn('[proteus] VectorStore construction failed; falling back to noop:', (err as Error).message);
+    return createNoopVectorStore();
+  }
 }
 
 function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
@@ -463,20 +534,20 @@ function readStoredModelSpec(agent: AgentHost): string | null {
   ).getModel();
 }
 
-function createDualPathLLM(agent: AgentHost): LLM {
+function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
         const reg = createAgentProviderRegistry({
           env: agent.env,
-          userDOStub: userDOStubFor(agent),
+          userDO: userCredentialSourceFor(agent, actor),
           appTitle: 'Proteus',
           workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
         const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
         const result = await generateText({
-          model, prompt, maxOutputTokens: 512,
+          model, prompt,
           ...effortFor('reflection'),
         });
         return result.text.trim();
@@ -487,30 +558,35 @@ function createDualPathLLM(agent: AgentHost): LLM {
 
 /**
  * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
- * operator's review_model (Settings → setAgentConfig('review_model')) at call
- * time so judging can run on a DIFFERENT model from the explorer — the
- * self-enhancement-bias fix. When no review_model is set this resolves the
- * agent's chat model: same-model judging is the documented fallback, not a
- * separate code path. Errors propagate — the evaluator's judge ensemble
+ * operator's review_model (the `review_model` agent_config key) at call time
+ * so judging can run on a DIFFERENT model from the explorer — the
+ * self-enhancement-bias fix. With no review_model set it now searches the
+ * registry for an available model from a different VENDOR family than the
+ * chat model, because an unset key used to mean the agent graded itself with
+ * itself; same-model judging survives only as the single-vendor fallback (see
+ * core's selectJudgeModel). Errors propagate — the evaluator's judge ensemble
  * drops failed samples instead of misreading them as scores.
  */
-function createJudgeLLM(agent: AgentHost): LLM {
+function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       const config = createAgentConfigStore(
         agent.sql.bind(agent) as unknown as CoreSqlExecutor,
       );
-      const reg = createAgentProviderRegistry({
+      const registry = createAgentProviderRegistry({
         env: agent.env,
-        userDOStub: userDOStubFor(agent),
+        userDO: userCredentialSourceFor(agent, actor),
         appTitle: 'Proteus (judge)',
         workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
       });
-      const spec = config.getReviewModel() ?? config.getModel();
-      const model = reg.resolveModel(reg.normalizeSpecSync(spec));
+      const { spec } = await resolveJudgeModelSelection({
+        registry,
+        reviewSpec: config.getReviewModel(),
+        chatSpec: config.getModel(),
+      });
       const result = await generateText({
-        model, prompt, maxOutputTokens: 1024,
+        model: registry.resolveModel(spec), prompt,
         ...effortFor('judge'),
       });
       return result.text.trim();
@@ -548,18 +624,15 @@ function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): I
   };
 }
 
-// ── MCTS branches via real Facets (subAgent) ─────────────────────
+// ── MCTS branches via real Facets (spawn seam: facet-spawn.ts) ───
 
-function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<BranchHandle> {
+function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
-      const stub = await agent.subAgent(ExplorationAgent, branchId);
-      const owner = readOwnerUserId(agent);
-      if (owner) await stub.setOwner(owner);
-      return {
-        explore: async (history, tools, siblings) => stub.explore(history, tools, siblings ?? []),
-        generateReflection: async (task) => stub.generateReflection(task),
-      };
+      return await spawnBranchFacet(agent, branchId, {
+        ownerUserId: actor.ownerUserId(),
+        capabilityToken: await actor.capabilityToken(),
+      });
     } catch (err) {
       console.warn(`[proteus] subAgent failed for branch ${branchId}: ${(err as Error).message}. Using inline fallback.`);
       return createInlineBranch(agent);
@@ -568,9 +641,7 @@ function createFacetSpawner(agent: AgentHost): (branchId: string) => Promise<Bra
 }
 
 function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
-  return async (branchId: string) => {
-    try { agent.abortSubAgent(ExplorationAgent, branchId); } catch {}
-  };
+  return async (branchId: string) => { abortExplorationFacet(agent, branchId); };
 }
 
 /**
@@ -589,7 +660,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
   // needs no credential reads.
   const reg = createAgentProviderRegistry({
     env: agent.env,
-    userDOStub: null,
+    userDO: null,
     appTitle: 'Proteus (inline branch)',
     workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });
@@ -598,13 +669,15 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
 
   return {
     explore: async (history, _tools, siblings = []) => {
-      const context = history.map((m: { role: string; content: string }) =>
-        `${m.role}: ${m.content}`).join("\n").slice(-800);
+      // Match the Facet's explore() exactly — same context formatter and token
+      // budget — so the fallback path produces branches of equal fidelity, not
+      // a slice(-800) + 512-token stub that can't ground code (WP-A7).
+      const context = formatInheritedContext(history);
       const result = await generateText({
         model: getModel(),
         system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
         messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
-        maxOutputTokens: 512,
+        ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
       const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
@@ -614,7 +687,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
       const result = await generateText({
         model: getModel(),
         messages: [{ role: "user" as const, content: `What went wrong? ${task.slice(0, 500)}\nOne sentence.` }],
-        maxOutputTokens: 200,
+        ...effortFor('reflection'),
       });
       return result.text.trim();
     },

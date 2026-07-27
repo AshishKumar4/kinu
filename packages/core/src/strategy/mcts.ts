@@ -13,6 +13,7 @@ import { runMCTS } from '../mcts/engine.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
 import type { SessionWriter } from '../mcts/record-node.js';
+import type { MctsSearchStore } from '../mcts/search-store.js';
 
 interface MCTSStrategyOptions {
   /** Default iteration budget when the caller doesn't pass one explicitly. */
@@ -28,6 +29,8 @@ interface MCTSStrategyOptions {
   takesEpsilon?: number;
   /** SessionWriter for trajectory recording. Required (provided by caller). */
   session: SessionWriter;
+  /** Durable search checkpoint (host-injected) — enables evict-resume (B6). */
+  search?: MctsSearchStore;
 }
 
 export function createMCTSStrategy(): ExplorationStrategy {
@@ -58,6 +61,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
         maxEvalLLMCalls: o.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls,
         takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
         signal: ctx.signal,
+        ...(o.search ? { search: o.search } : {}),
       });
       // The winner's trajectory is the agent-readable answer.
       const text = result.trajectory.map(m => `${m.role}: ${m.content}`).join('\n');

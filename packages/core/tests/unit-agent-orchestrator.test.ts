@@ -3,9 +3,11 @@
 // were extracted from the cf-backend OrchestratorAgent's onChatResponse.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { createTestSql } from '@proteus/test-utils';
 import { AgentOrchestrator } from '../src/orchestrator/agent-orchestrator.js';
+import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window.js';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index.js';
-import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
+import type { BackendHost, BroadcastEvent, MidTurnEventBatch, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { EvolutionEngine } from '../src/evolution/engine.js';
 import type { CompletedTurn } from '../src/evolution/types.js';
 
@@ -26,31 +28,45 @@ function newEventLog(): EventLog {
   initEventsHubTables(sql as never);
   return new EventLog(sql as never);
 }
-function webhook(deliveryId: string): IngressDescriptor {
+function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): IngressDescriptor {
   return {
     ingress: 'webhook_hmac', variant: 'webhook',
-    payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body: { x: 1 }, delivery_id: deliveryId },
+    payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body, delivery_id: deliveryId },
     auth_outcome: 'verified', webhook_id: 'w1',
   } as IngressDescriptor;
 }
 
+/** A stand-in engine over a REAL in-memory session window — the store the
+ *  engine owns in production, so the cadence is exercised against the durable
+ *  buffer rather than orchestrator-instance state. */
 function fakeEngine() {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
+  const { sql, execRaw } = createTestSql();
+  initSessionWindowTable(execRaw);
   const engine = {
-    reviewTurnDetached: (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
+    sessionWindow: createSessionWindowStore(sql),
     reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
   } as unknown as EvolutionEngine;
   return { engine, reviews, sessions };
 }
-function fakeHost() {
+function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
+  const injected: MidTurnEventBatch[] = [];
+  const broadcasts: BroadcastEvent[] = [];
+  const timers: Array<{ fn: () => Promise<void>; ms: number }> = [];
   const host: BackendHost = {
-    broadcast: () => {},
+    broadcast: (event) => { broadcasts.push(event); },
     enqueueTurn: async (i) => { enqueued.push(i); return { status: 'queued' }; },
+    injectIntoActiveTurn: (batch) => {
+      if (!opts?.activeTurn) return false;
+      injected.push(batch);
+      return true;
+    },
+    setTimer: (fn, ms) => { timers.push({ fn, ms }); },
   };
-  return { host, enqueued };
+  return { host, enqueued, injected, broadcasts, timers };
 }
 const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({
   userMessage: `t${i}`, assistantResponse: 'r', toolCalls: [], durationMs: 1, steps: 1,
@@ -63,24 +79,66 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 3 });
     for (let i = 0; i < 7; i++) orch.recordTurn(aTurn(i));
-    expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (count resets)
+    expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (window closes)
     expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
   });
 
-  test('flushSession reviews the pending turn as abandoned, then reflects the partial window', async () => {
+  test('a partial window survives the session ending — it is not force-closed or graded', async () => {
     const { engine, reviews, sessions } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 5 });
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i));   // below the interval — no auto reflection
     expect(sessions).toEqual([]);
-    await orch.flushSession();
-    expect(sessions).toEqual([2]);                            // the 2 buffered turns reflected
-    expect(orch.sessionTurnIndex).toBe(0);                    // window reset
-    // The last user-origin turn had no follow-up — reviewed as abandoned.
-    expect(reviews).toEqual([{ turn: aTurn(1), followup: null }]);
-    await orch.flushSession();                                // nothing buffered now
-    expect(sessions).toEqual([2]);                            // still just the one
-    expect(reviews).toHaveLength(1);
+    await orch.settleEvolution();
+    // No session is manufactured out of a 2-turn window, and the last turn's
+    // follow-up may still arrive — so nothing is graded on no evidence.
+    expect(sessions).toEqual([]);
+    expect(reviews).toEqual([]);
+    expect(orch.sessionTurnIndex).toBe(2);                    // the window carries over
+  });
+
+  test('settleEvolution waits for the evolution the run dispatched', async () => {
+    const { engine, sessions } = fakeEngine();
+    const { host } = fakeHost();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    (engine as unknown as { onSessionComplete: (s: { turns: CompletedTurn[] }) => Promise<void> })
+      .onSessionComplete = async (s) => { await gate; sessions.push(s.turns.length); };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
+    orch.recordTurn(aTurn(0));
+    orch.recordTurn(aTurn(1));
+    expect(sessions).toEqual([]);            // still in flight
+    const settled = orch.settleEvolution();
+    release();
+    await settled;
+    expect(sessions).toEqual([2]);           // the process would have killed this before
+  });
+});
+
+describe('AgentOrchestrator — the durable session window', () => {
+  // `proteus exec` is one process per turn: a fresh orchestrator every time,
+  // against the same workspace database. The window and the pending review
+  // have to live in that database or headless usage never evolves at all.
+  test('the window accumulates across orchestrator instances and fires at the interval', () => {
+    const { engine, sessions } = fakeEngine();
+    const eventLog = newEventLog();
+    for (let i = 0; i < 5; i++) {
+      const { host } = fakeHost();
+      new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 }).recordTurn(aTurn(i));
+    }
+    expect(sessions).toEqual([5]);
+  });
+
+  test('the pending review survives the process boundary — the next run grades it', () => {
+    const { engine, reviews } = fakeEngine();
+    const eventLog = newEventLog();
+    const { host } = fakeHost();
+    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0));
+    expect(reviews).toHaveLength(0);
+    // A new process against the same workspace: its user message IS turn 0's
+    // follow-up, so the turn is graded by real signal instead of a constant.
+    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build');
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
   });
 });
 
@@ -130,6 +188,14 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(enqueued).toHaveLength(1);                    // one batched turn
     expect(enqueued[0].text).toContain('arrived');        // the turn-driving message
     expect(enqueued[0].text).toContain('[webhook]');
+    // The injected turn is marked programmatic and carries the synthetic turn
+    // id the consumed events were bound to — the backend's reply-dispatch key.
+    expect(enqueued[0].metadata?.proteusEvent).toBe('event_drain');
+    const drainTurnId = enqueued[0].metadata?.drainTurnId;
+    expect(typeof drainTurnId).toBe('string');
+    // d1/d2 share a body → webhook dedupe admits one event; it is bound here.
+    const bound = log.query({ turn_id: drainTurnId as string });
+    expect(bound).toHaveLength(1);
 
     // Events are now consumed → a second drain is a no-op (self-terminates).
     await orch.drainPendingEvents();
@@ -139,8 +205,141 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
   test('no pending events → no turn injected (idle reactor)', async () => {
     const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    await new AgentOrchestrator({ host, engine, eventLog: newEventLog() }).drainPendingEvents();
+    expect(enqueued).toHaveLength(0);
+  });
+
+  test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', async () => {
+    const log = newEventLog();
+    log.publish({ descriptor: webhook('d1'), now: 1 });
+    const { engine } = fakeEngine();
+    const { host, enqueued, injected, broadcasts } = fakeHost({ activeTurn: true });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(0);
+    expect(injected).toHaveLength(1);
+    // Mid-turn rendering: the live turn is told to fold the events in, not stop.
+    expect(injected[0]!.stepText).toContain('arrived while you were working');
+    expect(injected[0]!.stepText).toContain('[webhook]');
+    // The standalone rendering rides along for the leftover fallback.
+    expect(injected[0]!.turnText).toContain('arrived while you were idle');
+    // Reply-channel binding: the consumed event is bound to the SAME turn id
+    // the host received — the backend dispatches the live turn's answer by it.
+    const bound = log.query({ turn_id: injected[0]!.turnId });
+    expect(bound).toHaveLength(1);
+    expect(injected[0]!.ids).toEqual(bound.map((event) => event.id));
+    // The delivery is observable (clients get a typed fan-out, not silence).
+    expect(broadcasts).toEqual([
+      { type: 'background_event_injected', turnId: injected[0]!.turnId, events: 1 },
+    ]);
+
+    // Consumed events never double-deliver: the next drain is a no-op.
+    await orch.drainPendingEvents();
+    expect(injected).toHaveLength(1);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  test('no active turn → the host declines and the batch enqueues as its own turn', async () => {
+    const log = newEventLog();
+    log.publish({ descriptor: webhook('d1'), now: 1 });
+    const { engine } = fakeEngine();
+    const { host, enqueued, injected, broadcasts } = fakeHost({ activeTurn: false });
+    await new AgentOrchestrator({ host, engine, eventLog: log }).drainPendingEvents();
+    expect(injected).toHaveLength(0);
+    expect(broadcasts).toHaveLength(0);
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]!.metadata?.proteusEvent).toBe('event_drain');
+  });
+
+  test('an enqueue rejection re-pends the batch so the next drain retries it', async () => {
+    const log = newEventLog();
+    const admitted = log.publish({ descriptor: webhook('retry-rejection'), now: 1 });
+    const { engine } = fakeEngine();
+    const { host, enqueued } = fakeHost();
+    let attempts = 0;
+    host.enqueueTurn = async (turn) => {
+      enqueued.push(turn);
+      attempts++;
+      if (attempts === 1) throw new Error('queue unavailable');
+      return { status: 'queued' };
+    };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    await orch.drainPendingEvents();
+    expect(log.pending().map((event) => event.id)).toEqual([admitted.id]);
+
+    await orch.drainPendingEvents();
+    expect(enqueued).toHaveLength(2);
+    expect(log.pending()).toHaveLength(0);
+    expect(log.query({ turn_id: enqueued[1]!.metadata?.drainTurnId as string }).map((event) => event.id))
+      .toEqual([admitted.id]);
+  });
+
+  test("a skipped enqueue re-pends the batch so the next drain retries it", async () => {
+    const log = newEventLog();
+    const admitted = log.publish({ descriptor: webhook('retry-skipped'), now: 1 });
+    const { engine } = fakeEngine();
+    const { host, enqueued } = fakeHost();
+    let attempts = 0;
+    host.enqueueTurn = async (turn) => {
+      enqueued.push(turn);
+      attempts++;
+      return { status: attempts === 1 ? 'skipped' : 'queued' };
+    };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    await orch.drainPendingEvents();
+    expect(log.pending().map((event) => event.id)).toEqual([admitted.id]);
+
+    await orch.drainPendingEvents();
+    expect(enqueued).toHaveLength(2);
+    expect(log.pending()).toHaveLength(0);
+  });
+});
+
+describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () => {
+  test('an event burst schedules ONE window that drains into ONE turn', async () => {
+    const log = newEventLog();
+    const { engine } = fakeEngine();
+    const { host, enqueued, timers } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    // The ingress pattern: publish, then scheduleDrain — a burst of three.
+    for (let i = 0; i < 3; i++) {
+      log.publish({ descriptor: webhook(`d${i}`, { seq: i }), now: i + 1 });
+      orch.scheduleDrain();
+    }
+    expect(timers).toHaveLength(1);                  // calls 2..3 absorbed
+    expect(enqueued).toHaveLength(0);                // nothing drains inside the window
+
+    await timers[0]!.fn();                           // the window fires
+    expect(enqueued).toHaveLength(1);                // ONE coalesced turn…
+    const bound = log.query({ turn_id: enqueued[0]!.metadata?.drainTurnId as string });
+    expect(bound).toHaveLength(3);                   // …binding all three events
+  });
+
+  test('a schedule after the window fired opens a second window → a second turn', async () => {
+    const log = newEventLog();
+    const { engine } = fakeEngine();
+    const { host, enqueued, timers } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+
+    log.publish({ descriptor: webhook('a', { seq: 'a' }), now: 1 });
+    orch.scheduleDrain();
+    await timers[0]!.fn();
+    log.publish({ descriptor: webhook('b', { seq: 'b' }), now: 2 });
+    orch.scheduleDrain();
+    await timers[1]!.fn();
+    expect(enqueued).toHaveLength(2);
+  });
+
+  test('a window firing with nothing pending injects no turn', async () => {
+    const { engine } = fakeEngine();
+    const { host, enqueued, timers } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    orch.scheduleDrain();
+    await timers[0]!.fn();
+    expect(enqueued).toHaveLength(0);                // buildDrainBatch null → no enqueueTurn
   });
 });

@@ -1,6 +1,7 @@
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReasoningEffort } from '@proteus/core';
 import {
   createCliAgent,
   defaultCreateMode,
@@ -9,9 +10,20 @@ import {
   suggestAgentIdentityFromMission,
 } from '../agent-create.js';
 import { listKnownAgents, syncCloudAgentRefs, type ListedAgent } from '../agent-list.js';
-import type { AgentMode } from '../config.js';
+import { listCloudAvailableModels } from '../cloud-api.js';
+import {
+  loadConfigFile,
+  resolveCloudOrigin,
+  setDefaultModel,
+  setDefaultReasoningEffort,
+  type AgentMode,
+} from '../config.js';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
+import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from '../model-catalog.js';
 import { requireInteractiveTerminal } from '../prompt.js';
-import { DeviceConnectOverlay } from './overlays.js';
+import { VERSION } from '../display.js';
+import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays.js';
+import { clipText } from './format.js';
 import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { tuiColors } from './theme.js';
 
@@ -27,29 +39,41 @@ export interface HomeTuiOptions {
 }
 
 let finishHome: ((action: HomeTuiAction) => void) | null = null;
-type HomeFocus = 'agents' | 'mission' | 'mode';
+type HomeFocus = 'agents' | 'mission' | 'mode' | 'model' | 'effort';
+const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 
-function HomeApp({ opts }: { opts: HomeTuiOptions }) {
+export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const { width, height } = useTerminalDimensions();
+  const initialDefaults = useMemo(() => loadConfigFile(), []);
   const [agents, setAgents] = useState<ListedAgent[]>(() => listKnownAgents());
   const [mode, setMode] = useState<AgentMode>(() => defaultCreateMode());
+  const [defaultModel, setDefaultModelState] = useState(initialDefaults.model ?? '');
+  const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort ?? 'medium');
+  const [modelPicker, setModelPicker] = useState<{ models: AgentModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [focusArea, setFocusArea] = useState<HomeFocus>('mission');
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0);
   const [agentPage, setAgentPage] = useState(0);
+  const modelPickerRequestRef = useRef(0);
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const deviceConnect = useDeviceConnectPrompt();
   const cloudReady = isCloudAuthConfigured();
   const localReady = isLocalModelConfigured();
   const setupRequired = !cloudReady && !localReady;
+  const compactHome = height < 34;
   const panelWidth = Math.min(Math.max(28, width - 4), Math.max(52, Math.floor(width * 0.72)), 104);
-  const promptHeight = Math.min(Math.max(7, Math.floor(height * 0.24)), 10);
-  const agentPageSize = 9;
+  const promptHeight = compactHome ? 3 : Math.min(Math.max(7, Math.floor(height * 0.24)), 10);
+  const agentPageSize = clamp(height - (compactHome ? 23 : 33), 1, 9);
   const agentPageCount = Math.max(1, Math.ceil(agents.length / agentPageSize));
   const agentPageStart = agentPage * agentPageSize;
   const visibleAgents = agents.slice(agentPageStart, agentPageStart + agentPageSize);
+
+  useEffect(() => () => {
+    modelPickerRequestRef.current += 1;
+  }, []);
 
   useEffect(() => {
     if (!cloudReady) return;
@@ -61,20 +85,69 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   }, [cloudReady]);
 
   const modeLabel = useMemo(() => {
-    if (mode === 'cloud') return cloudReady ? 'Cloud agent' : 'Cloud agent - sign in required';
-    return localReady ? 'Local agent' : 'Local agent - provider required';
+    if (mode === 'cloud') return cloudReady ? 'Cloud workspace' : 'Cloud workspace - sign in required';
+    return localReady ? 'Local workspace' : 'Local workspace - provider required';
   }, [cloudReady, localReady, mode]);
 
   const selectAgentIndex = useCallback((index: number) => {
     const next = clamp(index, 0, Math.max(0, agents.length - 1));
     setSelectedAgentIndex(next);
     setAgentPage(Math.floor(next / agentPageSize));
-  }, [agents.length]);
+  }, [agentPageSize, agents.length]);
 
   const openSelectedAgent = useCallback(() => {
     const selected = agents[selectedAgentIndex];
     if (selected) finishHome?.({ type: 'open-agent', name: selected.name });
   }, [agents, selectedAgentIndex]);
+
+  const openModelPicker = useCallback(async () => {
+    const request = ++modelPickerRequestRef.current;
+    setFocusArea('model');
+    setCatalogHint(null);
+    setModelPicker({ models: [], loading: true, error: null });
+    try {
+      const models = await loadHomeModelCatalog(mode, opts);
+      if (models.length === 0) throw new Error(`No ${mode} models are available.`);
+      if (modelPickerRequestRef.current !== request) return;
+      setModelPicker({ models, loading: false, error: null });
+    } catch (err) {
+      if (modelPickerRequestRef.current !== request) return;
+      const detail = err instanceof Error ? err.message : String(err);
+      const current = defaultModel || 'provider default';
+      const message = `Catalog unavailable: ${detail} Current default: ${current}. Esc keeps it.`;
+      setCatalogHint('Catalog unavailable — the current default remains active.');
+      setModelPicker({ models: [], loading: false, error: message });
+    }
+  }, [defaultModel, mode, opts]);
+
+  const selectModel = useCallback((model: AgentModelEntry) => {
+    try {
+      setDefaultModel(model.spec);
+      modelPickerRequestRef.current += 1;
+      setDefaultModelState(model.spec);
+      setCatalogHint(null);
+      setModelPicker(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const selectReasoningEffort = useCallback((effort: ReasoningEffort) => {
+    try {
+      setDefaultReasoningEffort(effort);
+      setReasoningEffortState(effort);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const moveReasoningEffort = useCallback((delta: number) => {
+    const index = REASONING_EFFORTS.indexOf(reasoningEffort);
+    const next = REASONING_EFFORTS[(index + delta + REASONING_EFFORTS.length) % REASONING_EFFORTS.length] ?? reasoningEffort;
+    selectReasoningEffort(next);
+  }, [reasoningEffort, selectReasoningEffort]);
 
   const submit = useCallback(async () => {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
@@ -83,13 +156,15 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     setError(null);
     try {
       if (setupRequired) throw new Error('Run proteus setup to connect your account or a local model provider.');
-      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud agent.');
+      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with proteus auth, then create a cloud workspace.');
       if (mode === 'local' && !localReady) throw new Error('Connect a local provider with proteus provider connect, or switch to cloud after sign-in.');
       // Cloud naming is server-side (async display-name generation after
       // create); only local agents need a locally generated identity.
       const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
       const created = await createCliAgent({
         ...opts,
+        model: defaultModel || opts.model,
+        reasoningEffort,
         name: identity?.name,
         displayName: identity?.displayName,
         nameOrigin: identity?.nameOrigin,
@@ -105,11 +180,18 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
-  }, [busy, cloudReady, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, setupRequired]);
+  }, [busy, cloudReady, defaultModel, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, reasoningEffort, setupRequired]);
 
   useKeyboard((key) => {
     if (deviceConnect.handleKey(key)) return;
     if (busy) return;
+    if (modelPicker) {
+      if (key.name === 'escape') {
+        modelPickerRequestRef.current += 1;
+        setModelPicker(null);
+      }
+      return;
+    }
     if (key.name === 'escape') {
       finishHome?.({ type: 'exit' });
       return;
@@ -123,6 +205,15 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       if (key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down' || key.name === 'return') {
         setMode((current) => current === 'cloud' ? 'local' : 'cloud');
       }
+      return;
+    }
+    if (focusArea === 'model') {
+      if (key.name === 'return' || key.name === 'up' || key.name === 'down') void openModelPicker();
+      return;
+    }
+    if (focusArea === 'effort') {
+      if (key.name === 'up' || key.name === 'left') moveReasoningEffort(-1);
+      else if (key.name === 'down' || key.name === 'right' || key.name === 'return') moveReasoningEffort(1);
       return;
     }
     if (agents.length === 0) return;
@@ -157,7 +248,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       <box style={{ width: panelWidth, marginBottom: 1 }}>
         <text>
           <strong fg={tuiColors.accentStrong}>Proteus</strong>{' '}
-          <span fg={tuiColors.muted}>agent workspace</span>
+          <span fg={tuiColors.muted}>workspaces · cli {VERSION}</span>
         </text>
       </box>
 
@@ -179,10 +270,10 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'Start with a mission' : 'What should Proteus do next?'}</strong>{'\n'}
           <span fg={tuiColors.muted}>
             {setupRequired
-              ? 'Connect Proteus once, then this screen can create and open agents directly.'
+              ? 'Connect Proteus once, then this screen can create and open workspaces directly.'
               : agents.length === 0
-              ? 'Describe the work. Proteus will create an agent and send this as its first turn.'
-              : 'Select an agent, or write a mission to create a new one.'}
+              ? 'Describe the work. Proteus will create a workspace and send this as its first turn.'
+              : 'Select a workspace, or write a mission to create a new one.'}
           </span>
         </text>
 
@@ -190,7 +281,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: tuiColors.borderSubtle, paddingLeft: 1, paddingRight: 1 }}>
             <text><strong fg={tuiColors.text}>Setup required</strong></text>
             <text><span fg={tuiColors.muted}>  proteus setup</span> <span fg={tuiColors.text}>connect account and optional local provider</span></text>
-            <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud agents only</span></text>
+            <text><span fg={tuiColors.muted}>  proteus auth</span>  <span fg={tuiColors.text}>connect cloud workspaces only</span></text>
             <text><span fg={tuiColors.muted}>  proteus provider connect codex</span> <span fg={tuiColors.text}>connect local model access</span></text>
           </box>
         )}
@@ -198,7 +289,7 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         {agents.length > 0 && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1 }}>
             <text>
-              <span fg={focusArea === 'agents' ? tuiColors.accentStrong : tuiColors.accentDeep}>Agents</span>
+              <span fg={focusArea === 'agents' ? tuiColors.accentStrong : tuiColors.accentDeep}>Workspaces</span>
               <span fg={tuiColors.muted}>  {focusArea === 'agents' ? '↑/↓ select · Enter open' : 'Tab to focus'}</span>
             </text>
             {visibleAgents.map((agent, index) => {
@@ -279,29 +370,31 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             </span>
             <span fg={tuiColors.muted}>  {focusArea === 'mode' ? '←/→ or Enter switches' : 'Tab to focus'}</span>
           </text>
-          <box flexDirection="row" style={{ height: 3, marginTop: 1 }}>
-            <ModeSegment
-              label="Cloud"
-              selected={mode === 'cloud'}
-              focused={focusArea === 'mode'}
-              ready={cloudReady}
-              onSelect={() => {
-                setFocusArea('mode');
-                setMode('cloud');
-              }}
-            />
-            <box style={{ width: 2 }} />
-            <ModeSegment
-              label="Local"
-              selected={mode === 'local'}
-              focused={focusArea === 'mode'}
-              ready={localReady}
-              onSelect={() => {
-                setFocusArea('mode');
-                setMode('local');
-              }}
-            />
-          </box>
+          {!compactHome && (
+            <box flexDirection="row" style={{ height: 3, marginTop: 1 }}>
+              <ModeSegment
+                label="Cloud"
+                selected={mode === 'cloud'}
+                focused={focusArea === 'mode'}
+                ready={cloudReady}
+                onSelect={() => {
+                  setFocusArea('mode');
+                  setMode('cloud');
+                }}
+              />
+              <box style={{ width: 2 }} />
+              <ModeSegment
+                label="Local"
+                selected={mode === 'local'}
+                focused={focusArea === 'mode'}
+                ready={localReady}
+                onSelect={() => {
+                  setFocusArea('mode');
+                  setMode('local');
+                }}
+              />
+            </box>
+          )}
           <text>
             <span fg={tuiColors.muted}>
               {setupRequired
@@ -309,6 +402,55 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
                 : `${agents.length > 0 ? 'Tab focus · ↑/↓ select · Enter open · ' : 'Tab focus mode · '}Ctrl/Alt+Enter create · Esc exit`}
             </span>
           </text>
+          <box flexDirection="column" style={{ marginTop: compactHome ? 0 : 1 }}>
+            <text>
+              <strong fg={tuiColors.textStrong}>Defaults</strong>
+              <span fg={tuiColors.muted}>  saved globally for new workspaces</span>
+            </text>
+            <box
+              style={{
+                height: 1,
+                backgroundColor: focusArea === 'model' ? tuiColors.selectionDeep : tuiColors.panel,
+                paddingLeft: 1,
+                paddingRight: 1,
+              }}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+                void openModelPicker();
+              }}
+            >
+              <text>
+                <span fg={focusArea === 'model' ? tuiColors.accentStrong : tuiColors.accentDeep}>Model: </span>
+                <span fg={tuiColors.text}>{clipText(defaultModel || 'provider default', Math.max(8, panelWidth - 30))}</span>
+                <span fg={tuiColors.muted}>  {focusArea === 'model' ? 'Enter browse' : 'Tab to focus'}</span>
+              </text>
+            </box>
+            <box flexDirection="row" style={{ height: 1, paddingLeft: 1 }}>
+              <text><span fg={focusArea === 'effort' ? tuiColors.accentStrong : tuiColors.accentDeep}>Effort: </span></text>
+              {REASONING_EFFORTS.map((effort) => (
+                <box
+                  key={effort}
+                  style={{
+                    width: effort.length + 3,
+                    backgroundColor: effort === reasoningEffort ? tuiColors.selection : tuiColors.panel,
+                    paddingLeft: 1,
+                    paddingRight: 1,
+                  }}
+                  onMouseDown={(event) => {
+                    event.stopPropagation();
+                    setFocusArea('effort');
+                    selectReasoningEffort(effort);
+                  }}
+                >
+                  <text>
+                    <span fg={effort === reasoningEffort ? tuiColors.textStrong : tuiColors.muted}>{effort}</span>
+                  </text>
+                </box>
+              ))}
+              <text><span fg={tuiColors.muted}>  {focusArea === 'effort' ? '↑/↓ select' : 'Tab to focus'}</span></text>
+            </box>
+            {catalogHint && <text><span fg={tuiColors.amberDeep}>  {catalogHint}</span></text>}
+          </box>
           <text>
             <span fg={cloudReady ? tuiColors.green : tuiColors.muted}>{cloudReady ? '●' : '○'} Cloud account</span>
             <span fg={tuiColors.muted}>  </span>
@@ -323,6 +465,16 @@ function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         )}
       </box>
 
+      {modelPicker && (
+        <ModelPickerOverlay
+          models={modelPicker.models}
+          currentSpec={defaultModel || null}
+          terminal={{ width, height }}
+          loading={modelPicker.loading}
+          error={modelPicker.error}
+          onSelect={selectModel}
+        />
+      )}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
     </box>
   );
@@ -389,9 +541,24 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
 }
 
 function nextFocus(current: HomeFocus, hasAgents: boolean): HomeFocus {
-  const order: HomeFocus[] = hasAgents ? ['mission', 'agents', 'mode'] : ['mission', 'mode'];
+  const order: HomeFocus[] = hasAgents
+    ? ['mission', 'agents', 'mode', 'model', 'effort']
+    : ['mission', 'mode', 'model', 'effort'];
   const index = order.indexOf(current);
   return order[(index + 1) % order.length] ?? order[0]!;
+}
+
+async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelEntry[]> {
+  const rows = mode === 'cloud'
+    ? await loadCloudHomeModels(opts.origin)
+    : await createConfiguredLocalModelResolver(opts).resolver.listModels();
+  return dedupeModelEntries(normalizeModelEntries(rows));
+}
+
+async function loadCloudHomeModels(originOverride: string | undefined) {
+  const config = loadConfigFile();
+  if (!config.accessToken) throw new Error('Sign in with proteus auth to browse cloud models.');
+  return listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), config.accessToken);
 }
 
 function clamp(value: number, min: number, max: number) {

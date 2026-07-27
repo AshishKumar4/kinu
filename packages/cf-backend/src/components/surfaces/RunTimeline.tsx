@@ -17,28 +17,28 @@ import type { TimelineSpan, TimelineKind } from "@/lib/protocol";
 
 type KindMeta = { icon: React.ComponentType<{ size?: number; weight?: "regular" | "bold" | "fill" }>; tone: string };
 
-// tone = a tailwind text colour class; kept muted + on-brand (accent for
-// reasoning, red for failure, amber for recovery/scaffold churn).
+// tone = a semantic text-colour token (.p-*); kept muted + on-brand (accent for
+// reasoning, danger for failure, warning for recovery/scaffold churn).
 const KIND_META: Record<TimelineKind, KindMeta> = {
   "llm-turn": { icon: SparkleIcon, tone: "p-accent" },
   "tool-call": { icon: WrenchIcon, tone: "p-text-2" },
-  "runtime-exec": { icon: TerminalIcon, tone: "text-emerald-400" },
-  "mcts": { icon: TreeStructureIcon, tone: "text-sky-400" },
-  "scaffold": { icon: GitBranchIcon, tone: "text-amber-400" },
-  "shadow-eval": { icon: ScalesIcon, tone: "text-amber-300" },
-  "craft": { icon: PackageIcon, tone: "text-teal-400" },
+  "runtime-exec": { icon: TerminalIcon, tone: "p-success" },
+  "mcts": { icon: TreeStructureIcon, tone: "p-info" },
+  "scaffold": { icon: GitBranchIcon, tone: "p-warning" },
+  "shadow-eval": { icon: ScalesIcon, tone: "p-warning" },
+  "craft": { icon: PackageIcon, tone: "p-info" },
   "reflection": { icon: BrainIcon, tone: "p-accent" },
-  "head-split": { icon: GitBranchIcon, tone: "text-rose-400" },
-  "head-merge": { icon: GitMergeIcon, tone: "text-rose-300" },
-  "gepa": { icon: DatabaseIcon, tone: "text-orange-300" },
-  "skills": { icon: BookOpenIcon, tone: "text-cyan-400" },
-  "curriculum": { icon: GraduationCapIcon, tone: "text-lime-400" },
-  "trigger": { icon: LightningIcon, tone: "text-yellow-400" },
+  "head-split": { icon: GitBranchIcon, tone: "p-danger" },
+  "head-merge": { icon: GitMergeIcon, tone: "p-danger" },
+  "gepa": { icon: DatabaseIcon, tone: "p-warning" },
+  "skills": { icon: BookOpenIcon, tone: "p-info" },
+  "curriculum": { icon: GraduationCapIcon, tone: "p-success" },
+  "trigger": { icon: LightningIcon, tone: "p-warning" },
   "event-ingress": { icon: DatabaseIcon, tone: "p-text-3" },
-  "background": { icon: ClockIcon, tone: "text-orange-400" },
-  "error": { icon: WarningCircleIcon, tone: "text-red-400" },
-  "abort": { icon: ProhibitIcon, tone: "text-red-400" },
-  "recovery": { icon: ArrowsClockwiseIcon, tone: "text-amber-400" },
+  "background": { icon: ClockIcon, tone: "p-warning" },
+  "error": { icon: WarningCircleIcon, tone: "p-danger" },
+  "abort": { icon: ProhibitIcon, tone: "p-danger" },
+  "recovery": { icon: ArrowsClockwiseIcon, tone: "p-warning" },
   "other": { icon: ClockIcon, tone: "p-text-3" },
 };
 

@@ -4,18 +4,13 @@ import type {
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
 } from '@proteus/core';
 import {
+  callAgentRpc,
   createCloudAgentConnectTicket,
-  getCloudAgentMessages,
-  getCloudAgentModel,
-  getCloudAgentStatus,
-  getCloudAgentTools,
-  getCloudMctsTree,
-  getCloudMemoryContent,
   listCloudAvailableModels,
-  listCloudJobs,
-  listCloudPendingConsents,
-  resolveCloudDeviceConsent,
-  setCloudAgentModel,
+  type CloudAgentStatus,
+  type CloudBackgroundJob,
+  type CloudChatMessage,
+  type CloudToolDescriptions,
 } from './cloud-api.js';
 import {
   createCliSession,
@@ -26,7 +21,7 @@ import {
 } from './session.js';
 import { SessionRecorder } from './session-recorder.js';
 import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
-import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, TakePickOutcome } from '@proteus/core';
+import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@proteus/core';
 import {
   asRecord,
   createUserUiMessage,
@@ -71,8 +66,10 @@ interface ActiveTurn {
 
 /**
  * AgentClient over the OrchestratorAgent DO: chat turns ride the real agent
- * websocket (ticket-authenticated), everything else uses the /api/cli HTTP
- * projection. The DO is the source of truth for chat history and turn
+ * websocket (ticket-authenticated), everything else calls agent methods by
+ * name over the generic /api/cli/workspaces/:name/rpc transport (or the
+ * socket's own {type:'rpc'} frames once it is open). The DO is the source
+ * of truth for chat history and turn
  * execution: each send transmits only the new user message (the server
  * reconciles it into its canonical store and builds model context
  * server-side), so the client never mirrors history.
@@ -105,8 +102,8 @@ export class CloudAgentClient implements AgentClient {
     this.sessionOptions = opts.session ?? {};
     this.activeCliSession = createCliSession(opts.agentName, this.sessionOptions);
     this.consents = {
-      listPending: () => listCloudPendingConsents(this.origin, this.token, this.cloudName),
-      resolve: (consentId, decision) => resolveCloudDeviceConsent(this.origin, this.token, this.cloudName, consentId, decision),
+      listPending: () => this.callHttp('listPendingConsents'),
+      resolve: (consentId, decision) => this.callHttp('resolveDeviceConsent', [consentId, decision]),
     };
     // Checkpoints live on the user's device daemon; the DO forwards.
     this.checkpoints = {
@@ -173,7 +170,7 @@ export class CloudAgentClient implements AgentClient {
     if (!text && files.length === 0) throw new Error('prompt required');
     await this.ensureOpen();
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud agent connection is not open.');
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
 
     // The JSONL log records attachment names, never the data-URL payloads.
     this.activeCliSession.append('user', {
@@ -225,10 +222,10 @@ export class CloudAgentClient implements AgentClient {
    *  sibling client pointed at the fork. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const rows = await getCloudAgentMessages(this.origin, this.token, this.cloudName);
+    const rows = await this.callHttp<CloudChatMessage[]>('getChatHistory');
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) throw new Error('Could not locate that message in the agent’s chat history.');
-    if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud agent.');
+    if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
     const untilId = rows[pivot - 1]!.id;
     const result = await this.callRpc('forkAgent', [untilId]);
     const forkName = (result as { name?: unknown } | null)?.name;
@@ -246,11 +243,19 @@ export class CloudAgentClient implements AgentClient {
     return { client: sibling, label: `agent ${forkName}` };
   }
 
+  /** Invoke a named agent method over the generic HTTP RPC transport —
+   *  for surfaces that must not force a websocket open (consents polling,
+   *  history, status). Live-session ops (branch, fork, takes, checkpoints)
+   *  ride callRpc on the already-open socket instead. */
+  private callHttp<T>(method: string, args: unknown[] = []): Promise<T> {
+    return callAgentRpc<T>(this.origin, this.token, this.cloudName, method, args);
+  }
+
   /** Invoke a @callable agent method over the websocket ({type:'rpc'}). */
   private async callRpc(method: string, args: unknown[]): Promise<unknown> {
     await this.ensureOpen();
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud agent connection is not open.');
+    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
     const id = randomRequestId();
     return await new Promise<unknown>((resolve, reject) => {
       this.pendingRpcs.set(id, { resolve, reject });
@@ -280,14 +285,14 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async close(): Promise<void> {
-    this.failInFlight(new Error('Cloud agent connection closed.'));
+    this.failInFlight(new Error('Cloud workspace connection closed.'));
     this.ws?.close();
     this.ws = null;
     this.connectPromise = null;
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    const rows = await getCloudAgentMessages(this.origin, this.token, this.cloudName);
+    const rows = await this.callHttp<CloudChatMessage[]>('getChatHistory');
     return rows.map((row) => ({ id: row.id, role: row.role, content: row.content }));
   }
 
@@ -301,11 +306,12 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async status(): Promise<AgentClientStatus> {
-    const status = await getCloudAgentStatus(this.origin, this.token, this.cloudName);
+    const status = await this.callHttp<CloudAgentStatus>('getAgentStatus');
     return {
       name: status.displayName ?? status.name,
       purpose: status.purpose,
       model: status.model ?? null,
+      reasoningEffort: status.reasoningEffort ?? null,
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
@@ -314,7 +320,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async describeTools(): Promise<AgentToolSurface> {
-    const tools = await getCloudAgentTools(this.origin, this.token, this.cloudName);
+    const tools = await this.callHttp<CloudToolDescriptions>('getToolDescriptions');
     return {
       builtIn: tools.builtIn.map(({ name, description }) => ({ name, description })),
       crafted: tools.crafted.map(({ name, description }) => ({ name, description })),
@@ -322,7 +328,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async readMemory(): Promise<string> {
-    return (await getCloudMemoryContent(this.origin, this.token, this.cloudName)).content;
+    return await this.callHttp<string>('getMemoryContent');
   }
 
   async changelog(limit?: number): Promise<AgentChangelogView> {
@@ -354,7 +360,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
-    const rows = await getCloudMctsTree(this.origin, this.token, this.cloudName);
+    const rows = await this.callHttp<unknown[]>('getMctsTree');
     if (!Array.isArray(rows)) return [];
     return rows.flatMap((row) => {
       if (!row || typeof row !== 'object') return [];
@@ -371,16 +377,26 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const jobs = await listCloudJobs(this.origin, this.token, this.cloudName, limit);
+    const jobs = await this.callHttp<CloudBackgroundJob[]>('listBackgroundJobs', [limit]);
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
   }
 
   async getModelSpec(): Promise<string | null> {
-    return (await getCloudAgentModel(this.origin, this.token, this.cloudName)).spec;
+    return (await this.callHttp<{ spec: string | null }>('getStoredModelSpec')).spec;
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
-    return { spec: (await setCloudAgentModel(this.origin, this.token, this.cloudName, spec)).spec };
+    return { spec: (await this.callHttp<{ ok: true; spec: string }>('setModel', [spec])).spec };
+  }
+
+  async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    return (await this.callHttp<{ effort: ReasoningEffort | null }>('getReasoningEffort')).effort;
+  }
+
+  async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+    return {
+      effort: (await this.callHttp<{ ok: true; effort: ReasoningEffort }>('setReasoningEffort', [effort])).effort,
+    };
   }
 
   async listModels(): Promise<AgentModelEntry[]> {
@@ -433,14 +449,14 @@ export class CloudAgentClient implements AgentClient {
     ws.addEventListener('message', (event) => this.handleMessage(event));
     ws.addEventListener('close', () => {
       if (this.ws === ws) this.ws = null;
-      this.failInFlight(new Error('Cloud agent connection closed.'));
+      this.failInFlight(new Error('Cloud workspace connection closed.'));
     });
     ws.addEventListener('error', () => {
-      this.failInFlight(new Error('Cloud agent connection failed.'));
+      this.failInFlight(new Error('Cloud workspace connection failed.'));
     });
 
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud agent.')), 15_000);
+      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
         resolve();
@@ -461,7 +477,7 @@ export class CloudAgentClient implements AgentClient {
       if (!pending) return;
       this.pendingRpcs.delete(payload.id);
       if (payload.success === true) pending.resolve(payload.result);
-      else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud agent RPC failed.'));
+      else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud workspace RPC failed.'));
       return;
     }
 

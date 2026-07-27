@@ -1,7 +1,8 @@
 /**
- * Agent fork — storage-layer helper shared by CF and CLI backends.
+ * Workspace fork — storage-layer helper shared by CF and CLI backends.
  *
- * Forks a source agent's SQLite state into a target agent's SQLite state.
+ * Forks a source workspace's SQLite state into a target workspace's SQLite
+ * state (a fork is a NEW workspace by a new name).
  * The fork semantics are "clean-slate messages-only" (per plan doc §6):
  *
  *   Copy:   SOUL.md, messages+conversation_history (≤ forkPointMs),
@@ -9,7 +10,7 @@
  *   Reset:  search_nodes, scaffold_versions, task_history, craft_scores,
  *           fibers, evolution_events, executor_output, activity_log,
  *           scaffold/* VFS rows
- *   Rewrite: agent_identity (new id/name/created_at)
+ *   Rewrite: workspace_identity (new id/name/created_at)
  *   Insert: fork_lineage (single row)
  *
  * The target DB MUST already have been initialized via initAllTables() — the
@@ -31,10 +32,10 @@ export interface ForkOpts {
   /** Message id from source's `messages` table; the fork includes messages
    *  with created_at <= this message's created_at. Throws if not found. */
   untilMessageId: string;
-  /** New target agent's id (usually `ctx.id.toString()` on the fork DO). */
-  targetAgentId: string;
-  /** New target agent's human name. */
-  targetAgentName: string;
+  /** New target workspace's id (usually `ctx.id.toString()` on the fork DO). */
+  targetWorkspaceId: string;
+  /** New target workspace's human name. */
+  targetWorkspaceName: string;
   /** Optional clock override for tests. Defaults to Date.now(). */
   now?: number;
 }
@@ -52,7 +53,7 @@ export interface ForkResult {
  *
  * Throws if `untilMessageId` does not exist in source's `messages` table.
  */
-export function forkAgentStorage(
+export function forkWorkspaceStorage(
   source: SqlExecutor,
   target: SqlExecutor,
   opts: ForkOpts,
@@ -70,13 +71,13 @@ export function forkAgentStorage(
 
   // 2. Purge any default-bootstrap identity/SOUL.md rows the target's onStart
   //    may have inserted. This makes the helper idempotent across retries.
-  target`DELETE FROM agent_identity`;
+  target`DELETE FROM workspace_identity`;
   target`DELETE FROM vfs_files WHERE path = ${SOUL_PATH}`;
 
-  // 3. Rewrite agent_identity — new id, new name, fresh created_at.
+  // 3. Rewrite workspace_identity — new id, new name, fresh created_at.
   target`
-    INSERT INTO agent_identity (id, name, created_at)
-    VALUES (${opts.targetAgentId}, ${opts.targetAgentName}, ${now})
+    INSERT INTO workspace_identity (id, name, created_at)
+    VALUES (${opts.targetWorkspaceId}, ${opts.targetWorkspaceName}, ${now})
   `;
 
   // 4. Copy messages <= forkPointMs, preserving PKs.
@@ -218,19 +219,19 @@ export function forkAgentStorage(
     for (const row of cfg) {
       target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
     }
-    target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.targetAgentName})`;
+    target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.targetWorkspaceName})`;
   } catch { /* agent_config may not exist in source — non-fatal */ }
 
   // 10. Lineage — single row.
   const srcIdent = source<{ id: string; name: string }>`
-    SELECT id, name FROM agent_identity LIMIT 1
+    SELECT id, name FROM workspace_identity LIMIT 1
   `;
   const srcId = srcIdent[0]?.id ?? '';
   const srcName = srcIdent[0]?.name ?? '';
   target`DELETE FROM fork_lineage WHERE id = 1`;
   target`
     INSERT INTO fork_lineage
-    (id, source_agent_id, source_agent_name, source_message_id, source_message_created_at, forked_at)
+    (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
     VALUES
     (1, ${srcId}, ${srcName}, ${opts.untilMessageId}, ${forkPointMs}, ${now})
   `;
@@ -244,7 +245,7 @@ export function forkAgentStorage(
   //         pane shows a visible "Forked from …" marker between the
   //         copied history and the fork's own future turns.
   const syntheticText =
-    `You were forked from agent "${srcName}" at message ${opts.untilMessageId} on ` +
+    `You were forked from workspace "${srcName}" at message ${opts.untilMessageId} on ` +
     `${new Date(now).toISOString()}. The conversation above happened before the fork. ` +
     `Your current tool set and memory are authoritative; ignore any tools or context ` +
     `referenced before the fork that you don't see in your active tool list.`;
@@ -260,7 +261,7 @@ export function forkAgentStorage(
   // This table may not exist if the source never had any Session rows — we
   // created it idempotently in step 6b, so the INSERT is safe here.
   try {
-    const syntheticId = `fork-marker-${opts.targetAgentId.slice(0, 8)}-${now}`;
+    const syntheticId = `fork-marker-${opts.targetWorkspaceId.slice(0, 8)}-${now}`;
     const syntheticContent = JSON.stringify({
       id: syntheticId,
       role: 'system',
@@ -284,8 +285,8 @@ export function forkAgentStorage(
 
 /** Shape of what getForkLineage returns (null when not a fork). */
 export interface ForkLineageRow {
-  sourceAgentId: string;
-  sourceAgentName: string;
+  sourceWorkspaceId: string;
+  sourceWorkspaceName: string;
   sourceMessageId: string;
   sourceMessageCreatedAt: number;
   forkedAt: number;
@@ -295,17 +296,17 @@ export interface ForkLineageRow {
 export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   try {
     const rows = sql<{
-      source_agent_id: string; source_agent_name: string;
+      source_workspace_id: string; source_workspace_name: string;
       source_message_id: string; source_message_created_at: number;
       forked_at: number;
-    }>`SELECT source_agent_id, source_agent_name, source_message_id,
+    }>`SELECT source_workspace_id, source_workspace_name, source_message_id,
               source_message_created_at, forked_at
        FROM fork_lineage WHERE id = 1 LIMIT 1`;
     if (rows.length === 0) return null;
     const r = rows[0]!;
     return {
-      sourceAgentId: r.source_agent_id,
-      sourceAgentName: r.source_agent_name,
+      sourceWorkspaceId: r.source_workspace_id,
+      sourceWorkspaceName: r.source_workspace_name,
       sourceMessageId: r.source_message_id,
       sourceMessageCreatedAt: r.source_message_created_at,
       forkedAt: r.forked_at,

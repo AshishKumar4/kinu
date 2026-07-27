@@ -1,0 +1,17 @@
+{
+  "system": {
+    "name": "proteus",
+    "params": {
+      "name": "proteus_fresh_workspace",
+      "auto_evolve": true,
+      "persist_workspace": false,
+      "single_conversation": false
+    }
+  },
+  "task": {
+    "name": "database_exploration",
+    "params": {
+      "schedule": "default"
+    }
+  }
+}

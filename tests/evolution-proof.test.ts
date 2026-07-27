@@ -19,8 +19,8 @@ import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 import {
-  createAgent,
-  openAgent,
+  createWorkspace,
+  openWorkspace,
   buildBuiltinTools,
   collectStepText,
   EvolutionEngine,
@@ -187,7 +187,7 @@ describe('Evolution Proof', () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = createAgent(db, {
+    rt = createWorkspace(db, {
       name: 'evolution-proof',
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,

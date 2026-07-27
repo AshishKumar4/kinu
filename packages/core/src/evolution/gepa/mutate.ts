@@ -52,6 +52,9 @@ export function renderReflectionPrompt<I, E>(opts: {
   artifactDescription?: string;
 }): string {
   const desc = opts.artifactDescription ?? 'candidate artifact';
+  const processRubric = desc === 'scaffold source'
+    ? '\n\nProcess rubric: For corrected/frustrated requests with 2+ independent parts, consider long zero-team/think linear grinds for decomposition and staffing/heads; reinforce effective team/think on accepted turns; treat non-contributing spawns as delegation overhead.'
+    : '';
 
   const outcomeById = new Map(opts.rollout.outcomes.map(o => [o.instanceId, o.outcome]));
   const traceLines: string[] = [];
@@ -62,6 +65,7 @@ export function renderReflectionPrompt<I, E>(opts: {
     traceLines.push(
       `--- instance ${inst.id} (score ${o.score.toFixed(2)}) ---`,
       `input: ${truncate(inputStr, 400)}`,
+      ...(inst.evidence ? [`evidence: ${truncate(inst.evidence, 800)}`] : []),
       `feedback: ${truncate(o.feedback, 800)}`,
       '',
     );
@@ -69,7 +73,7 @@ export function renderReflectionPrompt<I, E>(opts: {
 
   return `You are improving a ${desc}. The current version scored sub-optimally on the following instances.
 
-Read each instance's input + feedback. Identify a SPECIFIC defect that explains the failures, then propose a revised ${desc} that fixes it without regressing on other axes. Keep the revision tightly scoped — large rewrites get rejected by downstream gates.
+Read each instance's input + evidence + feedback. Identify a SPECIFIC defect that explains the failures, then propose a revised ${desc} that fixes it without regressing on other axes. Keep the revision tightly scoped — large rewrites get rejected by downstream gates.${processRubric}
 
 Current ${desc}:
 \`\`\`

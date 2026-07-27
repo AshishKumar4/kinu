@@ -4,11 +4,10 @@
 // step 6b) because external MCP clients can't do browser OAuth — they
 // authenticate with their per-user CLI bearer token, and every request runs
 // the same ownership claim as the rest of the per-agent API.
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
+import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
-mock.module('agents', () => ({
-  getAgentByName: async (ns: DurableObjectNamespace, name: string) => ns.get(ns.idFromName(name)),
-}));
+mockAgentsSdk();
 const { handleMcpRequest } = await import('../src/mcp-server.js');
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -17,15 +16,16 @@ const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 function mcpEnv() {
   const calls: string[] = [];
   const userDO = {
-    async verifyCliToken(token: string) {
+    async verifyCliToken(_caller: unknown, token: string) {
       return token === TOKEN
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasAgent(name: string) { return name === 'jarvis'; },
+    async hasWorkspace(_caller: unknown, name: string) { return name === 'jarvis'; },
+    async ensureWorkspaceCapability() {},
   };
   const agent = {
-    async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId }; },
+    async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId, capabilityHash: 'sha-existing' }; },
   };
   const env = {
     // Present but never reached in these tests (no session cookie is sent);

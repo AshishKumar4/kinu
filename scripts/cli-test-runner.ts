@@ -186,7 +186,7 @@ async function testDbIntegrity() {
     const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
     const tableNames = tables.map(t => t.name);
 
-    const requiredTables = ["agent_identity", "vfs_files", "search_nodes", "crafted_tools"];
+    const requiredTables = ["workspace_identity", "vfs_files", "search_nodes", "crafted_tools"];
     const missing = requiredTables.filter(t => !tableNames.includes(t));
 
     if (missing.length === 0) {
@@ -206,11 +206,11 @@ async function testDbIntegrity() {
       fail("DB SOUL.md", soulChunks.length === 0 ? "SOUL.md missing from vfs_files" : `purpose not found in: ${soulText.slice(0, 120)}`);
     }
 
-    const identity = db.query("SELECT name FROM agent_identity LIMIT 1").get() as { name: string } | null;
+    const identity = db.query("SELECT name FROM workspace_identity LIMIT 1").get() as { name: string } | null;
     if (identity?.name === AGENT_NAME) {
-      pass("DB agent_identity", `name: "${identity.name}"`);
+      pass("DB workspace_identity", `name: "${identity.name}"`);
     } else {
-      fail("DB agent_identity", `unexpected: ${JSON.stringify(identity)}`);
+      fail("DB workspace_identity", `unexpected: ${JSON.stringify(identity)}`);
     }
   } finally {
     db.close();

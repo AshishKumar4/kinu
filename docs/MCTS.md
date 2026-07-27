@@ -1,5 +1,7 @@
 # MCTS Exploration
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 Proteus uses Monte Carlo Tree Search (LATS variant, [arXiv:2310.04406](https://arxiv.org/abs/2310.04406)) to explore multiple solution approaches in parallel. Each branch is an isolated Durable Object (Facet) with its own SQLite database.
 
 ## Search Flow
@@ -42,28 +44,75 @@ UCT(node) = value + W × √(ln(parent_visits) / node_visits)
 
 Where:
 - `value` = running mean of backpropagated rewards (0-1)
-- `W` = exploration constant (default: √2 ≈ 1.414)
+- `W` = exploration constant (`DEFAULT_CONFIG.mcts.explorationWeight` = `Math.SQRT2` ≈ 1.414)
 - `parent_visits` = number of times the parent was visited
 - `node_visits` = number of times this node was visited
 
-Implemented in SQL (from `mcts/uct.ts:33-47`). Selects the best open node across the entire tree via a self-join to look up parent visits:
+Implemented in SQL (`mcts/uct.ts`). Selection is a **global argmax over every open node**, not a root-down descent — one self-join to look up parent visits, one `ORDER BY … LIMIT 1`:
 ```sql
 SELECT
   s.*,
-  COALESCE(p.visits, 1) AS parent_visits
+  COALESCE(p.visits, max(2, s.visits)) AS parent_visits
 FROM search_nodes s
 LEFT JOIN search_nodes p ON s.parent_id = p.id
-WHERE s.status = 'open'
+WHERE s.status = 'open' AND s.depth < :maxDepth
 ORDER BY (
   s.value + W * sqrt(
-    (log(max(1.0, COALESCE(p.visits, 1))) / log(exp(1.0))) /
+    (log(max(2.0, COALESCE(p.visits, max(2, s.visits)))) / log(exp(1.0))) /
     max(1.0, s.visits)
   )
 ) DESC
 LIMIT 1
 ```
 
-Note: SQLite's `log()` is log10, so natural log is computed as `log(x) / log(exp(1.0))`.
+Three things in that query are deliberate:
+
+- SQLite's `log()` is log₁₀, so natural log is computed as `log(x) / log(exp(1.0))`.
+- **Root re-widening.** The root has no parent, so a literal `ln(N(parent))`
+  would be `ln(1) = 0` — the root's exploration term collapses and it is never
+  re-selected after the first expansion, permanently freezing breadth at
+  `branches`. The root instead uses its own visit count as a synthetic
+  parent-visit, floored at 2, so it stays selectable but decays as visits
+  accrue and the tree deepens over time.
+- **The depth cap is a `WHERE` clause**, not an abort. A node at depth `d`
+  expands children at `d+1`, so only nodes below `maxDepth` can still produce
+  in-bounds children; selection skips the capped ones and keeps spending budget
+  on the shallower frontier instead of dying when the argmax happens to be deep.
+
+Defaults (`core/src/config.ts`): `budget: 5`, `branches: 3`, `maxDepth: 20`,
+`explorationWeight: Math.SQRT2`, `pruneThreshold: 0.25`,
+`minAcceptableScore: 0.3`, `minVisitsForPrune: 2`, `reflectionThreshold: 0.35`,
+`judgeSamples: 3`, `maxEvalLLMCalls: 4`, `maxCostUSD: 10`. Lifetime evolution
+runs a smaller search (budget 2, branches 2), and an operator can override
+iterations, depth, branches, judge samples, eval-call ceiling, and the
+exploration weight per workspace through `agent_config`.
+
+## Scoring — execution picks the band, the judge positions inside it
+
+The single scorer (`mcts/evaluation.ts`) is used by every backend. Execution
+outcome and judge score are **not** averaged: whether the branch's code ran and
+passed selects a score band, and the judge only decides where inside that band
+the branch lands.
+
+| Branch produced | Score | Range |
+|---|---|---|
+| Code that ran and **passed** | `0.60 + 0.40 · j` | 0.60 – 1.00 |
+| Code that ran and **failed** | `0.05 + 0.25 · j` | 0.05 – 0.30 |
+| Prose only, no sibling wrote code | `0.75 · j` | 0.00 – 0.75 |
+| Prose only, a sibling **did** write code | `0.30 · j` | 0.00 – 0.30 |
+
+`j` is the **median** of up to `judgeSamples` judge calls; samples that fail to
+parse are dropped rather than scored zero, and if every sample fails the branch
+falls to its band floor. An empty trajectory scores a hard 0 without spending a
+judge call. Assertions are generated once (one LLM call) and only when at least
+two eval calls remain in the budget.
+
+This is why a branch cannot talk its way to a good score: the ceiling for prose
+when a sibling actually produced running code is 0.30, below
+`minAcceptableScore`. The other thresholds are pinned to the same bands —
+`craftExtractionThreshold` 0.80 is the pass-band midpoint, `minAcceptableScore`
+0.30 is the fail ceiling, `reflectionThreshold` 0.35 sits just above it, and
+`pruneThreshold` 0.25 sits inside the fail band.
 
 ## Backpropagation
 
@@ -97,12 +146,39 @@ Each MCTS branch runs in an isolated environment:
 |----------|-----------|-----------|
 | CF Workers | `agent.subAgent(ExplorationAgent, branchId)` — Facets | Separate DO with own SQLite. Proven in Lean: `StorageIsolated` invariant. |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
-| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with own SQLite file |
+| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file under `~/.proteus/<agent>/branches/` |
 
-ExplorationAgent has 3 `@callable()` methods:
-- `explore(history, craftedTools)` — propose one approach in 2-3 sentences
-- `evaluate(task)` — score the approach 0.0-1.0 via LLM
+Branches only **explore**; scoring is engine-level, so both backends score
+through the same `evaluation.ts` and the reward is execution-grounded either
+way. `ExplorationAgent`'s MCTS-mode `@callable()` methods are:
+
+- `explore(history, craftedTools, siblingAngles)` — propose one approach
 - `generateReflection(task)` — explain what went wrong (for pruned branches)
+
+plus `setOwner` / `setSharedParent` for bootstrap. Siblings are pushed apart by
+`mcts/diversity.ts`, which hands each branch index a different framing angle, so
+three branches don't converge on the same idea.
+
+The same class also serves **head mode** for `think(strategy:'heads')` —
+`initHead` / `runAsHead` / `abortHead` drive a multi-step agentic loop over a
+restricted tool surface. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that
+class deliberately stays outside the `ActorAgent` hierarchy.
+
+## Pruning and convergence
+
+Pruning needs both conditions: `value < pruneThreshold` (0.25) **and**
+`visits >= minVisitsForPrune` (2). A pruned node is soft-marked
+(`status = 'pruned'`, `branch_agent_key` cleared) and its branch aborted; the
+reflection that explains the failure is written first, at the slightly higher
+`reflectionThreshold` (0.35).
+
+Winner selection (`mcts/convergence.ts`) takes the argmax over `terminal` and
+`open` nodes by value, then applies a **test-based tie-break**: rivals within
+`takesEpsilon` (0.1) of the leader are run against one shared generated
+assertion harness, and if the leader fails where a near-tied rival passes, the
+passer is promoted. If the winner still scores below `minAcceptableScore` (0.3)
+the search reports `converged: false`, writes a failure lesson, and marks the
+open nodes failed rather than shipping a bad answer.
 
 ## search_nodes Table
 
@@ -124,13 +200,28 @@ ExplorationAgent has 3 `@callable()` methods:
 
 ## Formal Properties (Lean 4)
 
-MCTS-related proofs live in `lean/Proteus/MCTS/`:
+Eleven of the corpus's 84 published theorems live in `lean/Proteus/MCTS/`.
+The backpropagation model is exact scaled-integer arithmetic, so these are
+statements about that model — SQLite backpropagates in IEEE-754 `REAL`. See
+[FORMAL-SPEC.md](./FORMAL-SPEC.md) for the claim taxonomy and what each status
+does and does not assert.
 
-| Property | File | Theorem | Status |
-|----------|------|---------|--------|
-| Budget terminates (well-founded on Nat) | `StorageIsolation.lean` | `budget_well_founded` | Proven |
-| Initial state is storage-isolated | `StorageIsolation.lean` | `init_isolated` | Proven |
-| All 7 MCTS transitions preserve isolation | `StorageIsolation.lean` | `transition_preserves_isolation` | Proven |
-| Initial backprop state is valid | `Backpropagation.lean` | `initial_valid` | Proven |
-| Initial values equal at first step | `Backpropagation.lean` | `init_values_equal_at_first_step` | Proven |
-| Backprop preserves node IDs | `Backpropagation.lean` | `backprop_preserves_ids` | Proven |
+| Property | File | Theorem | Claim status |
+|----------|------|---------|--------------|
+| Budget terminates (well-founded on Nat) | `StorageIsolation.lean` | `budget_well_founded` | by-construction-witness |
+| Initial state is storage-isolated | `StorageIsolation.lean` | `init_isolated` | proved-in-abstract-model |
+| All 7 MCTS transitions preserve isolation | `StorageIsolation.lean` | `transition_preserves_isolation` | proved-in-abstract-model |
+| A reward in [0,S] keeps a node's mean in range | `Backpropagation.lean` | `update_preserves_range` | proved-in-abstract-model |
+| …lifted to a whole reward history | `Backpropagation.lean` | `applyRewards_preserves_range` | proved-in-abstract-model |
+| `value · visits = Σ rewards` after any history | `Backpropagation.lean` | `applyRewards_sum_invariant`, `sum_invariant` | proved-in-abstract-model |
+| At the first visit the init value is erased | `Backpropagation.lean` | `init_values_equal_at_first_step` | by-construction-witness |
+| One update yields exactly the running-mean numerator | `Backpropagation.lean` | `update_matches_ts_numerator` | by-construction-witness |
+| A fresh node starts in range | `Backpropagation.lean` | `initial_in_range` | by-construction-witness |
+| The ancestor walk touches visits/value only, never row IDs | `Backpropagation.lean` | `backprop_preserves_ids` | by-construction-witness |
+
+Two MCTS requirements deliberately have **no** theorems and stay
+`specified-not-modeled`: monotonicity of the implemented UCT-style bonus (the
+production selector is a global argmax with visit-count plateaus and root
+self-parenting, which defeats a naive self-antitonic claim) and convergence of
+the production search. Modeling a different textbook algorithm would not be
+evidence about Proteus.

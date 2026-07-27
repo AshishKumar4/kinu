@@ -8,6 +8,7 @@
  *   http_pending  — held-open HTTP request; 30s TTL
  *   peer_back     — async reply to a peer agent; 24h TTL
  *   mcp_pending   — open MCP HTTP request; 60s TTL
+ *   email_thread  — reply sent onto the inbound email's thread; 24h TTL
  *   none          — event has no reply channel (timer, file_watch, etc.)
  *
  * The single `reply()` LLM tool dispatches based on the channel bound to
@@ -32,6 +33,7 @@ const TTL_MS: Record<Exclude<ReplyChannelKind, 'none'>, number> = {
   http_pending: 30_000,
   peer_back: 24 * 60 * 60 * 1000,
   mcp_pending: 60_000,
+  email_thread: 24 * 60 * 60 * 1000,
 };
 
 /** Dispatcher that actually moves the reply over the wire. Implementations
@@ -78,6 +80,19 @@ export class ReplyChannelStore {
     return id;
   }
 
+  /** The open channel bound to an event (optionally narrowed by kind). Used by
+   *  reply tools that hold an event id, not a channel id — e.g. a peer answering
+   *  the ask event it was woken with. */
+  findOpenByEvent(event_id: EventId, kind?: ReplyChannelKind): ReplyChannelRow | null {
+    const rows = this.sql.exec(
+      `SELECT id FROM reply_channels
+       WHERE event_id = ? AND state = 'open'${kind ? ` AND kind = ?` : ''}
+       ORDER BY created_at DESC LIMIT 1`,
+      ...(kind ? [event_id, kind] : [event_id]),
+    ).toArray() as Array<{ id: string }>;
+    return rows.length > 0 ? this.get(rows[0].id) : null;
+  }
+
   get(id: ReplyChannelId): ReplyChannelRow | null {
     const rows = this.sql.exec(
       `SELECT id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,
@@ -99,6 +114,14 @@ export class ReplyChannelStore {
       created_at: r.created_at as number,
       updated_at: r.updated_at as number,
     };
+  }
+
+  /** Re-point a channel at its real event id (channels are opened before
+   *  publish so the event row can carry the ref). */
+  bindEvent(id: ReplyChannelId, eventId: EventId): void {
+    this.sql.exec(
+      `UPDATE reply_channels SET event_id = ? WHERE id = ?`, eventId, id,
+    );
   }
 
   /** Mechanically dispatch a reply to a channel.
@@ -163,8 +186,8 @@ export class ReplyChannelStore {
     );
   }
 
-  /** Expire channels whose TTL has passed. Called periodically by TurnRunner
-   *  on phase-idle transitions. Returns the number of channels expired. */
+  /** Expire channels whose TTL has passed. Returns the number of channels
+   *  expired. Currently unwired — no periodic caller exists. */
   expireDue(now: number): number {
     const before = this.countOpen();
     this.sql.exec(

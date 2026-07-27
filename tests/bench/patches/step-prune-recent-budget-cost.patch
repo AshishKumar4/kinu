@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/step-prune.ts b/packages/core/src/prompting/step-prune.ts
+index f4fbef4..3a8cbc7 100644
+--- a/packages/core/src/prompting/step-prune.ts
++++ b/packages/core/src/prompting/step-prune.ts
+@@ -82,7 +82,7 @@ function collectProtectedResults(messages: readonly ModelMessage[]): Set<ToolRes
+     for (const part of toolResultPartsOf(messages[i]).reverse()) {
+       const cost = Math.max(1, Math.round(serializedOutputLength(part) / 4));
+       if (used >= STEP_RECENT_TOOL_BUDGET_TOKENS) return protectedResults;
+-      if (protectedResults.size > 0 && used + cost > STEP_RECENT_TOOL_BUDGET_TOKENS) return protectedResults;
++      if (protectedResults.size > 0 && used > STEP_RECENT_TOOL_BUDGET_TOKENS) return protectedResults;
+       protectedResults.add(part);
+       used += cost;
+     }

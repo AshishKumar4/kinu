@@ -10,7 +10,7 @@ export function StatusView({ status }: { status: AgentClientStatus }) {
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <strong fg={tuiColors.accentStrong}>Agent Status</strong>
+        <strong fg={tuiColors.accentStrong}>Workspace Status</strong>
         {renderStatusLines(status).map((line) => {
           const [label = '', ...value] = line.split(/\s+/);
           return (

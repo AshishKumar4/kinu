@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/bench/report.ts b/packages/core/src/bench/report.ts
+index c4a59b1..b157a74 100644
+--- a/packages/core/src/bench/report.ts
++++ b/packages/core/src/bench/report.ts
+@@ -89,7 +89,7 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
+   if (!sealed) return { accept: false, reason: 'no held-out measurement — dev-split results alone never justify keeping a variant' };
+   const s = sealed.stats;
+   if (s.pairs === 0) return { accept: false, reason: 'held-out split was empty' };
+-  if (!s.canReachSignificance) {
++  if (s.canReachSignificance) {
+     return { accept: false, reason: `the held-out split has only ${s.pairs} tasks — no result on it can reach p ≤ ${s.alpha} (best possible ${s.floorPValue.toFixed(4)}), so it cannot accept anything; grow the corpus` };
+   }
+   if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };

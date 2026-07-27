@@ -7,7 +7,7 @@
 // Hoisted here so there is ONE tested implementation; platform side-effects
 // (activity log, durable run-event recorder) inject as optional sinks.
 
-import type { ToolCallRecord } from '../evolution/types.js';
+import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
 
 /** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
  *  StepResult, minus the fields we don't use). */
@@ -46,7 +46,11 @@ export interface TurnSinks {
 export class TurnAccumulator {
   toolCalls: ToolCallRecord[] = [];
   stepCount = 0;
-  usage = { input: 0, output: 0, cached: 0 };
+  usage: TurnUsage = { input: 0, output: 0, cached: 0 };
+  /** Provider-reported prompt tokens of the turn's LAST step — the final
+   *  request's priced input size (0 until a step reports). Backends persist
+   *  it at turn end as the next turn's measured compaction-trigger signal. */
+  lastPromptTokens = 0;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
@@ -58,9 +62,18 @@ export class TurnAccumulator {
     this.toolCalls = [];
     this.stepCount = 0;
     this.usage = { input: 0, output: 0, cached: 0 };
+    this.lastPromptTokens = 0;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
+  }
+
+  /** What the turn spent, or undefined when no step reported usage — so a
+   *  turn served by a provider that reports nothing carries no usage rather
+   *  than a fabricated zero. */
+  reportedUsage(): TurnUsage | undefined {
+    const { input, output, cached } = this.usage;
+    return input > 0 || output > 0 || cached > 0 ? { input, output, cached } : undefined;
   }
 
   /** First streamed token of the turn — fired once. */
@@ -105,6 +118,11 @@ export class TurnAccumulator {
     this.usage.input += inTok;
     this.usage.output += outTok;
     this.usage.cached += cached;
+    // Each step is one request, so the newest reporting step carries the
+    // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
+    // total). Keep the last non-zero report: a trailing step with absent
+    // usage must not erase a real measurement.
+    if (inTok > 0) this.lastPromptTokens = inTok;
     const extras: string[] = [];
     if (cached > 0) extras.push(`cached=${cached}`);
     if (reasoning > 0) extras.push(`reasoning=${reasoning}`);

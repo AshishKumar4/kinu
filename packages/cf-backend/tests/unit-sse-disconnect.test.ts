@@ -1,11 +1,10 @@
 // Regression test: the run-events SSE stream must stop polling the agent DO
 // as soon as the client goes away (request abort or stream cancellation)
 // instead of polling every 500ms for up to 5 minutes.
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
+import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
-mock.module('agents', () => ({
-  getAgentByName: async (ns: DurableObjectNamespace, name: string) => ns.get(ns.idFromName(name)),
-}));
+mockAgentsSdk();
 const { handleRunEventsRequest } = await import('../src/run-events-routes.js');
 
 function sseEnv() {
@@ -27,7 +26,7 @@ describe('run-events SSE client disconnect', () => {
     const { env, pollCount } = sseEnv();
     const aborter = new AbortController();
     const res = await handleRunEventsRequest(new Request(
-      'https://proteus.example.com/api/agents/jarvis/runs/run-1/stream',
+      'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
     ), env);
     expect(res?.status).toBe(200);
@@ -48,7 +47,7 @@ describe('run-events SSE client disconnect', () => {
   test('cancelling the response stream stops the DO poll loop', async () => {
     const { env, pollCount } = sseEnv();
     const res = await handleRunEventsRequest(new Request(
-      'https://proteus.example.com/api/agents/jarvis/runs/run-1/stream',
+      'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), env);
     const reader = res!.body!.getReader();
     await sleep(1200);

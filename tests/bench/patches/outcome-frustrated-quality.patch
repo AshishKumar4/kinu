@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
+index d90bc58..d431006 100644
+--- a/packages/core/src/evolution/outcomes.ts
++++ b/packages/core/src/evolution/outcomes.ts
+@@ -50,7 +50,7 @@ export function outcomeToFeedback(outcome: TurnOutcome): 'positive' | 'negative'
+  *  constants (one mapping); frustration is the strongest negative signal;
+  *  abandonment is neutral (no signal, not a verdict). */
+ export function outcomeQuality(outcome: TurnOutcome): number {
+-  if (outcome === 'frustrated') return 0.1;
++  if (outcome === 'frustrated') return 0.9;
+   if (outcome === 'abandoned') return 0.5;
+   return feedbackToQuality(outcome === 'accepted' ? 'positive' : 'negative');
+ }

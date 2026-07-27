@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -26,22 +26,25 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
   });
 }
 
+const VFS_FILES_DDL = `
+  CREATE TABLE vfs_files (
+    path TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
+    parent_path TEXT NOT NULL DEFAULT '',
+    data BLOB,
+    is_dir INTEGER NOT NULL DEFAULT 0,
+    size INTEGER NOT NULL DEFAULT 0,
+    mtime INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (path, chunk_index)
+  );`;
+
 function createLocalAgent(home: string, name: string): void {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "agent.db"));
   db.exec(`
-    CREATE TABLE agent_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL);
-    CREATE TABLE vfs_files (
-      path TEXT NOT NULL,
-      chunk_index INTEGER NOT NULL DEFAULT 0,
-      parent_path TEXT NOT NULL DEFAULT '',
-      data BLOB,
-      is_dir INTEGER NOT NULL DEFAULT 0,
-      size INTEGER NOT NULL DEFAULT 0,
-      mtime INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (path, chunk_index)
-    );
+    CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL);
+    ${VFS_FILES_DDL}
     CREATE TABLE search_nodes (
       id TEXT PRIMARY KEY,
       parent_id TEXT,
@@ -75,7 +78,7 @@ function createLocalAgent(home: string, name: string): void {
       dedupe_key TEXT
     );
   `);
-  db.run("INSERT INTO agent_identity (id, name, created_at) VALUES (?, ?, ?)", ["agent-1", name, 1]);
+  db.run("INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)", ["agent-1", name, 1]);
   db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
     "SOUL.md",
     Buffer.from("# Test\n\n## Mission\n\nTest purpose\n"),
@@ -112,6 +115,59 @@ function createLocalAgent(home: string, name: string): void {
   ]);
   db.close();
 }
+
+/** A workspace from before the workspace_identity rename and before the VFS
+ *  BLOB-encoding fix: identity in `agent_identity`, SOUL.md bound as TEXT, and
+ *  none of the tables added since (scaffold_versions, crafted_tools, ...). */
+function createLegacyLocalAgent(home: string, name: string): void {
+  const dir = join(home, name);
+  mkdirSync(dir, { recursive: true });
+  const db = new Database(join(dir, "agent.db"));
+  db.exec(`
+    CREATE TABLE agent_identity (
+      id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
+    ${VFS_FILES_DDL}
+  `);
+  db.run("INSERT INTO agent_identity (id, name, created_at) VALUES (?, ?, ?)", ["legacy-1", name, 1781042330894]);
+  const soul = "# jarvis\n\n## Mission\n\nRun the household and the lab.";
+  db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
+    "SOUL.md",
+    soul,
+    soul.length,
+    1,
+  ]);
+  db.close();
+}
+
+describe("legacy workspaces stay readable", () => {
+  test("proteus list reports a pre-rename workspace's real purpose", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-legacy-"));
+    tempDirs.push(home);
+    createLegacyLocalAgent(home, "jarvis-d03e0a");
+
+    const list = runCli(home, ["list"]);
+    expect(list.exitCode).toBe(0);
+    expect(list.stdout.toString()).toContain("Run the household and the lab.");
+    expect(list.stdout.toString()).not.toContain("(error reading)");
+  });
+
+  test("proteus status degrades per field instead of failing", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-legacy-status-"));
+    tempDirs.push(home);
+    createLegacyLocalAgent(home, "jarvis-d03e0a");
+
+    const status = runCli(home, ["status", "jarvis-d03e0a"]);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout.toString()).toContain("Run the household and the lab.");
+    // Absent tables read as zero rather than taking the whole workspace down.
+    expect(status.stdout.toString()).toContain("Scaffold:");
+    expect(status.stderr.toString()).not.toContain("readonly database");
+  });
+});
 
 describe("CLI inspection commands", () => {
   test("inspect local durable state without model credentials", () => {
@@ -158,5 +214,64 @@ describe("CLI inspection commands", () => {
 
     const stored = runCli(home, ["model", "localtest"], llmEnv);
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).model)
+      .toBe("workers-ai/@cf/meta/llama-3.1-8b-instruct");
+  });
+
+  test("proteus effort sets workspace and global defaults and appears in status", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-effort-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+
+    const initial = runCli(home, ["effort", "localtest"]);
+    expect(initial.exitCode).toBe(0);
+    expect(initial.stdout.toString()).toContain("medium (chat default)");
+
+    const set = runCli(home, ["effort", "localtest", "high"]);
+    expect(set.exitCode).toBe(0);
+    expect(set.stdout.toString()).toContain("set high");
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).reasoningEffort).toBe("high");
+
+    const stored = runCli(home, ["effort", "localtest"]);
+    expect(stored.stdout.toString()).toContain("high");
+    const status = runCli(home, ["status", "localtest"]);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout.toString()).toContain("Effort:");
+    expect(status.stdout.toString()).toContain("high");
+
+    const invalid = runCli(home, ["effort", "localtest", "extreme"]);
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.stderr.toString()).toContain("low, medium, or high");
+  });
+
+  test("proteus model validates known, uncatalogued, and unknown-provider specs", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-validation-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+    const knownSpec = "workers-ai/@cf/moonshotai/kimi-k2.6";
+    const llmEnv = {
+      PROTEUS_BASE_URL: "http://localhost:1/v1",
+      PROTEUS_AUTH: "Bearer x",
+      PROTEUS_MODEL: "@cf/moonshotai/kimi-k2.6",
+    };
+
+    const known = runCli(home, ["model", "localtest", knownSpec], llmEnv);
+    expect(known.exitCode).toBe(0);
+    expect(known.stdout.toString()).toContain(`set ${knownSpec}`);
+    expect(known.stdout.toString()).not.toContain("not in the model catalog");
+
+    const uncatalogued = runCli(home, ["model", "localtest", "workers-ai/@cf/meta/not-real"], llmEnv);
+    expect(uncatalogued.exitCode).toBe(0);
+    expect(uncatalogued.stdout.toString()).toContain("not in the model catalog");
+    expect(uncatalogued.stdout.toString()).toContain("Close matches: workers-ai/");
+    expect(uncatalogued.stdout.toString()).toContain("proteus chat localtest");
+    expect(uncatalogued.stdout.toString()).toContain("/model");
+    expect(uncatalogued.stdout.toString()).toContain("set workers-ai/@cf/meta/not-real");
+
+    const unknownProvider = runCli(home, ["model", "localtest", "unknown/model"], llmEnv);
+    expect(unknownProvider.exitCode).toBe(1);
+    expect(unknownProvider.stderr.toString()).toContain('Unknown model provider "unknown"');
+    expect(unknownProvider.stderr.toString()).toContain("workers-ai");
+    expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
   });
 });

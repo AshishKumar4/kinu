@@ -1,26 +1,114 @@
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { isPlaceholderMission } from './soul.js';
 
-/** URL-safe slug for stable agent ids. */
+/** URL-safe slug for stable workspace ids. */
 export function slugifyName(text: string): string {
   return text.toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 24);
+    .slice(0, 24)
+    .replace(/-+$/, '');
 }
 
-export interface SuggestedAgentIdentity {
+export interface SuggestedWorkspaceIdentity {
   name: string;
   displayName: string;
   nameOrigin: 'auto' | 'user';
 }
 
+const FALLBACK_ADJECTIVES = [
+  'amber',
+  'ashen',
+  'balanced',
+  'burnished',
+  'calm',
+  'cedar',
+  'clear',
+  'brisk',
+  'copper',
+  'crafted',
+  'earthen',
+  'evergreen',
+  'fieldstone',
+  'grounded',
+  'handwrought',
+  'hardy',
+  'hearthlit',
+  'honest',
+  'ironwood',
+  'luminous',
+  'maple',
+  'measured',
+  'mellow',
+  'mossy',
+  'oak',
+  'patient',
+  'pine',
+  'quiet',
+  'river',
+  'rugged',
+  'sage',
+  'seasoned',
+  'steady',
+  'stone',
+  'sunlit',
+  'timber',
+  'verdant',
+  'walnut',
+  'warm',
+  'weathered',
+] as const;
+
+const FALLBACK_NOUNS = [
+  'anvil',
+  'arbor',
+  'ash',
+  'basin',
+  'bench',
+  'birch',
+  'brook',
+  'cairn',
+  'cedar',
+  'chisel',
+  'copper',
+  'cove',
+  'elm',
+  'field',
+  'forge',
+  'grove',
+  'harbor',
+  'hawk',
+  'hearth',
+  'hemlock',
+  'hill',
+  'heron',
+  'kiln',
+  'lantern',
+  'maple',
+  'mill',
+  'oak',
+  'pine',
+  'plane',
+  'quarry',
+  'ridge',
+  'river',
+  'stone',
+  'timber',
+  'trail',
+  'valley',
+  'walnut',
+  'willow',
+  'workshop',
+  'yard',
+] as const;
+
 /** Deterministic provisional display title: first non-empty line, collapsed. */
-export function deriveAgentTitle(text: string): string {
+export function deriveWorkspaceTitle(text: string): string {
   const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
   return firstLine.replace(/\s+/g, ' ').slice(0, 60);
 }
 
-export function resolveAgentTitle(opts: {
+export function resolveWorkspaceTitle(opts: {
   explicit?: string;
   existing?: string;
   purpose?: string;
@@ -28,32 +116,109 @@ export function resolveAgentTitle(opts: {
 }): string {
   return (opts.explicit && opts.explicit.trim())
     || (opts.existing && opts.existing.trim())
-    || deriveAgentTitle(opts.purpose ?? '')
+    || deriveWorkspaceTitle(opts.purpose ?? '')
     || opts.slug;
 }
 
-export function createAgentNameFromMission(mission: string, id: string): string {
-  const slug = cleanAgentSlug(extractPersonaName(mission) ?? 'agent') || 'agent';
-  return `${slug}-${id.slice(0, 6)}`;
+export function createWorkspaceNameFromMission(mission: string, id: string): string {
+  return fallbackWorkspaceIdentity(mission, id).name;
 }
 
-export function fallbackAgentIdentity(mission: string, id: string): SuggestedAgentIdentity {
+/** Deterministic title for a mission: a stated persona name wins, then the
+ *  mission's own opening line. Empty when the mission yields neither. */
+export function workspaceTitleFromMission(mission: string): string {
   const persona = extractPersonaName(mission);
-  const title = cleanAgentTitle(persona ?? 'Agent') || 'Agent';
-  return {
-    name: `${cleanAgentSlug(persona ?? 'agent') || 'agent'}-${id.slice(0, 6)}`,
-    displayName: title || 'Agent',
-    nameOrigin: 'auto',
-  };
+  return (persona && cleanTitle(persona)) || cleanTitle(deriveWorkspaceTitle(mission));
 }
 
-/** System prompt paired with agentIdentityPrompt — shared by the CLI's local
- *  naming call and the server's cloud display-name generation. */
-export const AGENT_IDENTITY_SYSTEM_PROMPT = 'You create short, useful names for persistent software agents.';
+/** Deterministic identity when LLM titling is unavailable: a title from the
+ *  mission itself; the random adjective-noun pair is the last resort for an
+ *  empty/unusable mission. */
+export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
+  const title = workspaceTitleFromMission(mission);
+  const slug = cleanSlug(title);
+  if (title && slug) {
+    return { name: `${slug}-${id.slice(0, 6)}`, displayName: title, nameOrigin: 'auto' };
+  }
+  return { ...memorableFallbackIdentity(id), nameOrigin: 'auto' };
+}
 
-export function agentIdentityPrompt(mission: string): string {
+/** A workspace's stored naming state, as both backends keep it: the raw slug
+ *  the workspace is addressed by, the shown title, how that title came about,
+ *  and the mission to title from (the opening request, or SOUL.md's mission). */
+export interface WorkspaceTitleState {
+  slug: string;
+  displayName: string | null;
+  nameOrigin: 'user' | 'auto' | null;
+  mission: string;
+}
+
+export interface WorkspaceTitlePlan {
+  /** Deterministic title to persist immediately, or null when the shown title
+   *  is already presentable and only the LLM step can improve it. */
+  provisional: string | null;
+  mission: string;
+}
+
+/** A title nobody chose: absent, or an echo of the raw slug — which is what
+ *  workspaces created before mission-derived titling still carry. */
+export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
+  const shown = displayName?.trim() ?? '';
+  return shown.length === 0 || shown === slug.trim();
+}
+
+/** Decide whether a workspace should be auto-titled, and from what.
+ *
+ *  `null` means leave it alone: the operator named it (`nameOrigin: 'user'`),
+ *  there is no mission to title from, or it already carries a title it was
+ *  deliberately given. Otherwise the workspace either never had a title
+ *  generated (`nameOrigin: null`) or is still showing its raw slug — the
+ *  legacy shape this heals. */
+export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
+  if (state.nameOrigin === 'user') return null;
+  if (isPlaceholderMission(state.mission)) return null;
+  const placeholder = isPlaceholderWorkspaceTitle(state.displayName, state.slug);
+  if (!placeholder && state.nameOrigin !== null) return null;
+  const mission = state.mission.trim();
+  return { provisional: (placeholder && workspaceTitleFromMission(mission)) || null, mission };
+}
+
+/** Auto-title a workspace: persist the deterministic title at once so the
+ *  placeholder never survives a failed model call, then upgrade to the
+ *  generated one. `persist` writes the title AND marks its origin 'auto',
+ *  which is what makes this one-shot — the plan can no longer match.
+ *  Generation failures are swallowed: the deterministic title stands. */
+export async function applyWorkspaceTitle(
+  state: WorkspaceTitleState,
+  effects: {
+    persist: (title: string) => void | Promise<void>;
+    suggest?: (mission: string) => Promise<string | null>;
+  },
+): Promise<string | null> {
+  const plan = planWorkspaceTitle(state);
+  if (!plan) return null;
+  let title: string | null = null;
+  if (plan.provisional) {
+    await effects.persist(plan.provisional);
+    title = plan.provisional;
+  }
+  try {
+    const suggested = (await effects.suggest?.(plan.mission))?.trim();
+    if (suggested && suggested !== title) {
+      await effects.persist(suggested);
+      title = suggested;
+    }
+  } catch { /* the deterministic title stands */ }
+  return title;
+}
+
+/** System prompt paired with workspaceIdentityPrompt — shared by the CLI's
+ *  local naming call and the server's cloud display-name generation. */
+export const WORKSPACE_IDENTITY_SYSTEM_PROMPT = 'You create short, useful names for persistent agent workspaces.';
+
+export function workspaceIdentityPrompt(mission: string): string {
   return [
-    'Name a Proteus agent from this opening mission.',
+    'Name a Proteus workspace from this opening mission.',
     '',
     'Return a concise JSON object with:',
     '- title: 1-5 words, Title Case, specific to the mission or persona.',
@@ -67,7 +232,7 @@ export function agentIdentityPrompt(mission: string): string {
   ].join('\n');
 }
 
-export function parseAgentIdentityOutput(raw: string, id: string): SuggestedAgentIdentity | null {
+export function parseWorkspaceIdentityOutput(raw: string, id: string): SuggestedWorkspaceIdentity | null {
   let parsed: unknown;
   try {
     parsed = extractJsonObject(raw);
@@ -75,8 +240,8 @@ export function parseAgentIdentityOutput(raw: string, id: string): SuggestedAgen
     return null;
   }
   if (!isRecord(parsed)) return null;
-  const title = cleanAgentTitle(typeof parsed.title === 'string' ? parsed.title : '');
-  const slug = cleanAgentSlug(typeof parsed.slug === 'string' ? parsed.slug : title);
+  const title = cleanTitle(typeof parsed.title === 'string' ? parsed.title : '');
+  const slug = cleanSlug(typeof parsed.slug === 'string' ? parsed.slug : title);
   if (!title || !slug) return null;
   return {
     name: `${slug}-${id.slice(0, 6)}`,
@@ -90,7 +255,22 @@ function extractPersonaName(mission: string): string | null {
   return match?.[1] ?? null;
 }
 
-function cleanAgentTitle(value: string): string {
+function memorableFallbackIdentity(id: string): { name: string; displayName: string } {
+  const hex = id.replace(/-/g, '').toLowerCase();
+  const adjective = FALLBACK_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % FALLBACK_ADJECTIVES.length];
+  const noun = FALLBACK_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % FALLBACK_NOUNS.length];
+  const suffix = hex.slice(0, 4);
+  return {
+    name: `${adjective}-${noun}-${suffix}`,
+    displayName: `${capitalize(adjective)} ${capitalize(noun)}`,
+  };
+}
+
+function capitalize(word: string): string {
+  return word[0].toUpperCase() + word.slice(1);
+}
+
+function cleanTitle(value: string): string {
   return value
     .replace(/^["'#\s]+|["'\s.]+$/g, '')
     .replace(/\b(agent|assistant|ai|bot|helper)\b$/i, '')
@@ -99,7 +279,7 @@ function cleanAgentTitle(value: string): string {
     .trim();
 }
 
-function cleanAgentSlug(value: string): string {
+function cleanSlug(value: string): string {
   return slugifyName(value.replace(/\b(agent|assistant|ai|bot|helper)\b/gi, '')) || slugifyName(value);
 }
 

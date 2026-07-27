@@ -12,8 +12,18 @@
  * All secrets live here. Orchestrator agents never store credential material;
  * they call `getAuthHeaders(key)` and get ready-to-attach HTTP headers.
  * Token refresh (Codex OAuth) happens atomically inside this DO.
+ *
+ * Every privileged method takes a `UserCaller` as its FIRST argument and gates
+ * on `requireTier` before doing anything else. That is the whole attenuation
+ * boundary: it lives where the secrets are, so no workspace-DO code path,
+ * crafted tool, or forgotten tool gate can route around it. Worker routes act
+ * for the owner whose identity the edge verified and pass `OWNER_SESSION`;
+ * agents pass their workspace capability token and get whatever their tier
+ * allows. Methods the DO calls on itself pass `OWNER_SESSION` because their
+ * public entry point was already gated.
  */
-import { Agent, callable } from "agents";
+import { Agent, type AgentContext } from "agents";
+import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface.js";
 import { parseCliTokenUserId } from "../cli/auth-store.js";
 import {
   getActiveAccessTokenScopes,
@@ -41,6 +51,7 @@ import {
   type ProductChangeBoard,
   type ProductChangeApproval,
   type ProductChangeCheck,
+  type ProductChangeDetail,
   type ProductChangeRequest,
   type ProductChangeStatus,
   type ProductDeploymentRecord,
@@ -55,14 +66,29 @@ import {
   type DeviceCheckpointHint,
 } from '@proteus/core';
 import { initUserTables } from './schema.js';
+import {
+  OWNER_SESSION,
+  mintWorkspaceCapability,
+  requireTier,
+  revokeWorkspaceCapability,
+  workspaceCapabilityHash,
+  type UserCaller,
+  type WorkspaceCapability,
+  type ResolvedCaller,
+} from './workspace-capability.js';
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
-import { credentialToHeaders, accessTokenExpiring } from './credential-headers.js';
-import { validateCredential, validateCredentialKey, validateAgentName } from './validate.js';
+import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers.js';
+import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
-import { resolveAgentTitle } from '../lib/agent-naming.js';
-import { DEVICE_CONSENT_SCOPE, summarizeDeviceAction, type DeviceConsentScope } from './device-consent.js';
+import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
+import {
+  DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
+  mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  type DeviceConsentScope,
+} from './device-consent.js';
 import {
   validateMcpServerInput, mcpToolKey, parseAllowedTools, mapConnectionStatus,
+  parseMcpHeaders, buildMcpHeaderTransportOpts,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
 } from './mcp.js';
@@ -86,6 +112,9 @@ const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
+/** `user_schema_meta` key retiring the one-shot capability backfill. */
+const BACKFILL_MARKER = 'workspace_capability_backfill';
+
 /** Stable per-user OAuth callback path. The full URL is built from the
  *  request origin at add-time so it works in any environment without
  *  configuration. NOT the SDK's per-agent default (`/agents/.../callback`)
@@ -102,7 +131,7 @@ export interface UserProfile {
   lastSeenAt: number;
 }
 
-export interface AgentEntry {
+export interface WorkspaceEntry {
   name: string;
   displayName: string;
   createdAt: number;
@@ -174,6 +203,11 @@ function parseCapabilityList(value: string): string[] {
 }
 
 export class UserDO extends Agent<Env> {
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    sealRpcSurface(this, USER_DO_RPC_SURFACE);
+  }
+
   private _initialized = false;
 
   /** Per-user MCP manager. NOTE: distinct from the inherited `Agent.mcp`
@@ -197,16 +231,96 @@ export class UserDO extends Agent<Env> {
     return this.ctx.storage.sql.exec(query, ...bindings).toArray() as T[];
   }
 
+  /** The attenuation gate. First statement of every privileged method below —
+   *  the check lives here, next to the secrets, rather than in any caller. */
+  private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
+    this.ensureInit();
+    return requireTier(this.ctx.storage.sql, caller, capability);
+  }
+
+  /** Provisioning in flight, per workspace. A Durable Object serializes nothing
+   *  across an outbound RPC await, so two concurrent first-touches would
+   *  otherwise each mint and each install, leaving the surviving stored hash
+   *  and the surviving installed token from DIFFERENT mints — a workspace that
+   *  can never authenticate again and never re-provisions, because it does hold
+   *  a token. Coalescing on this map is what makes the handshake atomic. */
+  private readonly _provisioning = new Map<string, Promise<void>>();
+
+  /**
+   * Reconcile a workspace's identity: the workspace reports the hash of the
+   * token it holds, and any disagreement with the registry is repaired by
+   * minting a fresh one and installing it.
+   *
+   * `presentedHash` makes this self-healing in both directions — a workspace
+   * that holds nothing, and a workspace holding a token this UserDO no longer
+   * recognizes (its storage was reset, or a delete tore down one side only).
+   *
+   * Deliberately ungated, and the ONLY method that is: this is the bootstrap of
+   * workspace identity, so it cannot require identity. It is safe because it
+   * hands the secret to nobody — the token is delivered straight into the
+   * Durable Object of the named workspace, which must already be in this user's
+   * registry. The worst a caller can do is force a rotation, after which both
+   * sides still agree and the tier is untouched.
+   */
+  async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
+    this.ensureInit();
+    validateWorkspaceName(workspaceName);
+    if (!this.workspaceRegistered(workspaceName)) {
+      throw new Error(`Workspace ${workspaceName} is not in your registry.`);
+    }
+    if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) return;
+
+    const inFlight = this._provisioning.get(workspaceName);
+    if (inFlight) return inFlight;
+    const task = (async () => {
+      const { token } = await mintWorkspaceCapability(this.ctx.storage.sql, workspaceName);
+      const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
+      await workspace.installWorkspaceCapability(token);
+    })();
+    this._provisioning.set(workspaceName, task);
+    try { await task; } finally { this._provisioning.delete(workspaceName); }
+  }
+
+  /** One-shot repair for workspaces that predate this boundary. They are owned
+   *  but identity-less, and a workspace runs without anyone opening it — an
+   *  alarm, an inbound email, a webhook, a peer's task — so waiting for a human
+   *  to visit each one would fail those turns. Runs once per user, off the
+   *  request's critical path. */
+  async backfillWorkspaceCapabilities(caller: UserCaller): Promise<{ provisioned: number }> {
+    await this.requireTier(caller, 'workspaces.write');
+    if (this.sqlx(`SELECT 1 AS x FROM user_schema_meta WHERE key = ?`, BACKFILL_MARKER)[0]) {
+      return { provisioned: 0 };
+    }
+    const names = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`).map((r) => r.name);
+    const settled = await Promise.allSettled(names.map(async (name) => {
+      // Ask each workspace what it holds so an already-provisioned one is left
+      // alone; rotating a live token would invalidate the copies its facets
+      // hold until the parent pushes again.
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
+      const presentedHash = await stub.getWorkspaceCapabilityHash();
+      await this.ensureWorkspaceCapability(name, presentedHash);
+    }));
+    const failed = settled.filter((r) => r.status === 'rejected');
+    for (const failure of failed) {
+      console.warn('[user-do] capability backfill failed for a workspace:', (failure as PromiseRejectedResult).reason);
+    }
+    // Only a clean sweep retires the marker; a partial one retries next boot.
+    if (failed.length === 0) {
+      this.sqlx(`INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, BACKFILL_MARKER, String(Date.now()));
+    }
+    return { provisioned: names.length - failed.length };
+  }
+
   private productChanges() {
     this.ensureInit();
-    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName });
+    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
   // ── Profile ────────────────────────────────────────────────────────
 
-  @callable()
-  async ensureProfile(email: string, displayName?: string): Promise<UserProfile> {
-    this.ensureInit();
+  async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
+    await this.requireTier(caller, 'profile');
     const now = Date.now();
     const existing = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
@@ -230,8 +344,8 @@ export class UserDO extends Agent<Env> {
     return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now };
   }
 
-  @callable()
-  async getProfile(): Promise<UserProfile | null> {
+  async getProfile(caller: UserCaller): Promise<UserProfile | null> {
+    await this.requireTier(caller, 'profile');
     const row = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
     )[0];
@@ -244,13 +358,13 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  // ── Agent registry ─────────────────────────────────────────────────
+  // ── Workspace registry ─────────────────────────────────────────────
 
-  @callable()
-  async listAgents(): Promise<AgentEntry[]> {
+  async listWorkspaces(caller: UserCaller): Promise<WorkspaceEntry[]> {
+    await this.requireTier(caller, 'workspaces.read');
     return this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
       `SELECT name, display_name, created_at, last_visited, archived_at
-       FROM user_agents WHERE archived_at IS NULL ORDER BY last_visited DESC`,
+       FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC`,
     ).map((r) => ({
       name: r.name,
       displayName: r.display_name,
@@ -263,18 +377,18 @@ export class UserDO extends Agent<Env> {
   /** Insert-or-resurrect a roster row. `existed` reports whether ANY row
    *  (archived included — a name conflict un-archives) was already there, so
    *  a failed create can roll back ONLY rows it actually inserted. */
-  @callable()
-  async registerAgent(name: string, displayName?: string, purpose?: string): Promise<{ entry: AgentEntry; existed: boolean }> {
-    validateAgentName(name);
+  async registerWorkspace(caller: UserCaller, name: string, displayName?: string, purpose?: string): Promise<{ entry: WorkspaceEntry; existed: boolean }> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
     const now = Date.now();
     const existing = this.sqlx<{ display_name: string }>(
-      `SELECT display_name FROM user_agents WHERE name = ?`, name,
+      `SELECT display_name FROM user_workspaces WHERE name = ?`, name,
     )[0];
-    const title = resolveAgentTitle({
+    const title = resolveWorkspaceTitle({
       explicit: displayName, existing: existing?.display_name, purpose, slug: name,
     });
     this.sqlx(
-      `INSERT INTO user_agents (name, display_name, created_at, last_visited)
+      `INSERT INTO user_workspaces (name, display_name, created_at, last_visited)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          display_name = excluded.display_name,
@@ -288,15 +402,15 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  @callable()
-  async touchAgent(name: string): Promise<void> {
-    validateAgentName(name);
-    this.sqlx(`UPDATE user_agents SET last_visited = ? WHERE name = ?`, Date.now(), name);
+  async touchWorkspace(caller: UserCaller, name: string): Promise<void> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    this.sqlx(`UPDATE user_workspaces SET last_visited = ? WHERE name = ?`, Date.now(), name);
   }
 
-  @callable()
-  async removeAgent(name: string, ownerUserId: string): Promise<void> {
-    validateAgentName(name);
+  async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
     // Tear down the agent's Durable Object (storage, alarm, sandbox) BEFORE
     // dropping it from the registry — otherwise the DO's SQLite (conversation,
@@ -308,35 +422,63 @@ export class UserDO extends Agent<Env> {
       await stub.destroyAgent(ownerUserId);
     } catch (err) {
       if (!(err instanceof Error) || err.message !== 'destroyed') {
-        console.warn('[proteus] removeAgent: agent teardown failed:', err instanceof Error ? err.message : err);
+        console.warn('[proteus] removeWorkspace: agent teardown failed:', err instanceof Error ? err.message : err);
       }
     }
-    this.sqlx(`DELETE FROM user_agents WHERE name = ?`, name);
+    this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
+    // The workspace's identity dies with it, so a same-name recreate is issued
+    // a fresh secret rather than inheriting this one's.
+    revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
 
   /** Update only the roster display name — keeps the Sidebar in sync with the
    *  agent's own `agent_config.display_name` (e.g. after AI auto-titling). */
-  @callable()
-  async setAgentDisplayName(name: string, displayName: string): Promise<void> {
-    validateAgentName(name);
-    this.sqlx(`UPDATE user_agents SET display_name = ? WHERE name = ?`, displayName, name);
+  async setWorkspaceDisplayName(caller: UserCaller, name: string, displayName: string): Promise<void> {
+    const resolved = await this.requireTier(caller, 'workspaces.rename_self');
+    validateWorkspaceName(name);
+    // Workspace-scoped by construction: an agent renames itself, never a
+    // sibling. This is what makes rename safe to keep at the `shared` tier.
+    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+      throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
+    }
+    this.sqlx(`UPDATE user_workspaces SET display_name = ? WHERE name = ?`, displayName, name);
   }
 
-  @callable()
-  async hasAgent(name: string): Promise<boolean> {
-    validateAgentName(name);
-    const row = this.sqlx(`SELECT 1 AS x FROM user_agents WHERE name = ? AND archived_at IS NULL`, name)[0];
+  async hasWorkspace(caller: UserCaller, name: string): Promise<boolean> {
+    await this.requireTier(caller, 'workspaces.read');
+    return this.workspaceRegistered(name);
+  }
+
+  /** Registry membership, ungated — the internal read behind `hasWorkspace`
+   *  and the ticket flows, whose own entry points are already gated. */
+  private workspaceRegistered(name: string): boolean {
+    validateWorkspaceName(name);
+    const row = this.sqlx(`SELECT 1 AS x FROM user_workspaces WHERE name = ? AND archived_at IS NULL`, name)[0];
     return !!row;
   }
+
+  // ── Peer-messaging grants (cross-owner, default deny) ──────────────
+
+  /** Read by the receiving agent's `receivePeerMessage` — whether a foreign
+   *  sender may deliver into this user's agents. Same-owner peers never need
+   *  a grant (ownership is checked before this). */
+  async hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
+    await this.requireTier(caller, 'peers.grants');
+    const row = this.sqlx(
+      `SELECT 1 AS x FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
+      senderUserId, senderAgentName,
+    )[0];
+    return !!row;
+  }
+
 
   // ── CLI auth tokens ────────────────────────────────────────────────
 
   /** Mint a CLI bearer token after browser approval. The raw token is returned
    *  once to the CLI; only its hash is stored. The userId is embedded solely so
    *  edge routes can route directly to the correct UserDO before verification. */
-  @callable()
-  async mintCliToken(userId: string, label?: string): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
-    this.ensureInit();
+  async mintCliToken(caller: UserCaller, userId: string, label?: string): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
+    await this.requireTier(caller, 'auth_tokens');
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
     const token = `ptc_${userId}_${nanoid(44)}`;
     const tokenHash = await sha256Hex(token);
@@ -352,8 +494,8 @@ export class UserDO extends Agent<Env> {
 
   /** Verify a CLI bearer token. Called by Worker HTTP routes after routing to
    *  this UserDO via the user id embedded in the token. */
-  async verifyCliToken(token: string): Promise<CliTokenVerification> {
-    this.ensureInit();
+  async verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
+    await this.requireTier(caller, 'auth_tokens');
     const userId = parseCliTokenUserId(token);
     if (!userId) return { ok: false, error: 'malformed token' };
     const tokenHash = await sha256Hex(token);
@@ -365,7 +507,7 @@ export class UserDO extends Agent<Env> {
     const now = Date.now();
     if (row.expires_at <= now) return { ok: false, error: 'expired token' };
     this.sqlx(`UPDATE user_cli_tokens SET last_used_at = ? WHERE token_hash = ?`, now, tokenHash);
-    const profile = await this.getProfile();
+    const profile = await this.getProfile(OWNER_SESSION);
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
       ok: true,
@@ -375,9 +517,8 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  @callable()
-  async listCliTokens(): Promise<Array<{ tokenHash: string; label: string; createdAt: number; expiresAt: number; lastUsedAt: number | null }>> {
-    this.ensureInit();
+  async listCliTokens(caller: UserCaller): Promise<Array<{ tokenHash: string; label: string; createdAt: number; expiresAt: number; lastUsedAt: number | null }>> {
+    await this.requireTier(caller, 'auth_tokens');
     return this.sqlx<{ token_hash: string; label: string; created_at: number; expires_at: number; last_used_at: number | null }>(
       `SELECT token_hash, label, created_at, expires_at, last_used_at
        FROM user_cli_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC`,
@@ -390,8 +531,8 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  async revokeCliTokenHash(tokenHash: string): Promise<{ ok: boolean }> {
-    this.ensureInit();
+  async revokeCliTokenHash(caller: UserCaller, tokenHash: string): Promise<{ ok: boolean }> {
+    await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
     return { ok: true };
   }
@@ -401,18 +542,18 @@ export class UserDO extends Agent<Env> {
   /** Mint a scoped access token. The step-up policy (interactive session
    *  token, freshly minted) is enforced by the CLI routes; this DO owns the
    *  hash-only storage plus name/scope validation. */
-  async mintAccessToken(userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
-    this.ensureInit();
+  async mintAccessToken(caller: UserCaller, userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
+    await this.requireTier(caller, 'auth_tokens');
     return mintAccessTokenRow(this.ctx.storage.sql, userId, name, scopes);
   }
 
   /** Verify a `pta_…` access token presented as a bearer. Same contract as
    *  verifyCliToken, with the granted scopes attached. */
-  async verifyAccessToken(token: string): Promise<CliTokenVerification> {
-    this.ensureInit();
+  async verifyAccessToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
+    await this.requireTier(caller, 'auth_tokens');
     const verified = await verifyAccessTokenRow(this.ctx.storage.sql, token);
     if (!verified.ok) return { ok: false, error: verified.error };
-    const profile = await this.getProfile();
+    const profile = await this.getProfile(OWNER_SESSION);
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
       ok: true,
@@ -422,29 +563,29 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  async listAccessTokens(): Promise<AccessTokenRecord[]> {
-    this.ensureInit();
+  async listAccessTokens(caller: UserCaller): Promise<AccessTokenRecord[]> {
+    await this.requireTier(caller, 'auth_tokens');
     return listAccessTokenRows(this.ctx.storage.sql);
   }
 
-  async revokeAccessToken(ref: string): Promise<{ ok: true; revoked: boolean }> {
-    this.ensureInit();
+  async revokeAccessToken(caller: UserCaller, ref: string): Promise<{ ok: true; revoked: boolean }> {
+    await this.requireTier(caller, 'auth_tokens');
     return revokeAccessTokenRow(this.ctx.storage.sql, ref);
   }
 
-  async issueCliAgentConnectTicket(input: {
+  async issueCliAgentConnectTicket(caller: UserCaller, input: {
     userId: string;
     agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
     agentName: string;
     cliTokenHash: string;
     capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
   }): Promise<{ ok: boolean; ticket?: string; expiresAt?: number; error?: string }> {
-    this.ensureInit();
+    await this.requireTier(caller, 'auth_tokens');
     if (!/^[a-f0-9]{32}$/.test(input.userId)) return { ok: false, error: 'invalid user id' };
     if (input.agentClass !== ORCHESTRATOR_AGENT_SLUG) return { ok: false, error: 'invalid agent class' };
     if (!/^[a-f0-9]{64}$/.test(input.cliTokenHash)) return { ok: false, error: 'invalid token hash' };
-    validateAgentName(input.agentName);
-    if (!(await this.hasAgent(input.agentName))) return { ok: false, error: 'agent not found' };
+    validateWorkspaceName(input.agentName);
+    if (!this.workspaceRegistered(input.agentName)) return { ok: false, error: 'agent not found' };
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -471,6 +612,7 @@ export class UserDO extends Agent<Env> {
   }
 
   async verifyCliAgentConnectTicket(
+    caller: UserCaller,
     ticket: string,
     expected: {
       userId: string;
@@ -479,11 +621,11 @@ export class UserDO extends Agent<Env> {
       capability: typeof CLI_AGENT_WEBSOCKET_CAPABILITY;
     },
   ): Promise<CliAgentConnectTicketVerification> {
-    this.ensureInit();
+    await this.requireTier(caller, 'auth_tokens');
     const hintedUserId = parseCliAgentConnectTicketUserId(ticket);
     if (!hintedUserId) return { ok: false, error: 'malformed ticket' };
     if (hintedUserId !== expected.userId) return { ok: false, error: 'wrong user' };
-    validateAgentName(expected.agentName);
+    validateWorkspaceName(expected.agentName);
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -510,10 +652,10 @@ export class UserDO extends Agent<Env> {
     if (!capabilities.includes(expected.capability)) return { ok: false, error: 'missing capability' };
 
     this.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
-    if (!(await this.hasAgent(expected.agentName))) return { ok: false, error: 'agent not found' };
+    if (!this.workspaceRegistered(expected.agentName)) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
     if (!bearerScopes) return { ok: false, error: 'invalid CLI token' };
-    const profile = await this.getProfile();
+    const profile = await this.getProfile(OWNER_SESSION);
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
       ok: true,
@@ -523,12 +665,6 @@ export class UserDO extends Agent<Env> {
       capabilities,
       ...(bearerScopes === 'all' ? {} : { scopes: bearerScopes }),
     };
-  }
-
-  @callable()
-  async revokeCliToken(tokenHash: string): Promise<{ ok: boolean }> {
-    if (!/^[a-f0-9]{64}$/.test(tokenHash)) throw new Error('invalid token hash');
-    return this.revokeCliTokenHash(tokenHash);
   }
 
   /** A connect ticket stays bound to the bearer that minted it: an
@@ -573,7 +709,7 @@ export class UserDO extends Agent<Env> {
       return new Response('Expected WebSocket', { status: 426 });
     }
     const ticket = url.searchParams.get('ticket');
-    const verified = ticket ? await this.verifyDeviceConnectTicket(ticket) : { ok: false as const };
+    const verified = ticket ? await this.verifyDeviceConnectTicket(OWNER_SESSION, ticket) : { ok: false as const };
     if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
 
     const pair = new WebSocketPair();
@@ -620,8 +756,8 @@ export class UserDO extends Agent<Env> {
   /** Mint a device + connect token. The authenticated CLI receives the raw
    *  token once and writes it to the local daemon config; only its hash is
    *  stored here. */
-  @callable()
-  async registerDevice(label?: string): Promise<{ deviceId: string; token: string }> {
+  async registerDevice(caller: UserCaller, label?: string): Promise<{ deviceId: string; token: string }> {
+    await this.requireTier(caller, 'device.manage');
     const deviceId = `dev-${nanoid(10)}`;
     const token = `pdt_${randomToken(32)}`;
     const tokenHash = await sha256Hex(token);
@@ -633,7 +769,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Verify a presented device token against the stored hash. */
-  async verifyDeviceToken(token: string): Promise<{ ok: boolean; deviceId?: string }> {
+  async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string }> {
+    await this.requireTier(caller, 'device.manage');
     if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
     const tokenHash = await sha256Hex(token);
     const row = this.sqlx<{ id: string }>(
@@ -644,8 +781,9 @@ export class UserDO extends Agent<Env> {
 
   /** Exchange the daemon's local long-lived token for a one-minute WebSocket
    *  ticket. The ticket is scoped to this UserDO and can be consumed once. */
-  async issueDeviceConnectTicket(token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
-    const verified = await this.verifyDeviceToken(token);
+  async issueDeviceConnectTicket(caller: UserCaller, token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
+    await this.requireTier(caller, 'device.manage');
+    const verified = await this.verifyDeviceToken(OWNER_SESSION, token);
     if (!verified.ok || !verified.deviceId) return { ok: false };
     const now = Date.now();
     this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -662,7 +800,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Consume a short-lived WebSocket connect ticket. */
-  async verifyDeviceConnectTicket(ticket: string): Promise<{ ok: boolean; deviceId?: string }> {
+  async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string }> {
+    await this.requireTier(caller, 'device.manage');
     if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) return { ok: false };
     const now = Date.now();
     this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -690,14 +829,20 @@ export class UserDO extends Agent<Env> {
    *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
    *  the agent to raise a consent card and await the user's decision. */
   async deviceRpc(
+    caller: UserCaller,
     method: string,
     params: unknown[],
     opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint },
   ): Promise<unknown> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) throw new Error(NO_DEVICE_CONNECTED);
     if (opts?.agentName) {
-      const allowed = await this.checkDeviceConsent(opts.agentName, deviceId, method, params);
+      // Consent is keyed on the PROVEN workspace, never the claimed name — an
+      // agent cannot ride a sibling workspace's remembered grant. Calls that
+      // pass no agentName (checkpoint bookkeeping) stay consent-free as before.
+      const consentAgent = resolved.kind === 'workspace' ? resolved.workspace : opts.agentName;
+      const allowed = await this.checkDeviceConsent(consentAgent, deviceId, method, params);
       if (!allowed) throw new Error('device use was not approved');
     }
     const tunnel = this._devices.tunnel(deviceId);
@@ -712,7 +857,7 @@ export class UserDO extends Agent<Env> {
       `SELECT policy, scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
     )[0];
     if (row?.policy !== 'allow' && row?.policy !== 'deny') return null;
-    return { policy: row.policy, scope: DEVICE_CONSENT_SCOPE };
+    return { policy: row.policy, scope: parseConsentScope(row.scope) };
   }
 
   private setDeviceConsentPolicy(
@@ -720,7 +865,13 @@ export class UserDO extends Agent<Env> {
     deviceId: string,
     policy: 'allow' | 'deny',
     lastAction?: { method: string; command: string },
+    scope: DeviceConsentScope = DEVICE_CONSENT_SCOPE,
   ): void {
+    // Remembering a base action grant must not downgrade full_filesystem.
+    const existing = this.sqlx<{ scope: string }>(
+      `SELECT scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
+    )[0];
+    const effectiveScope = policy === 'allow' ? mergeConsentScope(existing?.scope, scope) : scope;
     this.sqlx(
       `INSERT INTO device_consent
          (agent_name, device_id, policy, scope, last_method, last_summary, updated_at)
@@ -731,16 +882,17 @@ export class UserDO extends Agent<Env> {
          last_method = excluded.last_method,
          last_summary = excluded.last_summary,
          updated_at = excluded.updated_at`,
-      agentName, deviceId, policy, DEVICE_CONSENT_SCOPE,
+      agentName, deviceId, policy, effectiveScope,
       lastAction?.method ?? null, lastAction?.command ?? null, Date.now(),
     );
   }
 
   /** Resolve consent for one agent→device call. Remembered policies short-
-   *  circuit; otherwise the agent renders a card and the user decides. */
+   *  circuit (either tier covers device actions — full_filesystem implies the
+   *  base grant); otherwise the agent renders a card and the user decides. */
   private async checkDeviceConsent(agentName: string, deviceId: string, method: string, params: unknown[]): Promise<boolean> {
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    if (policy?.policy === 'allow' && policy.scope === DEVICE_CONSENT_SCOPE) return true;
+    if (policy?.policy === 'allow') return true;
     if (policy?.policy === 'deny') return false;
     const action = summarizeDeviceAction(method, params);
     let decision: 'once' | 'always' | 'deny';
@@ -770,10 +922,9 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  /** The remembered consent policies (Devices tab — see/revoke which agents may
+  /** The remembered consent policies (Account settings → Devices — see/revoke which agents may
    *  use a device). */
-  @callable()
-  async listDeviceConsents(): Promise<Array<{
+  async listDeviceConsents(caller: UserCaller): Promise<Array<{
     agentName: string;
     deviceId: string;
     policy: string;
@@ -781,6 +932,7 @@ export class UserDO extends Agent<Env> {
     lastMethod: string | null;
     lastSummary: string | null;
   }>> {
+    await this.requireTier(caller, 'device.consent');
     return this.sqlx<{
       agent_name: string; device_id: string; policy: string; scope: string;
       last_method: string | null; last_summary: string | null;
@@ -797,20 +949,49 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Forget a remembered consent (next use re-asks). */
-  @callable()
-  async clearDeviceConsent(agentName: string, deviceId: string): Promise<{ ok: boolean }> {
-    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+  /** Grant or reduce an agent's consent tier on a device (workspace settings / CLI).
+   *  Granting full_filesystem also records the base 'allow' policy. */
+  async setDeviceConsentScope(caller: UserCaller, agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
+    const resolved = await this.requireTier(caller, 'device.consent');
+    // Same rule as the two reads below it: a workspace caller's agent name is
+    // the proven one, never the claimed one. The owner's settings route grants
+    // on any of their workspaces and is unaffected.
+    const target = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+    if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) {
+      return { ok: false };
+    }
+    // An explicit tier choice overrides the no-downgrade merge.
+    this.sqlx(
+      `INSERT INTO device_consent (agent_name, device_id, policy, scope, updated_at)
+       VALUES (?, ?, 'allow', ?, ?)
+       ON CONFLICT(agent_name, device_id) DO UPDATE SET
+         policy = 'allow', scope = excluded.scope, updated_at = excluded.updated_at`,
+      target, deviceId, scope, Date.now(),
+    );
     return { ok: true };
   }
 
-  /** The user's devices for the Devices tab (live-connected flag from the
+  /** The /pc mount's path-scope check: does this agent hold the
+   *  full-filesystem tier on the currently connected device? */
+  async getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }> {
+    const resolved = await this.requireTier(caller, 'device.consent');
+    const deviceId = this._devices.connectedDeviceId();
+    if (!deviceId) return { fullFilesystem: false };
+    const policy = this.getDeviceConsentPolicy(
+      resolved.kind === 'workspace' ? resolved.workspace : agentName, deviceId,
+    );
+    return {
+      fullFilesystem: policy?.policy === 'allow' && policy.scope === DEVICE_CONSENT_SCOPE_FULL_FS,
+    };
+  }
+
+  /** The user's devices for Account settings → Devices (live-connected flag from the
    *  hibernatable-socket tags). */
-  @callable()
-  async listDevices(): Promise<Array<{
+  async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null;
   }>> {
+    await this.requireTier(caller, 'device.manage');
     return this.sqlx<{
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null;
@@ -824,8 +1005,8 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Revoke a device: drop its live socket + mark the row revoked. */
-  @callable()
-  async revokeDevice(deviceId: string): Promise<{ ok: boolean }> {
+  async revokeDevice(caller: UserCaller, deviceId: string): Promise<{ ok: boolean }> {
+    await this.requireTier(caller, 'device.manage');
     this._devices.close(deviceId, 'device revoked');
     this.sqlx(`UPDATE user_devices SET revoked_at = ?, connected_at = NULL WHERE id = ?`, Date.now(), deviceId);
     return { ok: true };
@@ -833,91 +1014,111 @@ export class UserDO extends Agent<Env> {
 
   // ── Product changes ─────────────────────────────────────────────────
 
-  @callable()
-  async listProductSourceBindings(): Promise<ProductSourceBinding[]> {
+  async listProductSourceBindings(caller: UserCaller): Promise<ProductSourceBinding[]> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().listSourceBindings();
   }
 
-  @callable()
-  async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
+  async upsertProductSourceBinding(caller: UserCaller, input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().upsertSourceBinding(input);
   }
 
-  @callable()
-  async createProductChange(agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
+  async createProductChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().createChange(agentName, input);
   }
 
-  @callable()
-  async listProductChanges(agentName?: string, limit = 20): Promise<ProductChangeRequest[]> {
-    return this.productChanges().listChanges(agentName, limit);
-  }
-
-  @callable()
   async updateProductChange(
+    caller: UserCaller,
     changeId: string,
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
   ): Promise<ProductChangeRequest> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().updateChange(changeId, patch);
   }
 
-  @callable()
-  async transitionProductChange(changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest> {
+  async transitionProductChange(caller: UserCaller, changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().transitionChange(changeId, to);
   }
 
-  @callable()
   async recordProductChangeCheck(
+    caller: UserCaller,
     changeId: string,
     input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
   ): Promise<ProductChangeCheck> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().recordCheck(changeId, input);
   }
 
-  @callable()
-  async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval> {
+  async requestProductChangeApproval(caller: UserCaller, changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().requestApproval(changeId, approvalType);
   }
 
-  @callable()
   async decideProductChangeApproval(
+    caller: UserCaller,
     approvalId: string,
     decision: 'approved' | 'rejected',
     approvedBy: string,
     note?: string | null,
   ): Promise<ProductChangeApproval> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().decideApproval(approvalId, decision, approvedBy, note);
   }
 
-  @callable()
   async recordProductDeployment(
+    caller: UserCaller,
     changeId: string,
     input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
   ): Promise<ProductDeploymentRecord> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().recordDeployment(changeId, input);
   }
 
-  @callable()
-  async getProductChangeBoard(agentName?: string, limit = 20): Promise<ProductChangeBoard> {
+  async getProductChangeBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ProductChangeBoard> {
+    await this.requireTier(caller, 'product_change');
     return this.productChanges().board(agentName, limit);
+  }
+
+  /** Full ledger view of one change — the execution engine's read surface. */
+  async getProductChangeDetail(caller: UserCaller, changeId: string): Promise<ProductChangeDetail> {
+    await this.requireTier(caller, 'product_change');
+    return this.productChanges().detail(changeId);
   }
 
   // ── Credentials ────────────────────────────────────────────────────
 
-  @callable()
-  async listCredentials(): Promise<CredentialSummary[]> {
-    return this.sqlx<{ key: string; kind: string; created_at: number; updated_at: number }>(
-      `SELECT key, kind, created_at, updated_at FROM user_credentials ORDER BY key`,
-    ).map((r) => ({
-      key: r.key,
-      kind: r.kind as CredentialSummary['kind'],
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+  async listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
+    return this.credentialSummaries(await this.requireTier(caller, 'credentials.model'));
   }
 
-  @callable()
-  async setCredential(key: string, credentialJson: unknown): Promise<void> {
+  /** Non-model credentials are cut from a shared workspace's view along with
+   *  access to them: the agent must not even learn that the owner holds a
+   *  GitHub PAT. Model providers stay listed so the model picker still works. */
+  private credentialSummaries(resolved: ResolvedCaller): CredentialSummary[] {
+    const attenuated = resolved.kind === 'workspace' && resolved.tier === 'shared';
+    return this.sqlx<{ key: string; kind: string; created_at: number; updated_at: number }>(
+      `SELECT key, kind, created_at, updated_at FROM user_credentials ORDER BY key`,
+    ).filter((r) => !attenuated || isModelInferenceCredentialKey(r.key))
+      .map((r) => ({
+        key: r.key,
+        kind: r.kind as CredentialSummary['kind'],
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+  }
+
+  /** Model-inference credentials survive tainting — the agent must still be
+   *  able to think, and provider headers attach inside trusted DO code without
+   *  ever entering LLM context. Everything else in the store is owner-level. */
+  private requireCredentialAccess(caller: UserCaller, key: string): Promise<ResolvedCaller> {
+    return this.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
+  }
+
+  async setCredential(caller: UserCaller, key: string, credentialJson: unknown): Promise<void> {
+    await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
       throw new Error(`${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
@@ -935,11 +1136,11 @@ export class UserDO extends Agent<Env> {
     // Cloudflare login just landed → discover the account's AI Gateways now
     // (single-gateway auto-select lives in listAIGateways), so my-gateway
     // works without a settings visit. listAIGateways never throws.
-    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways();
+    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(OWNER_SESSION);
   }
 
-  @callable()
-  async deleteCredential(key: string): Promise<void> {
+  async deleteCredential(caller: UserCaller, key: string): Promise<void> {
+    await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
   }
@@ -955,8 +1156,8 @@ export class UserDO extends Agent<Env> {
    *  provider deps need this to point the SDK at the right endpoint —
    *  baseURL isn't a secret on its own and won't show up in
    *  listCredentials(). */
-  @callable()
-  async getCredentialBaseURL(key: string): Promise<string | null> {
+  async getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
+    await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
     // The my-gateway view rides the same account-scoped /ai/v1 endpoint as
     // Workers AI — only the cf-aig-gateway-id header differs.
@@ -973,8 +1174,8 @@ export class UserDO extends Agent<Env> {
 
   /** Returns headers ready to inject into a fetch. Handles Codex OAuth
    *  refresh atomically (DO event loop serializes concurrent calls). */
-  @callable()
-  async getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
+  async getAuthHeaders(caller: UserCaller, key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
+    await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
     // `cloudflare.ai-gateway` is a DERIVED view of the Cloudflare login: same
     // bearer + refresh path, but cf-aig-gateway-id names the user's own
@@ -1055,21 +1256,20 @@ export class UserDO extends Agent<Env> {
   /** The user's AI Gateways + current selection. Zero-friction rule: exactly
    *  one gateway and nothing selected → select it (persisted). Never throws —
    *  discovery failures surface in `error` so login can call this inline. */
-  @callable()
-  async listAIGateways(): Promise<{
+  async listAIGateways(caller: UserCaller): Promise<{
     connected: boolean;
     selectedId: string | null;
     gateways: CloudflareAIGatewaySummary[];
     error: string | null;
   }> {
-    this.ensureInit();
+    await this.requireTier(caller, 'ai_gateway.admin');
     let selectedId = this.selectedAIGatewayId();
     const api = await this.cloudflareAPICredential();
     if (!api) return { connected: false, selectedId, gateways: [], error: null };
     try {
       const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
       if (!selectedId && gateways.length === 1) {
-        await this.selectAIGateway(gateways[0].id);
+        await this.selectAIGateway(OWNER_SESSION, gateways[0].id);
         selectedId = gateways[0].id;
       }
       return { connected: true, selectedId, gateways, error: null };
@@ -1078,15 +1278,14 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  @callable()
-  async selectAIGateway(gatewayId: string | null): Promise<void> {
-    this.ensureInit();
+  async selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
+    await this.requireTier(caller, 'ai_gateway.admin');
     if (gatewayId === null) {
       this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
       return;
     }
     if (!isCloudflareAIGatewayId(gatewayId)) throw new Error('Invalid AI Gateway id.');
-    await this.setConfig(UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
+    await this.setConfig(OWNER_SESSION, UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
 
   /** Returns the rotated credential, `'revoked'` when Cloudflare rejected
@@ -1143,8 +1342,8 @@ export class UserDO extends Agent<Env> {
 
   // ── Codex device flow ──────────────────────────────────────────────
 
-  @callable()
-  async startCodexDeviceFlow(): Promise<DeviceCodeStart> {
+  async startCodexDeviceFlow(caller: UserCaller): Promise<DeviceCodeStart> {
+    await this.requireTier(caller, 'codex_auth');
     const client = createCodexOAuthClient();
     const result = await client.startDeviceFlow();
     this.sqlx(`DELETE FROM codex_device_flow`);
@@ -1156,8 +1355,8 @@ export class UserDO extends Agent<Env> {
     return result;
   }
 
-  @callable()
-  async pollCodexDeviceFlow(): Promise<{ connected: boolean; accountId?: string; error?: string }> {
+  async pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
+    await this.requireTier(caller, 'codex_auth');
     const row = this.sqlx<{ device_auth_id: string; user_code: string }>(
       `SELECT device_auth_id, user_code FROM codex_device_flow WHERE id = 1`,
     )[0];
@@ -1182,14 +1381,14 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  @callable()
-  async disconnectCodex(): Promise<void> {
+  async disconnectCodex(caller: UserCaller): Promise<void> {
+    await this.requireTier(caller, 'codex_auth');
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, CODEX_CRED_KEY);
     this.sqlx(`DELETE FROM codex_device_flow`);
   }
 
-  @callable()
-  async getCodexStatus(): Promise<CodexStatus> {
+  async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
+    await this.requireTier(caller, 'codex_auth');
     const cred = this.getCredentialRow(CODEX_CRED_KEY);
     const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
       `SELECT user_code, portal_url, poll_interval FROM codex_device_flow WHERE id = 1`,
@@ -1216,14 +1415,14 @@ export class UserDO extends Agent<Env> {
 
   // ── User-level config (defaults) ───────────────────────────────────
 
-  @callable()
-  async getConfig(key: string): Promise<string | null> {
+  async getConfig(caller: UserCaller, key: string): Promise<string | null> {
+    await this.requireTier(caller, 'config');
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
     return row?.value ?? null;
   }
 
-  @callable()
-  async setConfig(key: string, value: string): Promise<void> {
+  async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
+    await this.requireTier(caller, 'config');
     this.sqlx(
       `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -1231,8 +1430,8 @@ export class UserDO extends Agent<Env> {
     );
   }
 
-  @callable()
-  async listConfig(): Promise<Record<string, string>> {
+  async listConfig(caller: UserCaller): Promise<Record<string, string>> {
+    await this.requireTier(caller, 'config');
     const rows = this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_config`);
     const out: Record<string, string> = {};
     for (const r of rows) out[r.key] = r.value;
@@ -1266,9 +1465,8 @@ export class UserDO extends Agent<Env> {
   /** Idempotent boot warmup. Called by the routes layer on first hit per
    *  process so MCP connections can re-establish in parallel with the user's
    *  first orchestrator turn, not on its critical path. Fire-and-forget. */
-  @callable()
-  async userMcp_warmConnections(): Promise<{ servers: number }> {
-    this.ensureInit();
+  async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
+    await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0] as { n: number };
     if (!rows || rows.n === 0) return { servers: 0 };
     try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
@@ -1276,9 +1474,8 @@ export class UserDO extends Agent<Env> {
     return { servers: rows.n };
   }
 
-  @callable()
-  async userMcp_list(): Promise<McpServerSummary[]> {
-    this.ensureInit();
+  async userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
+    await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx<{
       id: string; name: string; server_url: string; transport: string;
       allowed_tools: string | null; created_at: number; updated_at: number;
@@ -1328,12 +1525,12 @@ export class UserDO extends Agent<Env> {
    *  Worker should redirect OAuth callbacks to (e.g. `https://proteus.example`).
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
-  @callable()
   async userMcp_add(
+    caller: UserCaller,
     input: unknown,
     publicOrigin: string,
   ): Promise<{ id: string; authUrl: string | null }> {
-    this.ensureInit();
+    await this.requireTier(caller, 'mcp.manage');
     const cfg = validateMcpServerInput(input);
     if (typeof publicOrigin !== 'string' || !/^https?:\/\//.test(publicOrigin)) {
       throw new Error('publicOrigin must be a full https?:// origin.');
@@ -1358,18 +1555,10 @@ export class UserDO extends Agent<Env> {
     );
     authProvider.serverId = id;
 
-	    // Header passthrough for non-OAuth servers behind private/bearer auth.
-    // Set both eventSourceInit (SSE path) and requestInit (Streamable HTTP)
-    // so `transport: 'auto'` works either way.
-    const headerOpts = cfg.headers
-      ? {
-          eventSourceInit: {
-            fetch: (url: string | URL, init?: RequestInit) =>
-              fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...cfg.headers } }),
-          },
-          requestInit: { headers: cfg.headers },
-        }
-      : {};
+    // Header passthrough for non-OAuth servers behind private/bearer auth.
+    // requestInit.headers is what survives hibernation and authenticates both
+    // transports; see buildMcpHeaderTransportOpts.
+    const headerOpts = buildMcpHeaderTransportOpts(cfg.headers ?? null) ?? {};
 
     let authUrl: string | null = null;
     try {
@@ -1406,9 +1595,8 @@ export class UserDO extends Agent<Env> {
     return { id, authUrl };
   }
 
-  @callable()
-  async userMcp_remove(id: string): Promise<void> {
-    this.ensureInit();
+  async userMcp_remove(caller: UserCaller, id: string): Promise<void> {
+    await this.requireTier(caller, 'mcp.manage');
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
     try { await this.userMcp().removeServer(id); }
     catch (err) { console.warn('[user-do] removeServer (live):', (err as Error).message); }
@@ -1416,12 +1604,15 @@ export class UserDO extends Agent<Env> {
     this._userMcpUpdatedAt = Date.now();
   }
 
-  /** Patch-update editable fields. `name`, `allowedTools`, and `headers` are
-   *  safe to change without reconnecting. `serverUrl` / `transport` changes
+  /** Patch-update editable fields. `name` and `allowedTools` take effect
+   *  without reconnecting (name is cosmetic; allowedTools is enforced from SQL
+   *  at descriptor/dispatch time). A `headers` change re-registers the live
+   *  connection — the SSE/HTTP transport reads its auth headers at connect
+   *  time, so a rotated bearer only takes effect (and re-persists into the
+   *  SDK's snapshot) after a reconnect. `serverUrl` / `transport` changes still
    *  require remove + re-add (the SDK doesn't support live re-targeting). */
-  @callable()
-  async userMcp_update(id: string, patch: unknown): Promise<void> {
-    this.ensureInit();
+  async userMcp_update(caller: UserCaller, id: string, patch: unknown): Promise<void> {
+    await this.requireTier(caller, 'mcp.manage');
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
     if (!patch || typeof patch !== 'object') throw new Error('patch must be a JSON object.');
     const p = patch as Record<string, unknown>;
@@ -1458,21 +1649,61 @@ export class UserDO extends Agent<Env> {
     args.push(id);
     this.sqlx(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
     this._userMcpUpdatedAt = now;
+
+    // A headers patch must re-register the live transport (and the SDK's
+    // stored snapshot) — writing the SQL column alone never reaches the wire.
+    if (p.headers !== undefined) {
+      try { await this.reregisterUserMcpServer(id); }
+      catch (err) { console.warn('[user-do] userMcp_update header re-register:', (err as Error).message); }
+    }
+  }
+
+  /** Rebuild a server's live MCP connection from its current `user_mcp_servers`
+   *  row. The transport reads auth headers at connect time, so applying a
+   *  rotated bearer means tearing down the connection and re-establishing it
+   *  with freshly-built transport options (which also re-persists the new
+   *  headers into the SDK's `server_options` snapshot). Any OAuth callback URL
+   *  is preserved across the re-register. */
+  private async reregisterUserMcpServer(id: string): Promise<void> {
+    const row = this.sqlx<{ name: string; server_url: string; transport: string; headers: string | null }>(
+      `SELECT name, server_url, transport, headers FROM user_mcp_servers WHERE id = ?`, id,
+    )[0];
+    if (!row) return;
+    const mgr = this.userMcp();
+    const callbackUrl = mgr.listServers().find((s) => s.id === id)?.callback_url ?? '';
+    try { await mgr.removeServer(id); }
+    catch (err) { console.warn('[user-do] reregister removeServer:', (err as Error).message); }
+
+    const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(row.headers)) ?? {};
+    let authProvider: AgentMcpOAuthProvider | undefined;
+    if (callbackUrl) {
+      authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'proteus-user-mcp', callbackUrl);
+      authProvider.serverId = id;
+    }
+    await mgr.registerServer(id, {
+      url: row.server_url,
+      name: row.name,
+      callbackUrl,
+      transport: {
+        ...headerOpts,
+        ...(authProvider ? { authProvider } : {}),
+        type: (row.transport as McpTransport) ?? 'auto',
+      },
+    });
+    void mgr.establishConnection(id).catch(() => undefined);
   }
 
   /** Monotonic watermark — the orchestrator caches by this value. */
-  @callable()
-  async userMcp_updatedAt(): Promise<number> {
-    this.ensureInit();
+  async userMcp_updatedAt(caller: UserCaller): Promise<number> {
+    await this.requireTier(caller, 'mcp.tools');
     return this._userMcpUpdatedAt;
   }
 
   /** Serializable tool descriptors for every connected MCP server, filtered
    *  by per-server `allowed_tools`. The orchestrator wraps each into an
    *  AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`. */
-  @callable()
-  async userMcp_toolDescriptors(): Promise<SerializableToolDescriptor[]> {
-    this.ensureInit();
+  async userMcp_toolDescriptors(caller: UserCaller): Promise<SerializableToolDescriptor[]> {
+    await this.requireTier(caller, 'mcp.tools');
     const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
       `SELECT id, name, allowed_tools FROM user_mcp_servers`,
     );
@@ -1521,13 +1752,16 @@ export class UserDO extends Agent<Env> {
   /** Execute a single MCP tool call. Called over RPC by the orchestrator's
    *  per-tool closure. The result must be JSON-serializable; the SDK already
    *  guarantees this (no closures in CallToolResult). */
-  @callable()
   async userMcp_callTool(
+    caller: UserCaller,
     serverId: string,
     name: string,
     args: unknown,
   ): Promise<unknown> {
-    this.ensureInit();
+    // Caller identity is proven by the capability token rather than claimed in
+    // an argument, so there is no agent name left to spoof: a token exists only
+    // for a workspace this user's registry issued one to, and dies with it.
+    await this.requireTier(caller, 'mcp.tools');
     if (!this._userMcp) {
       // Cold start: hydrate the manager before dispatching.
       this.userMcp();
@@ -1553,9 +1787,8 @@ export class UserDO extends Agent<Env> {
 
   /** OAuth callback receiver. The routes layer matches the incoming
    *  `/api/user/mcp/callback` request and forwards it here verbatim. */
-  @callable()
-  async userMcp_handleOAuthCallback(url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
-    this.ensureInit();
+  async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
+    await this.requireTier(caller, 'mcp.manage');
     try {
       const req = new Request(url);
       const result = await this.userMcp().handleCallbackRequest(req);
@@ -1575,9 +1808,8 @@ export class UserDO extends Agent<Env> {
 
   /** Which providers does this user have credentials for? Used by the UI's
    *  model picker to know which providers are connected. */
-  @callable()
-  async listConnectedProviders(): Promise<ConnectedProvider[]> {
-    const creds = await this.listCredentials();
+  async listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {
+    const creds = this.credentialSummaries(await this.requireTier(caller, 'credentials.model'));
     const byKey = new Map(creds.map((c) => [c.key, c]));
     const out: ConnectedProvider[] = [];
     // Built-in providers without credentials are listed by the server, not

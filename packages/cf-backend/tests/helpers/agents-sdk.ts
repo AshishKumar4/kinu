@@ -1,0 +1,43 @@
+import { mock } from 'bun:test';
+
+/**
+ * Stub the Agent SDK so bun can import the DO-layer src modules that depend on
+ * it — the real `agents` dist imports `cloudflare:*` modules that exist only
+ * inside workerd.
+ *
+ * bun keeps ONE mock per specifier for the whole run (the first registration
+ * wins), so every test that needs it must go through this single shape.
+ * Call it before importing the module under test.
+ */
+export function mockAgentsSdk(): void {
+  mock.module('agents', () => ({
+    /** Base-class token. Used as a `subAgent` class key, and as the real base
+     *  for DO classes a test instantiates directly (UserDO) — hence the ctx/env
+     *  assignment the real Agent constructor also performs. */
+    Agent: class {
+      readonly ctx: unknown;
+      readonly env: unknown;
+      constructor(ctx?: unknown, env?: unknown) {
+        this.ctx = ctx;
+        this.env = env;
+      }
+    },
+    /** The real decorator only attaches RPC metadata. */
+    callable: () => (method: unknown) => method,
+    getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
+      namespace.get(namespace.idFromName(name)),
+  }));
+  // UserDO imports these at module load; the real ones reach `cloudflare:*`.
+  // No test exercises the live MCP client — the per-user MCP surface is covered
+  // through its pure helpers in unit-user-mcp.test.ts.
+  mock.module('agents/mcp/client', () => ({
+    MCPClientManager: class {
+      mcpConnections = {};
+      async removeServer() {}
+      async restoreConnectionsFromStorage() {}
+    },
+  }));
+  mock.module('agents/mcp/do-oauth-client-provider', () => ({
+    DurableObjectOAuthClientProvider: class { serverId = ''; },
+  }));
+}

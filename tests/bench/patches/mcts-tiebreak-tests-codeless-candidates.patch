@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/mcts/test-selection.ts b/packages/core/src/mcts/test-selection.ts
+index fd1628c..a2c2937 100644
+--- a/packages/core/src/mcts/test-selection.ts
++++ b/packages/core/src/mcts/test-selection.ts
+@@ -45,7 +45,7 @@ export async function selectWinnerByTest(
+   const candidates = [winner, ...rivals];
+ 
+   // Only candidates that carry runnable code can be discriminated by execution.
+-  const runnable = candidates.filter((n) => (n.code_used ?? '').trim().length > 0);
++  const runnable = candidates.filter((n) => (n.code_used ?? '').trim().length === 0);
+   if (runnable.length < 2) return winner.id;
+ 
+   // One harness, written against the task using the value-argmax winner's code

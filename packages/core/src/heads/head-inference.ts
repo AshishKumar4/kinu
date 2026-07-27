@@ -395,7 +395,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         if (budgetExhausted(input.budget, usageTotal().total).exhausted) return true;
         return false;
       },
-      maxOutputTokens: 2048,
     });
 
     const status: HeadReport['status'] = deps.isAborted()

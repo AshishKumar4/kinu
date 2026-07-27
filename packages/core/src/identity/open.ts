@@ -1,9 +1,10 @@
 /**
- * Open an existing agent — runs the resume protocol and returns AgentRuntime.
+ * Open an existing workspace — runs the resume protocol and returns the
+ * default agent's AgentRuntime.
  *
  * Resume protocol:
- * 1. Read agent_identity → get stable UUID + name
- * 2. Read SOUL.md → get agent identity text (migrates legacy agent_soul DBs)
+ * 1. Read workspace_identity → get stable UUID + name
+ * 2. Read SOUL.md → get the workspace identity text
  * 3. Read scaffold_versions → get current version
  * 4. Read scaffold/agent.js from VFS → current agentic loop
  * 5. Read craft_scores → quality metrics
@@ -12,7 +13,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLMProviderConfig } from '../llm.js';
-import { initAllTables } from './schema.js';
+import { initAllTables, migrateWorkspaceStorage } from './schema.js';
 import { readSoul, summarizeSoul } from './soul.js';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
@@ -21,12 +22,12 @@ import {
 import { createVercelAILLM } from '../llm.js';
 import { buildRuntime } from '../runtime-builder.js';
 
-export interface AgentResumeConfig {
+export interface WorkspaceResumeConfig {
   llm: LLMProviderConfig;
   judge?: LLMProviderConfig;
 }
 
-export interface AgentInfo {
+export interface WorkspaceInfo {
   id: string;
   name: string;
   purpose: string;
@@ -39,23 +40,24 @@ export interface AgentInfo {
   createdAt: number;
 }
 
-/** Open an existing agent database and resume it */
-export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
+/** Open an existing workspace database and resume it */
+export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig): {
   rt: AgentRuntime;
-  info: AgentInfo;
+  info: WorkspaceInfo;
 } {
   const { sql, execRaw } = wrapDatabase(db);
 
   // Ensure all tables exist (handles schema upgrades gracefully)
   initAllTables(execRaw);
+  migrateWorkspaceStorage(sql);
 
   // Step 1: Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`
-    SELECT id, name, created_at FROM agent_identity LIMIT 1
+    SELECT id, name, created_at FROM workspace_identity LIMIT 1
   `[0];
-  if (!identity) throw new Error('No agent identity found. Use createAgent() to create one.');
+  if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
-  // Step 2: Read SOUL.md (migrates pre-SOUL.md agent_soul databases)
+  // Step 2: Read SOUL.md
   const soul = readSoul(sql);
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
@@ -81,7 +83,7 @@ export function openAgent(db: AgentDatabase, config: AgentResumeConfig): {
   // Step 8: Detect orphaned fibers
   const orphanedFibers = sql<{ id: string; name: string }>`SELECT id, name FROM fibers`;
   if (orphanedFibers.length > 0) {
-    console.warn(`[agent] ${orphanedFibers.length} orphaned fiber(s) from previous run:`,
+    console.warn(`[workspace] ${orphanedFibers.length} orphaned fiber(s) from previous run:`,
       orphanedFibers.map(f => f.name).join(', '));
     // Clean up orphaned fibers
     for (const fiber of orphanedFibers) {

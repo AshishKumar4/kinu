@@ -14,12 +14,39 @@ describe('agent_facts', () => {
 
   test('upsert is idempotent: second write overwrites', () => {
     const { facts } = createTestFactsStore();
-    facts.upsert('deploy.target', 'foo.workers.dev');
-    facts.upsert('deploy.target', 'bar.workers.dev', { confidence: 0.8, source: 'cli' });
+    expect(facts.upsert('deploy.target', 'foo.workers.dev')).toBe('created');
+    expect(facts.upsert('deploy.target', 'bar.workers.dev', { confidence: 0.8, source: 'cli' })).toBe('changed');
     const f = facts.recall('deploy.target');
     expect(f?.value).toBe('bar.workers.dev');
     expect(f?.confidence).toBe(0.8);
     expect(f?.source).toBe('cli');
+  });
+
+  test('same-value re-observation preserves the changelog timestamp', () => {
+    const { facts, testSql } = createTestFactsStore();
+    facts.upsert('sandbox.npm_version', 'npm v10');
+    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+                WHERE key = 'sandbox.npm_version'`;
+
+    expect(facts.upsert('sandbox.npm_version', 'npm v10', {
+      confidence: 0.9,
+      source: 'sleep-time-compute',
+    })).toBe('unchanged');
+
+    const fact = facts.recall('sandbox.npm_version');
+    expect(fact?.lastObservedAt).toBe(1000);
+    expect(fact?.confidence).toBe(0.9);
+    expect(fact?.source).toBe('sleep-time-compute');
+  });
+
+  test('value change advances the changelog timestamp', () => {
+    const { facts, testSql } = createTestFactsStore();
+    facts.upsert('sandbox.npm_version', 'npm v9');
+    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+                WHERE key = 'sandbox.npm_version'`;
+
+    expect(facts.upsert('sandbox.npm_version', 'npm v10')).toBe('changed');
+    expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
   });
 
   test('forget removes the key', () => {

@@ -1,19 +1,28 @@
 /**
  * File-manager plumbing shared by the orchestrator RPCs and the FilesPane UI.
  *
- * Listing: normalize the heterogeneous `readdir` outputs of the execution
- * providers into a single typed DirEntry[]. Each provider returns a
- * different shape:
- *   - sandbox:  string  "d name\n- name\n…"        (type-prefixed)
- *   - nimbus:   string  "d name (123b)\n- name (45b)" (type-prefixed + size)
- *   - laptop:   string[] plain names (ls -1a)        (no type info)
- *   - workspace is read directly off the VFS by the orchestrator, not here.
- *
- * Writing: writeExecutorFileOp is the one upload seam — workspace writes go
- * binary-safe to the agent VFS, other executors route through their provider
- * writeFile tool (text-only transports), read-only executors get a typed error.
+ * One plane for BOTH read and write: every executor's files are reached
+ * through the CompositeVFS. Workspace paths are composite-addressed already;
+ * other executors' env-native paths map onto their mount prefix
+ * (EXECUTOR_MOUNT_PREFIX), landing on the same raw handle the executor's tools
+ * use — structured bytes and entries, never the executors' lossy LLM tool
+ * strings. Unavailable mounts surface the composite's honest reservation error.
  */
+import { EXECUTOR_MOUNT_PREFIX } from "@proteus/core";
 import type { DirEntry } from "./protocol";
+
+/**
+ * Map an (executorId, environment-native path) to its CompositeVFS address.
+ * The workspace executor IS the composite, so its paths pass through; every
+ * other executor maps through its mount prefix. Returns null for an executor
+ * with no file plane (unknown id).
+ */
+export function toCompositePath(executorId: string, path: string): string | null {
+  if (executorId === "workspace") return path;
+  const prefix = EXECUTOR_MOUNT_PREFIX[executorId];
+  if (!prefix) return null;
+  return `${prefix}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
 /** Per-file upload cap. Content crosses the agents RPC frame as base64, so the
  *  raw cap keeps the encoded payload within sane WS frame territory. */
@@ -37,24 +46,20 @@ export function encodeBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** What writeExecutorFileOp needs from the orchestrator — the workspace VFS
- *  (binary-safe, auto-creates parent dirs) and the provider lookup. */
+/** What writeExecutorFileOp needs from the orchestrator — the workspace
+ *  CompositeVFS (binary-safe on every mount). */
 export interface ExecutorWriteDeps {
   vfs: { writeFile(path: string, data: Uint8Array | string): Promise<void> };
-  getProvider(executorId: string):
-    | { tools: Record<string, { execute: (...args: unknown[]) => Promise<unknown> }> }
-    | undefined
-    | null;
 }
 
 export type ExecutorWriteResult = { ok: true } | { error: string };
 
 /**
- * Write one uploaded file into an executor, mirroring readExecutorFile's
- * provider dispatch. Workspace → vfs.writeFile (binary-safe). Other executors →
- * their provider `writeFile` tool when present; those transports are
- * string-typed, so binary content is refused with a clear error rather than
- * silently corrupted. Executors with no writeFile tool are read-only.
+ * Write one uploaded file into an executor — ONE binary-safe path: the
+ * CompositeVFS. Workspace paths are composite-addressed already; other
+ * executors' env-native paths map through their mount prefix, landing on the
+ * same raw handle the executor's tools use. A reserved/offline mount yields
+ * the composite's clear unavailability error.
  */
 export async function writeExecutorFileOp(
   deps: ExecutorWriteDeps,
@@ -73,47 +78,14 @@ export async function writeExecutorFileOp(
     return { error: `file too large (${bytes.length} bytes; max ${MAX_UPLOAD_BYTES})` };
   }
 
-  if (executorId === "workspace") {
-    await deps.vfs.writeFile(path, bytes);
+  const target = toCompositePath(executorId, path);
+  if (target === null) return { error: `Executor "${executorId}" not found` };
+  try {
+    await deps.vfs.writeFile(target, bytes);
     return { ok: true };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
   }
-
-  const provider = deps.getProvider(executorId);
-  if (!provider) return { error: `Executor "${executorId}" not found` };
-  const writeTool = provider.tools.writeFile;
-  if (!writeTool) return { error: `Executor "${executorId}" is read-only — it has no writeFile tool` };
-  if (bytes.includes(0)) {
-    return { error: `binary upload is not supported on "${executorId}" — use the workspace executor` };
-  }
-  const result = await writeTool.execute(path, new TextDecoder().decode(bytes));
-  // Provider writeFile tools report failures as strings ("writeFile error: …" /
-  // "writeFile failed: …") instead of throwing — surface them as typed errors.
-  if (typeof result === "string" && /^writeFile (error|failed)/i.test(result)) {
-    return { error: result };
-  }
-  return { ok: true };
-}
-
-/** Strip a trailing slash (dir markers from some `ls` variants). */
-function stripSlash(name: string): string {
-  return name.endsWith("/") ? name.slice(0, -1) : name;
-}
-
-function parseLine(line: string): DirEntry | null {
-  const s = line.trim();
-  if (!s) return null;
-  // "d name" / "- name", optionally with a " (123b)" size suffix (nimbus).
-  const m = /^([d-])\s+(.+?)(?:\s+\((\d+)\s*b?\))?$/i.exec(s);
-  if (m) {
-    const name = stripSlash(m[2].trim());
-    if (!name || name === "." || name === "..") return null;
-    return { name, type: m[1] === "d" ? "dir" : "file", size: m[3] ? Number(m[3]) : undefined };
-  }
-  // Plain name (laptop) — a trailing slash is the only available dir hint.
-  const isDir = s.endsWith("/");
-  const name = stripSlash(s);
-  if (!name || name === "." || name === "..") return null;
-  return { name, type: isDir ? "dir" : "file" };
 }
 
 /** Directories first, then files; alphabetical within each group. */
@@ -122,17 +94,4 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
     if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
-}
-
-/** Normalize a provider `readdir` result (string blob or string[]) → DirEntry[]. */
-export function parseReaddirEntries(raw: unknown): DirEntry[] {
-  const lines = Array.isArray(raw)
-    ? (raw as unknown[]).map(String)
-    : String(raw ?? "").split("\n");
-  const entries: DirEntry[] = [];
-  for (const line of lines) {
-    const e = parseLine(line);
-    if (e) entries.push(e);
-  }
-  return sortDirEntries(entries);
 }

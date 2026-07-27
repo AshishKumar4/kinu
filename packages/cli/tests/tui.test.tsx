@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot } from '@opentui/react';
@@ -10,17 +11,153 @@ import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackO
 import type { AgentModelEntry } from '../src/model-catalog.js';
 import { MessageList } from '../src/tui/messages.js';
 import { tuiColors } from '../src/tui/theme.js';
+import { StatusBar } from '../src/tui/status-bar.js';
+import { handleHistoryScrollKey } from '../src/tui/chat-app.js';
+import { VERSION } from '../src/display.js';
 
 const repoRoot = resolve(__dirname, '../../..');
 
 describe('CLI TUI layout', () => {
+  test('status bar makes the model control discoverable and shows effort', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 110, height: 8, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <StatusBar
+          name="jarvis"
+          mode="local"
+          model="openai/gpt-5.5"
+          reasoningEffort="high"
+          connected={true}
+          onModelSelect={() => {}}
+        />,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain('GPT 5.5');
+      expect(frame).toContain('[Ctrl+P]');
+      expect(frame).toContain('effort high');
+      expect(frame).toContain(`cli ${VERSION}`);
+
+      const statusSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/status-bar.tsx'), 'utf8');
+      const chatSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/chat-app.tsx'), 'utf8');
+      expect(statusSource).toContain('onMouseDown={onModelSelect}');
+      expect(chatSource).toContain("key.name === 'p' && key.ctrl");
+      expect(chatSource).toContain('setModelPreference(client, model.spec)');
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('status bar clips model metadata to narrow terminals and retains the CLI version', async () => {
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 52, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    try {
+      root.render(
+        <StatusBar
+          name="a"
+          mode="local"
+          model="openai/a-very-long-model-name-that-cannot-fit"
+          reasoningEffort="high"
+          connected={true}
+          scaffoldVersion={12}
+          toolCount={42}
+          autoEvolve={true}
+          branchCount={2}
+        />,
+      );
+      await renderSettled(renderOnce);
+      const frame = captureCharFrame();
+      expect(frame).toContain(`cli ${VERSION}`);
+      expect(frame).toContain('…');
+      expect(frame).not.toContain('A Very Long Model Name That Cannot Fit');
+      for (const line of frame.split('\n')) {
+        expect([...line].length).toBeLessThanOrEqual(52);
+      }
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('CLI version has package.json as its single source', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')) as { version: string };
+    const displaySource = readFileSync(resolve(repoRoot, 'packages/cli/src/display.ts'), 'utf8');
+    const binSource = readFileSync(resolve(repoRoot, 'packages/cli/bin/cli.ts'), 'utf8');
+    const homeSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
+
+    expect(VERSION).toBe(packageJson.version);
+    expect(displaySource).toContain("import cliPackage from '../package.json'");
+    expect(binSource).toContain(".version(VERSION, '-v, --version')");
+    expect(binSource).not.toContain(".version('0.1.0'");
+    expect(homeSource).toContain('workspaces · cli {VERSION}');
+  });
+
   test('model picker is an absolute overlay and does not move the input area', async () => {
     const withoutOverlay = await renderOverlayFrame(false);
     const withOverlay = await renderOverlayFrame(true);
 
     expect(lineContaining(withoutOverlay, 'INPUT-SENTINEL')).toBe(lineContaining(withOverlay, 'INPUT-SENTINEL'));
     expect(withOverlay).toContain('Select model');
+    expect(withOverlay).toContain('Type to filter');
+    expect(withOverlay).toContain('Filter models');
     expect(withOverlay).toContain('Kimi K2.6');
+  });
+
+  test('model picker forwards arrow and enter keys from its filter input', async () => {
+    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    let selected: AgentModelEntry | null = null;
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%' }}>
+          <ModelPickerOverlay
+            models={MODELS}
+            currentSpec={MODELS[0]!.spec}
+            terminal={{ width: 80, height: 24 }}
+            onSelect={(model) => { selected = model; }}
+          />
+        </box>,
+      );
+      await renderSettled(renderOnce);
+
+      mockInput.pressArrow('down');
+      await renderSettled(renderOnce);
+      expect(captureCharFrame()).toContain('Llama 3.3 70B');
+
+      mockInput.pressEnter();
+      await renderSettled(renderOnce);
+      expect(selected?.spec).toBe(MODELS[1]!.spec);
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
+  });
+
+  test('chat history keys scroll without stealing multiline draft arrows', () => {
+    const history = {
+      scrollTop: 100,
+      viewport: { height: 20 },
+      scrollTo(position: number) {
+        this.scrollTop = position;
+      },
+    };
+    let prevented = 0;
+    const key = (name: string) => ({
+      name,
+      preventDefault: () => { prevented += 1; },
+    });
+
+    expect(handleHistoryScrollKey(key('up'), '', history)).toBe(true);
+    expect(history.scrollTop).toBe(96);
+    expect(handleHistoryScrollKey(key('down'), 'line one\nline two', history)).toBe(false);
+    expect(history.scrollTop).toBe(96);
+    expect(handleHistoryScrollKey(key('pageup'), 'draft text', history)).toBe(true);
+    expect(history.scrollTop).toBe(86);
+    expect(handleHistoryScrollKey(key('pagedown'), 'draft text', history)).toBe(true);
+    expect(history.scrollTop).toBe(96);
+    expect(prevented).toBe(3);
   });
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
@@ -281,6 +418,82 @@ describe('CLI TUI layout', () => {
     expect(source).toContain("focusArea === 'mission'");
     expect(source).toContain('nextFocus');
     expect(source).toContain('onMouseDown');
+  });
+
+  test('home model and effort selections persist as global defaults', () => {
+    const proteusHome = mkdtempSync(resolve(tmpdir(), 'proteus-home-tui-'));
+    try {
+      writeFileSync(resolve(proteusHome, 'config.json'), JSON.stringify({
+        model: 'openai/gpt-5.5',
+        reasoningEffort: 'medium',
+        providers: { openai: { apiKey: 'sk-test' } },
+      }));
+      const script = `
+        import { readFileSync } from 'node:fs';
+        import { createElement } from './packages/cli/node_modules/react/index.js';
+        import { createTestRenderer } from './packages/cli/node_modules/@opentui/core/testing.js';
+        import { createRoot } from './packages/cli/node_modules/@opentui/react/index.js';
+        import { CONFIG_PATH } from './packages/cli/src/config.ts';
+        import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
+
+        globalThis.fetch = async () => new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+        const { renderer, mockInput, renderOnce } = await createTestRenderer({
+          width: 100,
+          height: 40,
+          useThread: false,
+          maxFps: Number.POSITIVE_INFINITY,
+        });
+        const root = createRoot(renderer);
+        const settle = async (rounds = 10) => {
+          for (let i = 0; i < rounds; i++) {
+            await renderOnce();
+            await Bun.sleep(10);
+          }
+        };
+        root.render(createElement(HomeApp, { opts: {} }));
+        await settle();
+        mockInput.pressTab();
+        await settle();
+        mockInput.pressTab();
+        await settle();
+        mockInput.pressEnter();
+        await settle(100);
+        await mockInput.typeText('openai');
+        await settle();
+        mockInput.pressArrow('down');
+        mockInput.pressEnter();
+        await settle();
+        mockInput.pressTab();
+        await settle();
+        mockInput.pressArrow('down');
+        await settle();
+        root.render(createElement('box'));
+        renderer.destroy();
+        console.log(readFileSync(CONFIG_PATH, 'utf8'));
+      `;
+      const env: Record<string, string | undefined> = { ...process.env, PROTEUS_HOME: proteusHome };
+      for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'PROTEUS_TOKEN']) {
+        delete env[name];
+      }
+      const proc = Bun.spawnSync({
+        cmd: [process.execPath, '-e', script],
+        cwd: repoRoot,
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+
+      expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+      const config = JSON.parse(proc.stdout.toString()) as Record<string, unknown>;
+      expect(config).toMatchObject({ reasoningEffort: 'high' });
+      expect(config.model).toStartWith('openai/');
+      expect(config.model).not.toBe('openai/gpt-5.5');
+    } finally {
+      rmSync(proteusHome, { recursive: true, force: true });
+    }
   });
 });
 

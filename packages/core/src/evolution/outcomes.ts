@@ -22,6 +22,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
+import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 export type TurnOutcome = 'accepted' | 'corrected' | 'frustrated' | 'abandoned';
 
@@ -366,37 +367,182 @@ export interface OutcomeEvalExpectation {
 
 export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
 
-export interface OutcomeEvalSplit {
-  /** Reflection minibatch source — the corrected/frustrated turns the
-   *  optimizer must fix. Falls back to `val` when no negatives exist yet. */
-  train: OutcomeEvalInstance[];
-  /** Scoring set (Pareto/winner selection): the negatives to fix PLUS the
-   *  accepted turns the optimizer must not regress. */
-  val: OutcomeEvalInstance[];
+/** Why a split cannot support an out-of-sample winner selection. */
+export type OutcomeSplitDegeneracy =
+  /** Nothing is graded yet — there is nothing to optimize or to score on. */
+  | 'no_labeled_turns'
+  /** Only accepted turns exist: no failure to fix, so `train` is empty and a
+   *  run would select on regression guards alone. */
+  | 'no_negatives'
+  /** Exactly one failure exists: it has to be trained on, so nothing unseen
+   *  remains to score improvement against. */
+  | 'no_held_out_negatives';
+
+/** One honest sentence per degeneracy — what it costs the selection. */
+export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
+  switch (degeneracy) {
+    case 'no_labeled_turns':
+      return 'no outcome-labeled turns yet — chat with the agent first';
+    case 'no_negatives':
+      return 'no corrected/frustrated turns yet — there is no failure to optimize toward';
+    case 'no_held_out_negatives':
+      return 'only one labeled failure exists, and the optimizer must train on it — ' +
+        'the winner is selected without any unseen failure, so an improvement here is not evidence of one';
+  }
 }
 
-/** Draw a budgeted train/val split from the outcome ledger: negatives first
- *  (up to half the budget — they are the optimization targets), accepted
- *  turns fill the rest as regression guards. Newest outcomes win. */
+export interface OutcomeEvalSplit {
+  /** Reflection minibatch source — the corrected/frustrated turns the
+   *  optimizer must fix. Shares no instance with `val`. */
+  train: OutcomeEvalInstance[];
+  /** Scoring set (Pareto/winner selection): failures HELD OUT of `train`
+   *  PLUS the accepted turns the optimizer must not regress. */
+  val: OutcomeEvalInstance[];
+  /** Failures in `val` the optimizer never trained on. Selection is only
+   *  evidence of improvement when this is > 0. */
+  heldOutNegatives: number;
+  /** null when the split supports an out-of-sample selection; otherwise why
+   *  it does not — the caller must not read the winner as trustworthy. */
+  degeneracy: OutcomeSplitDegeneracy | null;
+}
+
+interface TurnMessageWindow {
+  userMessage: string;
+  startedAt: number;
+  endedAt: number;
+}
+
+interface StoredRunEvent {
+  type: string;
+  name?: string;
+}
+
+function parseRunEvent(payload: string): StoredRunEvent | null {
+  try {
+    const value: unknown = JSON.parse(payload);
+    if (typeof value !== 'object' || value === null || !('type' in value) || typeof value.type !== 'string') {
+      return null;
+    }
+    return {
+      type: value.type,
+      ...('name' in value && typeof value.name === 'string' ? { name: value.name } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Reconstruct non-scoring process evidence from the existing message + run ledgers. */
+function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | undefined {
+  if (!turnId) return undefined;
+  try {
+    const window = sql<TurnMessageWindow>`
+      SELECT u.content AS userMessage, u.created_at AS startedAt, a.created_at AS endedAt
+      FROM messages a JOIN messages u ON u.id = a.parent_id
+      WHERE a.id = ${turnId} LIMIT 1`[0];
+    if (!window) return undefined;
+
+    const from = new Date(window.startedAt).toISOString();
+    const to = new Date(window.endedAt).toISOString();
+    const starts = sql<{ runId: string; payload: string }>`
+      SELECT run_id AS runId, payload FROM run_events
+      WHERE type = 'run_start' AND ts >= ${from} AND ts <= ${to}
+      ORDER BY ts DESC LIMIT 20`;
+    const expectedUserMessage = window.userMessage.slice(0, 500);
+    const runId = starts.find(({ payload }) => {
+      try {
+        const value: unknown = JSON.parse(payload);
+        return typeof value === 'object' && value !== null &&
+          'type' in value && value.type === 'run_start' &&
+          'caused_by' in value && value.caused_by === 'chat' &&
+          'userMessage' in value && value.userMessage === expectedUserMessage;
+      } catch {
+        return false;
+      }
+    })?.runId;
+    if (!runId) return undefined;
+
+    const rows = sql<{ payload: string; ts: string }>`
+      SELECT payload, ts FROM run_events WHERE run_id = ${runId} ORDER BY event_index`;
+    const events = rows.map((row) => ({ event: parseRunEvent(row.payload), at: Date.parse(row.ts) }))
+      .filter((row): row is { event: StoredRunEvent; at: number } => row.event !== null && Number.isFinite(row.at));
+    if (events.length === 0) return undefined;
+
+    const toolCalls = events.flatMap(({ event }) =>
+      event.type === 'tool_call_end' && event.name
+        ? [{ name: event.name, args: {}, result: null }]
+        : []);
+    const steps = events.filter(({ event }) => event.type === 'step_finish').length;
+    const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
+    const endAt = [...events].reverse().find(({ event }) => event.type === 'run_end')?.at ??
+      events[events.length - 1]?.at ?? startAt;
+    return renderDelegationFeatures(delegationFeatures({
+      toolCalls,
+      steps,
+      durationMs: Math.max(0, endAt - startAt),
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Share of the drawn failures held OUT of the reflection minibatch and
+ *  scored on instead. A third keeps most of the (scarce) failures available
+ *  to learn from while still leaving a real held-out set — at the default
+ *  budget, 8 to train on and 4 to be judged on. */
+const NEGATIVE_HOLDOUT_SHARE = 1 / 3;
+
+/** Draw a budgeted, DISJOINT train/val split from the outcome ledger.
+ *
+ *  Negatives come first (up to half the budget — they are the optimization
+ *  targets) and are then partitioned: the newest go to `val` as held-out
+ *  failures, the rest to `train`. Holding out the newest is a temporal
+ *  holdout — a candidate proves itself on failures more recent than the ones
+ *  it was written against. Accepted turns fill the remaining budget as `val`
+ *  regression guards. Newest outcomes win throughout.
+ *
+ *  No instance is ever in both sets: a winner selected on `val` was never
+ *  reflected on during training. When the ledger is too thin to hold anything
+ *  out, the split says so via `degeneracy` instead of quietly overlapping. */
 export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): OutcomeEvalSplit {
   const size = Math.max(2, Math.floor(budget));
   const negatives = listTurnOutcomes(sql, { limit: size, outcomes: ['corrected', 'frustrated'] });
   const accepted = listTurnOutcomes(sql, { limit: size, outcomes: ['accepted'] });
 
   const negativeShare = Math.min(negatives.length, Math.ceil(size / 2));
-  const acceptedShare = Math.min(accepted.length, size - negativeShare);
+  const acceptedCount = Math.min(accepted.length, size - negativeShare);
   // Negatives backfill what the accepted pool can't cover (and vice versa).
-  const negativeCount = Math.min(negatives.length, size - acceptedShare);
+  const negativeCount = Math.min(negatives.length, size - acceptedCount);
 
   const toInstance = (row: TurnOutcomeRow, i: number, kind: string): OutcomeEvalInstance => ({
     id: `${kind}-${i}-${row.id}`,
     input: row.userMessage,
+    evidence: [
+      `Outcome: ${row.outcome}`,
+      turnProcessEvidence(sql, row.turnId),
+    ].filter((line): line is string => line !== undefined).join('\n'),
     expected: { outcome: row.outcome, recordedResponse: row.assistantResponse, followup: row.followup },
   });
 
-  const train = negatives.slice(0, negativeCount).map((r, i) => toInstance(r, i, 'neg'));
-  const val = [...train, ...accepted.slice(0, acceptedShare).map((r, i) => toInstance(r, i, 'pos'))];
-  return { train: train.length > 0 ? train : val, val };
+  const drawnNegatives = negatives.slice(0, negativeCount);
+  // A single failure cannot be both trained on and held out, so it stays in
+  // train and the split reports that selection is blind to improvement.
+  const holdoutCount = drawnNegatives.length >= 2
+    ? Math.max(1, Math.round(drawnNegatives.length * NEGATIVE_HOLDOUT_SHARE))
+    : 0;
+
+  const train = drawnNegatives.slice(holdoutCount).map((r, i) => toInstance(r, i, 'neg'));
+  const val = [
+    ...drawnNegatives.slice(0, holdoutCount).map((r, i) => toInstance(r, i, 'held')),
+    ...accepted.slice(0, acceptedCount).map((r, i) => toInstance(r, i, 'pos')),
+  ];
+
+  const degeneracy: OutcomeSplitDegeneracy | null =
+    drawnNegatives.length === 0
+      ? (val.length === 0 ? 'no_labeled_turns' : 'no_negatives')
+      : holdoutCount === 0 ? 'no_held_out_negatives' : null;
+
+  return { train, val, heldOutNegatives: holdoutCount, degeneracy };
 }
 
 // ── Lessons ledger (provisional → corroborated) ──────────────────

@@ -16,9 +16,9 @@ export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
-  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000 },
-  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000 },
+  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'] },
+  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'] },
+  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000, inputModalities: ['text', 'image', 'pdf'] },
 ];
 
 const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];

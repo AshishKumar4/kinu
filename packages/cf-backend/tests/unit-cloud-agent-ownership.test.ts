@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { OWNER_SESSION } from '../src/user/workspace-capability.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createCloudAgentForUser } from '../src/user/agent-create.js';
+import { createCloudWorkspaceForUser } from '../src/user/workspace-create.js';
+import { claimOwnedWorkspace } from '../src/user/workspace-access.js';
 import type { UserDO } from '../src/user/user-do.js';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -16,37 +18,41 @@ describe('cloud agent ownership safety', () => {
     const calls: string[] = [];
     const background: Promise<unknown>[] = [];
     const userDO = {
-      async getConfig(key: string) {
+      async getConfig(_caller: unknown, key: string) {
         calls.push(`config:${key}`);
         return null;
       },
-      async getAuthHeaders() {
+      async getAuthHeaders(_caller: unknown) {
         return { authorization: 'Bearer token' };
       },
-      async getCredentialBaseURL() {
+      async getCredentialBaseURL(_caller: unknown) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
-      async listCredentials() {
+      async listCredentials(_caller: unknown) {
         return [];
       },
-      async registerAgent(name: string, displayName?: string) {
+      async ensureWorkspaceCapability() {},
+      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: false,
         };
       },
-      async removeAgent(name: string, ownerUserId: string) {
+      async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
     const orchestrator = {
       async claimOwner(userId: string) {
         calls.push(`claim:${userId}`);
-        return { owner: userId };
+        return { owner: userId, capabilityHash: 'sha-existing' };
       },
       async setSoul() {
         calls.push('soul');
+      },
+      async setProvisionalDisplayName(displayName: string) {
+        calls.push(`provisional-title:${displayName}`);
       },
       async setModel(model: string) {
         calls.push(`model:${model}`);
@@ -68,20 +74,33 @@ describe('cloud agent ownership safety', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      const entry = await createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+      const entry = await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
         purpose: 'Build a hello world app in react',
       }, {
         waitUntil: (promise) => background.push(promise),
         suggestDisplayName: async () => 'React Hello World',
       });
 
-      expect(entry.name.startsWith('agent-')).toBe(true);
+      expect(entry.name).toMatch(/^build-a-hello-world-app-[0-9a-f]{6}$/);
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
+      expect(calls).toContain('provisional-title:Build a hello world app in react');
       expect(calls).toContain('soul');
       expect(background).toHaveLength(1);
       await Promise.all(background);
       expect(calls).toContain('auto-title:React Hello World');
+
+      const purposeless = await createCloudWorkspaceForUser(
+        env,
+        USER_ID,
+        userDO as unknown as DurableObjectStub<UserDO>,
+        {},
+        { waitUntil: (promise) => background.push(promise) },
+      );
+      expect(purposeless.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
+      expect(purposeless.displayName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+      expect(purposeless.displayName).not.toBe(purposeless.name);
+      expect(background).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -90,27 +109,28 @@ describe('cloud agent ownership safety', () => {
   test('rolls back the local roster row when orchestrator owner claim fails', async () => {
     const calls: string[] = [];
     const userDO = {
-      async getConfig(key: string) {
+      async getConfig(_caller: unknown, key: string) {
         calls.push(`config:${key}`);
         return null;
       },
-      async getAuthHeaders() {
+      async getAuthHeaders(_caller: unknown) {
         return { authorization: 'Bearer token' };
       },
-      async getCredentialBaseURL() {
+      async getCredentialBaseURL(_caller: unknown) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
-      async listCredentials() {
+      async listCredentials(_caller: unknown) {
         return [];
       },
-      async registerAgent(name: string, displayName?: string) {
+      async ensureWorkspaceCapability() {},
+      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: false,
         };
       },
-      async removeAgent(name: string, ownerUserId: string) {
+      async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -139,7 +159,7 @@ describe('cloud agent ownership safety', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await expect(createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
         name: 'jarvis',
         displayName: 'Jarvis',
         purpose: 'Help with software projects',
@@ -157,22 +177,23 @@ describe('cloud agent ownership safety', () => {
   test('a failed create never destroys a pre-existing (archived) same-name agent', async () => {
     const calls: string[] = [];
     const userDO = {
-      async getConfig() { return null; },
-      async getAuthHeaders() { return { authorization: 'Bearer token' }; },
-      async getCredentialBaseURL() {
+      async getConfig(_caller: unknown) { return null; },
+      async getAuthHeaders(_caller: unknown) { return { authorization: 'Bearer token' }; },
+      async getCredentialBaseURL(_caller: unknown) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
-      async listCredentials() { return []; },
-      // The roster row exists but is ARCHIVED — registerAgent resurrects it
+      async listCredentials(_caller: unknown) { return []; },
+      // The roster row exists but is ARCHIVED — registerWorkspace resurrects it
       // on name conflict and reports existed: true.
-      async registerAgent(name: string, displayName?: string) {
+      async ensureWorkspaceCapability() {},
+      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
         calls.push(`register:${name}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: true,
         };
       },
-      async removeAgent(name: string, ownerUserId: string) {
+      async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -189,7 +210,7 @@ describe('cloud agent ownership safety', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await expect(createCloudAgentForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
         name: 'jarvis',
       })).rejects.toThrow('boot failure');
     } finally {
@@ -202,13 +223,119 @@ describe('cloud agent ownership safety', () => {
     expect(calls.some((c) => c.startsWith('remove:'))).toBe(false);
   });
 
+  test('a newly created workspace is given its identity before anything else touches it', async () => {
+    const calls: string[] = [];
+    const userDO = {
+      async getConfig() { return null; },
+      async getAuthHeaders() { return { authorization: 'Bearer token' }; },
+      async getCredentialBaseURL() {
+        return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+      },
+      async listCredentials() { return []; },
+      async ensureWorkspaceCapability() {},
+      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
+        calls.push(`register:${name}`);
+        return {
+          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+          existed: false,
+        };
+      },
+      async ensureWorkspaceCapability(name: string, presentedHash: string | null) {
+        calls.push(`ensure:${name}:${presentedHash ?? 'none'}`);
+      },
+      async removeWorkspace() {},
+    };
+    const orchestrator = {
+      // A freshly materialized workspace DO holds nothing yet.
+      async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId, capabilityHash: null }; },
+      async setProvisionalDisplayName() { calls.push('provisional-title'); },
+      async setSoul() { calls.push('soul'); },
+      async setModel() { calls.push('model'); },
+    };
+    const env = {
+      UserDO: { idFromName: (n: string) => n, get: () => userDO },
+      OrchestratorAgent: { idFromName: (n: string) => n, get: () => orchestrator },
+    } as unknown as Env;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    try {
+      await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
+        name: 'jarvis',
+        displayName: 'Jarvis',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // A new workspace runs its first turn — an auto-title, a peer's task, an
+    // inbound email — without ever being opened, so its identity must exist
+    // before any of that, not on first visit.
+    expect(calls).toEqual([
+      'register:jarvis', `claim:${USER_ID}`, 'ensure:jarvis:none',
+      'provisional-title', 'soul', 'model',
+    ]);
+  });
+
+  describe('capability reconciliation at claim time', () => {
+    function setupClaim(options: { capabilityHash: string | null; ensureThrows?: string }) {
+      const calls: string[] = [];
+      const workspace = {
+        async claimOwner(userId: string) {
+          calls.push(`claim:${userId}`);
+          return { owner: userId, capabilityHash: options.capabilityHash };
+        },
+      };
+      const userDO = {
+        async hasWorkspace() { return true; },
+        async ensureWorkspaceCapability(name: string, presentedHash: string | null) {
+          calls.push(`ensure:${name}:${presentedHash ?? 'none'}`);
+          if (options.ensureThrows) throw new Error(options.ensureThrows);
+        },
+      };
+      const env = {
+        UserDO: { idFromName: (n: string) => n, get: () => userDO },
+        OrchestratorAgent: { idFromName: (n: string) => n, get: () => workspace },
+      } as unknown as Env;
+      return { env, calls };
+    }
+
+    test('the workspace reports what it holds and the UserDO decides', async () => {
+      // The Worker deliberately does NOT decide: it cannot see both sides, and
+      // two concurrent first-touches each deciding is what splits a workspace's
+      // identity in half. It forwards the hash and lets the UserDO reconcile.
+      const { env, calls } = setupClaim({ capabilityHash: null });
+
+      expect((await claimOwnedWorkspace(env, USER_ID, 'jarvis')).ok).toBe(true);
+
+      expect(calls).toEqual([`claim:${USER_ID}`, 'ensure:jarvis:none']);
+    });
+
+    test('an already-provisioned workspace still reconciles, carrying its hash', async () => {
+      const { env, calls } = setupClaim({ capabilityHash: 'sha-existing' });
+
+      expect((await claimOwnedWorkspace(env, USER_ID, 'jarvis')).ok).toBe(true);
+
+      expect(calls).toEqual([`claim:${USER_ID}`, 'ensure:jarvis:sha-existing']);
+    });
+
+    test('a workspace whose reconciliation fails is not handed to the caller', async () => {
+      const { env } = setupClaim({ capabilityHash: null, ensureThrows: 'storage unavailable' });
+
+      const result = await claimOwnedWorkspace(env, USER_ID, 'jarvis');
+
+      expect(result).toMatchObject({ ok: false, status: 500 });
+      if (!result.ok) expect(result.error).toContain('storage unavailable');
+    });
+  });
+
   test('delete route and teardown require owner-scoped destroy', () => {
     const userRoutes = source('src/user/routes.ts');
     const userDO = source('src/user/user-do.ts');
     const orchestrator = source('src/orchestrator.ts');
 
-    expect(userRoutes).toContain('stub.removeAgent(decodeURIComponent(agentMatch[1]), identity.userId)');
-    expect(userDO).toContain('async removeAgent(name: string, ownerUserId: string): Promise<void>');
+    expect(userRoutes).toContain('stub.removeWorkspace(OWNER_SESSION, decodeURIComponent(agentMatch[1]), identity.userId)');
+    expect(userDO).toContain('async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>');
     expect(userDO).toContain('await stub.destroyAgent(ownerUserId)');
     expect(orchestrator).toContain('async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }>');
     expect(orchestrator).toContain('Agent owner mismatch; refusing to destroy.');

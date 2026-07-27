@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/curriculum/proposer.ts b/packages/core/src/curriculum/proposer.ts
+index b6f3278..d450854 100644
+--- a/packages/core/src/curriculum/proposer.ts
++++ b/packages/core/src/curriculum/proposer.ts
+@@ -154,7 +154,7 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
+   }
+ 
+   const [lo, hi] = window;
+-  const filtered = result.output.filter(p => p.predictedSuccess >= lo && p.predictedSuccess <= hi);
++  const filtered = result.output.filter(p => p.predictedSuccess >= lo || p.predictedSuccess <= hi);
+ 
+   const now = Date.now();
+   const proposals: ProposedTask[] = filtered.map((p, i) => ({

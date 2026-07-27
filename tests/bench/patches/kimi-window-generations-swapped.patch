@@ -1,0 +1,15 @@
+diff --git a/packages/core/src/context-window.ts b/packages/core/src/context-window.ts
+index 417521b..4cc924c 100644
+--- a/packages/core/src/context-window.ts
++++ b/packages/core/src/context-window.ts
+@@ -12,8 +12,8 @@ const WINDOWS: Array<[RegExp, number]> = [
+   [/^codex\/gpt-5\.3-codex\b/i, 272_000],
+   [/(^|\/)gpt-5\.5\b/i, 1_050_000],
+   [/claude-(?:opus|sonnet)-4-[67]\b/i, 1_000_000],
+-  [/kimi-k3/i, 1_048_576],
+-  [/kimi-k2/i, 262_144],
++  [/kimi-k3/i, 262_144],
++  [/kimi-k2/i, 1_048_576],
+   [/llama-4/i, 131_072],
+   [/qwen/i, 131_072],
+   [/claude/i, 200_000],

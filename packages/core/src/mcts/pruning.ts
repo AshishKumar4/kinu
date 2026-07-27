@@ -1,51 +1,52 @@
 /**
- * MCTS pruning — remove low-scoring branches, extract reflections first.
+ * MCTS pruning — retire settled low-value branches so selection stops spending
+ * on them and their branch agents are freed.
  *
  * Architecture reference: final-architecture.md §5.10
  * Formal spec: MCTS/StorageIsolation.lean — transition_preserves_isolation
  * (the Prune action preserves the storage-isolation invariant).
  *
- * Pruning criteria:
- * - Score below PRUNE_THRESHOLD (0.25) AND at least 2 visits
- * - Reflections extracted BEFORE marking pruned (failure lessons are the value from losers)
+ * Pruning criteria (WP-A2):
+ * - status='open' AND backpropagated value < pruneThreshold
+ * - AND visits >= minVisitsForPrune (config, was a hardcoded, unsatisfiable 2)
+ *
+ * We evaluate the FULL open population, not just the freshly-expanded children.
+ * A child is grounded-scored once and backpropagated once → visits === 1, so a
+ * fresh-children-only pass could never satisfy any visit gate and pruning never
+ * fired. Scanning the population lets an internal node be pruned once it has
+ * been re-selected enough for its running-mean value to settle below threshold
+ * (visits >= minVisitsForPrune). Single-visit leaves are protected by the gate:
+ * their one grounded sample is enough to keep UCT from re-selecting them, but
+ * not to justify pruning the subtree they might still open.
+ *
+ * Reflections on failed branches are written to memory by the engine's REFLECT
+ * step before this runs; pruning only marks status and aborts branch agents.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { DEFAULT_CONFIG } from '../config.js';
 
-export interface BranchScore {
-  nodeId: string;
-  agentKey: string;
-  score: number;
-  reflection?: string;
-}
-
-export async function pruneAndReflect(
+export async function pruneLowValueBranches(
   rt: AgentRuntime,
-  branches: BranchScore[],
   threshold: number = DEFAULT_CONFIG.mcts.pruneThreshold,
+  minVisits: number = DEFAULT_CONFIG.mcts.minVisitsForPrune,
 ): Promise<void> {
-  for (const b of branches) {
-    const node = rt.storage.sql<{ visits: number }>`
-      SELECT visits FROM search_nodes WHERE id = ${b.nodeId}
-    `[0];
-    if (!node) continue;
+  const doomed = rt.storage.sql<{ id: string; branch_agent_key: string | null }>`
+    SELECT id, branch_agent_key FROM search_nodes
+    WHERE status = 'open' AND value < ${threshold} AND visits >= ${minVisits}
+  `;
 
-    // Prune only if below threshold AND visited at least twice (avoid premature pruning)
-    if (b.score < threshold && node.visits >= 2) {
-      // Reflection already written to memory in engine.ts STEP 7.
-      // We don't duplicate the write here.
+  for (const node of doomed) {
+    // Soft prune: mark status so UCT stops selecting it, drop the agent key.
+    rt.storage.sql`
+      UPDATE search_nodes SET status = 'pruned', branch_agent_key = NULL
+      WHERE id = ${node.id}
+    `;
 
-      // Soft prune: mark status, stop UCT from selecting it
-      rt.storage.sql`
-        UPDATE search_nodes SET status = 'pruned', branch_agent_key = NULL
-        WHERE id = ${b.nodeId}
-      `;
-
-      // Abort the branch agent (platform-specific, via injected callback)
-      await rt.abortBranch(b.agentKey, 'pruned').catch(() => {
-        // Branch may already be gone — that's fine
-      });
+    if (node.branch_agent_key) {
+      // Abort the branch agent (platform-specific, via injected callback).
+      // Branch may already be gone — that's fine.
+      await rt.abortBranch(node.branch_agent_key, 'pruned').catch(() => {});
     }
   }
 }

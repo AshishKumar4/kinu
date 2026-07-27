@@ -54,7 +54,7 @@ describe('auth and desktop security invariants', () => {
     expect(server).toContain('verifyCliAgentConnectTicket');
     expect(server).toContain("url.searchParams.delete('ticket')");
     expect(server).not.toContain('looksInteractive');
-    expect(server).not.toContain('registerAgent(agentName');
+    expect(server).not.toContain('registerWorkspace(agentName');
     expect(cliRoutes).not.toContain('/local-turn/prepare');
     expect(cliRoutes).not.toContain('/local-turn/tool');
     expect(cliRoutes).not.toContain('/local-turn/commit');
@@ -219,13 +219,13 @@ describe('auth and desktop security invariants', () => {
 
   test('browser UI uses app auth routes rather than Cloudflare Access logout/login URLs', () => {
     const sidebar = source('src/components/Sidebar.tsx');
-    const triggers = source('src/pages/TriggersTab.tsx');
+    const supervise = source('src/pages/SupervisePage.tsx'); // webhook step-up login lives here
     const routes = source('src/auth/routes.ts');
     expect(sidebar).toContain('href="/logout"');
     expect(sidebar).not.toContain('/cdn-cgi/access/logout');
     expect(routes).toContain("url.searchParams.get('return_to') ?? '/'");
-    expect(triggers).toContain("new URL('/login', window.location.origin)");
-    expect(triggers).not.toContain('/cdn-cgi/access/login');
+    expect(supervise).toContain('new URL("/login", window.location.origin)');
+    expect(supervise).not.toContain('/cdn-cgi/access/login');
   });
 
   test('OAuth sessions are HttpOnly host cookies and state is server-side', () => {
@@ -360,26 +360,30 @@ describe('auth and desktop security invariants', () => {
   test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
     const cliRoutes = source('src/cli/routes.ts');
     expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
-    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId)');
+    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId, OWNER_SESSION)');
   });
 
   test('web agent creation requires an available model and stores the selected initial model', () => {
     const routes = source('src/user/routes.ts');
-    const createAgent = source('src/user/agent-create.ts');
-    expect(routes).toContain('listAvailableModels(env, identity.userId)');
+    const createAgent = source('src/user/workspace-create.ts');
+    expect(routes).toContain('listAvailableModels(env, identity.userId, OWNER_SESSION)');
     expect(createAgent).toContain('Cloudflare Workers AI is not connected');
     expect(createAgent).toContain('pickInitialModel');
     expect(createAgent).toContain('await orchestrator.setModel(model)');
   });
 
   test('web UI offers Cloudflare Workers AI reconnect instead of a no-provider dead end', () => {
+    // The shared self-fetching picker owns the reconnect CTA; the chat page
+    // renders it in the header.
+    const picker = source('src/components/ModelPicker.tsx');
     const workspace = source('src/pages/WorkspacePage.tsx');
     const home = source('src/pages/HomePage.tsx');
-    const modal = source('src/components/CreateAgentModal.tsx');
+    const modal = source('src/components/CreateWorkspaceModal.tsx');
     const settings = source('src/pages/UserSettingsPage.tsx');
-    expect(workspace).not.toContain('(no providers connected)');
-    expect(workspace).toContain('Connect Workers AI');
-    expect(workspace).toContain('cloudflareReconnectPath');
+    expect(picker).not.toContain('(no providers connected)');
+    expect(picker).toContain('Connect Workers AI');
+    expect(picker).toContain('cloudflareReconnectPath');
+    expect(workspace).toContain('ConnectedModelPicker');
     expect(home).toContain('CloudflareAIConnectNotice');
     expect(modal).toContain('CloudflareAIConnectNotice');
     expect(settings).toContain('CloudflareAIConnectNotice');

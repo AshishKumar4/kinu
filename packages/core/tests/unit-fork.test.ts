@@ -1,5 +1,5 @@
 /**
- * Unit tests for forkAgentStorage — the storage-layer fork helper.
+ * Unit tests for forkWorkspaceStorage — the storage-layer fork helper.
  * Backend-agnostic: drives two bun:sqlite handles in-memory.
  *
  * Schema parity: these tests use the canonical initAllTables() DDL from
@@ -10,7 +10,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { forkAgentStorage, readForkLineage, initAllTables, readSoul, writeSoul } from '../src/index.js';
+import { forkWorkspaceStorage, readForkLineage, initAllTables, readSoul, writeSoul } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 /** Build a fresh in-memory DB with the full production schema applied. */
@@ -32,7 +32,7 @@ function seedSource(
     craftedTools?: Array<{ name: string; description: string; code: string; scope: string; created_at: number; updated_at: number }>;
   },
 ) {
-  sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
+  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
   writeSoul(sql, opts.purpose);
   for (const m of opts.messages) {
     sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
@@ -53,13 +53,13 @@ function seedSource(
 
 function seedTargetBootstrap({ sql, execRaw }: ReturnType<typeof fresh>) {
   // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
-  // forkAgentStorage should purge these before writing the real fork rows.
-  sql`INSERT INTO agent_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
+  // forkWorkspaceStorage should purge these before writing the real fork rows.
+  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
   writeSoul(sql, 'default bootstrap purpose');
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 }
 
-describe('forkAgentStorage', () => {
+describe('forkWorkspaceStorage', () => {
   test('1. preserves messages 0..N with identical PKs and parent_ids', () => {
     const src = fresh();
     const tgt = fresh();
@@ -76,10 +76,10 @@ describe('forkAgentStorage', () => {
       ],
     });
 
-    const result = forkAgentStorage(src.sql, tgt.sql, {
+    const result = forkWorkspaceStorage(src.sql, tgt.sql, {
       untilMessageId: 'msg-3',
-      targetAgentId: 'TGT-ID',
-      targetAgentName: 'fork-agent',
+      targetWorkspaceId: 'TGT-ID',
+      targetWorkspaceName: 'fork-agent',
       now: 5000,
     });
 
@@ -111,10 +111,10 @@ describe('forkAgentStorage', () => {
       ],
     });
 
-    const res = forkAgentStorage(src.sql, tgt.sql, {
+    const res = forkWorkspaceStorage(src.sql, tgt.sql, {
       untilMessageId: 'm1',
-      targetAgentId: 'T',
-      targetAgentName: 'fork',
+      targetWorkspaceId: 'T',
+      targetWorkspaceName: 'fork',
     });
 
     expect(res.craftedToolsCopied).toBe(2);
@@ -141,7 +141,7 @@ describe('forkAgentStorage', () => {
     src.sql`INSERT INTO search_nodes (id, task, action, visits, value) VALUES (${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
     src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
 
-    forkAgentStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'f' });
+    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const nodes = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
     const events = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM evolution_events`;
@@ -160,7 +160,7 @@ describe('forkAgentStorage', () => {
     });
     src.sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES (${'foo'}, ${0.9}, ${12})`;
 
-    forkAgentStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'f' });
+    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const scores = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM craft_scores`;
     expect(scores[0]!.c).toBe(0);
@@ -185,7 +185,7 @@ describe('forkAgentStorage', () => {
     src.sql`INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
             VALUES (${'scaffold/agent.js'}, ${0}, ${'scaffold'}, ${'// scaffold source'}, ${0}, ${20}, ${1000})`;
 
-    forkAgentStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'f' });
+    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const mem = tgt.sql<{ path: string }>`SELECT path FROM vfs_files WHERE path LIKE 'memory/%'`;
     const scaf = tgt.sql<{ path: string }>`SELECT path FROM vfs_files WHERE path LIKE 'scaffold/%'`;
@@ -203,15 +203,15 @@ describe('forkAgentStorage', () => {
       messages: [{ id: 'msgX', role: 'user', content: 'hi', created_at: 1234 }],
     });
 
-    forkAgentStorage(src.sql, tgt.sql, {
+    forkWorkspaceStorage(src.sql, tgt.sql, {
       untilMessageId: 'msgX',
-      targetAgentId: 'TGT', targetAgentName: 'fork-beta', now: 9999,
+      targetWorkspaceId: 'TGT', targetWorkspaceName: 'fork-beta', now: 9999,
     });
 
     const lineage = readForkLineage(tgt.sql);
     expect(lineage).not.toBeNull();
-    expect(lineage!.sourceAgentId).toBe('SRC-UUID-123');
-    expect(lineage!.sourceAgentName).toBe('source-alpha');
+    expect(lineage!.sourceWorkspaceId).toBe('SRC-UUID-123');
+    expect(lineage!.sourceWorkspaceName).toBe('source-alpha');
     expect(lineage!.sourceMessageId).toBe('msgX');
     expect(lineage!.sourceMessageCreatedAt).toBe(1234);
     expect(lineage!.forkedAt).toBe(9999);
@@ -232,7 +232,7 @@ describe('forkAgentStorage', () => {
     });
 
     // Fork A → B
-    forkAgentStorage(a.sql, b.sql, { untilMessageId: 'a2', targetAgentId: 'B-ID', targetAgentName: 'agent-B', now: 5000 });
+    forkWorkspaceStorage(a.sql, b.sql, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
     // Add a turn in B to differentiate it
     b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
           VALUES (${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
@@ -240,7 +240,7 @@ describe('forkAgentStorage', () => {
           VALUES (${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
 
     // Fork B → C
-    forkAgentStorage(b.sql, c.sql, { untilMessageId: 'b4', targetAgentId: 'C-ID', targetAgentName: 'agent-C', now: 7000 });
+    forkWorkspaceStorage(b.sql, c.sql, { untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000 });
 
     // C has all 4 messages (a1, a2, b3, b4)
     const cMsgs = c.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC`;
@@ -248,8 +248,8 @@ describe('forkAgentStorage', () => {
 
     // C's lineage points to B (immediate parent), not A
     const lineage = readForkLineage(c.sql);
-    expect(lineage!.sourceAgentId).toBe('B-ID');
-    expect(lineage!.sourceAgentName).toBe('agent-B');
+    expect(lineage!.sourceWorkspaceId).toBe('B-ID');
+    expect(lineage!.sourceWorkspaceName).toBe('agent-B');
     expect(lineage!.sourceMessageId).toBe('b4');
   });
 
@@ -262,8 +262,8 @@ describe('forkAgentStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
 
-    expect(() => forkAgentStorage(src.sql, tgt.sql, {
-      untilMessageId: 'does-not-exist', targetAgentId: 'T', targetAgentName: 'f',
+    expect(() => forkWorkspaceStorage(src.sql, tgt.sql, {
+      untilMessageId: 'does-not-exist', targetWorkspaceId: 'T', targetWorkspaceName: 'f',
     })).toThrow('fork point not found');
   });
 
@@ -280,7 +280,7 @@ describe('forkAgentStorage', () => {
       ],
     });
 
-    forkAgentStorage(src.sql, tgt.sql, { untilMessageId: 'm2', targetAgentId: 'T', targetAgentName: 'f' });
+    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const ids = tgt.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC, id ASC`.map(r => r.id);
     expect(ids).toContain('m1');
@@ -288,7 +288,7 @@ describe('forkAgentStorage', () => {
     expect(ids).not.toContain('m3');
   });
 
-  test('10. agent_identity rewritten with new UUID + name + fresh created_at', () => {
+  test('10. workspace_identity rewritten with new UUID + name + fresh created_at', () => {
     const src = fresh();
     const tgt = fresh();
     seedTargetBootstrap(tgt);
@@ -297,12 +297,12 @@ describe('forkAgentStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
 
-    forkAgentStorage(src.sql, tgt.sql, {
-      untilMessageId: 'm1', targetAgentId: 'NEW-UUID', targetAgentName: 'fork-name', now: 7777,
+    forkWorkspaceStorage(src.sql, tgt.sql, {
+      untilMessageId: 'm1', targetWorkspaceId: 'NEW-UUID', targetWorkspaceName: 'fork-name', now: 7777,
     });
 
     const ident = tgt.sql<{ id: string; name: string; created_at: number }>`
-      SELECT id, name, created_at FROM agent_identity
+      SELECT id, name, created_at FROM workspace_identity
     `;
     expect(ident.length).toBe(1);
     expect(ident[0]!.id).toBe('NEW-UUID');
@@ -324,7 +324,7 @@ describe('forkAgentStorage', () => {
       ],
     });
 
-    forkAgentStorage(src.sql, tgt.sql, { untilMessageId: 'm2', targetAgentId: 'T', targetAgentName: 'beta', now: 5000 });
+    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'beta', now: 5000 });
 
     // Post-fork conversation_history has 3 rows: 2 copied + 1 synthetic system
     const rows = tgt.sql<{ role: string; created_at: number; message: string }>`
@@ -333,7 +333,7 @@ describe('forkAgentStorage', () => {
     expect(rows.length).toBe(3);
     expect(rows[2]!.role).toBe('system');
     expect(rows[2]!.created_at).toBe(1101);    // forkPointMs + 1
-    expect(rows[2]!.message).toContain('forked from agent');
+    expect(rows[2]!.message).toContain('forked from workspace');
     expect(rows[2]!.message).toContain('alpha');
   });
 
@@ -346,7 +346,7 @@ describe('forkAgentStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
 
-    forkAgentStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'forked-display' });
+    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked-display' });
 
     const cfg = tgt.sql<{ key: string; value: string }>`
       SELECT key, value FROM agent_config ORDER BY key
@@ -400,9 +400,9 @@ describe('forkAgentStorage', () => {
               ${JSON.stringify({ id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] })},
               '1970-01-01 00:00:02.000')`;
 
-    forkAgentStorage(src.sql, tgt.sql, {
+    forkWorkspaceStorage(src.sql, tgt.sql, {
       untilMessageId: 'm2',    // forkPointMs = 1100
-      targetAgentId: 'T', targetAgentName: 'forked',
+      targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     });
 
     // Only m1 (at second=1, strftime returns 1s → 1000ms ≤ 1100ms) is copied.
@@ -428,8 +428,8 @@ describe('forkAgentStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    expect(() => forkAgentStorage(src.sql, tgt.sql, {
-      untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'forked',
+    expect(() => forkWorkspaceStorage(src.sql, tgt.sql, {
+      untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     })).not.toThrow();
   });
 
@@ -441,8 +441,8 @@ describe('forkAgentStorage', () => {
       identity: { id: 'SRC', name: 'alpha' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    forkAgentStorage(src.sql, tgt.sql, {
-      untilMessageId: 'm1', targetAgentId: 'T', targetAgentName: 'beta',
+    forkWorkspaceStorage(src.sql, tgt.sql, {
+      untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'beta',
     });
 
     // The synthetic marker should land in assistant_messages with role=system,

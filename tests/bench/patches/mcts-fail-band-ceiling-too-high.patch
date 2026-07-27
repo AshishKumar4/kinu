@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/mcts/evaluation.ts b/packages/core/src/mcts/evaluation.ts
+index 67d9ae8..8d137e8 100644
+--- a/packages/core/src/mcts/evaluation.ts
++++ b/packages/core/src/mcts/evaluation.ts
+@@ -61,7 +61,7 @@ import { DEFAULT_CONFIG } from '../config.js';
+ const PASS_FLOOR = 0.6;
+ const PASS_SPAN = 0.4;
+ const FAIL_FLOOR = 0.05;
+-const FAIL_SPAN = 0.25;
++const FAIL_SPAN = 0.35;
+ /** Top of the fail band (0.30): a code branch that ran and failed can score no
+  *  higher, and neither may a prose branch when siblings actually attempted code. */
+ const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;

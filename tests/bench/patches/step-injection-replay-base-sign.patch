@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompting/step-injections.ts b/packages/core/src/prompting/step-injections.ts
+index e59d586..74c0ede 100644
+--- a/packages/core/src/prompting/step-injections.ts
++++ b/packages/core/src/prompting/step-injections.ts
+@@ -61,7 +61,7 @@ export class StepInjections<E extends { readonly message: ModelMessage }> {
+     const merged = [...responseMessages];
+     let spliced = 0;
+     for (const entry of this.entries) {
+-      const at = Math.max(0, Math.min(merged.length, entry.index - this.baseLength + spliced));
++      const at = Math.max(0, Math.min(merged.length, entry.index + this.baseLength + spliced));
+       merged.splice(at, 0, entry.message);
+       spliced += 1;
+     }

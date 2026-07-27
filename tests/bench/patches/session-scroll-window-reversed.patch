@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/memory/session-search.ts b/packages/core/src/memory/session-search.ts
+index 8c21c0e..184877a 100644
+--- a/packages/core/src/memory/session-search.ts
++++ b/packages/core/src/memory/session-search.ts
+@@ -145,7 +145,7 @@ export class SessionSearchStore {
+       WHERE session_id = ${anchor.session_id}
+         AND (created_at < ${anchor.created_at}
+              OR (created_at = ${anchor.created_at} AND rowid < ${anchor.rid}))
+-      ORDER BY created_at DESC, rowid DESC LIMIT ${w}`.reverse();
++      ORDER BY created_at DESC, rowid DESC LIMIT ${w}`;
+     const after = this.sql<MsgRow>`
+       SELECT id, role, content, created_at, rowid AS rid
+       FROM messages

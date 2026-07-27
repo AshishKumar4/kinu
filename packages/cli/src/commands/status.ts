@@ -1,6 +1,12 @@
 import { existsSync, statSync } from 'node:fs';
 import { agentDbPath, requireAuthConfig } from '../config.js';
-import { getCloudAgentStatus, getCloudAgentTools, listCloudJobs, listCloudTriggers } from '../cloud-api.js';
+import {
+  callAgentRpc,
+  type CloudAgentStatus,
+  type CloudBackgroundJob,
+  type CloudToolDescriptions,
+  type CloudTriggerList,
+} from '../cloud-api.js';
 import { ACCENT, DIM, OK, printAgentStatus, printError } from '../display.js';
 import { resolveAgentTarget } from '../agent-target.js';
 import { getLocalAgentInfo } from '../local-inspection.js';
@@ -10,10 +16,10 @@ export async function statusCommand(name: string): Promise<void> {
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const [status, tools, triggers, jobs] = await Promise.all([
-      getCloudAgentStatus(auth.origin, auth.token, target.cloudName),
-      getCloudAgentTools(auth.origin, auth.token, target.cloudName),
-      listCloudTriggers(auth.origin, auth.token, target.cloudName),
-      listCloudJobs(auth.origin, auth.token, target.cloudName, 10),
+      callAgentRpc<CloudAgentStatus>(auth.origin, auth.token, target.cloudName, 'getAgentStatus'),
+      callAgentRpc<CloudToolDescriptions>(auth.origin, auth.token, target.cloudName, 'getToolDescriptions'),
+      callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers'),
+      callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [10]),
     ]);
     printCloudStatus(target.name, status, {
       builtInTools: tools.builtIn.length,
@@ -28,18 +34,22 @@ export async function statusCommand(name: string): Promise<void> {
   name = target.localName;
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    printError(`Agent "${name}" not found.`, `Create it with: proteus create ${name}`);
+    printError(`Workspace "${name}" not found.`, `Create it with: proteus create ${name}`);
     process.exit(1);
   }
 
   const info = getLocalAgentInfo(name);
   const dbSize = statSync(dbPath).size;
-  printAgentStatus(info, dbSize, { conversationCount: info.conversationCount });
+  printAgentStatus(info, dbSize, {
+    conversationCount: info.conversationCount,
+    model: info.model,
+    reasoningEffort: info.reasoningEffort,
+  });
 }
 
 function printCloudStatus(
   name: string,
-  status: Awaited<ReturnType<typeof getCloudAgentStatus>>,
+  status: CloudAgentStatus,
   counts: {
     builtInTools: number;
     craftedTools: number;
@@ -50,10 +60,11 @@ function printCloudStatus(
   },
 ): void {
   console.log('');
-  console.log(`${ACCENT(name)} ${DIM('cloud agent')}`);
+  console.log(`${ACCENT(name)} ${DIM('cloud workspace')}`);
   console.log(`${DIM('State')}      ${OK('connected')}`);
   console.log(`${DIM('Mission')}    ${status.purpose || DIM('(none)')}`);
   console.log(`${DIM('Model')}      ${status.model ?? DIM('(default)')}`);
+  console.log(`${DIM('Effort')}     ${status.reasoningEffort ?? 'medium (chat default)'}`);
   console.log(`${DIM('Messages')}   ${status.messageCount}`);
   console.log(`${DIM('Scaffold')}   v${status.scaffoldVersion}`);
   console.log(`${DIM('MCTS')}       ${status.searchNodeCount} node${status.searchNodeCount === 1 ? '' : 's'}`);

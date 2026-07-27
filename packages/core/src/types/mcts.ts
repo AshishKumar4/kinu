@@ -37,6 +37,35 @@ export interface MCTSPhase {
   task: string;
 }
 
+/**
+ * Live search progress. Branch failures are non-fatal by design — a failed
+ * exploration or evaluation scores 0 and the search continues — so they are
+ * reported rather than thrown; without them a fully degraded run is
+ * indistinguishable from a healthy one that simply found nothing.
+ */
+export type MCTSProgressEvent =
+  | {
+      type: 'phase';
+      phase: 'explore' | 'evaluate' | 'reflect';
+      iteration: number;
+      remainingBudget: number;
+      /** Branches this phase covers (reflect only covers the failing ones). */
+      branches: number;
+    }
+  | {
+      type: 'branch-failed';
+      stage: 'explore' | 'evaluate' | 'reflect';
+      iteration: number;
+      branchId: string;
+      error: string;
+    }
+  | {
+      type: 'iteration-complete';
+      iteration: number;
+      remainingBudget: number;
+      scores: readonly number[];
+    };
+
 export interface MCTSConfig {
   budget: number;
   branches: number;
@@ -51,20 +80,15 @@ export interface MCTSConfig {
   maxEvalLLMCalls?: number;
   /** Near-tie gap for Alternate Takes capture at convergence. */
   takesEpsilon?: number;
-  /**
-   * Step-level Process Reward Model gate (default off). When on, each branch's
-   * proposal is first scored by a cheap one-call step-PRM judge; proposals below
-   * `stepPrmPruneThreshold` are pruned at that step score and SKIP the expensive
-   * grounded evaluator (assertions + judge ensemble). Off by default: at the
-   * current single-step rollout depth it duplicates the grounded evaluator's
-   * signal at extra cost — it pays off only when branches are wide or the
-   * grounded evaluator is expensive. See mcts/step-prm.ts.
-   */
-  stepPrm?: boolean;
-  /** Step-PRM prune threshold [0..1]; proposals scoring below skip the grounded
-   *  evaluator. Only consulted when `stepPrm` is on. */
-  stepPrmPruneThreshold?: number;
   signal?: AbortSignal;
-  /** Called after each MCTS iteration completes — use for real-time UI updates. */
-  onIterationComplete?: (iteration: number, remainingBudget: number) => void;
+  /** Called as the search progresses — phase transitions, branch failures and
+   *  iteration completion. Use for real-time UI updates. */
+  onProgress?: (event: MCTSProgressEvent) => void;
+  /** Durable search checkpoint. When present, the loop's progress + resolved
+   *  config are persisted per iteration under a lease epoch, so a DO eviction can
+   *  re-enter runMCTS and continue the remaining budget against the persisted
+   *  tree instead of discarding the search (B6). Absent ⇒ fiber-snapshot resume
+   *  only (tests / inline fast path). Typed loosely here to avoid a mcts→store
+   *  import cycle; the concrete type is MctsSearchStore. */
+  search?: import('../mcts/search-store.js').MctsSearchStore;
 }

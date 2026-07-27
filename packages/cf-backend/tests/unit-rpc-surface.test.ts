@@ -1,0 +1,379 @@
+/**
+ * The Durable Object RPC boundary.
+ *
+ * `requireTier` gates every public `UserDO` method, but TypeScript `private` is
+ * erased at compile time and Cloudflare resolves `stub.foo(...)` against the
+ * receiver's prototype chain — so before `sealRpcSurface`, any Durable Object
+ * holding a `UserDO` stub could call `sqlx` or `getCredentialRow` directly and
+ * never meet a gate. The first test here performs exactly that theft against a
+ * real `UserDO` holding a real credential, and then shows the same call denied.
+ *
+ * Reachability is modelled by `rpcReachableNames`, the rule this repo verified
+ * against workerd 1.20260601.1 with one Durable Object calling another: members
+ * anywhere on the prototype chain resolve (including superclass members and
+ * TypeScript `private` ones); own instance properties do not, and workerd
+ * rejects them with `The RPC receiver does not implement the method "x".` —
+ * the same error it gives for a name that was never declared.
+ */
+import { describe, expect, test } from 'bun:test';
+import {
+  AGENTS_FACET_RPC_SURFACE,
+  EXPLORATION_RPC_SURFACE,
+  ORCHESTRATOR_RPC_SURFACE,
+  PLATFORM_RPC_SURFACE,
+  SUBORDINATE_RPC_SURFACE,
+  USER_DO_RPC_SURFACE,
+  rpcReachableNames,
+  sealRpcSurface,
+} from '../src/rpc-surface.js';
+import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate.js';
+import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do.js';
+import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
+import { OWNER_SESSION } from '../src/user/workspace-capability.js';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** What a stub-holder gets. Denial reproduces workerd's own wording. */
+function callOverRpc(target: object, method: string, args: unknown[]): unknown {
+  if (!rpcReachableNames(target).includes(method)) {
+    throw new Error(`The RPC receiver does not implement the method "${method}".`);
+  }
+  return (target as Record<string, (...a: unknown[]) => unknown>)[method](...args);
+}
+
+/** Undo the seal on one instance — drops exactly the own properties that shadow
+ *  a prototype member, restoring the pre-fix class. Sabotage in a function, so
+ *  "the guard is what stops this" is asserted rather than assumed. */
+function unsealRpcSurface(instance: object): void {
+  const shadowed = Object.getOwnPropertyNames(instance)
+    .filter((name) => name in Object.getPrototypeOf(instance));
+  for (const name of shadowed) delete (instance as Record<string, unknown>)[name];
+}
+
+describe('the UserDO capability gate is reachable-surface enforced, not advisory', () => {
+  test('an internal call steals credentials without the seal, and cannot reach them with it', async () => {
+    const harness = createTestUserDO();
+    await provisionTestWorkspace(harness, 'alpha');
+    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_the_owners_pat' });
+
+    // The hole, demonstrated. `sqlx` is `private` in TypeScript and therefore an
+    // ordinary prototype method at runtime; every `requireTier` check sits in a
+    // public method above it.
+    unsealRpcSurface(harness.userDO);
+    const stolenBySql = callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials WHERE key = ?', 'github']);
+    expect(JSON.stringify(stolenBySql)).toContain('ghp_the_owners_pat');
+    const stolenByRow = callOverRpc(harness.userDO, 'getCredentialRow', ['github']);
+    expect(stolenByRow).toMatchObject({ token: 'ghp_the_owners_pat' });
+
+    // The same two calls, once the class's declared surface is enforced.
+    sealRpcSurface(harness.userDO, USER_DO_RPC_SURFACE);
+    expect(() => callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials']))
+      .toThrow('The RPC receiver does not implement the method "sqlx".');
+    expect(() => callOverRpc(harness.userDO, 'getCredentialRow', ['github']))
+      .toThrow('The RPC receiver does not implement the method "getCredentialRow".');
+    harness.close();
+  });
+
+  test('a UserDO seals itself — no test may reconstruct the boundary for it', async () => {
+    const harness = createTestUserDO();
+    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_untouched' });
+    for (const internal of ['sqlx', 'getCredentialRow', 'requireTier', 'ensureInit']) {
+      expect(() => callOverRpc(harness.userDO, internal, [])).toThrow('does not implement');
+    }
+    harness.close();
+  });
+
+  test('the gated surface still answers, and still gates', async () => {
+    const harness = createTestUserDO();
+    const token = await provisionTestWorkspace(harness, 'alpha');
+
+    // A worker route acting for the owner.
+    expect(await callOverRpc(harness.userDO, 'listWorkspaces', [OWNER_SESSION]))
+      .toMatchObject([{ name: 'alpha' }]);
+    // A workspace presenting its capability token — same transport, still gated.
+    await expect(callOverRpc(harness.userDO, 'listCredentials', [{ workspaceToken: token }]) as Promise<unknown>)
+      .resolves.toEqual([]);
+    harness.close();
+  });
+
+  test('the seal leaves the class working from the inside', async () => {
+    // Every credential path below runs through the sealed `sqlx`, `ensureInit`,
+    // `requireTier` and `getCredentialRow` — proving the shadowing changed
+    // reachability and nothing else.
+    const harness = createTestUserDO();
+    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_internal' });
+    expect(await harness.userDO.listCredentials(OWNER_SESSION)).toMatchObject([{ key: 'github' }]);
+    expect(await harness.userDO.getAuthHeaders(OWNER_SESSION, 'github'))
+      .toEqual({ Authorization: 'Bearer ghp_internal' });
+    await harness.userDO.deleteCredential(OWNER_SESSION, 'github');
+    expect(await harness.userDO.listCredentials(OWNER_SESSION)).toEqual([]);
+    harness.close();
+  });
+});
+
+// ── Completeness ────────────────────────────────────────────────────────────
+// An allowlist is only fail-closed if it cannot drift from the class. These read
+// the source, so a member added tomorrow is either declared on the surface on
+// purpose or unreachable — never quietly reachable.
+
+const declaredMembers = declaredClassMembers(
+  readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8'),
+);
+
+describe('the UserDO RPC surface cannot drift from the class', () => {
+  test('every public member is on the surface', () => {
+    const missing = declaredMembers
+      .filter((m) => !isInternalMember(m))
+      .map((m) => m.name)
+      .filter((name) => !USER_DO_RPC_SURFACE.includes(name));
+    expect(missing.sort()).toEqual([]);
+  });
+
+  test('no internal member is on the surface', () => {
+    const leaked = declaredMembers
+      .filter(isInternalMember)
+      .map((m) => m.name)
+      .filter((name) => USER_DO_RPC_SURFACE.includes(name));
+    expect(leaked.sort()).toEqual([]);
+  });
+
+  test('the surface names nothing the class does not have', () => {
+    const declared = new Set(declaredMembers.map((m) => m.name));
+    const stale = USER_DO_RPC_SURFACE
+      .filter((name) => !PLATFORM_RPC_SURFACE.includes(name))
+      .filter((name) => !declared.has(name));
+    expect(stale.sort()).toEqual([]);
+  });
+
+  test('the check sees the member shapes someone might actually add', () => {
+    // Guards the guard: a regex that only matched `async foo(` would let a
+    // getter, a generic, a plain method, or a `private` one through unnoticed.
+    const named = (name: string) => declaredMembers.some((m) => m.name === name);
+    expect(named('getAuthHeaders')).toBe(true);   // async, no modifier
+    expect(named('fetch')).toBe(true);            // override async
+    expect(named('sqlx')).toBe(true);             // private, non-async, generic
+    expect(named('getCredentialRow')).toBe(true); // private, non-async
+    expect(declaredMembers.filter(isInternalMember).length).toBeGreaterThan(5);
+  });
+
+  test('a UserDO instance reaches no further than its declared surface', () => {
+    const harness = createTestUserDO();
+    const beyond = rpcReachableNames(harness.userDO).filter((n) => !USER_DO_RPC_SURFACE.includes(n));
+    expect(beyond).toEqual([]);
+    harness.close();
+  });
+});
+
+// ── The agent family ────────────────────────────────────────────────────────
+// `OrchestratorAgent`, `SubordinateAgent` and `ExplorationAgent` cannot be
+// constructed under bun — their base chain reaches `cloudflare:*` through
+// `@cloudflare/think` and `@cloudflare/sandbox`. Their surfaces are plain data
+// though, and the class sources are readable, so the same two questions get
+// answered: does every class seal itself, and does its surface hold only what
+// the class actually declares?
+
+const SRC = join(import.meta.dir, '..', 'src');
+const source = (file: string) => readFileSync(join(SRC, file), 'utf8');
+
+/** Every Durable Object class in the Worker, and the surface it must seal to.
+ *  `ProteusSandbox` is the one omission — see the test that pins it. */
+const SEALED_CLASSES = [
+  { file: 'user/user-do.ts', klass: 'UserDO', constant: 'USER_DO_RPC_SURFACE', surface: USER_DO_RPC_SURFACE },
+  { file: 'orchestrator.ts', klass: 'OrchestratorAgent', constant: 'ORCHESTRATOR_RPC_SURFACE', surface: ORCHESTRATOR_RPC_SURFACE },
+  { file: 'subordinate-agent.ts', klass: 'SubordinateAgent', constant: 'SUBORDINATE_RPC_SURFACE', surface: SUBORDINATE_RPC_SURFACE },
+  { file: 'exploration.ts', klass: 'ExplorationAgent', constant: 'EXPLORATION_RPC_SURFACE', surface: EXPLORATION_RPC_SURFACE },
+] as const;
+
+/** The inherited members that make an unsealed Durable Object a liability: the
+ *  SDK's query runner over the receiver's own storage, its storage-wiping
+ *  teardown, its state writer, and the two universal method bridges that would
+ *  re-open every name this module closes. */
+const MUST_STAY_DENIED = [
+  'sql', 'destroy', 'setState', 'stash',
+  '_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeStubMethod',
+];
+
+describe('every Durable Object that holds something worth stealing is sealed', () => {
+  test.each(SEALED_CLASSES.map((c) => [c.klass, c] as const))(
+    '%s seals itself to its own surface',
+    (_name, { file, klass, constant }) => {
+      const src = source(file);
+      // The seal has to run in the class's own constructor: `this`'s prototype
+      // chain is only final once the SDK bases have finished with it.
+      expect(src).toContain(`export class ${klass} extends`);
+      expect(src).toContain(`sealRpcSurface(this, ${constant});`);
+    },
+  );
+
+  test.each(SEALED_CLASSES.map((c) => [c.klass, c] as const))(
+    '%s denies the inherited members that matter',
+    (_name, { surface }) => {
+      expect(MUST_STAY_DENIED.filter((name) => surface.includes(name))).toEqual([]);
+    },
+  );
+
+  test.each(SEALED_CLASSES.map((c) => [c.klass, c] as const))(
+    '%s carries the platform surface it is dispatched on',
+    (_name, { surface }) => {
+      expect(PLATFORM_RPC_SURFACE.filter((name) => !surface.includes(name))).toEqual([]);
+    },
+  );
+
+  test('only the agent family carries the facet protocol', () => {
+    for (const { klass, surface } of SEALED_CLASSES) {
+      const missing = AGENTS_FACET_RPC_SURFACE.filter((name) => !surface.includes(name));
+      // A facet and its root call these on each other across a real stub; the
+      // UserDO is neither, so it keeps them closed.
+      expect({ klass, missing: missing.length }).toEqual({ klass, missing: klass === 'UserDO' ? AGENTS_FACET_RPC_SURFACE.length : 0 });
+    }
+  });
+
+  test('ProteusSandbox is knowingly left open', () => {
+    // Its whole RPC surface is @cloudflare/sandbox's, which the preview proxy
+    // and the executor call broadly; it holds no owner credentials — the
+    // sandbox is where untrusted code was always meant to run. Sealing it
+    // would mean pinning a third-party API we do not own.
+    const src = source('proteus-sandbox.ts');
+    expect(src).toContain('export class ProteusSandbox extends Sandbox<Env>');
+    expect(src).not.toContain('sealRpcSurface');
+  });
+
+  test('no other Durable Object class slipped in unsealed', () => {
+    const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'ProteusSandbox']);
+    const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts'))
+      .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Think<|Sandbox<)/gm)]
+        .map((m) => m[1]));
+    expect(classes.filter((name) => !known.has(name))).toEqual([]);
+  });
+});
+
+describe('the agent surfaces cannot drift from their classes', () => {
+  const actorMembers = declaredClassMembers(source('actor-agent.ts'));
+
+  test('the orchestrator keeps every method the CLI transport dispatches onto it', () => {
+    // cli/routes.ts calls `stub[method](...)` for each key of this table, so a
+    // key missing from the surface is a broken CLI command, not a safe default.
+    const missing = Object.keys(AGENT_RPC_ACCESS).filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name));
+    expect(missing.sort()).toEqual([]);
+  });
+
+  test.each([
+    ['OrchestratorAgent', 'orchestrator.ts', ORCHESTRATOR_RPC_SURFACE] as const,
+    ['SubordinateAgent', 'subordinate-agent.ts', SUBORDINATE_RPC_SURFACE] as const,
+    ['ExplorationAgent', 'exploration.ts', EXPLORATION_RPC_SURFACE] as const,
+  ])('%s names only members it or ActorAgent declares', (_name, file, surface) => {
+    const declared = new Set([...declaredClassMembers(source(file)), ...actorMembers].map((m) => m.name));
+    const stale = surface
+      .filter((name) => !PLATFORM_RPC_SURFACE.includes(name) && !AGENTS_FACET_RPC_SURFACE.includes(name))
+      .filter((name) => !declared.has(name));
+    expect(stale.sort()).toEqual([]);
+  });
+
+  test.each([
+    ['OrchestratorAgent', 'orchestrator.ts', ORCHESTRATOR_RPC_SURFACE] as const,
+    ['SubordinateAgent', 'subordinate-agent.ts', SUBORDINATE_RPC_SURFACE] as const,
+    ['ExplorationAgent', 'exploration.ts', EXPLORATION_RPC_SURFACE] as const,
+  ])('%s exposes no internal of its own or of ActorAgent', (_name, file, surface) => {
+    const internal = [...declaredClassMembers(source(file)), ...actorMembers]
+      .filter(isInternalMember)
+      .map((m) => m.name);
+    expect(internal.filter((name) => surface.includes(name)).sort()).toEqual([]);
+  });
+});
+
+// ── The mechanism ───────────────────────────────────────────────────────────
+// `UserDO`'s base classes are stubbed under bun, so the inherited half of the
+// surface — the half that carries the agents SDK's `sql` — is exercised here on
+// a hierarchy shaped like the real one: a third-party base with a tagged
+// template query runner and a protected member, an abstract middle class, and a
+// leaf that overrides.
+
+class ThirdPartyBase {
+  sql(strings: TemplateStringsArray, ...values: unknown[]): string {
+    return `RAN ${strings.join('?')} ${JSON.stringify(values)}`;
+  }
+  baseUsesSql(): string { const id = 7; return this.sql`SELECT ${id}`; }
+  get liveState(): string { return 'state'; }
+  overridable(): string { return 'base'; }
+}
+
+abstract class Middle extends ThirdPartyBase {
+  protected sharedWithSubclasses(): string { return 'protected value'; }
+  publicApi(): string { return `api(${this.sharedWithSubclasses()})`; }
+}
+
+const callableRegistry = new WeakMap<object, string>();
+
+class Leaf extends Middle {
+  #secret = 'hidden';
+  constructor() {
+    super();
+    callableRegistry.set(this.markedCallable, 'metadata');
+    sealRpcSurface(this, ['publicApi', 'markedCallable', 'overridable']);
+  }
+  private leafInternal(): string { return this.#secret; }
+  markedCallable(): string { return 'callable'; }
+  override overridable(): string { return `leaf -> ${super.overridable()}`; }
+  selfCheck() {
+    return {
+      internal: this.leafInternal(),
+      protectedViaThis: this.sharedWithSubclasses(),
+      baseUsesSql: this.baseUsesSql(),
+      getter: this.liveState,
+      override: this.overridable(),
+      callableIdentityKept: callableRegistry.has(this.markedCallable),
+    };
+  }
+}
+
+describe('sealRpcSurface', () => {
+  test('an unsealed class exposes its whole chain, including the SDK query runner', () => {
+    const open = new Middle2();
+    expect(rpcReachableNames(open)).toEqual([
+      'baseUsesSql', 'liveState', 'overridable', 'publicApi', 'sharedWithSubclasses', 'sql',
+    ]);
+    expect(callOverRpc(open, 'sql', [['SELECT * FROM user_credentials']]))
+      .toBe('RAN SELECT * FROM user_credentials []');
+  });
+
+  test('a sealed class exposes exactly its surface', () => {
+    expect(rpcReachableNames(new Leaf())).toEqual(['markedCallable', 'overridable', 'publicApi']);
+  });
+
+  test('inherited members, protected members and TypeScript privates are all denied', () => {
+    const leaf = new Leaf();
+    for (const name of ['sql', 'baseUsesSql', 'liveState', 'sharedWithSubclasses', 'leafInternal', 'selfCheck']) {
+      expect(() => callOverRpc(leaf, name, [])).toThrow(`does not implement the method "${name}"`);
+    }
+  });
+
+  test('nothing about the instance changes from the inside', () => {
+    const leaf = new Leaf();
+    // Reached through the sealed `selfCheck` itself, so the call proves the point twice.
+    expect((leaf as { selfCheck(): Record<string, unknown> }).selfCheck()).toEqual({
+      internal: 'hidden',
+      protectedViaThis: 'protected value',
+      baseUsesSql: 'RAN SELECT ? [7]',
+      getter: 'state',
+      override: 'leaf -> base',
+      callableIdentityKept: true,
+    });
+  });
+
+  test('sealed members stay invisible to enumeration', () => {
+    const leaf = new Leaf();
+    expect(Object.keys(leaf)).toEqual([]);
+    expect(Object.keys({ ...leaf })).toEqual([]);
+  });
+
+  test('a surface entry the class does not have is ignored, not trusted', () => {
+    const open = new Middle2();
+    sealRpcSurface(open, ['publicApi', 'noSuchMethod']);
+    expect(rpcReachableNames(open)).toEqual(['publicApi']);
+    expect(() => callOverRpc(open, 'noSuchMethod', [])).toThrow('does not implement');
+  });
+});
+
+/** A concrete `Middle`, for the unsealed baseline. */
+class Middle2 extends Middle {}

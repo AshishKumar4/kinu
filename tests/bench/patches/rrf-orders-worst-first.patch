@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/memory/vector-store.ts b/packages/core/src/memory/vector-store.ts
+index ce7150b..27e3736 100644
+--- a/packages/core/src/memory/vector-store.ts
++++ b/packages/core/src/memory/vector-store.ts
+@@ -118,7 +118,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
+       }
+     });
+   }
+-  return Array.from(byId.values()).sort((a, b) => b.rrfScore - a.rrfScore);
++  return Array.from(byId.values()).sort((a, b) => a.rrfScore - b.rrfScore);
+ }
+ 
+ /**

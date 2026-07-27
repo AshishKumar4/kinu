@@ -1,23 +1,25 @@
 /**
  * Work Surface — Column C of the RUN altitude. A thin segmented switcher over
- * the agent's pinned work surfaces (Output · Brain · Reasoning · Devices),
- * NOT a row of co-equal debug tabs. The Run Timeline (Column B) drives which
- * surface is active; this owns the switcher chrome + dispatch.
+ * the workspace's pinned work surfaces (Output · Brain · Reasoning · Product ·
+ * Tasks · Environment), NOT a row of co-equal debug tabs. The Run Timeline
+ * (Column B) drives which surface is active; this owns the switcher chrome +
+ * dispatch.
  */
 import {
-  MonitorIcon, BrainIcon, TreeStructureIcon, DesktopTowerIcon, ClockIcon, GitDiffIcon,
+  MonitorIcon, BrainIcon, TreeStructureIcon, ClockIcon, GitDiffIcon, StackIcon,
 } from "@phosphor-icons/react";
-import ExecutorsPanel from "@/components/ExecutorsPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
+import type { ExecutorInfo } from "@/lib/executors";
 import type { ToolInfo, MemoryEntry, MCTSNode, BackgroundJob, Rpc } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { BrainSurface } from "./BrainSurface";
 import { ReasoningSurface } from "./ReasoningSurface";
 import { TasksSurface } from "./TasksSurface";
+import { EnvironmentSurface } from "./EnvironmentSurface";
 import { ProductChangesSurface } from "./ProductChangesSurface";
 
-export const SURFACES = ["Output", "Brain", "Reasoning", "Product", "Tasks", "Devices"] as const;
+export const SURFACES = ["Output", "Brain", "Reasoning", "Product", "Tasks", "Environment"] as const;
 export type SurfaceKind = (typeof SURFACES)[number];
 
 const SURFACE_ICON: Record<SurfaceKind, React.ComponentType<{ size?: number }>> = {
@@ -26,7 +28,7 @@ const SURFACE_ICON: Record<SurfaceKind, React.ComponentType<{ size?: number }>> 
   Reasoning: TreeStructureIcon,
   Product: GitDiffIcon,
   Tasks: ClockIcon,
-  Devices: DesktopTowerIcon,
+  Environment: StackIcon,
 };
 
 export interface WorkSurfaceProps {
@@ -42,21 +44,11 @@ export interface WorkSurfaceProps {
   onSearchMemory: (q: string) => void;
   // Reasoning
   mctsTree: MCTSNode | null;
-  // Devices (ExecutorsPanel)
-  executors: Array<{
-    name: string;
-    kind: string;
-    capabilities: string[];
-    available: boolean;
-    configured?: boolean;
-    active?: boolean;
-    status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
-    reason?: string;
-  }>;
+  // Environment (mounts + terminals)
+  executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
-  agentName?: string;
   // Background tasks (Tasks surface) + live running count for its tab badge.
   backgroundJobs: BackgroundJob[];
   runningTaskCount?: number;
@@ -75,12 +67,13 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className="flex items-center border-b p-border px-2 gap-0.5 shrink-0">
         {SURFACES.map((s) => {
           const Icon = SURFACE_ICON[s];
-          const badge = (s === "Output" || s === "Devices") ? props.pinnedPorts.length
+          // Live-port badge lights Output ONLY — one home per signal.
+          const badge = s === "Output" ? props.pinnedPorts.length
             : s === "Tasks" ? (props.runningTaskCount ?? 0)
             : s === "Brain" ? (props.changelogUnseen ?? 0) : 0;
-          const badgeTone = s === "Tasks" ? "bg-amber-500/20 text-amber-300"
+          const badgeTone = s === "Tasks" ? "p-badge-warning"
             : s === "Brain" ? "p-accent-subtle p-accent"
-            : "bg-emerald-500/20 text-emerald-300";
+            : "p-badge-success";
           return (
             <button key={s} onClick={() => onSurface(s)}
               className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px flex items-center gap-1.5 ${
@@ -109,17 +102,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} rpc={props.rpc} />}
           {surface === "Product" && <ProductChangesSurface rpc={props.rpc} />}
           {surface === "Tasks" && <TasksSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshTasks} rpc={props.rpc} />}
-          {surface === "Devices" && (
-            <div className="h-full -m-5">
-              <ExecutorsPanel
-                executors={props.executors}
-                outputs={props.executorOutputs}
-                onExecute={props.onExecute}
-                agentName={props.agentName}
-                rpc={props.rpc}
-                pinnedPorts={props.pinnedPorts}
-              />
-            </div>
+          {surface === "Environment" && (
+            <EnvironmentSurface
+              rpc={props.rpc}
+              executors={props.executors}
+              executorOutputs={props.executorOutputs}
+              lastActiveExecutor={props.lastActiveExecutor}
+              onExecute={props.onExecute}
+              pinnedPorts={props.pinnedPorts}
+            />
           )}
         </ErrorBoundary>
       </div>

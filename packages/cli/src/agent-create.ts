@@ -2,19 +2,20 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
-  AGENT_IDENTITY_SYSTEM_PROMPT,
-  agentIdentityPrompt,
-  createAgent,
+  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+  workspaceIdentityPrompt,
+  createWorkspace,
   createAgentConfigStore,
-  createAgentNameFromMission as coreCreateAgentNameFromMission,
-  fallbackAgentIdentity,
+  createWorkspaceNameFromMission as coreCreateAgentNameFromMission,
+  fallbackWorkspaceIdentity,
   initAgentConfigTable,
   initCraftScoreTables,
   initScaffoldTables,
   initSearchTables,
-  parseAgentIdentityOutput,
+  parseWorkspaceIdentityOutput,
   type LLMProviderConfig,
-  type SuggestedAgentIdentity,
+  type ReasoningEffort,
+  type SuggestedWorkspaceIdentity,
 } from '@proteus/core';
 import {
   agentDbPath,
@@ -27,14 +28,18 @@ import {
   writeAliasShim,
   type AgentMode,
 } from './config.js';
-import { createCloudAgent } from './cloud-api.js';
+import {
+  createCloudAgent,
+  type CloudAgent,
+  type CreateCloudAgentInput,
+} from './cloud-api.js';
 import { authCommand } from './commands/auth.js';
 import { ensureLocalDaemonRunning } from './commands/daemon.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 export interface CreateCliAgentInput {
-  /** Required for local agents. Omit for cloud agents to let the server
-   *  generate the name (cloud naming is server-side). */
+  /** Required for local agents. Cloud agents are named from their mission
+   *  when this is omitted. */
   name?: string;
   displayName?: string;
   nameOrigin?: 'user' | 'auto';
@@ -46,6 +51,7 @@ export interface CreateCliAgentInput {
   auth?: string;
   origin?: string;
   allowInteractiveAuth?: boolean;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface CreatedCliAgent {
@@ -67,25 +73,54 @@ export interface SuggestAgentIdentityOptions {
   generate?: (mission: string) => Promise<string>;
 }
 
-export function createAgentNameFromMission(mission: string, id: string = crypto.randomUUID()): string {
+export function createWorkspaceNameFromMission(mission: string, id: string = crypto.randomUUID()): string {
   return coreCreateAgentNameFromMission(mission, id);
 }
 
 export async function suggestAgentIdentityFromMission(
   mission: string,
   opts: SuggestAgentIdentityOptions = {},
-): Promise<SuggestedAgentIdentity> {
+): Promise<SuggestedWorkspaceIdentity> {
   const id = opts.id ?? crypto.randomUUID();
-  const fallback = fallbackAgentIdentity(mission, id);
+  const fallback = fallbackWorkspaceIdentity(mission, id);
   try {
     const raw = opts.generate
       ? await opts.generate(mission)
       : await generateIdentityJson(mission, opts);
-    const identity = parseAgentIdentityOutput(raw, id);
+    const identity = parseWorkspaceIdentityOutput(raw, id);
     return identity || fallback;
   } catch {
     return fallback;
   }
+}
+
+export interface CreateCloudAgentFromMissionOptions {
+  id?: string;
+  generate?: (mission: string) => Promise<string>;
+  create: (input: CreateCloudAgentInput) => Promise<CloudAgent>;
+}
+
+export async function createCloudAgentFromMission(
+  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth' | 'reasoningEffort'>,
+  options: CreateCloudAgentFromMissionOptions,
+): Promise<CloudAgent> {
+  const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
+  const identity = userNamed
+    ? { name: input.name, displayName: input.displayName ?? input.name }
+    : await suggestAgentIdentityFromMission(input.purpose, {
+        id: options.id,
+        model: input.model,
+        baseUrl: input.baseUrl,
+        auth: input.auth,
+        generate: options.generate,
+      });
+  return options.create({
+    name: identity.name,
+    displayName: identity.displayName,
+    purpose: input.purpose,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+  });
 }
 
 export function isCloudAuthConfigured(): boolean {
@@ -112,11 +147,14 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-    const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
-    const agent = await createCloudAgent(auth.origin, auth.token, {
-      name: userNamed ? input.name : undefined,
-      displayName: userNamed ? input.displayName ?? input.name : undefined,
+    const defaults = loadConfigFile();
+    const agent = await createCloudAgentFromMission({
+      ...input,
       purpose,
+      model: input.model ?? defaults.model,
+      reasoningEffort: input.reasoningEffort ?? defaults.reasoningEffort,
+    }, {
+      create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
     });
     upsertAgentConfig({
       name: agent.name,
@@ -130,7 +168,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   }
 
   const name = input.name;
-  if (!name) throw new Error('Agent name required for local agents.');
+  if (!name) throw new Error('Workspace name required for local workspaces.');
   const displayName = input.displayName ?? name;
   const dir = agentDir(name);
   const dbPath = agentDbPath(name);
@@ -141,13 +179,15 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const db = new Database(dbPath);
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    const rt = createAgent(db, { name: displayName, purpose, llm: llmConfig });
+    const rt = createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
     initSearchTables((ddl: string) => db.exec(ddl));
     initScaffoldTables((ddl: string) => db.exec(ddl));
     initCraftScoreTables((ddl: string) => db.exec(ddl));
     initAgentConfigTable(rt.storage.execRaw);
     const agentConfig = createAgentConfigStore(rt.storage.sql);
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
+    const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
+    if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
     agentConfig.setDisplayName(displayName);
     agentConfig.setNameOrigin(input.nameOrigin ?? 'user');
   } finally {
@@ -170,9 +210,11 @@ async function generateIdentityJson(mission: string, opts: SuggestAgentIdentityO
   const { resolver } = createConfiguredLocalModelResolver(opts);
   const result = await generateText({
     model: resolver.resolveModel(opts.model ?? null),
-    system: AGENT_IDENTITY_SYSTEM_PROMPT,
-    prompt: agentIdentityPrompt(mission),
-    maxOutputTokens: 80,
+    system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+    prompt: workspaceIdentityPrompt(mission),
+    // No output cap: reasoning models spend budget on thinking before the
+    // JSON, so a cap starves them into empty text (the fallback-name bug).
+    // Cheapness comes from low reasoning effort, not output caps.
   });
   return result.text;
 }

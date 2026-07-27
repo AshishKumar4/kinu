@@ -99,15 +99,4 @@ structure EvolutionState where
   reflectionCount : Nat
   deriving Repr, BEq, Inhabited
 
-/-! ## Backpropagation -/
-
-noncomputable def runningMean (value : Float) (visits : Nat) (reward : Float) : Float :=
-  (value * Float.ofNat visits + reward) / Float.ofNat (visits + 1)
-
-structure BackpropState where
-  visits    : Nat
-  value     : Float
-  rewardSum : Float
-  deriving Repr, BEq, Inhabited
-
 end Proteus

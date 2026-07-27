@@ -9,7 +9,8 @@
  *
  * Timescale 1 — Turn-level (reviewTurn, Hermes-style forked review):
  *   When user message N+1 arrives, turn N is graded from the user's actual
- *   follow-up (accepted / corrected / frustrated; abandoned at session end).
+ *   follow-up (accepted / corrected / frustrated). A turn with no follow-up
+ *   yet records no outcome — an honest absence, never a constant.
  *   The outcome populates turn.feedback, drives craft EMA, gates reflection
  *   (corrected/frustrated turns warrant it; accepted turns extract patterns),
  *   and lands in the durable turn_outcomes ledger that GEPA eval splits,
@@ -18,9 +19,10 @@
  * Timescale 2 — Session-level (onSessionComplete):
  *   Reflect on patterns when the window carries real negative signal —
  *   accepted streaks skip the reflection. The every-N-turns cadence lives in
- *   ONE place — AgentOrchestrator (recordTurn / flushSession).
+ *   ONE place — AgentOrchestrator (recordTurn), over the durable window this
+ *   engine owns (session-window.ts), so it survives process/instance death.
  *
- * Timescale 3 — Lifetime-level (every N conversations or daily):
+ * Timescale 3 — Lifetime-level (every N closed session windows):
  *   Replay eval (the loss curve) → CraftStore consolidation → MCTS exploration.
  */
 
@@ -49,7 +51,12 @@ import {
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
+import {
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+} from './session-window.js';
+import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 import { buildChangelog } from './changelog.js';
+import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
@@ -68,7 +75,7 @@ import {
 } from '../scaffold/archive.js';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
 import { runMCTS } from '../mcts/engine.js';
-import { createAgentConfigStore, type AgentConfigStore } from '../config/store.js';
+import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store.js';
 
 /** The archive context handed to the proposal prompt: which version the
  *  proposal branches from + the variants it may cite as stepping stones. */
@@ -140,25 +147,28 @@ export class EvolutionEngine {
   private rt: AgentRuntime;
   private config: EvolutionConfig;
   private listeners: EvolutionListener[] = [];
-  private conversationCount = 0;
-  /** Operator-tuned agent_config (MCTS overrides for lifetime evolution). */
+  /** Operator-tuned agent_config (MCTS overrides for lifetime evolution) —
+   *  also the home of the durable closed-window count the lifetime timescale
+   *  paces itself by. */
   private agentConfig: AgentConfigStore;
+  /** The open reflection window + the turn awaiting its outcome review.
+   *  AgentOrchestrator owns the cadence policy; the engine owns the ledger,
+   *  as it does for outcomes, lessons and replays. */
+  readonly sessionWindow: SessionWindowStore;
 
   constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
     this.rt = rt;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
-    this.agentConfig = createAgentConfigStore(rt.storage.sql);
 
-    // The engine owns the outcome + lessons + replay ledgers — created here so
+    // The engine owns the outcome + lessons + replay + session-window ledgers,
+    // and the config table it paces the lifetime timescale in — created here so
     // both backends (and tests) get them without per-backend schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
     initReplayTables(rt.storage.execRaw);
-
-    // Load conversation count from DB to resume lifetime tracking
-    const count = rt.storage.sql<{ c: number }>`
-      SELECT COUNT(DISTINCT session_id) as c FROM messages
-    `[0]?.c ?? 0;
-    this.conversationCount = count;
+    initSessionWindowTable(rt.storage.execRaw);
+    initAgentConfigTable(rt.storage.execRaw);
+    this.agentConfig = createAgentConfigStore(rt.storage.sql);
+    this.sessionWindow = createSessionWindowStore(rt.storage.sql);
   }
 
   /** Subscribe to evolution events (for CLI/UI display) */
@@ -183,12 +193,16 @@ export class EvolutionEngine {
 
   /**
    * Grade turn N from the user's follow-up and run turn-level evolution on
-   * the result. `followup` is the NEXT user message (null = none arrived:
-   * session flush ⇒ abandoned; programmatic turns carry no user signal).
+   * the result. `followup` is the NEXT user message; null means no follow-up
+   * exists (a programmatic turn — the reactor and job wakes carry no user
+   * verdict) and the turn records no outcome at all.
    *
    * One signal pipeline: explicit thumbs (recorded before the follow-up)
    * beat the classifier; trivial turns (greetings) skip the LLM call; a
-   * classifier failure records nothing rather than guessing.
+   * classifier failure records nothing rather than guessing. An absent
+   * outcome is not a neutral one: `turn.hadError` still drives quality and a
+   * provisional reflection below, which is the only machine signal a turn
+   * nobody graded actually carries.
    */
   async reviewTurn(turn: CompletedTurn, followup: string | null): Promise<void> {
     if (!this.config.enabled) return;
@@ -223,11 +237,14 @@ export class EvolutionEngine {
       outcome = c.outcome;
       confidence = c.confidence;
       evidence = c.evidence;
-    } else if (turn.origin !== 'programmatic') {
-      outcome = 'abandoned';
-      source = 'session_end';
     }
-    // else: programmatic turn with no follow-up — no user signal exists.
+    // else: no follow-up exists yet, so no user signal exists. The turn is NOT
+    // graded 'abandoned' here: the follow-up may still be coming (in headless
+    // usage it is the next `proteus exec` invocation), and everything that
+    // reads the ledger already discounts abandonment — alignmentConvergence
+    // counts it as ungraded and buildOutcomeEvalSplit ignores it — so writing
+    // it would only pull the crafted-tool EMA toward a neutral 0.5 on evidence
+    // nobody has.
 
     if (outcome) {
       if (!preRecorded) {
@@ -244,8 +261,9 @@ export class EvolutionEngine {
       turn.feedback = outcomeToFeedback(outcome);
     }
 
-    // Quality: the outcome IS the signal. An abandoned turn that errored is
-    // the one case the error decides; a clean abandonment stays neutral.
+    // Quality: the outcome IS the signal. An abandoned turn (only ever an
+    // existing ledger row now) that errored is the one case the error
+    // decides; a clean abandonment stays neutral.
     const quality: number | null = outcome
       ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome))
       : (turn.hadError ? 0.1 : null);
@@ -278,12 +296,12 @@ export class EvolutionEngine {
       await this.corroborateLessons(turn.turnId);
     }
 
-    // Reflection is warranted by real negative signal — or by an error the
-    // user never weighed in on (abandoned / programmatic), which stays
-    // provisional until an outcome corroborates it.
+    // Reflection is warranted by real negative signal — or by an error on a
+    // turn nobody graded, which stays provisional until an outcome
+    // corroborates it.
     const corroborated = outcome === 'corrected' || outcome === 'frustrated';
     if (corroborated || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
-      const reflection = await this.generateTurnReflection(turn, quality, followup);
+      const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
       recordLesson(this.rt.storage.sql, {
         turnIds: turn.turnId ? [turn.turnId] : [],
         text: reflection,
@@ -304,17 +322,6 @@ export class EvolutionEngine {
     if (outcome === 'accepted' && turn.toolCalls.length > 0) {
       await this.extractPattern(turn, quality);
     }
-  }
-
-  /**
-   * Fire-and-forget variant — the forked background review. Both backends
-   * dispatch this from the live loop (the next user turn's start, a session
-   * flush, or a programmatic turn's completion); it never blocks a turn.
-   */
-  reviewTurnDetached(turn: CompletedTurn, followup: string | null): void {
-    void this.reviewTurn(turn, followup).catch(err => {
-      console.error('[proteus] reviewTurn failed:', err);
-    });
   }
 
   /**
@@ -409,15 +416,15 @@ export class EvolutionEngine {
   async onSessionComplete(session: CompletedSession): Promise<void> {
     if (!this.config.enabled) return;
 
-    this.conversationCount++;
+    const windowsClosed = this.agentConfig.countClosedSessionWindow();
 
     // Reflect on the entire session (skip trivially short windows)
     if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
-      await this.onSessionReflection(session);
+      await this.onSessionReflection(session, windowsClosed);
     }
 
     // Check if lifetime evolution is due
-    if (this.conversationCount % this.config.lifetimeEvolutionInterval === 0) {
+    if (windowsClosed % this.config.lifetimeEvolutionInterval === 0) {
       await this.onLifetimeEvolution();
     }
 
@@ -461,7 +468,7 @@ export class EvolutionEngine {
    *  reflection prose is self-scored, so it enters MEMORY.md only when a
    *  recorded outcome already backs the window; otherwise it waits in the
    *  lessons ledger as provisional until one corroborates it. */
-  private async onSessionReflection(session: CompletedSession): Promise<void> {
+  private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
     const recentMemory = await this.rt.memory.read('memory/MEMORY.md') ?? '';
     const recentLessons = recentMemory.split('\n### Lesson').slice(-5).join('\n### Lesson');
 
@@ -492,8 +499,8 @@ export class EvolutionEngine {
 
     this.emit({ type: 'reflection', message: `Session reflection${corroborated ? '' : ' [provisional]'}: ${reflection.slice(0, 100)}...` });
 
-    // Propose scaffold mutation after enough conversations with clear patterns
-    if (this.conversationCount >= 3) {
+    // Propose scaffold mutation after enough closed windows with clear patterns
+    if (windowsClosed >= 3) {
       await this.maybeEvolveScaffold(reflection);
     }
   }
@@ -526,7 +533,8 @@ export class EvolutionEngine {
       // (policy + justification in scaffold/archive.ts selectEvolutionBase).
       // Selection weights blend the shadow record with how each version's
       // turns ACTUALLY landed with the user (turn_outcomes) — the real-outcome
-      // prior the shadow judge alone can't supply.
+      // prior the shadow judge alone can't supply — and are then aggregated
+      // over each candidate's descendant lineage (clade-metaproductivity).
       const archive = listScaffoldArchive(this.rt.storage.sql, 12);
       const realRates = realOutcomeScaffoldRates(this.rt.storage.sql);
       const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
@@ -606,7 +614,7 @@ export class EvolutionEngine {
         ...(overrides.explorationWeight !== undefined ? { explorationWeight: overrides.explorationWeight } : {}),
         ...(overrides.judgeSamples !== undefined ? { judgeSamples: overrides.judgeSamples } : {}),
         ...(overrides.maxEvalLLMCalls !== undefined ? { maxEvalLLMCalls: overrides.maxEvalLLMCalls } : {}),
-        onIterationComplete: this.config.onMctsProgress,
+        onProgress: this.config.onMctsProgress,
       });
 
       this.emit({
@@ -643,7 +651,8 @@ export class EvolutionEngine {
       if (summary) {
         this.emit({
           type: 'replay_eval',
-          message: `Replay eval: loss ${summary.loss.toFixed(2)} over ${summary.sampleSize} labeled turns ` +
+          message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
+            `over ${summary.sampleSize} labeled turns ` +
             `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
           data: summary,
         });
@@ -681,7 +690,7 @@ export class EvolutionEngine {
   /** Generate a reflection on a turn that went wrong. The user's follow-up
    *  (the correction) is the strongest available context when present. */
   private async generateTurnReflection(
-    turn: CompletedTurn, quality: number, followup: string | null,
+    turn: CompletedTurn, outcome: TurnOutcome | null, quality: number, followup: string | null,
   ): Promise<string> {
     const summary = turn.assistantResponse.slice(0, 300);
     const toolSummary = turn.toolCalls.length > 0
@@ -689,10 +698,12 @@ export class EvolutionEngine {
       : 'No tools used';
 
     return this.rt.llm.complete(
-      `A recent interaction scored ${quality.toFixed(2)}/1.0 quality.\n` +
+      `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
       `User asked: "${turn.userMessage.slice(0, 200)}"\n` +
       `Response: "${summary}"\n` +
       `${toolSummary}\n` +
+      `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
+      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero team/think a lesson to decompose and staff subordinates or fan out heads; credit effective team/think on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
       `${turn.hadError ? 'An error occurred.\n' : ''}` +
       `${followup ? `The user then replied: "${followup.slice(0, 300)}"\n` : ''}\n` +
       `In one sentence, what specifically should be done differently next time?`,

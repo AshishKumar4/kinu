@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/scaffold/modify.ts b/packages/core/src/scaffold/modify.ts
+index fab36d1..69ea1bc 100644
+--- a/packages/core/src/scaffold/modify.ts
++++ b/packages/core/src/scaffold/modify.ts
+@@ -37,7 +37,7 @@ export async function modifyScaffold(
+   const minRationaleLength = DEFAULT_CONFIG.scaffold.minRationaleLength;
+ 
+   // Gate 1: structural validation
+-  if (rationale.length < minRationaleLength) {
++  if (code.length < minRationaleLength) {
+     return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };
+   }
+   for (const pattern of FORBIDDEN_PATTERNS) {

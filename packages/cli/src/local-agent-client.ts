@@ -1,9 +1,10 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { AgentInfo, AgentRuntime, SearchNode, ShellApprovalMode } from '@proteus/core';
+import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable } from '@proteus/core';
 import {
   LocalAgentSession,
-  openAgentCLI,
+  openWorkspaceCLI,
   resolveChatModel,
   type LocalModelResolver,
   type McpServerConfig,
@@ -13,10 +14,13 @@ import {
   CONFIG_PATH,
   agentDbPath,
   createCodexAuthStore,
+  listConfiguredAgentRefs,
   loadConfigFile,
   resolveMcpServers,
   resolveProviderCredentials,
+  upsertAgentConfig,
 } from './config.js';
+import { suggestAgentIdentityFromMission, type SuggestAgentIdentityOptions } from './agent-create.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 import {
   createCliSession,
@@ -75,14 +79,15 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
   };
-  const { rt, info } = openAgentCLI(db, dbPath, openConfig);
+  const { rt, info } = openWorkspaceCLI(db, dbPath, openConfig);
+  autoTitleLocalWorkspace(name, rt, info.purpose, opts);
   return new LocalAgentClient({
     agentName: name,
     rt,
     db,
     dbPath,
     info,
-    refreshInfo: () => openAgentCLI(db, dbPath, openConfig).info,
+    refreshInfo: () => openWorkspaceCLI(db, dbPath, openConfig).info,
     model: resolveChatModel(llmConfig),
     modelResolver: resolver,
     mcpServers: resolveMcpServers(),
@@ -91,13 +96,43 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
   });
 }
 
+/** Workspaces created before mission-derived titling still show their raw
+ *  directory name. Title them from SOUL.md's mission on open, through the same
+ *  identity path `proteus create` uses. The deterministic title lands before
+ *  this returns; the model call runs in the background and never blocks the
+ *  CLI, and failing it leaves the title that already landed. */
+export function autoTitleLocalWorkspace(
+  name: string,
+  rt: AgentRuntime,
+  mission: string,
+  opts: SuggestAgentIdentityOptions,
+): void {
+  initAgentConfigTable(rt.storage.execRaw);
+  const config = createAgentConfigStore(rt.storage.sql);
+  void applyWorkspaceTitle({
+    slug: name,
+    displayName: config.getDisplayName(),
+    nameOrigin: config.getNameOrigin(),
+    mission,
+  }, {
+    persist: (title) => {
+      config.setDisplayName(title);
+      config.setNameOrigin('auto');
+      const configured = listConfiguredAgentRefs()
+        .find((agent) => agent.mode === 'local' && (agent.localName ?? agent.name) === name);
+      upsertAgentConfig({ ...(configured ?? { name, mode: 'local', localName: name }), displayName: title });
+    },
+    suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
+  }).catch(() => { /* best-effort: the workspace keeps the name it had */ });
+}
+
 export interface LocalAgentClientDeps {
   agentName: string;
   rt: AgentRuntime;
   db: Database;
   dbPath: string;
-  info: AgentInfo;
-  refreshInfo: () => AgentInfo;
+  info: WorkspaceInfo;
+  refreshInfo: () => WorkspaceInfo;
   model: ReturnType<typeof resolveChatModel>;
   modelResolver: LocalModelResolver;
   mcpServers: Record<string, McpServerConfig>;
@@ -306,6 +341,7 @@ export class LocalAgentClient implements AgentClient {
       name: info.name,
       purpose: info.purpose,
       model: this.session.getEffectiveModelSpec(),
+      reasoningEffort: this.session.getReasoningEffort().effort,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
       craftedToolCount: info.craftedToolCount,
@@ -373,6 +409,14 @@ export class LocalAgentClient implements AgentClient {
     return { spec: this.session.setModel(spec).spec };
   }
 
+  async getReasoningEffort(): Promise<ReasoningEffort | null> {
+    return this.session.getReasoningEffort().effort;
+  }
+
+  async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+    return { effort: this.session.setReasoningEffort(effort).effort };
+  }
+
   async listModels(): Promise<AgentModelEntry[]> {
     return normalizeModelEntries(await this.session.listAvailableModels());
   }
@@ -434,6 +478,7 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
             args: call.args,
             result: call.result === undefined ? undefined : String(call.result),
           })),
+          ...(event.turn.usage ? { usage: event.turn.usage } : {}),
         },
       };
     case 'evolution':

@@ -8,6 +8,7 @@
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { DirectoryBackup } from '../execution/sandbox.js';
+import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -15,6 +16,7 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
  *  catches typos at compile time. */
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
+  reasoningEffort: 'reasoning_effort',
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
@@ -43,8 +45,13 @@ export const AGENT_CONFIG_KEYS = {
   /** Epoch ms of the operator's last Evolution Changelog view — entries newer
    *  than this drive the unseen badge. */
   changelogSeenAt: 'changelog_seen_at',
+  /** Session windows this agent has closed over its lifetime — the pace the
+   *  lifetime timescale (replay eval → consolidation → MCTS) runs at. Durable
+   *  because no agent instance outlives it: a `proteus exec` process handles
+   *  one turn, and a Durable Object is evicted between requests. */
+  closedSessionWindows: 'closed_session_windows',
   /** Total outcome-labeled instances a GEPA run draws into its train/val
-   *  split (buildOutcomeEvalSplit). Default 8, clamped 2..20. */
+   *  split (buildOutcomeEvalSplit) — see DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
   /** Operator-tuned MCTS knobs (Settings UI / setMctsConfig). Unset = engine
    *  defaults (DEFAULT_CONFIG.mcts) at the call site. */
@@ -54,6 +61,15 @@ export const AGENT_CONFIG_KEYS = {
   mctsBranches: 'mcts_branches',
   mctsJudgeSamples: 'mcts_judge_samples',
   mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
+  /** 'false' silences owner emails (changelog digests, job completions).
+   *  Defaults on; sends only happen when the platform email pieces exist. */
+  emailNotifications: 'email_notifications',
+  /** One-time semantic-memory backfill markers. Vectorize was added after FTS5,
+   *  so chunks indexed earlier are embedded lazily on boot. 'true' once the whole
+   *  memory_chunks table is embedded; the cursor pages a large table across boots
+   *  without re-embedding. Internal plumbing — accessed via generic get/set. */
+  memoryVectorBackfillDone: 'memory_vector_backfill_done',
+  memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
 } as const;
 export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
@@ -71,6 +87,8 @@ export interface AgentConfigStore {
   // ── Typed accessors for known keys ──
   getModel(): string | null;
   setModel(spec: string): void;
+  getReasoningEffort(): ReasoningEffort | null;
+  setReasoningEffort(effort: ReasoningEffort): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
   getNameOrigin(): 'user' | 'auto' | null;
@@ -107,13 +125,19 @@ export interface AgentConfigStore {
   /** Epoch ms of the last changelog view (0 = never seen). */
   getChangelogSeenAt(): number;
   setChangelogSeenAt(ms: number): void;
-  /** GEPA eval budget — labeled instances per run (default 8, clamp 2..20). */
+  /** Count one more closed session window and return the new lifetime total. */
+  countClosedSessionWindow(): number;
+  /** GEPA eval budget — labeled instances per run (train + val). See
+   *  DEFAULT_GEPA_EVAL_BUDGET / clampGepaEvalBudget. */
   getGepaEvalBudget(): number;
   /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
    *  into runMCTS call sites so unset knobs keep engine defaults. */
   getMctsOverrides(): MctsOverrides;
   /** Persist MCTS overrides; undefined fields are left untouched. */
   setMctsOverrides(overrides: MctsOverrides): void;
+  /** Owner-email notifications (changelog digests, job completions). */
+  getEmailNotificationsEnabled(): boolean;
+  setEmailNotificationsEnabled(enabled: boolean): void;
 }
 
 export interface MctsOverrides {
@@ -132,6 +156,27 @@ export interface MctsOverrides {
  *  fresh outcome labels, sparse enough that each pass sees a genuinely new
  *  eval split (the trace-driven counter pauses it on idle agents anyway). */
 export const DEFAULT_AUTO_GEPA_EVERY_N_TURNS = 25;
+
+/**
+ * Outcome-labeled instances one GEPA pass draws (train + val together).
+ * Every instance in `val` costs a full scaffold execution plus a judge call
+ * for EVERY candidate scored, so this is the dominant cost knob — and the
+ * thing that decides whether the winner's score means anything. 24 draws ~12
+ * failures (8 to reflect on, 4 held out) and ~12 accepted guards, putting ~16
+ * instances under every candidate. 95% half-width at an aggregate of 0.5:
+ * ±0.28 on the old 8-instance split, ±0.22 at 16, ±0.19 at 24, ±0.14 at 48 —
+ * cost is linear in instances while the width falls off as 1/√n, so this is
+ * the last doubling that buys much. The per-instance Pareto comparison is
+ * paired across candidates and resolves finer than the absolute aggregate.
+ */
+export const DEFAULT_GEPA_EVAL_BUDGET = 24;
+
+/** The operator-settable range for the GEPA eval budget. The floor keeps a
+ *  disjoint split possible at all (2 failures + 2 guards); the ceiling is the
+ *  most an operator can spend on one pass. */
+export function clampGepaEvalBudget(n: number): number {
+  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
+}
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
@@ -165,6 +210,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
+    getReasoningEffort() {
+      const effort = get(AGENT_CONFIG_KEYS.reasoningEffort);
+      return isReasoningEffort(effort) ? effort : null;
+    },
+    setReasoningEffort(effort) {
+      if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+      set(AGENT_CONFIG_KEYS.reasoningEffort, effort);
+    },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
     getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
@@ -251,8 +304,10 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));
     },
     getGepaEvalBudget() {
-      const n = Math.floor(Number(get(AGENT_CONFIG_KEYS.gepaEvalBudget)));
-      return Number.isFinite(n) && n >= 2 ? Math.min(n, 20) : 8;
+      const raw = get(AGENT_CONFIG_KEYS.gepaEvalBudget);
+      if (raw == null) return DEFAULT_GEPA_EVAL_BUDGET;
+      const n = Number(raw);
+      return Number.isFinite(n) ? clampGepaEvalBudget(n) : DEFAULT_GEPA_EVAL_BUDGET;
     },
     getChangelogSeenAt() {
       const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));
@@ -260,6 +315,12 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     setChangelogSeenAt(ms) {
       if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
+    },
+    countClosedSessionWindow() {
+      const previous = Math.floor(Number(get(AGENT_CONFIG_KEYS.closedSessionWindows)));
+      const next = (Number.isFinite(previous) && previous > 0 ? previous : 0) + 1;
+      set(AGENT_CONFIG_KEYS.closedSessionWindows, String(next));
+      return next;
     },
     getMctsOverrides() {
       const positive = (key: string): number | undefined => {
@@ -295,6 +356,12 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       write(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
       write(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
       write(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
+    },
+    getEmailNotificationsEnabled() {
+      return get(AGENT_CONFIG_KEYS.emailNotifications) !== 'false';
+    },
+    setEmailNotificationsEnabled(enabled) {
+      set(AGENT_CONFIG_KEYS.emailNotifications, enabled ? 'true' : 'false');
     },
   };
 }

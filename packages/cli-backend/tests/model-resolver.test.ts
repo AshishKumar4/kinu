@@ -2,9 +2,40 @@ import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
-import { cloudProxyBaseURL, createLocalModelResolver } from '../src/model-resolver.js';
+import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver.js';
 
 describe('createLocalModelResolver', () => {
+  test('local LLM has no default output cap but honors an explicitly configured cap', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const body = await request.json() as Record<string, unknown>;
+        bodies.push(body);
+        return Response.json({
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+    const llm: LLMProviderConfig = {
+      name: 'workers-ai',
+      baseURL: `http://127.0.0.1:${server.port}/v1`,
+      headers: { Authorization: 'Bearer test' },
+      model: '@cf/test/model',
+    };
+    try {
+      await createLocalProviderLLM({ llm }).complete('uncapped');
+      await createLocalProviderLLM({ llm: { ...llm, maxTokens: 123 } }).complete('capped');
+      expect(bodies[0]?.max_tokens).toBeUndefined();
+      expect(bodies[1]?.max_tokens).toBe(123);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test('normalizes Workers AI model ids to provider-style specs', async () => {
     const resolver = createLocalModelResolver({
       llm: {
@@ -41,6 +72,38 @@ describe('createLocalModelResolver', () => {
     const models = await resolver.listModels();
     expect(models.find((model) => model.provider === 'workers-ai' && model.id === '@cf/moonshotai/kimi-k2.6')?.contextWindow)
       .toBe(262_144);
+  });
+
+  test('modelInfo resolves one spec to its catalog entry with input modalities', async () => {
+    const resolver = createLocalModelResolver({
+      llm: {
+        name: 'workers-ai',
+        baseURL: 'https://gateway.example/v1',
+        headers: { Authorization: 'Bearer cf-test' },
+        model: '@cf/zai-org/glm-5.2',
+      },
+      credentials: {},
+      fetch: async () => Response.json({
+        'cloudflare-workers-ai': {
+          models: {
+            '@cf/zai-org/glm-5.2': {
+              id: '@cf/zai-org/glm-5.2',
+              name: 'GLM 5.2',
+              tool_call: true,
+              modalities: { input: ['text'] },
+              limit: { context: 200_000 },
+            },
+          },
+        },
+      }),
+    });
+
+    // The attachment sanitizer's capability source: a text-only model reports
+    // no media modalities, so PDFs (and images) get the VFS treatment.
+    const info = await resolver.modelInfo('workers-ai/@cf/zai-org/glm-5.2');
+    expect(info?.inputModalities).toEqual(['text']);
+    expect(info?.contextWindow).toBe(200_000);
+    expect(await resolver.modelInfo('workers-ai/@cf/unknown/model')).toBeNull();
   });
 
   test('exposes local direct-provider credentials through the shared provider registry', async () => {
@@ -137,7 +200,7 @@ function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
         { spec: 'codex/gpt-5.3-codex', label: 'Codex', provider: 'codex' },
       ]);
     }
-    throw new Error(`unexpected fetch: ${url}`);
+    return fetch(input, init);
   }) as typeof fetch;
 }
 
@@ -178,11 +241,16 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
   test('resolved models call the proxy with the CLI bearer and the wire model id', async () => {
     const seen: Array<{ path: string; auth: string | null; affinity: string | null; model: unknown }> = [];
+    let wireCalls = 0;
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
+        wireCalls++;
         const body = await request.json() as { model?: unknown };
+        if (wireCalls === 1) {
+          return new Response('limited', { status: 429, headers: { 'Retry-After': '0' } });
+        }
         seen.push({
           path: new URL(request.url).pathname,
           auth: request.headers.get('authorization'),
@@ -205,12 +273,17 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         fetch: cloudMenuFetch(origin),
       });
 
-      const viaWorkersAI = await generateText({ model: resolver.resolveModel(null), prompt: 'ping' });
+      const viaWorkersAI = await generateText({
+        model: resolver.resolveModel(null),
+        prompt: 'ping',
+        maxRetries: 0,
+      });
       expect(viaWorkersAI.text).toBe('ok');
       const viaGateway = await generateText({ model: resolver.resolveModel('my-gateway/openai/gpt-4.1'), prompt: 'ping' });
       expect(viaGateway.text).toBe('ok');
 
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/chat/completions']);
+      expect(wireCalls).toBe(3);
       expect(seen.map((s) => s.model)).toEqual(['@cf/moonshotai/kimi-k2.6', 'openai/gpt-4.1']);
       for (const request of seen) {
         expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);

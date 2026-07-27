@@ -7,6 +7,7 @@
 // refresh-and-retry, and an expired-but-refreshable credential still
 // advertises Workers AI (so the connect CTA stays a fallback, not a ritual).
 import { describe, test, expect } from 'bun:test';
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateText } from 'ai';
@@ -92,7 +93,7 @@ describe('Workers AI credential refresh', () => {
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
     const authCalls: Array<boolean> = [];
-    const stub = {
+    const stub = userCredentialSource({
       getAuthHeaders: async (key: string, opts?: { forceRefresh?: boolean }) => {
         if (key !== 'cloudflare.oauth') return null;
         authCalls.push(!!opts?.forceRefresh);
@@ -100,12 +101,12 @@ describe('Workers AI credential refresh', () => {
       },
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
-    } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
+    });
 
     const wire: Array<string | null> = [];
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: stub,
+      userDO: stub,
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
@@ -131,23 +132,23 @@ describe('Workers AI credential refresh', () => {
     // UserDO returns null headers when the credential is expired with no
     // refresh token — the provider must drop out of the model menu so the
     // connect CTA appears, instead of advertising a dead provider.
-    const dead = {
+    const dead = userCredentialSource({
       getAuthHeaders: async () => null,
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async () => null,
-    } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: dead });
+    });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
     expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(false);
 
     // …while a credential UserDO can still serve (fresh or silently
     // refreshed) keeps Workers AI advertised — no CTA.
-    const alive = {
+    const alive = userCredentialSource({
       getAuthHeaders: async (key: string) =>
         key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-user-token' } : null,
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
-    } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
-    const reg2 = createAgentProviderRegistry({ env: {}, userDOStub: alive });
+    });
+    const reg2 = createAgentProviderRegistry({ env: {}, userDO: alive });
     expect(await reg2.registry.get('workers-ai')!.isAvailable(reg2.deps)).toBe(true);
   });
 

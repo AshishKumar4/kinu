@@ -9,6 +9,7 @@
 // refresh-on-401 retry, and actionable error mapping for the documented
 // gateway failures (2008 invalid provider / 2021 invalid user credentials).
 import { describe, test, expect } from 'bun:test';
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateText } from 'ai';
@@ -31,7 +32,7 @@ function gatewayStub(opts: {
   const headersFor = (token: string) => gatewayId
     ? { authorization: `Bearer ${token}`, 'cf-aig-gateway-id': gatewayId }
     : null;
-  return {
+  return userCredentialSource({
     getAuthHeaders: async (key: string, o?: { forceRefresh?: boolean }) => {
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${opts.token ?? 'cf-user'}` };
       if (key !== CLOUDFLARE_AI_GATEWAY_CRED_KEY) return null;
@@ -40,7 +41,7 @@ function gatewayStub(opts: {
     listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
     getCredentialBaseURL: async (key: string) =>
       (key === 'cloudflare.oauth' || key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) ? AI_BASE_URL : null,
-  } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
+  });
 }
 
 function chatCompletionResponse(model: string): Response {
@@ -59,7 +60,7 @@ describe('my-gateway request shape', () => {
     const seen: Array<{ url: string; auth: string | null; gateway: string | null; model: unknown }> = [];
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub({ gatewayId: 'prod-gw', token: 'cf-user-token' }),
+      userDO: gatewayStub({ gatewayId: 'prod-gw', token: 'cf-user-token' }),
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         seen.push({
@@ -89,7 +90,7 @@ describe('my-gateway request shape', () => {
     const wire: Array<string | null> = [];
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub({ token: 'cf-stale', freshToken: 'cf-fresh' }),
+      userDO: gatewayStub({ token: 'cf-stale', freshToken: 'cf-fresh' }),
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
@@ -113,20 +114,20 @@ describe('my-gateway request shape', () => {
 
 describe('my-gateway availability gating', () => {
   test('unavailable until a gateway is selected; available once it is', async () => {
-    const noGateway = createAgentProviderRegistry({ env: {}, userDOStub: gatewayStub({ gatewayId: null }) });
+    const noGateway = createAgentProviderRegistry({ env: {}, userDO: gatewayStub({ gatewayId: null }) });
     expect(await noGateway.registry.get('my-gateway')!.isAvailable(noGateway.deps)).toBe(false);
 
-    const selected = createAgentProviderRegistry({ env: {}, userDOStub: gatewayStub() });
+    const selected = createAgentProviderRegistry({ env: {}, userDO: gatewayStub() });
     expect(await selected.registry.get('my-gateway')!.isAvailable(selected.deps)).toBe(true);
   });
 
   test('without a usable Cloudflare credential the provider drops out', async () => {
-    const dead = {
+    const dead = userCredentialSource({
       getAuthHeaders: async () => null,
       listCredentials: async () => [],
       getCredentialBaseURL: async () => null,
-    } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
-    const reg = createAgentProviderRegistry({ env: {}, userDOStub: dead });
+    });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
     expect(await reg.registry.get('my-gateway')!.isAvailable(reg.deps)).toBe(false);
     expect(await reg.registry.get('my-gateway')!.unavailableReason!(reg.deps)).toMatch(/select an AI Gateway/i);
   });
@@ -189,7 +190,7 @@ describe('my-gateway model discovery', () => {
     const urls: string[] = [];
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub({ gatewayId: 'byok-gw', token: `t-${Math.random()}` }),
+      userDO: gatewayStub({ gatewayId: 'byok-gw', token: `t-${Math.random()}` }),
       fetch: discoveryFetch({ slugs: ['openai', 'google-ai-studio', 'workers-ai'], onRequest: (u) => urls.push(u) }),
     });
     const models = await reg.registry.get('my-gateway')!.listModels(reg.deps);
@@ -204,7 +205,7 @@ describe('my-gateway model discovery', () => {
   test('positive Unified Billing balance adds the billable provider set', async () => {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub({ gatewayId: 'credits-gw', token: `t-${Math.random()}` }),
+      userDO: gatewayStub({ gatewayId: 'credits-gw', token: `t-${Math.random()}` }),
       fetch: discoveryFetch({ slugs: [], balance: 12.5 }),
     });
     const models = await reg.registry.get('my-gateway')!.listModels(reg.deps);
@@ -218,7 +219,7 @@ describe('my-gateway model discovery', () => {
   test('denied management reads narrow the menu to empty instead of throwing', async () => {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub({ gatewayId: 'old-scope-gw', token: `t-${Math.random()}` }),
+      userDO: gatewayStub({ gatewayId: 'old-scope-gw', token: `t-${Math.random()}` }),
       fetch: (async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.startsWith('https://models.dev/')) {
@@ -237,7 +238,7 @@ describe('my-gateway error mapping', () => {
   async function failWith(body: unknown, status = 400): Promise<string> {
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub({ gatewayId: 'my-gw' }),
+      userDO: gatewayStub({ gatewayId: 'my-gw' }),
       fetch: (async () => new Response(JSON.stringify(body), {
         status, headers: { 'content-type': 'application/json' },
       })) as typeof fetch,
@@ -276,7 +277,7 @@ describe('my-gateway registry precedence', () => {
     const wire: string[] = [];
     const reg = createAgentProviderRegistry({
       env: {},
-      userDOStub: gatewayStub(),
+      userDO: gatewayStub(),
       fetch: (async (input: RequestInfo | URL) => {
         wire.push(String(input));
         return chatCompletionResponse('@cf/moonshotai/kimi-k2.6');
@@ -343,8 +344,8 @@ describe('UserDO gateway selection wiring', () => {
 
   test('login-time discovery auto-selects a sole gateway', () => {
     // setCredential(cloudflare.oauth) triggers discovery…
-    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways();');
+    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(OWNER_SESSION);');
     // …and listAIGateways persists the only gateway as the selection.
-    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(gateways\[0\]\.id\);/);
+    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(OWNER_SESSION, gateways\[0\]\.id\);/);
   });
 });

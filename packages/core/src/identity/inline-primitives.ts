@@ -55,7 +55,7 @@ export function createInlineVFS(sql: SqlExecutor): VFS {
     async stat(path) {
       try {
         const s = await fs.stat(path);
-        return { size: s.size, mtime: s.mtimeMs, isDir: s.isDirectory() };
+        return { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
       } catch (err) {
         if ((err as VFSError).code === 'ENOENT') return null;
         throw err;

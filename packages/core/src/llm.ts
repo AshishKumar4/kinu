@@ -11,6 +11,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import type { LLM } from './types/primitives.js';
+import { withRateLimitRetry } from './providers/rate-limit-retry.js';
 
 export interface LLMProviderConfig {
   /** Display name for the provider (e.g., 'workers-ai', 'anthropic') */
@@ -35,7 +36,11 @@ export interface LLMProviderConfig {
  */
 export function createVercelAILLM(config: LLMProviderConfig): LLM {
   const model = createModelFromLLMConfig(config);
-  const maxOutputTokens = config.maxTokens ?? 2048;
+  // No default output cap: a reasoning model spends its budget thinking before
+  // it emits anything, so a cap truncates the answer (or starves it entirely).
+  // Cost is controlled by reasoning effort. A cap applies only when the caller
+  // explicitly configured one.
+  const cap = config.maxTokens !== undefined ? { maxOutputTokens: config.maxTokens } : {};
 
   return {
     async *stream(opts) {
@@ -46,7 +51,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
           role: m.role as 'user' | 'assistant',
           content: m.content,
         })),
-        maxOutputTokens,
+        ...cap,
       });
       for await (const chunk of result.textStream) {
         yield chunk;
@@ -57,7 +62,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       const { text } = await generateText({
         model,
         prompt,
-        maxOutputTokens,
+        ...cap,
       });
       return text.trim();
     },
@@ -114,12 +119,14 @@ export type ChatModelConfig =
       baseURL: string;
       headers: Record<string, string>;
       modelId: string;
+      fetch?: typeof fetch;
     }
   | {
       kind: 'anthropic';
       baseURL?: string;
       headers: Record<string, string>;
       modelId: string;
+      fetch?: typeof fetch;
     };
 
 export function createChatModel(config: ChatModelConfig): LanguageModel {
@@ -129,12 +136,14 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
       baseURL: config.baseURL ?? 'https://api.anthropic.com/v1',
       headers: config.headers,
       model: config.modelId,
+      fetch: config.fetch,
     });
   }
   return createOpenAICompatible({
     name: config.name ?? 'openai-compat',
     baseURL: config.baseURL,
     headers: config.headers,
+    fetch: withRateLimitRetry(config.fetch ?? fetch),
   }).chatModel(config.modelId);
 }
 
@@ -144,10 +153,13 @@ function createModelFromLLMConfig(config: LLMProviderConfig): LanguageModel {
     name: config.name,
     baseURL: config.baseURL,
     headers: config.headers,
+    fetch: withRateLimitRetry(fetch),
   }).chatModel(config.model);
 }
 
-function createAnthropicModel(config: Pick<LLMProviderConfig, 'name' | 'baseURL' | 'headers' | 'model'>): LanguageModel {
+function createAnthropicModel(
+  config: Pick<LLMProviderConfig, 'name' | 'baseURL' | 'headers' | 'model'> & { fetch?: typeof fetch },
+): LanguageModel {
   const headers = { ...config.headers };
   const apiKey = headers['x-api-key'] ?? headers['X-Api-Key'];
   delete headers['x-api-key'];
@@ -166,6 +178,7 @@ function createAnthropicModel(config: Pick<LLMProviderConfig, 'name' | 'baseURL'
     ...(apiKey ? { apiKey } : {}),
     ...(authToken ? { authToken } : {}),
     headers,
+    fetch: withRateLimitRetry(config.fetch ?? fetch),
   });
   return provider.languageModel(config.model);
 }

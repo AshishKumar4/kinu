@@ -91,14 +91,14 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
 async function cleanupAgent(): Promise<void> {
   if (keepAgent) return;
   try {
-    await jsonFetch(`/api/user/agents/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
+    await jsonFetch(`/api/user/workspaces/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
   } catch (err) {
     console.warn(`[smoke-workspace] cleanup failed for ${agentName}:`, err instanceof Error ? err.message : err);
   }
 }
 
 try {
-  await jsonFetch('/api/user/agents', {
+  await jsonFetch('/api/user/workspaces', {
     method: 'POST',
     body: JSON.stringify({ name: agentName, purpose: mission }),
   });

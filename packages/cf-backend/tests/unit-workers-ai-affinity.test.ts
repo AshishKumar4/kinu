@@ -6,6 +6,7 @@
 // provider's customFetch and asserts the header reaches the wire, so the
 // option can never become decorative again.
 import { describe, test, expect } from 'bun:test';
+import { userCredentialSource } from './helpers/user-credentials.js';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
 import { agentAffinityKey } from '@proteus/core';
@@ -13,12 +14,12 @@ import { agentAffinityKey } from '@proteus/core';
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
 function fakeUserDOStub() {
-  return {
+  return userCredentialSource({
     getAuthHeaders: async (key: string) =>
       key === 'cloudflare.oauth' ? { authorization: 'Bearer cf-user-token' } : null,
     listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
     getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
-  } as unknown as Parameters<typeof createAgentProviderRegistry>[0]['userDOStub'];
+  });
 }
 
 function chatCompletionResponse(): Response {
@@ -36,7 +37,7 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
   const captured: Array<{ url: string; headers: Headers }> = [];
   const reg = createAgentProviderRegistry({
     env: {},
-    userDOStub: fakeUserDOStub(),
+    userDO: fakeUserDOStub(),
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       captured.push({ url, headers: new Headers(init?.headers) });
@@ -68,5 +69,28 @@ describe('Workers AI session affinity (REST path)', () => {
   test('no affinity header without the option (no accidental shared bucket)', async () => {
     const req = await captureWorkersAIRequest(undefined);
     expect(req.headers.get('x-session-affinity')).toBeNull();
+  });
+
+  test('agent-registry model fetches use the patient rate-limit retry', async () => {
+    let calls = 0;
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDO: fakeUserDOStub(),
+      fetch: (async () => {
+        calls++;
+        return calls === 1
+          ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
+          : chatCompletionResponse();
+      }) as typeof fetch,
+    });
+
+    const result = await generateText({
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+      prompt: 'ping',
+      maxRetries: 0,
+    });
+
+    expect(result.text).toBe('ok');
+    expect(calls).toBe(2);
   });
 });

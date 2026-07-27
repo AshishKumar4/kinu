@@ -13,7 +13,7 @@ interface MockAgentServer {
   frames: Array<Record<string, unknown>>;
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
-  /** Rows served from /api/cli/agents/:name/messages (the DO chat projection). */
+  /** Rows served from /api/cli/workspaces/:name/messages (the DO chat projection). */
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: Record<string, unknown>): void;
@@ -35,9 +35,9 @@ function startMockAgentServer(): MockAgentServer {
 
   const server = Bun.serve({
     port: 0,
-    fetch(req, srv) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
-      const ticketMatch = url.pathname.match(/^\/api\/cli\/agents\/([^/]+)\/connect-ticket$/);
+      const ticketMatch = url.pathname.match(/^\/api\/cli\/workspaces\/([^/]+)\/connect-ticket$/);
       if (ticketMatch && req.method === 'POST') {
         ticketRequests.push({
           name: decodeURIComponent(ticketMatch[1]!),
@@ -45,8 +45,12 @@ function startMockAgentServer(): MockAgentServer {
         });
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
-      if (/^\/api\/cli\/agents\/[^/]+\/messages$/.test(url.pathname)) {
-        return Response.json(chatMessages);
+      if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
+        const { method, args = [] } = await req.json() as { method: string; args?: unknown[] };
+        if (method === 'getChatHistory') return Response.json({ result: chatMessages });
+        if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
+        if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] } });
+        return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
         connectUrls.push(url);
@@ -117,6 +121,14 @@ function responseChunk(id: string, chunk: Record<string, unknown>, done = false)
 }
 
 describe('CloudAgentClient protocol', () => {
+  test('reasoning effort reads and writes through the agent RPC seam', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    await expect(client.getReasoningEffort()).resolves.toBe('medium');
+    await expect(client.setReasoningEffort('high')).resolves.toEqual({ effort: 'high' });
+    await client.close();
+  });
+
   test('send transmits only the new user message and streams the reply', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
@@ -422,7 +434,7 @@ describe('CloudAgentClient protocol', () => {
 
     const result = await turn;
     expect(result.hadError).toBe(true);
-    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Cloud agent connection closed.' });
+    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Cloud workspace connection closed.' });
     expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
     await client.close();
   });

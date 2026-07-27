@@ -8,4 +8,4 @@ package proteus where
 
 @[default_target]
 lean_lib Proteus where
-  roots := #[`Proteus]
+  roots := #[`Proteus, `Proteus.Axioms]

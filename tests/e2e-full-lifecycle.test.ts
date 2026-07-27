@@ -3,7 +3,7 @@
  * real bun:sqlite, native AI SDK tool calling.
  *
  * Covers: agent creation, tool building, multi-turn chat with tool use,
- * close/reopen via openAgent, identity/SOUL.md/scaffold persistence.
+ * close/reopen via openWorkspace, identity/SOUL.md/scaffold persistence.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -15,8 +15,8 @@ import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 import {
-  createAgent,
-  openAgent,
+  createWorkspace,
+  openWorkspace,
   buildBuiltinTools,
   BUILTIN_TOOLS,
   EvolutionEngine,
@@ -128,7 +128,7 @@ describe('E2E Full Lifecycle', () => {
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
 
-    rt = createAgent(db, {
+    rt = createWorkspace(db, {
       name: 'lifecycle-test',
       purpose: 'A coding assistant that helps write and test JavaScript code.',
       llm: LLM_CONFIG,
@@ -154,7 +154,7 @@ describe('E2E Full Lifecycle', () => {
     const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[])
       .map(t => t.name);
 
-    expect(tables).toContain('agent_identity');
+    expect(tables).toContain('workspace_identity');
     expect(tables).toContain('messages');
     expect(tables).toContain('vfs_files');
     expect(tables).toContain('search_nodes');
@@ -165,7 +165,7 @@ describe('E2E Full Lifecycle', () => {
     const soul = readSoul(rt.storage.sql) ?? '';
     expect(soul).toContain('JavaScript');
 
-    const identity = db.query('SELECT id, name FROM agent_identity LIMIT 1').get() as { id: string; name: string };
+    const identity = db.query('SELECT id, name FROM workspace_identity LIMIT 1').get() as { id: string; name: string };
     expect(identity.id).toBeTruthy();
     expect(identity.name).toBe('lifecycle-test');
 
@@ -233,13 +233,13 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Memory size: ${memory!.length} chars`);
   }, 120_000);
 
-  // ── Step 6: Close and reopen with openAgent ──────────────────
+  // ── Step 6: Close and reopen with openWorkspace ──────────────────
 
   test('6. close and reopen agent — verify persistence', () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
-    const { rt: rt2, info } = openAgent(db2, { llm: LLM_CONFIG });
+    const { rt: rt2, info } = openWorkspace(db2, { llm: LLM_CONFIG });
 
     // Identity survived
     expect(info.id).toBe(agentId);
@@ -290,7 +290,7 @@ describe('E2E Full Lifecycle', () => {
       } catch {}
     }
 
-    const identity = db.query('SELECT * FROM agent_identity').get() as Record<string, unknown>;
+    const identity = db.query('SELECT * FROM workspace_identity').get() as Record<string, unknown>;
     console.log(`\n  Identity: ${JSON.stringify(identity)}`);
 
     const soul = readSoul(rt.storage.sql) ?? '';

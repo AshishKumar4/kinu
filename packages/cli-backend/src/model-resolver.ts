@@ -8,11 +8,14 @@ import {
   createCodexOAuthClient,
   createAnthropicProvider,
   createCodexProvider,
+  catalogModelInfo,
   createOpenAICompatProvider,
   createOpenAIProvider,
   createOpenRouterProvider,
   createProviderRegistry,
   listModelsDevProviderModels,
+  parseModelSpec,
+  reasoningEffortOptions,
   type AuthResolution,
   type AuthResolver,
   type ModelCapability,
@@ -27,6 +30,7 @@ import { generateText, streamText } from 'ai';
 import type { LanguageModel } from 'ai';
 import type { LLM } from '@proteus/core';
 import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider.js';
+import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 
 export interface LocalOpenAICompatCredential {
@@ -66,6 +70,10 @@ export interface LocalModelResolver {
   resolveModel(specOrNull?: string | null): LanguageModel;
   listProviders(): Promise<ProviderInfo[]>;
   listModels(): Promise<Array<ModelInfo & { provider: string }>>;
+  /** One spec's catalog entry (provider listModels lookup) — per-model
+   *  metadata like input modalities for the attachment sanitizer. Null when
+   *  the provider/model is unknown or the catalog is unreachable. */
+  modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -85,11 +93,17 @@ export interface LocalModelResolverConfig {
    *  `claude` binary). Production leaves this undefined — the provider spawns
    *  the real binary and probes `claude auth status`. */
   claudeCli?: ClaudeCliProviderOptions;
+  /** Seam for the local opencode bridge provider. Production leaves this
+   *  undefined — the provider probes the real opencode binary and reads
+   *  ~/.local/share/opencode/auth.json. */
+  opencode?: OpenCodeProviderOptions;
 }
 
 export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
   const resolver = createLocalModelResolver(opts);
-  const maxOutputTokens = opts.llm.maxTokens ?? 2048;
+  const spec = resolver.normalizeSpecSync(null);
+  const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
+  const maxOutputTokens = opts.llm.maxTokens;
   const model = () => resolver.resolveModel(null);
   return {
     async *stream(input) {
@@ -100,7 +114,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
           role: m.role as 'user' | 'assistant',
           content: m.content,
         })),
-        maxOutputTokens,
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(providerOptions ? { providerOptions } : {}),
       });
       for await (const chunk of result.textStream) yield chunk;
     },
@@ -108,7 +123,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
       const result = await generateText({
         model: model(),
         prompt,
-        maxOutputTokens,
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(providerOptions ? { providerOptions } : {}),
       });
       return result.text.trim();
     },
@@ -148,6 +164,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       defaultModel: localEndpoint.model,
       llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
+      fetch: opts.fetch,
     }));
     registry.register(createGatewayBackedProvider({
       id: 'ai-gateway',
@@ -156,6 +173,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
+      fetch: opts.fetch,
     }));
   }
 
@@ -169,6 +187,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         menu,
         defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
         unavailableReason: 'Connect Cloudflare in your Proteus user settings to use Workers AI.',
+        fetch: opts.fetch,
       }));
     }
     registry.register(createCloudProxyProvider({
@@ -177,6 +196,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       cloud,
       menu,
       unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Proteus user settings.',
+      fetch: opts.fetch,
     }));
   } else {
     if (!registry.get('workers-ai')) {
@@ -186,6 +206,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   }
 
   registry.register(createClaudeCliProvider(opts.claudeCli));
+  registry.register(createOpenCodeProvider(opts.opencode));
   registry.register(createCodexProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
@@ -238,6 +259,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     listModels() {
       return registry.listAllModels(deps);
     },
+    async modelInfo(specOrNull) {
+      const spec = normalizeSpecSync(specOrNull);
+      const { provider, modelId } = parseModelSpec(spec);
+      return catalogModelInfo(registry.get(provider), deps, modelId);
+    },
     getAuth: deps.getAuth,
   };
 }
@@ -249,6 +275,7 @@ function createGatewayBackedProvider(opts: {
   llm: LLMProviderConfig;
   catalogProviderId?: 'cloudflare-workers-ai';
   catalogModelPrefix?: string;
+  fetch?: typeof fetch;
 }): ModelProvider {
   return {
     id: opts.id,
@@ -278,6 +305,7 @@ function createGatewayBackedProvider(opts: {
         baseURL: opts.llm.baseURL,
         headers: opts.llm.headers,
         modelId,
+        fetch: opts.fetch,
       });
     },
   };
@@ -343,6 +371,7 @@ function createCloudProxyProvider(opts: {
   menu: () => Promise<CloudMenuEntry[]>;
   defaultModel?: string;
   unavailableReason: string;
+  fetch?: typeof fetch;
 }): ModelProvider {
   const baseURL = cloudProxyBaseURL(opts.cloud.origin);
   const headers: Record<string, string> = {
@@ -369,7 +398,14 @@ function createCloudProxyProvider(opts: {
         }));
     },
     createModel(modelId): LanguageModel {
-      return createChatModel({ kind: 'openai-compat', name: opts.id, baseURL, headers, modelId });
+      return createChatModel({
+        kind: 'openai-compat',
+        name: opts.id,
+        baseURL,
+        headers,
+        modelId,
+        fetch: opts.fetch,
+      });
     },
   };
 }
@@ -390,12 +426,13 @@ function createSignedOutCloudProvider(id: 'workers-ai' | 'my-gateway', label: st
   };
 }
 
-function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' {
+function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'openai' | 'anthropic' | 'openrouter' | 'openai-compat' | 'opencode' {
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
   if (llm.name === 'codex') return 'codex';
   if (llm.name === 'openai') return 'openai';
   if (llm.name === 'anthropic') return 'anthropic';
   if (llm.name === 'openrouter') return 'openrouter';
+  if (llm.name === 'opencode') return 'opencode';
   return 'openai-compat';
 }
 

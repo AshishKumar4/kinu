@@ -10,7 +10,7 @@ export async function sessionsCommand(agentName: string | undefined, opts: {
 }): Promise<void> {
   const names = resolveAgentNames(agentName);
   if (names.length === 0) {
-    console.log(DIM('No agents found.'));
+    console.log(DIM('No workspaces found.'));
     return;
   }
 

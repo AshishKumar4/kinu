@@ -52,10 +52,11 @@ describe('UCT selection', () => {
     expect(node!.id).toBe('open1');
   });
 
-  test('UCT uses natural log (ln), not log10', () => {
+  // Platform contract, NOT a UCT test: SQLite's log() is log₁₀, which is the
+  // whole reason uct.ts divides by log(exp(1.0)). selectNode's own use of ln is
+  // covered behaviourally below.
+  test('SQLite log() is log₁₀, so log(x)/log(exp(1.0)) is the ln conversion', () => {
     const { db } = setup();
-    // ln(10) ≈ 2.302, log10(10) = 1.0
-    // If UCT used log10, the exploration bonus would be ~2.3x smaller
     const result = db.query('SELECT log(10.0) / log(exp(1.0)) as ln10').get() as { ln10: number };
     expect(Math.abs(result.ln10 - 2.302585)).toBeLessThan(0.001);
   });
@@ -92,6 +93,27 @@ describe('UCT selection', () => {
     expect(reselect.id).toBe('root');
   });
 
+  test('WP-A4: depth-capped nodes are skipped, not fatal — a shallower node is still selected', () => {
+    const { sql } = setup();
+    // The UCT-max node sits AT the depth cap; a lower-scoring node sits below it.
+    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
+        VALUES ('deep', 'test', 0.99, 1, 'open', 3)`;
+    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
+        VALUES ('shallow', 'test', 0.1, 1, 'open', 1)`;
+    // Old behavior aborted the whole search on the deep argmax. Now selection
+    // skips it and returns the shallower node so the budget keeps flowing.
+    const node = selectNode(sql, undefined, 3);
+    expect(node!.id).toBe('shallow');
+  });
+
+  test('WP-A4: returns null only when every open node is at/beyond the cap', () => {
+    const { sql } = setup();
+    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
+        VALUES ('capped', 'test', 0.9, 1, 'open', 5)`;
+    expect(selectNode(sql, undefined, 5)).toBeNull();
+    expect(selectNode(sql, undefined, 6)!.id).toBe('capped');
+  });
+
   test('exploration bonus favors less-visited nodes', () => {
     const { sql } = setup();
     // Root with many visits
@@ -109,5 +131,51 @@ describe('UCT selection', () => {
     // UCT(fresh) = 0.5 + √2 * √(ln(100)/1) ≈ 0.5 + 1.414 * √4.605 ≈ 0.5 + 3.03 = 3.53
     // UCT(visited) = 0.6 + √2 * √(ln(100)/50) ≈ 0.6 + 1.414 * √0.092 ≈ 0.6 + 0.43 = 1.03
     expect(node!.id).toBe('fresh');
+  });
+});
+
+describe('UCT log base — observed through selectNode, not re-derived', () => {
+  /**
+   * Two siblings under a heavily-visited parent, tuned so the explore/exploit
+   * ordering is decided purely by the base of the log in the exploration term:
+   *
+   *   exploit: value 0.9, visits 10000 → bonus ≈ 0, UCT ≈ 0.94 either way
+   *   explore: value 0.1, visits N     → bonus = W·√(log(10000)/N)
+   *
+   * ln(10000)=9.21 vs log₁₀(10000)=4 — a 2.3× numerator gap that moves the
+   * crossover by more than 2×, so a band of N separates the two formulas.
+   */
+  const W = Math.SQRT2;
+
+  function selectAmongSiblings(exploreVisits: number): string {
+    const { sql } = setup();
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
+        VALUES ('root', NULL, 't', 0.9, 10000, 'terminal')`;
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status, depth)
+        VALUES ('exploit', 'root', 't', 0.9, 10000, 'open', 1)`;
+    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status, depth)
+        VALUES ('explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
+    return selectNode(sql, W)!.id;
+  }
+
+  test('a 20-visit low-value sibling still out-explores the exploited node (log₁₀ would not)', () => {
+    // ln:    UCT(explore) = 0.1 + √2·√(9.21/20) ≈ 1.06  >  UCT(exploit) ≈ 0.943
+    // log₁₀: UCT(explore) = 0.1 + √2·√(4.00/20) ≈ 0.732 <  UCT(exploit) ≈ 0.928
+    expect(selectAmongSiblings(20)).toBe('explore');
+  });
+
+  test('the explore→exploit crossover sits where ln puts it (~26 visits), not where log₁₀ would (~12)', () => {
+    // Scanning the public entry point for its actual decision boundary. Under
+    // log₁₀ the whole 12..25 band flips to 'exploit'.
+    let crossover = 0;
+    for (let visits = 1; visits <= 200; visits++) {
+      if (selectAmongSiblings(visits) === 'exploit') { crossover = visits; break; }
+    }
+    expect(crossover).toBe(26);
+  });
+
+  test('both sides of the crossover are stable — the boundary is not an artifact of one sample', () => {
+    expect(selectAmongSiblings(25)).toBe('explore');
+    expect(selectAmongSiblings(27)).toBe('exploit');
   });
 });

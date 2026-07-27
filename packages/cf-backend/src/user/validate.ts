@@ -52,8 +52,8 @@ export function validateCredentialKey(key: string): void {
 
 /** Agent names follow the same rule. The DO id system already restricts to
  *  printable ascii; this is just an extra-strict guard at our API boundary. */
-export function validateAgentName(name: string): void {
+export function validateWorkspaceName(name: string): void {
   if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) {
-    throw new Error('Invalid agent name — alphanumerics, dot, underscore, dash only (max 64 chars).');
+    throw new Error('Invalid workspace name — alphanumerics, dot, underscore, dash only (max 64 chars).');
   }
 }

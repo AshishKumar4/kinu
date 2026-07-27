@@ -1,0 +1,462 @@
+"""Proteus as a Continual Learning Bench system.
+
+One benchmark turn is one `proteus exec` — the CLI's headless surface — against
+a local workspace that lives in a throwaway ``PROTEUS_HOME``. Proteus runs its
+own agentic loop inside that turn (its tools, memory, CraftStore, scaffold);
+the benchmark environment is reached the way every CL-Bench system reaches it,
+by returning one structured action per turn.
+
+Two axes are configurable, because "a stateful agent improves over a sequence"
+is two claims and they need separating:
+
+* **Workspace persistence** — whether the durable workspace (memory, lessons,
+  crafted tools, evolved scaffold) carries across instances. CL-Bench already
+  drives the between-arms half of this for free: the stateless baseline builds
+  one system per instance, so each gets its own home. ``persist_workspace``
+  additionally controls the *within-run* case, so a stateful rollout can be
+  re-run with the workspace reset at every instance boundary.
+* **Self-evolution** — ``auto_evolve`` maps to ``proteus exec
+  --no-auto-evolve``, which turns off turn- and session-level evolution while
+  leaving durable state intact. Persistent state without evolution is the
+  control that says how much of any gain is evolution rather than memory.
+
+``single_conversation`` is the direct analogue of the Codex adapter's flag: the
+CLI session id is captured from the first turn and replayed with ``--resume``
+so Proteus sees its own prior turns, not just the task's latest observation.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any, Optional
+
+from ...interface import (
+    ContinualLearningSystem,
+    Observation,
+    Query,
+    Response,
+    observation_marks_instance_complete,
+)
+from ...registry import register_system
+from ...usage import build_usage_event
+from ..common import cleanup_run_workspace, create_run_workspace
+from ..utils.structured_output import (
+    extract_json,
+    schema_to_prompt_instruction,
+    validate_with_coercion,
+)
+from .events import (
+    EMPTY_USAGE,
+    assistant_text,
+    had_error,
+    has_answer,
+    parse_events,
+    session_id,
+    sum_usages,
+    tool_calls,
+    turn_usage,
+)
+
+logger = logging.getLogger(__name__)
+
+_WORKSPACE_NAME = "clbench"
+
+_DEFAULT_PURPOSE = (
+    "A benchmark agent solving a sequence of related tasks in one environment. "
+    "Carry forward what you learn: durable facts about the environment, which "
+    "approaches worked, and which were dead ends."
+)
+
+
+def _resolve_repo_root(explicit: Optional[str]) -> Path:
+    """Locate the Proteus checkout holding the CLI entrypoint.
+
+    Defaults to the repo this file lives in, resolved through any symlink —
+    the package is normally linked into ``clbench/src/systems/proteus``.
+    """
+    candidate = explicit or os.environ.get("PROTEUS_REPO")
+    root = (
+        Path(candidate).expanduser().resolve()
+        if candidate
+        else Path(__file__).resolve().parents[3]
+    )
+    if not (root / "packages" / "cli" / "bin" / "cli.ts").is_file():
+        raise FileNotFoundError(
+            f"No Proteus CLI at {root}/packages/cli/bin/cli.ts. "
+            "Pass repo_root, or set PROTEUS_REPO to the Proteus checkout."
+        )
+    return root
+
+
+def _resolve_api_key(provider: str, api_key_env: Optional[str]) -> str:
+    """Read the provider key from the environment, else the Proteus config.
+
+    Never accepted as a system param and never passed on argv — a benchmark
+    config is a committed file and a command line is world-readable.
+    """
+    env_name = api_key_env or f"{provider.upper()}_API_KEY"
+    key = os.environ.get(env_name, "").strip()
+    if key:
+        return key
+
+    config_path = Path.home() / ".proteus" / "config.json"
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            key = str(config.get("providers", {}).get(provider, {}).get("apiKey", ""))
+        except (json.JSONDecodeError, OSError, AttributeError) as exc:
+            raise ValueError(f"Could not read {config_path}: {exc}") from exc
+    if not key:
+        raise ValueError(
+            f"No API key for provider '{provider}'. Set ${env_name}, or add "
+            f"providers.{provider}.apiKey to {config_path}."
+        )
+    return key
+
+
+@register_system("proteus")
+class ProteusSystem(ContinualLearningSystem):
+    """Proteus driven one benchmark turn at a time through `proteus exec`."""
+
+    def __init__(
+        self,
+        model: str = "deepseek/deepseek-v4-flash",
+        base_url: str = "https://openrouter.ai/api/v1",
+        provider: str = "openrouter",
+        name: str = "proteus",
+        timeout: int = 900,
+        auto_evolve: bool = True,
+        persist_workspace: bool = True,
+        single_conversation: bool = True,
+        purpose: str = _DEFAULT_PURPOSE,
+        repo_root: Optional[str] = None,
+        api_key_env: Optional[str] = None,
+        bun: str = "bun",
+    ):
+        for flag, value in (
+            ("auto_evolve", auto_evolve),
+            ("persist_workspace", persist_workspace),
+            ("single_conversation", single_conversation),
+        ):
+            if not isinstance(value, bool):
+                raise ValueError(f"{flag} must be a bool, got {value!r}")
+        if timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout!r}")
+
+        self._name = name
+        self._model = model
+        self._base_url = base_url
+        self._provider = provider
+        self._timeout = timeout
+        self._auto_evolve = auto_evolve
+        self._persist_workspace = persist_workspace
+        self._single_conversation = single_conversation
+        self._purpose = purpose
+        self._bun = bun
+        self._repo_root = _resolve_repo_root(repo_root)
+        self._auth_header = f"Bearer {_resolve_api_key(provider, api_key_env)}"
+
+        self._root = Path(create_run_workspace("proteus_bench"))
+        self._workspace_ready = False
+        self._clear_interaction_state()
+
+    # ---- filesystem + process plumbing -------------------------------------
+
+    @property
+    def _home(self) -> Path:
+        """Throwaway PROTEUS_HOME: config, workspace database, durable state."""
+        return self._root / "home"
+
+    @property
+    def _cwd(self) -> Path:
+        """The agent's working directory — its scratch space across the run."""
+        return self._root / "work"
+
+    def _env(self) -> dict[str, str]:
+        """A clean environment: the operator's own Proteus home can never leak
+        into a measured run, and the key travels here rather than on argv."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PROTEUS_")}
+        env["HOME"] = str(self._home)
+        env["PROTEUS_HOME"] = str(self._home)
+        env["PROTEUS_BASE_URL"] = self._base_url
+        env["PROTEUS_MODEL"] = self._model
+        env["PROTEUS_AUTH"] = self._auth_header
+        env["CI"] = "1"
+        return env
+
+    def _run_cli(
+        self,
+        args: list[str],
+        *,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [
+                self._bun,
+                str(self._repo_root / "packages" / "cli" / "bin" / "cli.ts"),
+                *args,
+            ],
+            cwd=str(self._cwd),
+            env=self._env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+
+    def _ensure_workspace(self) -> None:
+        """Create the local workspace on first use.
+
+        Lazy because the benchmark runner resets a freshly constructed system
+        before the first turn; creating in ``__init__`` would build a workspace
+        only to throw it away.
+        """
+        if self._workspace_ready:
+            return
+        self._home.mkdir(parents=True, exist_ok=True)
+        self._cwd.mkdir(parents=True, exist_ok=True)
+        result = self._run_cli(
+            [
+                "create",
+                _WORKSPACE_NAME,
+                "--mode",
+                "local",
+                "--purpose",
+                self._purpose,
+                "--no-alias-shim",
+            ],
+            timeout=self._timeout,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"proteus create failed ({result.returncode}): "
+                f"{(result.stderr or result.stdout).strip()[:500]}"
+            )
+        self._workspace_ready = True
+        logger.info("Proteus workspace ready at %s", self._home / _WORKSPACE_NAME)
+
+    def _destroy_workspace(self) -> None:
+        """Stop the workspace daemon and delete every trace of the run's state."""
+        if self._home.is_dir():
+            try:
+                self._run_cli(["daemon", "stop"], timeout=30)
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.warning("Could not stop the Proteus daemon: %s", exc)
+        shutil.rmtree(self._home, ignore_errors=True)
+        shutil.rmtree(self._cwd, ignore_errors=True)
+        self._workspace_ready = False
+        self._session_id = None
+
+    # ---- one benchmark turn ------------------------------------------------
+
+    def _build_prompt(self, query: Query) -> str:
+        parts: list[str] = []
+        if self._pending_feedback:
+            parts.append(
+                f"FEEDBACK FROM YOUR PREVIOUS ACTION:\n{self._pending_feedback}\n"
+            )
+        parts.append(query.prompt)
+        parts.append(schema_to_prompt_instruction(query.response_schema))
+        return "\n".join(parts)
+
+    def _exec_args(self, prompt: str) -> list[str]:
+        args = ["exec", "--workspace", _WORKSPACE_NAME, "--json"]
+        if not self._auto_evolve:
+            args.append("--no-auto-evolve")
+        if self._single_conversation and self._session_id:
+            args.extend(["--resume", self._session_id])
+        # `--` so a prompt that opens with a dash is never read as a flag.
+        args.extend(["--", prompt])
+        return args
+
+    def _run_turn(self, prompt: str) -> list[dict[str, Any]]:
+        self._ensure_workspace()
+        logger.info(
+            "proteus exec (interaction %d, prompt %d chars, resume=%s)",
+            self._interaction_count + 1,
+            len(prompt),
+            self._session_id if self._single_conversation else None,
+        )
+        result = self._run_cli(self._exec_args(prompt), timeout=self._timeout)
+        events = parse_events(result.stdout)
+        self._event_log.extend(events)
+
+        resumed = session_id(events)
+        if resumed:
+            self._session_id = resumed
+
+        # `proteus exec` exits 1 whenever any tool call in the turn failed, even
+        # when the turn still produced its answer. Treat a stream that reached
+        # an assistant message as a turn; only a stream that never did is fatal.
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[:500]
+            if has_answer(events):
+                logger.warning(
+                    "proteus exec exited %d after a completed turn: %s",
+                    result.returncode,
+                    detail,
+                )
+            else:
+                raise RuntimeError(
+                    f"proteus exec failed ({result.returncode}): {detail}"
+                )
+        return events
+
+    def _repair_prompt(self, prompt: str, answer: str, error: str) -> str:
+        return "\n".join(
+            [
+                "Your previous response did not match the required benchmark schema.",
+                f"Validation error: {error}",
+                "Your previous response was:",
+                answer,
+                "Reply with ONLY a corrected JSON object for the same task.",
+                "The original task was:",
+                prompt,
+            ]
+        )
+
+    def _parse_action(self, text: str, schema: type[Any]) -> Any:
+        try:
+            return validate_with_coercion(text, schema)
+        except Exception:
+            return validate_with_coercion(extract_json(text), schema)
+
+    def _record_usage(self, usages: list[dict[str, int]]) -> dict[str, int]:
+        for usage in usages:
+            self.record_usage_event(
+                build_usage_event(
+                    model=self._model,
+                    provider=self._provider,
+                    input_tokens=usage["input"],
+                    output_tokens=usage["output"],
+                    cached_input_tokens=usage["cached"],
+                    call_type="completion",
+                )
+            )
+        total = sum_usages(usages)
+        for key in self._cumulative_usage:
+            self._cumulative_usage[key] += total[key]
+        return total
+
+    def respond(self, query: Query) -> Response:
+        prompt = self._build_prompt(query)
+        events = self._run_turn(prompt)
+        answer = assistant_text(events)
+        usages = [turn_usage(events)]
+        repaired = False
+
+        try:
+            action = self._parse_action(answer, query.response_schema)
+        except Exception as exc:
+            repaired = True
+            repair_events = self._run_turn(
+                self._repair_prompt(prompt, answer, str(exc))
+            )
+            usages.append(turn_usage(repair_events))
+            action = self._parse_action(
+                assistant_text(repair_events), query.response_schema
+            )
+            events = [*events, *repair_events]
+
+        spent = self._record_usage(usages)
+        self._pending_feedback = None
+        self._interaction_count += 1
+        logger.info(
+            "Response parsed (in=%d out=%d cached=%d)",
+            spent["input"],
+            spent["output"],
+            spent["cached"],
+        )
+
+        return Response(
+            action=action,
+            metadata={
+                "system_type": "proteus",
+                "model": self._model,
+                "provider": self._provider,
+                "interaction_count": self._interaction_count,
+                "auto_evolve": self._auto_evolve,
+                "persist_workspace": self._persist_workspace,
+                "single_conversation": self._single_conversation,
+                "session_id": self._session_id,
+                "token_usage": spent,
+                "cumulative_tokens": dict(self._cumulative_usage),
+                "tool_calls": tool_calls(events),
+                "had_error": had_error(events),
+                "repair_attempted": repaired,
+            },
+        )
+
+    def observe(
+        self, observation: Observation, next_query: Optional[Query] = None
+    ) -> None:
+        _ = next_query
+        if not self._persist_workspace and observation_marks_instance_complete(
+            observation
+        ):
+            # The within-run ablation: same rollout, but nothing durable
+            # survives the instance boundary.
+            self._destroy_workspace()
+        content = observation.content.strip()
+        if content:
+            self._pending_feedback = content
+
+    # ---- lifecycle ---------------------------------------------------------
+
+    def _clear_interaction_state(self) -> None:
+        self._interaction_count = 0
+        self._session_id: str | None = None
+        self._pending_feedback: str | None = None
+        self._event_log: list[dict[str, Any]] = []
+        self._cumulative_usage = dict(EMPTY_USAGE)
+
+    def reset(self) -> None:
+        self._destroy_workspace()
+        self._clear_interaction_state()
+
+    def _workspace_snapshot(self) -> dict[str, Any]:
+        """The durable state the workspace ended with — SOUL, scaffold version,
+        crafted tools, memory nodes. Reads the database; makes no model call."""
+        if not self._workspace_ready:
+            return {}
+        try:
+            result = self._run_cli(["state", _WORKSPACE_NAME, "--json"], timeout=120)
+        except (subprocess.SubprocessError, OSError) as exc:
+            return {"error": str(exc)}
+        if result.returncode != 0:
+            return {"error": (result.stderr or result.stdout).strip()[:500]}
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            return {"error": f"unparseable state output: {exc}"}
+
+    def get_run_artifacts(self) -> dict[str, Any]:
+        return {
+            "artifact_type": "proteus",
+            "model": self._model,
+            "provider": self._provider,
+            "auto_evolve": self._auto_evolve,
+            "persist_workspace": self._persist_workspace,
+            "single_conversation": self._single_conversation,
+            "interaction_count": self._interaction_count,
+            "session_id": self._session_id,
+            "cumulative_tokens": dict(self._cumulative_usage),
+            "workspace_state": self._workspace_snapshot(),
+            "events": self._event_log,
+        }
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def __del__(self) -> None:
+        if getattr(self, "_workspace_ready", False):
+            self._destroy_workspace()
+        root = getattr(self, "_root", None)
+        if root is not None:
+            cleanup_run_workspace(str(root))

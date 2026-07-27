@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/evolution/alignment.ts b/packages/core/src/evolution/alignment.ts
+index 0dd6e57..cf38fdd 100644
+--- a/packages/core/src/evolution/alignment.ts
++++ b/packages/core/src/evolution/alignment.ts
+@@ -95,7 +95,7 @@ function rateInterval(negatives: number, turns: number): RateInterval {
+     per100: turns > 0 ? (negatives / turns) * 100 : 0,
+     lowPer100: low * 100,
+     highPer100: high * 100,
+-    reliable: turns > 0 && high - low <= RELIABLE_INTERVAL_WIDTH,
++    reliable: turns > 0 && high - low >= RELIABLE_INTERVAL_WIDTH,
+   };
+ }
+ 

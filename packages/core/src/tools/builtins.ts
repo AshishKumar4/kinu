@@ -20,7 +20,19 @@
  *                       + Vectorize when a VectorStore is wired).
  *   6. fact           — typed keyed world model: remember / recall / forget.
  *                       Gated on deps.facts.
- *   7. product_change — governed product/UI self-customization lane.
+ *   7. team           — in-workspace subordinate management: list / spawn /
+ *                       assign / status / message / dismiss. Gated on
+ *                       deps.team (orchestrator-only — subordinates and the
+ *                       CLI wire no deps, so the tool is structurally absent).
+ *   8. peers          — cross-workspace peer messaging over the EventsHub
+ *                       transport: list / ask / send / reply /
+ *                       spawn_workspace. Gated on deps.peers
+ *                       (orchestrator-only; local sessions have no
+ *                       cross-process peers).
+ *   9. report         — the subordinate's progress spine back to its parent
+ *                       workspace orchestrator. Gated on deps.report
+ *                       (subordinate-only).
+ *  10. product_change — governed product/UI self-customization lane.
  *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -42,12 +54,14 @@ import { SessionSearchStore } from '../memory/session-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
-import type {
-  ProductChangeApproval,
-  ProductChangeCheck,
-  ProductChangeStatus,
-  ProductDeploymentRecord,
-  ProductSourceBinding,
+import {
+  isEngineOwnedTransitionTarget,
+  type ProductChangeApproval,
+  type ProductChangeCheck,
+  type ProductChangeEngine,
+  type ProductChangeStatus,
+  type ProductDeploymentRecord,
+  type ProductSourceBinding,
 } from '../product-change/index.js';
 
 /**
@@ -139,11 +153,129 @@ export interface BuiltinToolDeps {
   /** Product self-customization lane. Backend-supplied because persistence,
    *  source bindings, approval identity, and deployments are platform-owned. */
   productChanges?: ProductChangeToolDeps;
+  /** In-workspace subordinate management (the `team` tool). Backend-supplied
+   *  because the facet substrate + roster live on the workspace DO. Absent on
+   *  every actor that is not a workspace orchestrator (subordinates, CLI). */
+  team?: TeamToolDeps;
+  /** Cross-workspace peer messaging (the `peers` tool). Backend-supplied
+   *  because the transport (peer outbox + DO RPC + reply channels) and the
+   *  owner's workspace registry are platform-owned. Absent on backends
+   *  without a peer transport (the local CLI runs one agent per process) and
+   *  on subordinates (confinement is structural). */
+  peers?: PeersToolDeps;
+  /** Subordinate → parent progress reporting (the `report` tool). Wired only
+   *  on subordinate actors. */
+  report?: ReportToolDeps;
   /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
    *  Tavily-key auth seam differ per backend). Exposes the `web_search` and
    *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
    *  same provider in each backend's execute_tools assembly. */
   webSearch?: WebSearchProvider;
+}
+
+// ── Team (subordinate agents) tool contract ─────────────────────────────────
+// The deps implementation rides the workspace DO's facet substrate: spawn =
+// subAgent(SubordinateAgent, name) + seeded identity + roster row; assign /
+// message publish `subordinate_task` events into the subordinate's EventLog
+// (drained as its programmatic turn); reports come back as
+// `subordinate_report` events on the parent.
+
+export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
+
+/** One row of the workspace_subordinates roster (parent-DO source of truth). */
+export interface SubordinateRosterEntry {
+  name: string;
+  displayName: string;
+  role: string;
+  createdBy: 'orchestrator' | 'user';
+  status: SubordinateStatus;
+  currentTask: string | null;
+  createdAt: number;
+  dismissedAt: number | null;
+}
+
+export interface TeamToolDeps {
+  /** The workspace's subordinate roster (dismissed entries excluded). */
+  list(): Promise<SubordinateRosterEntry[]>;
+  /** Create a durable subordinate; its first turn is the mission. */
+  spawn(input: {
+    name?: string;
+    role: string;
+    mission: string;
+    model?: string;
+    /** Trusted caller attribution. The model tool omits this, so its spawns
+     * remain orchestrator-created; the interactive UI RPC supplies `user`. */
+    createdBy?: 'orchestrator' | 'user';
+  }): Promise<{
+    name: string; displayName: string;
+  }>;
+  /** Enqueue a task on the subordinate (drained as its next turn). */
+  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<{
+    ok: true; name: string;
+  }>;
+  /** Roster row + live snapshot for one subordinate, or the whole roster. */
+  status(input: { name?: string }): Promise<unknown>;
+  /** Conversational injection into the subordinate's next turn. */
+  message(input: { name: string; content: string }): Promise<{ ok: true; name: string }>;
+  /** Retire a subordinate: roster status 'dismissed'; storage wiped unless
+   *  keepHistory (archived — facet kept, no longer addressed). */
+  dismiss(input: { name: string; keepHistory?: boolean }): Promise<{
+    ok: true; name: string; historyKept: boolean;
+  }>;
+}
+
+// ── Peers (cross-workspace agents) tool contract ────────────────────────────
+// The deps implementation rides the existing EventsHub peer transport:
+// enqueueOutboundPeer → receiver's receivePeerMessage → EventLog → turn, with
+// replies routed back through the receiver's peer-back reply channel.
+
+export type PeerSendOutcome =
+  | { status: 'delivered' | 'queued'; message_id: string }
+  | { status: 'rejected'; reason: string };
+
+export type PeerAskOutcome =
+  | { status: 'replied'; from: string; reply: unknown }
+  | { status: 'no_reply'; note: string }
+  | { status: 'rejected'; reason: string };
+
+export type PeerReplyOutcome = { ok: true } | { ok: false; error: string };
+
+export type PeerSpawnOutcome = { agent: string; created: boolean } & PeerAskOutcome;
+
+export interface PeersToolDeps {
+  /** The owner's other workspaces' agents this one may address (self excluded). */
+  listPeers(): Promise<Array<{ name: string; displayName?: string }>>;
+  /** Send-and-await: deliver a message and wait for the peer's reply. */
+  ask(input: { agent: string; topic: string; message: string; timeoutMs: number }): Promise<PeerAskOutcome>;
+  /** Fire-and-forget: deliver a message without waiting for a reply. */
+  send(input: { agent: string; topic: string; message: string }): Promise<PeerSendOutcome>;
+  /** Answer a peer message event received this (or an earlier) turn. */
+  reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome>;
+  /** Create (or reuse by name) a specialist workspace, message its agent, await the result. */
+  spawnWorkspace(input: { name?: string; purpose: string; message: string; timeoutMs: number }): Promise<PeerSpawnOutcome>;
+}
+
+// ── Report (subordinate → parent) tool contract ─────────────────────────────
+
+export interface ReportToolDeps {
+  /** Publish a `subordinate_report` event into the PARENT workspace's
+   *  EventLog (via the parent stub). */
+  report(input: {
+    status: import('../events/hub/types.js').SubordinateReportStatus;
+    content: string;
+  }): Promise<unknown>;
+}
+
+/** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
+export const PEER_REPLY_TOPIC = 'peer_reply';
+
+const ASK_TIMEOUT_DEFAULT_MS = 120_000;
+const ASK_TIMEOUT_MIN_MS = 5_000;
+const ASK_TIMEOUT_MAX_MS = 600_000;
+
+function askTimeoutMs(timeoutSeconds: number | undefined): number {
+  if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_DEFAULT_MS;
+  return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
 }
 
 export interface ProductChangeToolDeps {
@@ -174,6 +306,12 @@ export interface ProductChangeToolDeps {
     deploymentId?: string | null;
     rollbackTarget?: string | null;
   }): Promise<ProductDeploymentRecord>;
+  /** Execution engine beneath the ledger (apply/run_checks/preview/deploy/
+   *  rollback grounded in real sandbox execution). When wired, the tool
+   *  refuses manual transitions into engine-owned states and refuses
+   *  record_deployment — those results are EARNED via the engine actions.
+   *  Absent on backends without an execution substrate. */
+  engine?: Pick<ProductChangeEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
 }
 
 /**
@@ -459,7 +597,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       const lexicalFn = async (q: string, k: number): Promise<LexicalHit[]> => {
         const results = await memory.search(q, k);
         return results.map((r) => ({
-          id: `${r.path}#${r.startLine}-${r.endLine}`,
+          // Canonical chunk id (`path:start-end`) — matches the id the vector
+          // store returns, so RRF fuses the lexical and semantic hits.
+          id: `${r.path}:${r.startLine}-${r.endLine}`,
           path: r.path, startLine: r.startLine, endLine: r.endLine,
           score: r.score, snippet: r.snippet,
         }));
@@ -654,7 +794,208 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 7. product_change — governed product/UI self-customization lane ───────
+  // ── 7. team — in-workspace subordinate management ──────────────────────────
+  if (deps.team) {
+    const team = deps.team;
+    tools.team = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.team,
+      inputSchema: jsonSchema<{
+        action: 'list' | 'spawn' | 'assign' | 'status' | 'message' | 'dismiss';
+        name?: string;
+        role?: string;
+        mission?: string;
+        model?: string;
+        task?: string;
+        deliverable?: string;
+        deadline_hint?: string;
+        content?: string;
+        keep_history?: boolean;
+      }>({
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'spawn', 'assign', 'status', 'message', 'dismiss'],
+            description:
+              'list = the workspace subordinate roster. spawn = create a durable subordinate (its first turn is the mission). ' +
+              'assign = hand a subordinate a task. status = roster + live progress snapshot. ' +
+              'message = inject a conversational note into its next turn. dismiss = retire it.',
+          },
+          name: { type: 'string', description: 'Subordinate name (assign/status/message/dismiss; optional for spawn — auto-generated from the role when omitted).' },
+          role: { type: 'string', maxLength: 200, description: 'For action=spawn: one freeform role/purpose line (e.g. "researcher — competitive landscape").' },
+          mission: { type: 'string', maxLength: 20000, description: "For action=spawn: the subordinate's mission — it seeds its identity and runs as its first turn." },
+          model: { type: 'string', description: 'For action=spawn: optional model spec override for the subordinate (defaults to the workspace model).' },
+          task: { type: 'string', maxLength: 20000, description: 'For action=assign: the task to run.' },
+          deliverable: { type: 'string', maxLength: 2000, description: 'For action=assign: what the finished result should be (optional).' },
+          deadline_hint: { type: 'string', maxLength: 200, description: 'For action=assign: optional urgency/deadline hint.' },
+          content: { type: 'string', maxLength: 20000, description: 'For action=message: the conversational note.' },
+          keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate\'s chat history archived instead of wiping its storage (default false).' },
+        },
+        required: ['action'],
+      }),
+      execute: async (args: {
+        action: 'list' | 'spawn' | 'assign' | 'status' | 'message' | 'dismiss';
+        name?: string;
+        role?: string;
+        mission?: string;
+        model?: string;
+        task?: string;
+        deliverable?: string;
+        deadline_hint?: string;
+        content?: string;
+        keep_history?: boolean;
+      }) => {
+        try {
+          switch (args.action) {
+            case 'list': {
+              const subordinates = await team.list();
+              return subordinates.length > 0
+                ? { subordinates }
+                : { subordinates, note: 'No subordinates yet — create one with action:"spawn".' };
+            }
+            case 'spawn':
+              if (!args.role || !args.mission) return { error: 'spawn requires role and mission' };
+              return await team.spawn({
+                ...(args.name ? { name: args.name } : {}),
+                role: args.role, mission: args.mission,
+                ...(args.model ? { model: args.model } : {}),
+              });
+            case 'assign':
+              if (!args.name || !args.task) return { error: 'assign requires name and task' };
+              return await team.assign({
+                name: args.name, task: args.task,
+                ...(args.deliverable ? { deliverable: args.deliverable } : {}),
+                ...(args.deadline_hint ? { deadlineHint: args.deadline_hint } : {}),
+              });
+            case 'status':
+              return await team.status(args.name ? { name: args.name } : {});
+            case 'message':
+              if (!args.name || !args.content) return { error: 'message requires name and content' };
+              return await team.message({ name: args.name, content: args.content });
+            case 'dismiss':
+              if (!args.name) return { error: 'dismiss requires name' };
+              return await team.dismiss({
+                name: args.name,
+                ...(args.keep_history !== undefined ? { keepHistory: args.keep_history } : {}),
+              });
+          }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    });
+  }
+
+  // ── 8. peers — cross-workspace peer messaging over the EventsHub transport ──
+  if (deps.peers) {
+    const peers = deps.peers;
+    tools.peers = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.peers,
+      inputSchema: jsonSchema<{
+        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn_workspace';
+        agent?: string;
+        message?: string;
+        topic?: string;
+        event_id?: string;
+        purpose?: string;
+        timeout_seconds?: number;
+      }>({
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'ask', 'send', 'reply', 'spawn_workspace'],
+            description:
+              'list = peers you may address. ask = message a peer and await its reply. ' +
+              'send = message a peer without waiting. reply = answer a peer message event. ' +
+              'spawn_workspace = create (or reuse by name) a specialist workspace, message its agent, and await the result.',
+          },
+          agent: { type: 'string', description: 'Peer agent name (ask/send; optional reuse name for spawn_workspace).' },
+          message: { type: 'string', maxLength: 20000, description: 'The message/task for ask, send, spawn_workspace, or the answer for reply.' },
+          topic: { type: 'string', maxLength: 80, description: 'Optional short label for ask/send (default "message").' },
+          event_id: { type: 'string', description: 'For action=reply: the peer message event id you were given.' },
+          purpose: { type: 'string', maxLength: 2000, description: "For action=spawn_workspace: the specialist's mission — it seeds the new workspace agent's identity." },
+          timeout_seconds: { type: 'number', description: 'For ask/spawn_workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
+        },
+        required: ['action'],
+      }),
+      execute: async (args: {
+        action: 'list' | 'ask' | 'send' | 'reply' | 'spawn_workspace';
+        agent?: string;
+        message?: string;
+        topic?: string;
+        event_id?: string;
+        purpose?: string;
+        timeout_seconds?: number;
+      }) => {
+        const topic = args.topic?.trim() || 'message';
+        if (topic === PEER_REPLY_TOPIC) {
+          return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
+        }
+        try {
+          switch (args.action) {
+            case 'list': {
+              const roster = await peers.listPeers();
+              return roster.length > 0
+                ? { peers: roster }
+                : { peers: roster, note: 'No other workspaces yet — create one with action:"spawn_workspace".' };
+            }
+            case 'ask':
+              if (!args.agent || !args.message) return { error: 'ask requires agent and message' };
+              return await peers.ask({
+                agent: args.agent, topic, message: args.message,
+                timeoutMs: askTimeoutMs(args.timeout_seconds),
+              });
+            case 'send':
+              if (!args.agent || !args.message) return { error: 'send requires agent and message' };
+              return await peers.send({ agent: args.agent, topic, message: args.message });
+            case 'reply':
+              if (!args.event_id || !args.message) return { error: 'reply requires event_id and message' };
+              return await peers.reply({ eventId: args.event_id, message: args.message });
+            case 'spawn_workspace':
+              if (!args.purpose || !args.message) return { error: 'spawn_workspace requires purpose and message' };
+              return await peers.spawnWorkspace({
+                ...(args.agent ? { name: args.agent } : {}),
+                purpose: args.purpose, message: args.message,
+                timeoutMs: askTimeoutMs(args.timeout_seconds),
+              });
+          }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    });
+  }
+
+  // ── 9. report — subordinate → parent progress spine ────────────────────────
+  if (deps.report) {
+    const report = deps.report;
+    tools.report = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.report,
+      inputSchema: jsonSchema<{ status: 'progress' | 'completed' | 'blocked'; content: string }>({
+        type: 'object',
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['progress', 'completed', 'blocked'],
+            description: 'completed = the assignment is done. blocked = you need input to continue. progress = significant mid-task update.',
+          },
+          content: { type: 'string', maxLength: 20000, description: 'What to tell the orchestrator — findings, the result, or what you are blocked on.' },
+        },
+        required: ['status', 'content'],
+      }),
+      execute: async (args: { status: 'progress' | 'completed' | 'blocked'; content: string }) => {
+        if (!args.content?.trim()) return { error: 'report requires non-empty content' };
+        try {
+          return await report.report({ status: args.status, content: args.content });
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    });
+  }
+
+  // ── 10. product_change — governed product/UI self-customization lane ──────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({
@@ -668,7 +1009,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           | 'transition'
           | 'record_check'
           | 'request_approval'
-          | 'record_deployment';
+          | 'record_deployment'
+          | 'apply'
+          | 'run_checks'
+          | 'preview'
+          | 'deploy'
+          | 'rollback';
         binding?: {
           kind?: 'local' | 'github';
           label?: string;
@@ -693,13 +1039,23 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           workerVersionId?: string | null;
           deploymentId?: string | null;
           rollbackTarget?: string | null;
+          command?: string;
         };
+        checks?: Array<{ name?: string; command?: string }>;
+        port?: number;
+        startCommand?: string;
       }>({
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment'],
+            enum: [
+              'board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment',
+              'apply', 'run_checks', 'preview', 'deploy', 'rollback',
+            ],
+            description:
+              'apply/run_checks/preview/deploy/rollback DRIVE the change for real in the sandbox ' +
+              '(patch applied + committed, checks = real exit codes, preview = live URL, deploy/rollback verified).',
           },
           binding: {
             type: 'object',
@@ -742,8 +1098,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               workerVersionId: { type: 'string' },
               deploymentId: { type: 'string' },
               rollbackTarget: { type: 'string' },
+              command: { type: 'string', description: 'Deploy (or rollback-redeploy) command run in the working copy, e.g. "bunx wrangler deploy". Defaults to the binding deployTarget when that reads like a command.' },
             },
           },
+          checks: {
+            type: 'array',
+            description: 'For action=run_checks: build/test/lint commands run in the working copy; pass/fail comes from real exit codes.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, command: { type: 'string' } },
+              required: ['name', 'command'],
+            },
+          },
+          port: { type: 'number', description: 'For action=preview: the port your server listens on inside the sandbox.' },
+          startCommand: { type: 'string', description: 'For action=preview: optional server start command run in the working copy before exposing the port.' },
         },
         required: ['action'],
       }),
@@ -779,6 +1147,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               });
             case 'transition':
               if (!args.changeId || !args.status) return { error: 'transition requires changeId and status' };
+              if (productChanges.engine && isEngineOwnedTransitionTarget(args.status)) {
+                return {
+                  error:
+                    `status '${args.status}' is earned by execution, not asserted — ` +
+                    `use action=apply / run_checks / deploy / rollback to get there for real`,
+                };
+              }
               return await productChanges.transition(args.changeId, args.status);
             case 'record_check':
               if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
@@ -794,12 +1169,51 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               return await productChanges.requestApproval(args.changeId, args.approvalType);
             case 'record_deployment':
               if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
+              if (productChanges.engine) {
+                return {
+                  error:
+                    'deployments are recorded from REAL deploy results — use action=deploy; ' +
+                    'the version id and rollback target come from the actual command output',
+                };
+              }
               return await productChanges.recordDeployment(args.changeId, {
                 environment: args.deployment.environment,
                 workerVersionId: args.deployment.workerVersionId,
                 deploymentId: args.deployment.deploymentId,
                 rollbackTarget: args.deployment.rollbackTarget,
               });
+            case 'apply':
+            case 'run_checks':
+            case 'preview':
+            case 'deploy':
+            case 'rollback': {
+              const engine = productChanges.engine;
+              if (!engine) {
+                return { error: `action=${args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
+              }
+              if (!args.changeId) return { error: `${args.action} requires changeId` };
+              switch (args.action) {
+                case 'apply':
+                  return await engine.apply(args.changeId);
+                case 'run_checks':
+                  if (!args.checks?.length) return { error: 'run_checks requires checks: [{ name, command }]' };
+                  return await engine.runChecks(
+                    args.changeId,
+                    args.checks.map((c) => ({ name: c.name ?? '', command: c.command ?? '' })),
+                  );
+                case 'preview':
+                  if (args.port == null) return { error: 'preview requires port (the port your server listens on)' };
+                  return await engine.preview(args.changeId, { port: args.port, ...(args.startCommand ? { startCommand: args.startCommand } : {}) });
+                case 'deploy':
+                  if (!args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
+                  return await engine.deploy(args.changeId, {
+                    environment: args.deployment.environment,
+                    ...(args.deployment.command ? { command: args.deployment.command } : {}),
+                  });
+                case 'rollback':
+                  return await engine.rollback(args.changeId, args.deployment?.command ? { command: args.deployment.command } : undefined);
+              }
+            }
           }
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };

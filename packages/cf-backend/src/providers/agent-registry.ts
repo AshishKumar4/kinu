@@ -13,7 +13,7 @@
 // Ordering is also the preference order for `defaultSpec()`:
 //   workers-ai → my-gateway → ai-gateway → codex → openai → anthropic → openrouter → openai-compat → catalog
 //
-// Auth flows through the UserDO stub passed in opts.userDOStub — getAuth /
+// Auth flows through the UserDO stub passed in opts.userDO — getAuth /
 // hasCredential are thin wrappers over its RPCs. No credential material ever
 // touches this layer.
 import {
@@ -27,16 +27,27 @@ import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js'
 import { createMyGatewayProvider } from './my-gateway.js';
 import { createAIGatewayProvider } from './ai-gateway.js';
 import type { UserDO } from '../user/user-do.js';
+import type { UserCaller } from '../user/workspace-capability.js';
+
+/** Stub for the per-user DO that owns this user's credentials, paired with the
+ *  identity this context presents to it — a Worker route acting for the
+ *  signed-in owner passes OWNER_SESSION, an agent passes its workspace
+ *  capability token (resolved per call, since a facet reads it from its
+ *  parent). The two travel together so no context can hold the stub without
+ *  saying who it is. */
+export interface UserCredentialSource {
+  stub: DurableObjectStub<UserDO>;
+  caller: UserCaller | (() => Promise<UserCaller>);
+}
 
 export interface AgentProviderDeps {
   env: ProviderEnv;
-  /** Stub for the per-user DO that owns this user's credentials. Null is
-   *  allowed for short-lived "env-bound providers only" contexts (e.g. the
-   *  inline-branch fallback in runtime.ts, where the spawn closure cannot
-   *  reach the user's UserDO). In that case getAuth always returns null
- *  and hasCredential always returns false — only env-bound providers end up
- *  usable. */
-  userDOStub?: DurableObjectStub<UserDO> | null;
+  /** Null/absent is allowed for short-lived "env-bound providers only" contexts
+   *  (e.g. the inline-branch fallback in runtime.ts, where the spawn closure
+   *  cannot reach the user's UserDO). In that case getAuth always returns null
+   *  and hasCredential always returns false — only env-bound providers end up
+   *  usable. */
+  userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
   refererURL?: string;
   appTitle?: string;
@@ -54,18 +65,23 @@ export interface AgentProviderRegistry {
   resolveSpec(specOrNull?: string | null): Promise<string>;
 }
 
+async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> {
+  return typeof source.caller === 'function' ? await source.caller() : source.caller;
+}
+
 /** Auth resolver proxying to UserDO — getAuth is a thin wrapper over its
  *  RPCs, so no credential material ever touches the caller's layer. The DO
- *  event loop serializes concurrent refreshes for the same credential. With a
- *  null stub (inline-branch context) every lookup returns null, leaving only
+ *  event loop serializes concurrent refreshes for the same credential. With no
+ *  source (inline-branch context) every lookup returns null, leaving only
  *  env-bound providers usable. Shared by the registry below and the
  *  /api/user/ai/v1 proxy. */
-export function createUserDOAuthResolver(stub: DurableObjectStub<UserDO> | null): AuthResolver {
+export function createUserDOAuthResolver(source: UserCredentialSource | null): AuthResolver {
   return async (key, opts) => {
-    if (!stub) return null;
-    const headers = await stub.getAuthHeaders(key, opts);
+    if (!source) return null;
+    const caller = await resolveCaller(source);
+    const headers = await source.stub.getAuthHeaders(caller, key, opts);
     if (!headers) return null;
-    const baseURL = await stub.getCredentialBaseURL(key);
+    const baseURL = await source.stub.getCredentialBaseURL(caller, key);
     return baseURL ? { headers, baseURL } : { headers };
   };
 }
@@ -89,23 +105,19 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // it so workers-ai never grows a second resolution path.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
-  const stub = opts.userDOStub ?? null;
-  const getAuth = createUserDOAuthResolver(stub);
+  const source = opts.userDO ?? null;
+  const getAuth = createUserDOAuthResolver(source);
 
-  const hasCredential = async (key: string) => {
-    if (!stub) return false;
-    const list = await stub.listCredentials();
-    return list.some((c) => c.key === key);
+  const credentialKeys = async (): Promise<string[]> => {
+    if (!source) return [];
+    return (await source.stub.listCredentials(await resolveCaller(source))).map((c) => c.key);
   };
 
   const deps: ProviderDeps = {
     env: opts.env,
     getAuth,
-    hasCredential,
-    listCredentialKeys: async () => {
-      if (!stub) return [];
-      return (await stub.listCredentials()).map((c) => c.key);
-    },
+    hasCredential: async (key: string) => (await credentialKeys()).includes(key),
+    listCredentialKeys: credentialKeys,
     fetch: opts.fetch,
   };
 
@@ -115,7 +127,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // UserDO stub — without a stub every request is a guaranteed 401, so the
   // sync default must skip it and fall back to the env-bound ai-gateway.
   function syncDefaultProvider(): string {
-    if (stub && registry.get('workers-ai')) return 'workers-ai';
+    if (source && registry.get('workers-ai')) return 'workers-ai';
     if (typeof opts.env.AI_GATEWAY_URL === 'string' && opts.env.AI_GATEWAY_URL
      && typeof opts.env.AI_GATEWAY_AUTH === 'string' && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
     throw new Error('No sync-resolvable provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');

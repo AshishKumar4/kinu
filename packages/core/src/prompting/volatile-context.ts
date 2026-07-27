@@ -4,33 +4,47 @@
  * `buildSystemPromptSync` is a byte-stable prefix: its bytes change only on
  * real agent events (soul edit, model switch, skill/tool surface change,
  * executor registration, AGENTS.md edit), so provider prefix caches survive
- * across turns. Everything that legitimately changes turn-to-turn — the
- * recent-facts tail, live executor availability, the one-turn device change
- * notice, skill activation reasons — rides here instead: ONE context message
- * appended at the END of the turn's messages, where any changed byte costs a
- * few tail tokens instead of re-prefilling the whole conversation. The end
- * position doubles as recitation — current state sits where attention is
- * strongest.
+ * across turns. Everything that legitimately changes turn-to-turn rides in
+ * the messages array instead, split by nature:
  *
- * Both backends assemble this through the same functions so the seam cannot
- * drift: CF in `beforeTurn` (TurnConfig.messages), CLI in `processTurn`.
+ * SYSTEM STATE (facts world model, MEMORY.md tail, live executor
+ * availability) — the EphemeralContextLedger. Each turn the current state is
+ * rendered and fingerprinted; a new block is appended at the conversation
+ * tail ONLY when the fingerprint differs from the newest block's. Every
+ * block freezes at the durable-history position where it was born and never
+ * moves or disappears while the activation lives — moving or removing a
+ * mid-array message would invalidate every provider cache breakpoint after
+ * it. The ledger is in-memory only, never persisted: a cold start (DO reset,
+ * new CLI session) begins empty, so the next turn carries exactly one fresh
+ * block.
+ *
+ * TURN-LOCAL state (skill activation reasons — they vary with THIS user
+ * message's keywords — and the one-turn device change notice) — one trailing
+ * user message for this turn only, appended after the ledger weave and never
+ * fingerprinted (folding it in would defeat block stability).
+ *
+ * Both backends assemble through the same functions so the seam cannot
+ * drift: CF in `beforeTurn` (TurnConfig.messages), CLI via runChat.
  */
 
 import type { ModelMessage } from 'ai';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface.js';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
 
-export interface VolatileTurnContext {
+/** The fingerprint-stable "latest state of the system" — changes only on
+ *  real events (fact learned, lesson recorded, executor lifecycle flip). */
+export interface SystemStateContext {
   /** Rendered recent-facts block (renderFactsBlock output). */
   factsBlock?: string;
-  /** Bounded MEMORY.md tail (newest lessons/reflections). Per-turn-read live
-   *  state, exactly like facts: every corroborated lesson / reflection /
-   *  take-pick correction appends to MEMORY.md, so a stable-prefix placement
-   *  would bust the cache on each write. */
+  /** Bounded MEMORY.md tail (newest lessons/reflections). */
   memoryTail?: string;
-  /** Live executor lifecycle at turn start — rendered as status labels only;
-   *  the executor doctrine itself lives in the stable prefix. */
+  /** Live executor lifecycle — rendered as status labels only; the executor
+   *  doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
+}
+
+/** State that only makes sense for THIS turn's user message. */
+export interface TurnLocalContext {
   /** One-turn device change notice (deviceChangeNotice output). */
   deviceNotice?: string | null;
   /** Skills resolved active for this turn. Bodies render in the stable
@@ -39,12 +53,16 @@ export interface VolatileTurnContext {
   activeSkills?: ActiveSkillSet;
 }
 
-export const VOLATILE_CONTEXT_HEADER =
+export const EPHEMERAL_CONTEXT_HEADER =
+  '[Ephemeral context — latest system state, maintained by the Proteus runtime, not written by the user. ' +
+  'The newest ephemeral context block supersedes all earlier ones.]';
+
+export const TURN_CONTEXT_HEADER =
   '[Turn context — live state maintained by the Proteus runtime, not written by the user.]';
 
 /** Live availability label for one executor. Volatile by nature (flips on
  *  device connect/disconnect and sandbox activation), so it renders in the
- *  per-turn context message — never in the cacheable system prefix. */
+ *  ephemeral system-state block — never in the cacheable system prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
   if (exec.active || exec.status === 'active') return 'active';
@@ -60,7 +78,8 @@ function describeActivationReason(r: ActivationReason): string {
   }
 }
 
-export function renderVolatileContext(ctx: VolatileTurnContext): string | null {
+/** The ledger-fed system-state block (or null when there is nothing to say). */
+export function renderSystemStateBlock(ctx: SystemStateContext): string | null {
   const sections: string[] = [];
 
   const facts = ctx.factsBlock?.trim();
@@ -78,6 +97,14 @@ export function renderVolatileContext(ctx: VolatileTurnContext): string | null {
     ].join('\n'));
   }
 
+  if (sections.length === 0) return null;
+  return [EPHEMERAL_CONTEXT_HEADER, ...sections].join('\n\n');
+}
+
+/** The per-turn tail block (or null when there is nothing to say). */
+export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
+  const sections: string[] = [];
+
   const reasons = ctx.activeSkills?.reasons ?? [];
   if (reasons.length > 0) {
     sections.push([
@@ -90,30 +117,144 @@ export function renderVolatileContext(ctx: VolatileTurnContext): string | null {
   if (notice) sections.push(notice);
 
   if (sections.length === 0) return null;
-  return [VOLATILE_CONTEXT_HEADER, ...sections].join('\n\n');
+  return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
-/** Append the volatile context as one trailing user message. Returns a new
- *  array — callers pass it to the model for THIS turn only and never persist
- *  the appended message into durable history. */
-export function appendVolatileContextMessage(
-  messages: ReadonlyArray<ModelMessage>,
-  ctx: VolatileTurnContext,
-): ModelMessage[] {
-  const text = renderVolatileContext(ctx);
-  return text ? [...messages, { role: 'user', content: text }] : [...messages];
+/** The turn-local context as one user message (or null). Callers hand it to
+ *  the model for THIS turn only — never persisted into durable history, and
+ *  appended AFTER the extension transformContext seam and the ledger weave,
+ *  so a compaction plugin never sees turn-local state. */
+export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
+  const text = renderTurnLocalContext(ctx);
+  return text ? { role: 'user', content: text } : null;
 }
 
-/** FNV-1a 64-bit hash of the assembled system prompt — the byte-stability
- *  invariant as telemetry. Backends log it per turn; it should change only
- *  on real agent events (soul/skill/craft/device/model), never between two
- *  vanilla consecutive turns. */
-export function hashSystemPrompt(text: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= BigInt(text.charCodeAt(i));
-    hash = (hash * prime) & 0xffffffffffffffffn;
+interface LedgerBlock {
+  /** Durable-history length when the block was born — it renders after this
+   *  many durable messages, forever (the cache-stability contract). */
+  index: number;
+  fingerprint: string;
+  message: ModelMessage;
+}
+
+/**
+ * Per-activation ledger of ephemeral system-state blocks.
+ *
+ * `weave` is the whole interface: hand it the (transformed) durable history
+ * and the current system state each turn. It appends a fresh block at the
+ * tail only when the state fingerprint differs from the newest block's, and
+ * returns the history with every frozen block woven in at its original
+ * position — an unchanged state adds nothing, so the already-frozen block
+ * keeps conveying current state from inside the cached prefix.
+ *
+ * In-memory only, never persisted: construct one per activation. Call
+ * `reset()` whenever the durable stream is rewritten (compaction) — the
+ * frozen positions are meaningless against the new stream, and the next
+ * weave starts over with one fresh block at the tail.
+ */
+export class EphemeralContextLedger {
+  private blocks: LedgerBlock[] = [];
+
+  get size(): number {
+    return this.blocks.length;
   }
-  return hash.toString(16).padStart(16, '0');
+
+  weave(history: ReadonlyArray<ModelMessage>, state: SystemStateContext): ModelMessage[] {
+    let previousIndex = -1;
+    for (const block of this.blocks) {
+      // History rewrites invalidate frozen positions even when their caller forgot to reset the ledger.
+      if (block.index > history.length || block.index < previousIndex) {
+        this.reset();
+        break;
+      }
+      previousIndex = block.index;
+    }
+    const text = renderSystemStateBlock(state);
+    // A null render appends nothing; frozen blocks stay regardless (removing
+    // a mid-array message would break the provider prefix cache).
+    if (text !== null) {
+      const fingerprint = fnv1a64(text);
+      const newest = this.blocks[this.blocks.length - 1];
+      if (newest?.fingerprint !== fingerprint) {
+        this.blocks.push({ index: history.length, fingerprint, message: { role: 'user', content: text } });
+      }
+    }
+    const woven: ModelMessage[] = [];
+    let cursor = 0;
+    for (const block of this.blocks) {
+      woven.push(...history.slice(cursor, block.index), block.message);
+      cursor = block.index;
+    }
+    woven.push(...history.slice(cursor));
+    return woven;
+  }
+
+  reset(): void {
+    this.blocks = [];
+  }
+}
+
+/** FNV-1a 64-bit text hash — the shared fingerprint behind both
+ *  cache-stability invariants (the system-prompt byte-stability telemetry
+ *  and the ledger's append gate) AND the compaction engine's content-hash
+ *  keys, which run over the FULL durable history every turn. Implemented
+ *  with 16-bit limb multiplies instead of BigInt (~30x faster on megabyte
+ *  inputs; the compaction plane made per-char BigInt a per-turn tax) —
+ *  digests are byte-identical to the previous BigInt implementation.
+ *  The FNV prime 0x100000001b3 = 2^40 + 0x1b3: each limb multiplies by
+ *  0x1b3 (435), and the 2^40 term shifts limbs 0/1 into limbs 2/3 by
+ *  8 bits. XOR input is the UTF-16 code unit (≤ 0xffff → low limb only). */
+export function fnv1a64(text: string): string {
+  // Offset basis 0xcbf29ce484222325 split into 16-bit limbs, low → high.
+  let v0 = 0x2325, v1 = 0x8422, v2 = 0x9ce4, v3 = 0xcbf2;
+  for (let i = 0; i < text.length; i++) {
+    v0 ^= text.charCodeAt(i);
+    let t0 = v0 * 0x1b3;
+    let t1 = v1 * 0x1b3;
+    let t2 = v2 * 0x1b3 + ((v0 << 8) & 0xffffff);
+    let t3 = v3 * 0x1b3 + ((v1 << 8) & 0xffffff);
+    t1 += t0 >>> 16;
+    t2 += t1 >>> 16;
+    t3 += t2 >>> 16;
+    v0 = t0 & 0xffff;
+    v1 = t1 & 0xffff;
+    v2 = t2 & 0xffff;
+    v3 = t3 & 0xffff;
+  }
+  return (
+    v3.toString(16).padStart(4, '0') +
+    v2.toString(16).padStart(4, '0') +
+    v1.toString(16).padStart(4, '0') +
+    v0.toString(16).padStart(4, '0')
+  );
+}
+
+/** FNV-1a 64-bit over raw bytes — the attachment sanitizer's content address.
+ *  Same limb math as {@link fnv1a64}, XORing the byte instead of the UTF-16
+ *  code unit, so identical payload bytes hash identically no matter which
+ *  carrier (data URL, base64 string, Uint8Array) delivered them. Kept as its
+ *  own loop rather than a shared per-element callback: both hashes are
+ *  hot paths over megabyte inputs. */
+export function fnv1a64Bytes(data: Uint8Array): string {
+  let v0 = 0x2325, v1 = 0x8422, v2 = 0x9ce4, v3 = 0xcbf2;
+  for (let i = 0; i < data.length; i++) {
+    v0 ^= data[i]!;
+    const t0 = v0 * 0x1b3;
+    let t1 = v1 * 0x1b3;
+    let t2 = v2 * 0x1b3 + ((v0 << 8) & 0xffffff);
+    let t3 = v3 * 0x1b3 + ((v1 << 8) & 0xffffff);
+    t1 += t0 >>> 16;
+    t2 += t1 >>> 16;
+    t3 += t2 >>> 16;
+    v0 = t0 & 0xffff;
+    v1 = t1 & 0xffff;
+    v2 = t2 & 0xffff;
+    v3 = t3 & 0xffff;
+  }
+  return (
+    v3.toString(16).padStart(4, '0') +
+    v2.toString(16).padStart(4, '0') +
+    v1.toString(16).padStart(4, '0') +
+    v0.toString(16).padStart(4, '0')
+  );
 }

@@ -7,14 +7,17 @@ import * as v from "valibot";
 import { MockLanguageModelV3 } from "ai/test";
 import { extractJsonObject, generateJson } from "../src/lib/generate-json";
 
-function modelReturning(text: string) {
+function modelReturning(text: string, capture?: (options: { maxOutputTokens?: number }) => void) {
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: "text", text }],
-      finishReason: "stop",
-      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-      warnings: [],
-    }),
+    doGenerate: async (options) => {
+      capture?.(options);
+      return {
+        content: [{ type: "text", text }],
+        finishReason: "stop",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      };
+    },
   });
 }
 
@@ -57,6 +60,14 @@ describe("generateJson", () => {
     const model = modelReturning('Sure, here you go:\n```json\n{"a":1,"b":["x","y"]}\n```');
     const out = await generateJson({ model, schema: Schema, prompt: "go" });
     expect(out).toEqual({ a: 1, b: ["x", "y"] });
+  });
+
+  test("has no implicit output cap but preserves an explicit cap", async () => {
+    const seen: Array<number | undefined> = [];
+    const model = modelReturning('{"a":1,"b":[]}', (options) => seen.push(options.maxOutputTokens));
+    await generateJson({ model, schema: Schema, prompt: "uncapped" });
+    await generateJson({ model, schema: Schema, prompt: "capped", maxOutputTokens: 321 });
+    expect(seen).toEqual([undefined, 321]);
   });
 
   test("throws on schema mismatch so the caller can fall back", async () => {

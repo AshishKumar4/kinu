@@ -74,7 +74,7 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
 
 // skills, think, fact, and product_change are conditional on their deps. Base = everything
 // else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'think', 'fact', 'web_search', 'web_fetch', 'product_change'] as const;
+const CONDITIONAL_TOOLS = ['skills', 'think', 'fact', 'web_search', 'web_fetch', 'team', 'peers', 'report', 'product_change'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
@@ -168,6 +168,24 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
       search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
       fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
     };
+    const stubTeam = {
+      list: async () => [],
+      spawn: async () => ({ name: 's', displayName: 'S' }),
+      assign: async () => ({ ok: true as const, name: 's' }),
+      status: async () => ({}),
+      message: async () => ({ ok: true as const, name: 's' }),
+      dismiss: async () => ({ ok: true as const, name: 's', historyKept: false }),
+    };
+    const stubPeers = {
+      listPeers: async () => [],
+      ask: async () => ({ status: 'no_reply' as const, note: 'stub' }),
+      send: async () => ({ status: 'queued' as const, message_id: 'm1' }),
+      reply: async () => ({ ok: true as const }),
+      spawnWorkspace: async () => ({ agent: 'a', created: true, status: 'no_reply' as const, note: 'stub' }),
+    };
+    const stubReport = {
+      report: async () => ({ delivered: true }),
+    };
     const t = buildBuiltinTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
@@ -178,6 +196,9 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
       skills: stubSkillsDeps,
       productChanges: stubProductChanges,
       webSearch: stubWebSearch,
+      team: stubTeam,
+      peers: stubPeers,
+      report: stubReport,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);

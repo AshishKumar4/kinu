@@ -1,29 +1,38 @@
 import {
   requireAuthConfig,
+  setDefaultModel,
+  setDefaultReasoningEffort,
 } from '../config.js';
+import { isReasoningEffort, type ReasoningEffort } from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
 import {
   cancelLocalJob,
   cancelLocalTrigger,
   createLocalTimerTrigger,
   getLocalStoredModel,
+  getLocalReasoningEffort,
   getLocalToolSurface,
   listLocalJobs,
   listLocalTriggers,
   setLocalStoredModel,
+  setLocalReasoningEffort,
 } from '../local-inspection.js';
 import {
-  cancelCloudJob,
-  cancelCloudTrigger,
-  createCloudTimerTrigger,
+  callAgentRpc,
   createCloudWebhookTrigger,
-  getCloudAgentModel,
-  getCloudAgentTools,
-  listCloudJobs,
-  listCloudTriggers,
-  setCloudAgentModel,
+  listCloudAvailableModels,
+  type CloudBackgroundJob,
+  type CloudToolDescriptions,
+  type CloudTriggerList,
 } from '../cloud-api.js';
-import { ACCENT, DIM, OK } from '../display.js';
+import { ACCENT, DIM, OK, WARN } from '../display.js';
+import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
+import {
+  dedupeModelEntries,
+  normalizeModelEntries,
+  validateModelSpec,
+  type AgentModelEntry,
+} from '../model-catalog.js';
 
 interface ControlOpts {
   model?: string;
@@ -40,22 +49,118 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
+    if (spec) {
+      const models = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
+      validateModelSelection(models, catalogSpec(models, spec), spec, name);
+    }
     const result = spec
-      ? await setCloudAgentModel(auth.origin, auth.token, target.cloudName, spec)
-      : await getCloudAgentModel(auth.origin, auth.token, target.cloudName);
+      ? await callAgentRpc<{ ok: true; spec: string }>(auth.origin, auth.token, target.cloudName, 'setModel', [spec])
+      : await callAgentRpc<{ spec: string | null }>(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec');
     console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+    if (spec && result.spec) setDefaultModel(result.spec);
     return;
   }
 
-  const result = spec ? setLocalStoredModel(target.localName, spec) : getLocalStoredModel(target.localName);
+  let resolvedSpec = spec;
+  if (spec) {
+    const configured = createConfiguredLocalModelResolver({
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      auth: opts.auth,
+      agentName: target.localName,
+    });
+    resolvedSpec = configured.resolver.normalizeSpecSync(spec);
+    const models = await loadModelCatalog(() => configured.resolver.listModels());
+    validateModelSelection(models, resolvedSpec, spec, name);
+  }
+  const result = resolvedSpec ? setLocalStoredModel(target.localName, resolvedSpec) : getLocalStoredModel(target.localName);
   console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
+  if (spec && result.spec) setDefaultModel(result.spec);
+}
+
+export async function effortCommand(name: string, level: string | undefined): Promise<void> {
+  const target = resolveAgentTarget(name);
+  if (level !== undefined && !isReasoningEffort(level)) {
+    throw new Error('Reasoning effort must be low, medium, or high.');
+  }
+  let result: { effort: ReasoningEffort | null };
+  if (target.mode === 'cloud') {
+    const auth = requireAuthConfig();
+    result = level
+      ? await callAgentRpc<{ ok: true; effort: ReasoningEffort }>(auth.origin, auth.token, target.cloudName, 'setReasoningEffort', [level])
+      : await callAgentRpc<{ effort: ReasoningEffort | null }>(auth.origin, auth.token, target.cloudName, 'getReasoningEffort');
+  } else {
+    result = level
+      ? setLocalReasoningEffort(target.localName, level)
+      : getLocalReasoningEffort(target.localName);
+  }
+  if (level && result.effort) setDefaultReasoningEffort(result.effort);
+  console.log(level
+    ? `${OK('set')} ${result.effort}`
+    : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);
+}
+
+async function loadModelCatalog(load: () => Promise<unknown[]>): Promise<AgentModelEntry[] | null> {
+  try {
+    return dedupeModelEntries(normalizeModelEntries(await load()));
+  } catch {
+    return null;
+  }
+}
+
+function validateModelSelection(
+  models: readonly AgentModelEntry[] | null,
+  resolvedSpec: string,
+  rawSpec: string,
+  workspace: string,
+): void {
+  if (!models || models.length === 0) {
+    console.log(`${WARN('!')} The model catalog is unavailable; setting ${resolvedSpec} without catalog validation.`);
+    return;
+  }
+
+  const explicitProvider = providerPrefix(rawSpec);
+  const validation = validateModelSpec(models, explicitProvider ? rawSpec.trim() : resolvedSpec);
+  if (validation.status === 'known') return;
+  if (validation.status === 'unknown-provider') {
+    if (!explicitProvider) {
+      console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog; setting it anyway.`);
+      console.log(`  ${DIM('List models:')} run ${ACCENT(`proteus chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+      return;
+    }
+    throw new Error(
+      `Unknown model provider ${JSON.stringify(validation.provider)} in ${JSON.stringify(rawSpec)}. `
+      + `Valid providers: ${validation.providers.join(', ')}.`,
+    );
+  }
+
+  console.log(`${WARN('!')} ${resolvedSpec} is not in the model catalog for ${validation.provider}; setting it anyway.`);
+  if (validation.suggestions.length > 0) {
+    console.log(`  ${DIM('Close matches:')} ${validation.suggestions.join(', ')}`);
+  }
+  console.log(`  ${DIM('List models:')} run ${ACCENT(`proteus chat ${workspace}`)}, then enter ${ACCENT('/model')}.`);
+}
+
+function providerPrefix(spec: string): string | null {
+  const normalized = spec.trim();
+  if (!normalized || normalized.startsWith('@cf/')) return null;
+  const slash = normalized.indexOf('/');
+  return slash > 0 ? normalized.slice(0, slash) : null;
+}
+
+function catalogSpec(models: readonly AgentModelEntry[] | null, spec: string): string {
+  const normalized = spec.trim();
+  if (normalized.startsWith('@cf/')) return `workers-ai/${normalized}`;
+  if (!models || normalized.includes('/')) return normalized;
+  const suffixMatches = models.filter((model) => model.spec.endsWith(`/${normalized}`));
+  return suffixMatches.length === 1 ? suffixMatches[0]!.spec : normalized;
 }
 
 export async function toolsCommand(name: string, opts: ControlOpts): Promise<void> {
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const tools = await getCloudAgentTools(auth.origin, auth.token, target.cloudName);
+    const tools = await callAgentRpc<CloudToolDescriptions>(auth.origin, auth.token, target.cloudName, 'getToolDescriptions');
     printTools([
       ...tools.builtIn.map((tool) => ({ ...tool, group: 'built-in' })),
       ...tools.crafted.map((tool) => ({ ...tool, group: 'crafted' })),
@@ -83,12 +188,13 @@ export async function triggersCommand(
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     if (normalized === 'list') {
-      printTriggers((await listCloudTriggers(auth.origin, auth.token, target.cloudName)).triggers);
+      printTriggers((await callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers')).triggers);
       return;
     }
     if (normalized === 'cancel') {
       if (!value) throw new Error('trigger id required');
-      console.log(`${OK('cancelled')} ${(await cancelCloudTrigger(auth.origin, auth.token, target.cloudName, value)).changed ? value : `${value} (already inactive)`}`);
+      const cancelled = await callAgentRpc<{ ok: true; changed: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelTrigger', [value]);
+      console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`);
       return;
     }
     if (normalized === 'webhook') {
@@ -105,12 +211,16 @@ export async function triggersCommand(
       return;
     }
     const input = timerInput(normalized, value);
-    const created = await createCloudTimerTrigger(auth.origin, auth.token, target.cloudName, input);
+    // trust:'owner' — an interactive session token IS the owner (the old
+    // per-route matcher stamped the same value server-side).
+    const created = await callAgentRpc<{ id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null }>(
+      auth.origin, auth.token, target.cloudName, 'createTimerTrigger', [{ ...input, trust: 'owner' }],
+    );
     console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.nextFireAt)}`);
     return;
   }
 
-  if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud agent.');
+  if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
 
   if (normalized === 'list') {
     printTriggers(listLocalTriggers(target.localName).triggers as Parameters<typeof printTriggers>[0]);
@@ -132,10 +242,11 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
     const auth = requireAuthConfig();
     if (normalized === 'cancel') {
       if (!id) throw new Error('job id required');
-      console.log(`${OK('cancelled')} ${(await cancelCloudJob(auth.origin, auth.token, target.cloudName, id)).ok ? id : `${id} (not running)`}`);
+      const cancelled = await callAgentRpc<{ ok: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelBackgroundJob', [id]);
+      console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`);
       return;
     }
-    printJobs(await listCloudJobs(auth.origin, auth.token, target.cloudName));
+    printJobs(await callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [20]));
     return;
   }
 

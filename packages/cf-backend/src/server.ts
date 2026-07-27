@@ -14,13 +14,18 @@
  *   7. AUTH GATE — every other request needs a Proteus browser session
  *      (or DEV_USER_EMAIL in local/staging dev).
  *   8. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
- *   9. /api/agents/<name>/* — owner check via UserDO.hasAgent.
+ *   9. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
  *   10. /agents/* — Think DOs (chat WebSocket).
  *   11. env.ASSETS fallback — SPA for everything else.
  */
 
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
+import {
+  extractOrchestratorAgentName,
+  extractTicketOrchestratorAgentName,
+  isForeignAgentNamespacePath,
+} from "./agent-routing.js";
 import { handlePcRequest } from "./pc-handler.js";
 import { proxyPreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
@@ -31,6 +36,7 @@ import { handleCliRequest } from "./cli/routes.js";
 import { handleAuthRequest } from "./auth/routes.js";
 import { handleLandingRequest } from "./landing-route.js";
 import { handleHubRequest } from "./events/routes.js";
+import { handleInboundEmail } from "./email/handler.js";
 import { handleNimbusPreviewRequest } from "./nimbus-route.js";
 import {
   authenticateRequest, AuthError, isPublicPath,
@@ -38,15 +44,16 @@ import {
 } from "./auth/session.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
-import { CLI_SCOPES_HEADER } from "./cli/ws-rpc-gate.js";
-import { claimOwnedAgent } from "./user/agent-access.js";
+import { OWNER_SESSION } from "./user/workspace-capability.js";
+import { CLI_SCOPES_HEADER } from "./cli/rpc-gate.js";
+import { claimOwnedWorkspace } from "./user/workspace-access.js";
 import { err } from "./lib/http.js";
 
-/** Public webhook delivery endpoint match. `/api/agents/<name>/webhook/<id>` —
- *  the only `/api/agents/<name>/...` route that bypasses browser OAuth (it has
+/** Public webhook delivery endpoint match. `/api/workspaces/<name>/webhook/<id>` —
+ *  the only `/api/workspaces/<name>/...` route that bypasses browser OAuth (it has
  *  its own per-trigger HMAC / Bearer / mTLS gate). */
 function isWebhookDeliveryPath(pathname: string): boolean {
-  return /^\/api\/agents\/[^/]+\/webhook\/[^/]+$/.test(pathname);
+  return /^\/api\/workspaces\/[^/]+\/webhook\/[^/]+$/.test(pathname);
 }
 
 export { OrchestratorAgent } from "./orchestrator.js";
@@ -54,6 +61,7 @@ export { OrchestratorAgent } from "./orchestrator.js";
 // MCTS mode: explore() / evaluate() / generateReflection() — short rollouts.
 // Head mode: initHead() / runAsHead() / abortHead() — multi-step branching heads.
 export { ExplorationAgent } from "./exploration.js";
+export { SubordinateAgent } from "./subordinate-agent.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
 export { UserDO } from "./user/user-do.js";
 export {
@@ -92,17 +100,17 @@ async function ensureAgentOwnership(
   identity: AuthIdentity,
   agentName: string,
 ): Promise<Response | null> {
-  const result = await claimOwnedAgent(env, identity.userId, agentName);
+  const result = await claimOwnedWorkspace(env, identity.userId, agentName);
   return result.ok ? null : err(result.status, result.error);
 }
 
 function extractAgentName(pathname: string): string | null {
-  // /api/agents/<name>/...
-  let m = pathname.match(/^\/api\/agents\/([^/]+)/);
+  // /api/workspaces/<name>/...
+  let m = pathname.match(/^\/api\/workspaces\/([^/]+)/);
   if (m) return decodeURIComponent(m[1]);
   // /agents/orchestrator-agent/<name>/...  (Think framework convention)
-  m = pathname.match(/^\/agents\/[^/]+\/([^/]+)/);
-  if (m) return decodeURIComponent(m[1]);
+  const orchestratorName = extractOrchestratorAgentName(pathname);
+  if (orchestratorName) return orchestratorName;
   return null;
 }
 
@@ -111,7 +119,7 @@ async function authenticateCliAgentTicketRequest(
   env: Env,
 ): Promise<{ identity: AuthIdentity; request: Request } | Response | null> {
   const url = new URL(request.url);
-  const agentName = extractOrchestratorAgentName(url.pathname);
+  const agentName = extractTicketOrchestratorAgentName(url.pathname);
   const ticket = url.searchParams.get('ticket');
   if (!agentName || !ticket) return null;
   if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
@@ -129,7 +137,7 @@ async function authenticateCliAgentTicketRequest(
   }
   try {
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    const verified = await userDO.verifyCliAgentConnectTicket(ticket, {
+    const verified = await userDO.verifyCliAgentConnectTicket(OWNER_SESSION, ticket, {
       userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
@@ -160,16 +168,6 @@ async function authenticateCliAgentTicketRequest(
       headers: { 'content-type': 'application/json' },
     });
   }
-}
-
-// Anchored: a connect ticket is only valid for the agent's root websocket
-// path. Sub-paths (e.g. facet routing under the agent) would expose a child
-// agent's @callable surface to scoped sockets, so they never ticket-auth.
-const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(`^/agents/${ORCHESTRATOR_AGENT_SLUG}/([^/]+)$`);
-
-function extractOrchestratorAgentName(pathname: string): string | null {
-  const match = pathname.match(ORCHESTRATOR_AGENT_PATH_RE);
-  return match ? decodeURIComponent(match[1]) : null;
 }
 
 export default {
@@ -217,7 +215,7 @@ export default {
     // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
     //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
     if (isWebhookDeliveryPath(url.pathname)) {
-      const m = url.pathname.match(/^\/api\/agents\/([^/]+)\/webhook\//);
+      const m = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/webhook\//);
       if (m) {
         const hubResp = await handleHubRequest(request, env, decodeURIComponent(m[1]));
         if (hubResp) return hubResp;
@@ -249,9 +247,20 @@ export default {
     const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
     if (userResp) return withD1Bookmark(userResp, identity);
 
-    // 10. Per-agent routes — verify ownership.
+    // 10. Per-agent routes — reject every namespace/facet path outside the
+    // closed public actor grammar before ownership lookup or SDK routing.
+    if (isForeignAgentNamespacePath(url.pathname)) {
+      return withD1Bookmark(err(404, 'Not found'), identity);
+    }
+
+    // Verify ownership of the root workspace. A direct subordinate facet is
+    // owned through its parent workspace; extractAgentName returns that parent.
     const agentName = extractAgentName(url.pathname);
     if (agentName) {
+      // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
+      // binding by slug, and its facet router recursively resolves literal
+      // /sub/{class}/{name} segments. The closed-path rejection above keeps
+      // UserDO, ExplorationAgent, ProteusSandbox and Nimbus* worker-side-only.
       const denial = await ensureAgentOwnership(env, identity, agentName);
       if (denial) return withD1Bookmark(denial, identity);
       // Inject the userId so downstream handlers can resolve UserDO without
@@ -271,6 +280,13 @@ export default {
 
     // 11. SPA fallback.
     return withD1Bookmark(await env.ASSETS.fetch(request), identity);
+  },
+
+  // Mission Inbox — Cloudflare Email Routing (catch-all rule on EMAIL_DOMAIN)
+  // delivers inbound mail here. Addressing, trust gating, and the turn wake
+  // live in email/handler.ts + the agent's acceptEmailDelivery RPC.
+  async email(message: ForwardableEmailMessage, env: Env) {
+    await handleInboundEmail(message, env);
   },
 } satisfies ExportedHandler<Env>;
 

@@ -19,6 +19,9 @@ bun test --cwd packages/core             # run all unit tests
 bun test packages/core/tests/unit-*.test.ts  # run only unit tests
 bun test tests/e2e-lifecycle.test.ts     # run E2E tests (needs LLM credentials)
 bun run dev                              # Vite dev server (cf-backend)
+bun run layergate                        # per-layer regression report (no LLM)
+bun run layergate --matrix               # fault-injection localization matrix
+bun run layergate:lock                   # re-lock after an intended change
 ```
 
 No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
@@ -37,6 +40,7 @@ packages/
   cli/          CLI frontend (commander-based)
   cli-backend/  CLI-specific backend (bun:sqlite, Node vm)
 tests/          E2E tests (run from repo root)
+bench/clbench/  Proteus as a system for the external Continual Learning Bench
 ```
 
 ### cf-backend Architecture
@@ -53,7 +57,7 @@ tests/          E2E tests (run from repo root)
 
 | Directory    | Purpose                                                 |
 |-------------|----------------------------------------------------------|
-| identity/   | Agent creation, reopening, soul (user-editable purpose), DDL |
+| identity/   | Workspace creation, reopening, soul (user-editable purpose), DDL |
 | evolution/  | 3-timescale auto-evolution engine, tool building         |
 | mcts/       | Monte Carlo Tree Search — UCT, backprop, convergence     |
 | scaffold/   | Agentic loop versioning — bootstrap, modify, rollback    |
@@ -61,6 +65,7 @@ tests/          E2E tests (run from repo root)
 | execution/  | Multi-executor routing: workspace, nimbus, container, SSH|
 | types/      | TypeScript interfaces for all primitives                 |
 | utils/      | nanoid, date helpers                                     |
+| layergate/  | Per-layer deterministic regression gate over the turn pipeline |
 
 ## Execution Layer
 
@@ -114,8 +119,8 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 ## Architecture Invariants
 
-- `SOUL.md` in VFS is the canonical agent identity/purpose file; user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
-- agent_identity holds a single row with stable UUID
+- `SOUL.md` in VFS is the canonical workspace identity/purpose file (embodied by its default agent); user-editable via the Settings page (`setSoul` @callable RPC). Written at genesis and may be updated by the agent owner; not modified by the agent itself
+- workspace_identity holds a single row with stable UUID — the workspace is the container (ownership root, file plane, sessions); the orchestrator is its default agent (see docs/WORKSPACES.md)
 - Scaffold is versioned in VFS (`scaffold/agent.js`) + `scaffold_versions` table
 - Memory lives in VFS under `memory/` prefix
 - MCTS nodes stored in `search_nodes` table

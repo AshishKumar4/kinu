@@ -11,16 +11,17 @@ import {
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { useCreateAgent } from "@/hooks/use-create-agent";
-import { listAgents, type AgentEntry } from "@/lib/user-api";
+import { useCreateWorkspace } from "@/hooks/use-create-workspace";
+import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const { hasModels, busy, err, create } = useCreateAgent();
+  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [listFailed, setListFailed] = useState(false);
+  const { hasModels, busy, err, create } = useCreateWorkspace();
 
   useEffect(() => {
-    listAgents().then(setAgents).catch(() => setAgents([]));
+    listWorkspaces().then((w) => { setWorkspaces(w); setListFailed(false); }).catch(() => setListFailed(true));
   }, []);
 
   const submit = (event?: FormEvent) => {
@@ -57,16 +58,15 @@ export default function HomePage() {
             />
 
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs p-text-3">Proteus will create the agent, seed SOUL.md, and send this as the first turn.</p>
+              <p className="text-xs p-text-3">Proteus will create a workspace with its own agent, seed SOUL.md, and send this as the first turn.</p>
 
               <button
                 type="submit"
                 disabled={busy || !mission.trim() || hasModels === false}
-                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
-                style={{ background: "var(--c-accent)" }}
+                className="p-btn inline-flex h-9 shrink-0 items-center justify-center gap-2 px-3 text-sm font-medium"
               >
                 {busy ? <Loader size="sm" /> : <PlusIcon size={15} />}
-                Create agent
+                Create workspace
               </button>
             </div>
           </form>
@@ -75,19 +75,22 @@ export default function HomePage() {
             <div className="mt-3">
               <CloudflareAIConnectNotice
                 returnTo="/"
-                message="Connect Cloudflare Workers AI before creating an agent."
+                message="Connect Cloudflare Workers AI before creating a workspace."
               />
             </div>
           )}
 
           {err && (
-            <div className="mt-3 rounded-md border border-red-400/40 px-3 py-2 text-xs text-red-400" style={{ background: "rgba(248,113,113,0.08)" }}>
+            <div className="p-notice-danger mt-3 rounded-md px-3 py-2 text-xs">
               {err}
             </div>
           )}
         </section>
 
         <aside className="space-y-5 lg:pt-[5.25rem]">
+          {listFailed && (
+            <p className="text-xs p-warning px-1">Couldn't load your recent workspaces.</p>
+          )}
           <div className="rounded-lg border p-border p-card p-4">
             <div className="flex items-center gap-2">
               <GearSixIcon size={16} className="p-accent" />
@@ -99,17 +102,17 @@ export default function HomePage() {
             </div>
           </div>
 
-          {agents.length > 0 && (
+          {workspaces.length > 0 && (
             <div className="rounded-lg border p-border p-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold p-text">Recent</span>
-                <span className="text-xs p-text-3">{agents.length}</span>
+                <span className="text-xs p-text-3">{workspaces.length}</span>
               </div>
               <div className="mt-3 space-y-1">
-                {agents.slice(0, 5).map((agent) => (
+                {workspaces.slice(0, 5).map((agent) => (
                   <Link
                     key={agent.name}
-                    to={`/agent/${agent.name}`}
+                    to={`/workspace/${agent.name}`}
                     className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:p-card-hover hover:p-text"
                   >
                     <WrenchIcon size={13} className="shrink-0 p-text-3" />

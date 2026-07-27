@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/prompts/structured.ts b/packages/core/src/prompts/structured.ts
+index 0a2c5d5..42f1df9 100644
+--- a/packages/core/src/prompts/structured.ts
++++ b/packages/core/src/prompts/structured.ts
+@@ -35,7 +35,7 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
+     }
+     if (ch === '"') inString = true;
+     else if (ch === open) depth++;
+-    else if (ch === close && --depth === 0) return src.slice(start, i + 1);
++    else if (ch === close && --depth === 0) return src.slice(start, i);
+   }
+   throw new Error(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`);
+ }

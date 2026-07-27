@@ -4,7 +4,7 @@
 // answered 'evaluate' would mean same-model self-rating snuck back in.
 import { describe, test, expect, afterAll } from 'bun:test';
 import { fork, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,12 @@ function rpc(proc: ChildProcess, method: string, args: unknown) {
 }
 
 describe('branch-worker protocol — no self-rating', () => {
+  test('exploration and reflection use low provider effort without output caps', () => {
+    const source = readFileSync(workerPath, 'utf8');
+    expect(source).not.toContain('maxOutputTokens');
+    expect(source).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
+  });
+
   test("'evaluate' is not part of the protocol anymore", async () => {
     const proc = await spawnWorker();
     const reply = await rpc(proc, 'evaluate', { task: 'rate yourself' });
@@ -65,5 +71,28 @@ describe('branch-worker protocol — no self-rating', () => {
     } finally {
       await abort('seam-test-branch');
     }
+  });
+});
+
+// A branch failure must arrive as a legible error, never as a silently
+// "successful" empty result. A provider error whose .message is empty used to
+// pass the parent's truthiness check, resolve `undefined`, and surface much
+// later as a TypeError inside the MCTS engine — the real provider error lost.
+describe('branch worker failure replies', () => {
+  test('an error reply always carries a message', () => {
+    const source = readFileSync(workerPath, 'utf8');
+    // The catch must normalise, not forward a possibly-empty err.message.
+    expect(source).not.toContain('error: (err as Error).message');
+    expect(source).toContain("'branch worker failed'");
+  });
+
+  test('the parent rejects on error PRESENCE, not truthiness, and on a missing result', () => {
+    const parent = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'branch-process.ts'),
+      'utf8',
+    );
+    expect(parent).toContain('msg.error !== undefined');
+    expect(parent).not.toContain('resolve(msg.result as T)');
+    expect(parent).toContain('Branch worker returned no result for');
   });
 });

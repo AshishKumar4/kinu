@@ -10,21 +10,14 @@ import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { MonitorIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import type { FileDiff } from "@/lib/diff";
-import { pickDefaultExecutor } from "@/lib/executor-default";
+import {
+  pickDefaultExecutor, executorLabel, executorSortKey, isActiveExecutionDevice,
+  type ExecutorInfo,
+} from "@/lib/executors";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { port: number; url: string; name?: string }
-export interface ExecutorInfo {
-  name: string;
-  kind: string;
-  capabilities: string[];
-  available: boolean;
-  configured?: boolean;
-  active?: boolean;
-  status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
-  reason?: string;
-}
 
 export interface OutputSurfaceProps {
   pinnedPorts: PinnedPort[];
@@ -45,7 +38,7 @@ export function OutputSurface({ pinnedPorts, executors, lastActiveExecutor, rpc 
           <button key={v} onClick={() => setView(v)}
             className={`px-2.5 py-1 text-[11px] rounded-md capitalize transition-colors flex items-center gap-1.5 ${view === v ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
             {v === "preview" ? <MonitorIcon size={12} /> : <GitDiffIcon size={12} />}{v}
-            {v === "preview" && pinnedPorts.length > 0 && <span className="size-1.5 rounded-full bg-emerald-500" />}
+            {v === "preview" && pinnedPorts.length > 0 && <span className="size-1.5 rounded-full p-dot-success" />}
           </button>
         ))}
       </div>
@@ -87,9 +80,9 @@ function PreviewView({ pinnedPorts }: { pinnedPorts: PinnedPort[] }) {
 /* ── Cumulative workspace diff ─────────────────────────────────── */
 
 const STATUS_TONE: Record<string, string> = {
-  added: "text-emerald-400",
-  removed: "text-red-400",
-  changed: "text-amber-400",
+  added: "p-success",
+  removed: "p-danger",
+  changed: "p-warning",
 };
 
 interface DiffResult {
@@ -100,21 +93,6 @@ interface DiffResult {
   error?: string;
 }
 
-const EXECUTOR_LABELS: Record<string, string> = { sandbox: "Sandbox", laptop: "Your PC", workspace: "Agent state", nimbus: "Nimbus" };
-const EXECUTOR_ORDER = ["laptop", "nimbus", "sandbox", "workspace"];
-
-function executorSortKey(name: string): number {
-  const idx = EXECUTOR_ORDER.indexOf(name);
-  return idx === -1 ? 99 : idx;
-}
-
-function isVisibleDiffDevice(exec: ExecutorInfo): boolean {
-  if (exec.name === "workspace") return false;
-  if (!exec.available) return false;
-  if (exec.name === "laptop") return true;
-  return exec.active === true || exec.status === "active";
-}
-
 function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorInfo[]; lastActiveExecutor?: string | null; rpc: Rpc }) {
   const [result, setResult] = useState<DiffResult | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -122,7 +100,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
 
   // Selector options: available execution devices first, internal state VFS last.
   const availableDevices = executors
-    .filter(isVisibleDiffDevice)
+    .filter(isActiveExecutionDevice)
     .sort((a, b) => executorSortKey(a.name) - executorSortKey(b.name) || a.name.localeCompare(b.name))
     .map((e) => e.name);
   const options = Array.from(new Set([...availableDevices, "workspace"]));
@@ -183,7 +161,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
                     ? "p-text-3 hover:p-text-2 opacity-80"
                     : "p-text-3 hover:p-text-2"
               }`}>
-              {EXECUTOR_LABELS[name] ?? name}
+              {executorLabel(name)}
             </button>
           ))}
         </div>
@@ -192,10 +170,10 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
       {result === null ? (
         <div className="flex justify-center py-8"><Loader size="sm" /></div>
       ) : result.error ? (
-        <div className="text-xs text-red-400 border border-red-400/40 rounded-md px-3 py-2">{result.error}</div>
+        <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
-          hint={`${EXECUTOR_LABELS[exec] ?? exec}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Agent state.`} />
+          hint={`${executorLabel(exec)}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Agent state.`} />
       ) : files.length === 0 ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="No changes"
           hint={result.mode === "vfs-baseline"
@@ -211,8 +189,8 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
                   {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
                   <span className={`text-[10px] uppercase font-mono shrink-0 ${STATUS_TONE[f.status]}`}>{f.status[0]}</span>
                   <span className="text-xs font-mono p-text truncate flex-1">{f.path}</span>
-                  {f.added > 0 && <span className="text-[10px] text-emerald-400 shrink-0">+{f.added}</span>}
-                  {f.removed > 0 && <span className="text-[10px] text-red-400 shrink-0">−{f.removed}</span>}
+                  {f.added > 0 && <span className="text-[10px] p-success shrink-0">+{f.added}</span>}
+                  {f.removed > 0 && <span className="text-[10px] p-danger shrink-0">−{f.removed}</span>}
                 </button>
                 {open && <div className="border-t p-border"><DiffLines lines={f.lines} /></div>}
               </div>

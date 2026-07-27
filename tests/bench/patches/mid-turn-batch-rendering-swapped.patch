@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
+index be3e5d5..ee73383 100644
+--- a/packages/core/src/orchestrator/agent-orchestrator.ts
++++ b/packages/core/src/orchestrator/agent-orchestrator.ts
+@@ -185,7 +185,7 @@ export class AgentOrchestrator {
+     }
+     try {
+       if (this.deps.host.injectIntoActiveTurn({
+-        turnId, ids: batch.ids, stepText: batch.midTurnText, turnText: batch.text,
++        turnId, ids: batch.ids, stepText: batch.text, turnText: batch.midTurnText,
+       })) {
+         this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: batch.ids.length });
+         return;

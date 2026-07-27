@@ -147,6 +147,20 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
     expect(picks[1]).toBeGreaterThan(0);
   });
 
+  test('the exploit path ignores lineage entirely — exploreShare still governs', () => {
+    // The live current is a proven dead end (its only child regressed hard).
+    // Outside the exploration share the policy must still branch from it:
+    // clade-metaproductivity ranks stepping stones, it does not decide whether
+    // to explore at all — that stays the exploreShare seam's job.
+    const deadEndTrunk: ScaffoldArchiveEntry[] = [
+      entry({ version: 2, parentVersion: 1, status: 'historical', trials: 9, wins: 0, losses: 9, winRate: 0 }),
+      entry({ version: 1, parentVersion: 0, status: 'current', trials: 9, wins: 9, losses: 0, winRate: 1 }),
+      entry({ version: 0, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+    ];
+    expect(selectEvolutionBase(deadEndTrunk, { exploreShare: 0.2, random: () => 0.9 }))
+      .toEqual({ version: 1, mode: 'current' });
+  });
+
   test('degenerate archives: no current → first explorable; empty → null', () => {
     const noCurrent = [entry({ version: 1, status: 'rolled_back' })];
     expect(selectEvolutionBase(noCurrent, { exploreShare: 0, random: () => 0.9 }))
@@ -156,6 +170,95 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
     const onlyPending = [entry({ version: 2, status: 'pending' })];
     expect(selectEvolutionBase(onlyPending, { exploreShare: 1, random: () => 0 }))
       .toEqual({ version: 2, mode: 'current' });
+  });
+});
+
+describe('selectEvolutionBase — clade-metaproductivity', () => {
+  /** Feeds the injected RNG a fixed script: draw 1 is the explore/exploit
+   *  roll, draw 2 is the weighted sample. No test touches real randomness. */
+  function seq(...rolls: number[]): () => number {
+    let i = 0;
+    return () => rolls[i++] ?? 0;
+  }
+
+  /** The pre-clade policy — weight a stepping stone by its OWN win rate plus
+   *  the novelty bonus. Kept here as the reference the cold-start path has to
+   *  reproduce exactly, and as the baseline the lineage signal must beat. */
+  function legacyExplorePick(archive: ReadonlyArray<ScaffoldArchiveEntry>, roll: number): number {
+    const explorable = archive.filter((e) => e.status === 'historical' || e.status === 'rolled_back');
+    const weight = (e: ScaffoldArchiveEntry): number => (e.winRate ?? 0.5) + 1 / (1 + e.trials);
+    const total = explorable.reduce((acc, e) => acc + weight(e), 0);
+    let r = roll * total;
+    for (const e of explorable) {
+      r -= weight(e);
+      if (r <= 0) return e.version;
+    }
+    return explorable[explorable.length - 1]!.version;
+  }
+
+  // v1 is the archive's best-scoring variant (0.9 over 10 observations) and a
+  // dead end — its only child regressed to zero. v3 scored mediocre (0.4) but
+  // every good version descends from it. HGM's finding in one lineage.
+  const lineage: ScaffoldArchiveEntry[] = [
+    entry({ version: 5, parentVersion: 4, status: 'current', trials: 10, wins: 10, losses: 0, winRate: 1 }),
+    entry({ version: 4, parentVersion: 3, status: 'historical', trials: 10, wins: 10, losses: 0, winRate: 1 }),
+    entry({ version: 3, parentVersion: null, status: 'historical', trials: 5, wins: 2, losses: 3, winRate: 0.4 }),
+    entry({ version: 2, parentVersion: 1, status: 'historical', trials: 10, wins: 0, losses: 10, winRate: 0 }),
+    entry({ version: 1, parentVersion: null, status: 'historical', trials: 10, wins: 9, losses: 1, winRate: 0.9 }),
+  ];
+
+  test('a productive ancestor outranks a higher-scoring dead end', () => {
+    // The same roll that the own-score policy spends on the dead end now buys
+    // the productive ancestor instead — the selection genuinely inverted.
+    expect(legacyExplorePick(lineage, 0.7)).toBe(1);
+    expect(selectEvolutionBase(lineage, { exploreShare: 1, random: seq(0, 0.7) }))
+      .toEqual({ version: 3, mode: 'explore' });
+  });
+
+  test('over the whole distribution the productive lineage wins the compute', () => {
+    let s = 11;
+    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+    const clade: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const legacy: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    for (let i = 0; i < 800; i++) {
+      clade[selectEvolutionBase(lineage, { exploreShare: 1, random: rng })!.version]! += 1;
+      legacy[legacyExplorePick(lineage, rng())]! += 1;
+    }
+    expect(clade[3]!).toBeGreaterThan(clade[1]!);
+    expect(legacy[1]!).toBeGreaterThan(legacy[3]!);
+    // The dead-end lineage keeps a share — no variant is ever unreachable.
+    expect(clade[1]!).toBeGreaterThan(0);
+  });
+
+  test('cold start: with no scored descendants the policy is the old one exactly', () => {
+    // Shape 1 — a pre-lineage archive (every parent_version null), i.e. what
+    // the table holds before the first generation of branching.
+    const flat: ScaffoldArchiveEntry[] = [
+      entry({ version: 3, parentVersion: null, status: 'current', trials: 5, wins: 4, losses: 0, ties: 1, winRate: 1 }),
+      entry({ version: 2, parentVersion: null, status: 'historical', trials: 4, wins: 3, losses: 1, winRate: 0.75 }),
+      entry({ version: 1, parentVersion: null, status: 'rolled_back', trials: 2, wins: 0, losses: 2, winRate: 0 }),
+      entry({ version: 0, parentVersion: null, status: 'historical' }),
+    ];
+    // Shape 2 — one generation deep, but the child has never been tried, so
+    // the clade carries no information its parent didn't already have.
+    const untriedChild: ScaffoldArchiveEntry[] = [
+      entry({ version: 2, parentVersion: 1, status: 'current' }),
+      entry({ version: 1, parentVersion: 0, status: 'historical' }),
+      entry({ version: 0, parentVersion: null, status: 'historical', trials: 4, wins: 3, losses: 1, winRate: 0.75 }),
+    ];
+    for (const archive of [flat, untriedChild]) {
+      for (const roll of [0, 0.05, 0.2, 0.37, 0.5, 0.63, 0.8, 0.99]) {
+        expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
+          .toBe(legacyExplorePick(archive, roll));
+      }
+    }
+  });
+
+  test('the same injected RNG always yields the same base', () => {
+    const first = selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) });
+    const second = selectEvolutionBase(lineage, { exploreShare: 0.5, random: seq(0.1, 0.42) });
+    expect(first).toEqual(second);
+    expect(first!.mode).toBe('explore');
   });
 });
 

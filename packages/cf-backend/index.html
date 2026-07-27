@@ -6,7 +6,10 @@
     <title>Proteus — Self-Evolving Agent</title>
     <script>
       (() => {
-        const mode = localStorage.getItem("theme") || "dark";
+        const stored = localStorage.getItem("theme");
+        const mode = stored === "light" || stored === "dark"
+          ? stored
+          : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
         document.documentElement.setAttribute("data-mode", mode);
         document.documentElement.style.colorScheme = mode;
       })();

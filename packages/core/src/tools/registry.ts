@@ -18,6 +18,9 @@ export const BUILTIN_TOOLS = [
   'fact',
   'web_search',
   'web_fetch',
+  'team',
+  'peers',
+  'report',
   'product_change',
 ] as const;
 
@@ -84,6 +87,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     name: 'think',
     summary: 'Run a deeper reasoning strategy: heads (parallel sub-agents) or mcts (approach search).',
     whenToUse:
+      'Use whenever work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
       'heads = ≥2 independent sub-questions, each running its own multi-step tool loop concurrently (web_search/web_fetch/exec); takes minutes, may auto-background. ' +
       'mcts = compare competing approaches scored by execution when the right path is genuinely unclear — branches score TEXT/code and do NOT run your tool loop, but proposed code is executed when scored.',
     whenNotToUse: 'Neither is for linear work you can simply do directly, nor when branches would race on the same mutable resource.',
@@ -120,12 +124,36 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse: 'Do not use to discover pages — that is web_search. Do not fetch private/internal addresses; they are blocked.',
     result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head you can re-read.',
   },
+  team: {
+    name: 'team',
+    summary: "Staff this workspace's independent workstreams with durable subordinate agents that can run in parallel.",
+    whenToUse:
+      'Use whenever the user asks for several fixes or features at once, or a long-running effort — create one subordinate per independent workstream and run them in parallel. Create each with a role and mission (action=spawn), hand it further tasks (action=assign), steer it (action=message), check progress (action=status), and retire it when done (action=dismiss).',
+    whenNotToUse: 'Do not use for a single short coherent change or for agents in the owner\'s OTHER workspaces — that is the peers tool. Caution: every subordinate turn is a full agent turn.',
+    result: 'Returns the subordinate roster, spawn/assign/message/dismiss confirmations, or a status snapshot. Subordinates report progress back as events that wake you.',
+  },
+  peers: {
+    name: 'peers',
+    summary: "Collaborate or hand work off across the owner's other workspaces and specialist agents.",
+    whenToUse:
+      'Use for cross-workspace collaboration or handoff — delegate to a better-suited peer agent, consult one and await its answer (action=ask), hand off work without waiting (action=send), create a specialist workspace (action=spawn_workspace), or answer a peer message event (action=reply with its event_id).',
+    whenNotToUse: 'Do not use for a single short coherent change or for helpers inside THIS workspace — spawn a subordinate with the team tool instead. Caution: every peer message wakes that agent for a full agent turn, so send purposeful handoffs.',
+    result: "Returns the peer roster, delivery status, the peer's reply, or a timeout notice — a late reply still arrives as an event that wakes you.",
+  },
+  report: {
+    name: 'report',
+    summary: 'Report progress, completion, or a blocker on your current assignment to the workspace orchestrator.',
+    whenToUse:
+      'Use at meaningful milestones: your assignment is done (status=completed), you are blocked and need input (status=blocked), or a significant mid-task update is worth surfacing (status=progress).',
+    whenNotToUse: 'Do not report per-step noise — the answer of an assigned turn is relayed to the orchestrator automatically at turn end.',
+    result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
+  },
   product_change: {
     name: 'product_change',
-    summary: 'Governed lane for changing the Proteus product/UI itself.',
-    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior.',
+    summary: 'Governed lane for changing the Proteus product/UI itself — plan, then apply/check/preview/deploy/rollback the change for real in the sandbox.',
+    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
     whenNotToUse: 'Do not use for ordinary user project work outside the Proteus product.',
-    result: 'Returns source binding, plan/check/preview/approval/deployment, or rollback metadata.',
+    result: 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.',
   },
 };
 

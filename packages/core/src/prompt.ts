@@ -22,6 +22,7 @@ import {
 } from './prompting/surface.js';
 import { DEFAULT_SOUL_MD, readSoul } from './identity/soul.js';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
+import { EXECUTOR_MOUNT_PREFIX } from './vfs/composite.js';
 
 export type {
   PromptBackend,
@@ -80,6 +81,10 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- Verify meaningful changes with the narrowest reliable checks available, then report what passed or failed.',
     '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
   ];
+
+  if (hasTool(surface.builtinTools, 'team')) {
+    lines.push('- For multi-part or long-running work, use the delegation ladder below to decompose and staff independent workstreams.');
+  }
 
   if (family === 'kimi') {
     lines.push(
@@ -208,6 +213,16 @@ function renderExecutorSection(surface: PromptSurface): string {
   if (executors.length > 1) {
     parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
   }
+  // Mount-table doctrine — only on backends whose workspace VFS actually
+  // mounts the remote environments (the CLI-local VFS is /local alone).
+  const mounts = devices.map((exec) => EXECUTOR_MOUNT_PREFIX[exec.name]).filter(Boolean);
+  if (surface.backend !== 'cli-local' && mounts.length > 0) {
+    parts.push(
+      '',
+      `The workspace filesystem (workspace.* file ops) is a mount table: /local is the durable base, and ${mounts.join(', ')} are live windows into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
+      'Mounts are the FILE plane only: command execution stays target-native — run commands via the environment\'s own namespace or the run tool, never against a mount path.',
+    );
+  }
   if (devices.length > 1) {
     parts.push('When more than one execution device is available, decide explicitly: laptop for the user machine, Nimbus for quick cloud execution, Sandbox for heavyweight/server work.');
   }
@@ -270,7 +285,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
     // prompt-only operational doctrine the per-tool schema can't carry.
     parts.push([
       '## Research and experimentation',
-      'When a task needs breadth-first investigation or comparing competing approaches, do not answer inline — fan out, escalating (answer directly → heads → mcts) as uncertainty rises:',
+      'When a task needs breadth-first investigation, comparing competing approaches, or independent review/verification passes over separate components, do not work through it inline — fan out, escalating (answer directly → heads → mcts) as uncertainty rises:',
       `- ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
       'Heads recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.',
     ].join('\n'));
@@ -281,6 +296,25 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '## Background work',
       'Long `think`, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
     ].join('\n'));
+  }
+
+  if (hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
+    const lines = ['## Team'];
+    if (hasTool(tools, 'team')) {
+      lines.push(
+        'Delegation ladder: do it yourself = a single short coherent change; think(heads) = ephemeral breadth-first research or comparison that merges back this turn; team subordinate = a durable, long-running, independent workstream with its own turn loop.',
+        "For work with 2+ independent parts, or work that will span many turns or hours, don't execute it all inline. Decompose and STAFF it: spawn one subordinate per independent workstream with `team`, assign each its task, and keep the coordination + integration turn for yourself. A subordinate is cheap to create and dismiss — prefer delegating an independent multi-step workstream over grinding through everything yourself in one long turn.",
+        'Run the coordination loop: spawn the needed roles → assign several independent workstreams → poll team status / await reports → integrate the results yourself.',
+        "Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.",
+      );
+    }
+    if (hasTool(tools, 'peers')) {
+      lines.push("Beyond this workspace, `peers` reaches the owner's other agents: delegate a subtask (ask waits for the answer, send does not), spawn a specialist workspace, or answer a peer message event via reply with its event_id.");
+    }
+    if (hasTool(tools, 'report')) {
+      lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` sends it progress/completed/blocked updates at meaningful milestones. Your turn-end answer to an assigned task is relayed automatically.');
+    }
+    parts.push(lines.join('\n'));
   }
 
   if (hasTool(tools, 'product_change')) {

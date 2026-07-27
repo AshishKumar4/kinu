@@ -28,6 +28,25 @@ export interface MemoryConfig {
 
 interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
 
+/** A memory chunk with its verbatim text — the unit a semantic index embeds.
+ *  Structurally matches core's `VectorMemoryChunk`; kept local so agent-utils
+ *  stays free of a @proteus/core dependency (core depends on agent-utils). */
+export interface IndexedChunk {
+	id: string;
+	path: string;
+	startLine: number;
+	endLine: number;
+	text: string;
+}
+
+/** The change set produced by (re)indexing a file — what a downstream vector
+ *  index must upsert (new/changed chunks, with text to embed) and delete
+ *  (chunk ids whose line range no longer exists). */
+export interface MemoryIndexDelta {
+	upserted: IndexedChunk[];
+	deletedIds: string[];
+}
+
 export class MemoryStore {
 	private vfs: VFS;
 	private sql: SqlExecutor;
@@ -114,7 +133,11 @@ export class MemoryStore {
 		return this.readFile(this.curatedFile);
 	}
 
-	async indexFile(path: string, content: string): Promise<void> {
+	/** (Re)index a file into FTS5 and report the semantic-index delta: chunks
+	 *  that were inserted or changed (need embedding) and chunk ids that were
+	 *  removed (need dropping from the vector index). FTS5 stays the source of
+	 *  truth; a vector store, if any, is synced by the caller from the delta. */
+	async indexFile(path: string, content: string): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
 		const now = Date.now();
 
@@ -123,6 +146,7 @@ export class MemoryStore {
 		`;
 		const existingMap = new Map(existing.map((r) => [r.id, r.hash]));
 		const newIds = new Set<string>();
+		const upserted: IndexedChunk[] = [];
 
 		for (const chunk of chunks) {
 			const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
@@ -135,14 +159,30 @@ export class MemoryStore {
 				VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text}, ${now})
 			`;
 			void this.sql`INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ${id}`;
+			upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
 		}
 
+		const deletedIds: string[] = [];
 		for (const [id] of existingMap) {
 			if (!newIds.has(id)) {
 				void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE id = ${id})`;
 				void this.sql`DELETE FROM memory_chunks WHERE id = ${id}`;
+				deletedIds.push(id);
 			}
 		}
+		return { upserted, deletedIds };
+	}
+
+	/** A bounded, ordered page of indexed chunks — the one-time semantic-index
+	 *  backfill of chunks written before a vector store existed. Ordered by the
+	 *  `id` primary key (a total order) so `afterId` pages a large table across
+	 *  boots without re-embedding earlier chunks. */
+	allChunksAfter(afterId: string, limit: number): IndexedChunk[] {
+		const rows = this.sql<{ id: string; path: string; start_line: number; end_line: number; text: string }>`
+			SELECT id, path, start_line, end_line, text FROM memory_chunks
+			WHERE id > ${afterId} ORDER BY id LIMIT ${limit}
+		`;
+		return rows.map((r) => ({ id: r.id, path: r.path, startLine: r.start_line, endLine: r.end_line, text: r.text }));
 	}
 
 	removeIndex(path: string): void {

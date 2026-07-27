@@ -4,8 +4,7 @@
  */
 
 import { existsSync, readFileSync, mkdirSync, readdirSync, statSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   ANTHROPIC_BASE_URL,
   ANTHROPIC_DEFAULT_MODEL,
@@ -17,17 +16,20 @@ import {
   OPENROUTER_BASE_URL,
   type LLMProviderConfig,
   type OAuthCredential,
+  isReasoningEffort,
+  type ReasoningEffort,
 } from '@proteus/core';
 import {
   cloudProxyBaseURL,
   createFileCodexAuthStore,
+  proteusHome,
   type LocalCloudSession,
   type LocalCodexAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
 } from '@proteus/cli-backend';
 
-export const AGENT_HOME = resolve(process.env.PROTEUS_HOME?.trim() || join(homedir(), '.proteus'));
+export const AGENT_HOME = proteusHome();
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
 export const BIN_DIR = join(AGENT_HOME, 'bin');
 const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -47,7 +49,9 @@ const RESERVED_ALIASES = new Set([
   'chat',
   'evolve',
   'status',
+  'effort',
   'list',
+  'workspace',
   'alias',
   'unalias',
   'aliases',
@@ -85,6 +89,12 @@ export interface ProteusConfig {
   agents?: Record<string, ProteusAgentConfig>;
   aliases?: Record<string, string>;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
+  /** Set false to silence the once-a-day "newer Proteus available" notice. */
+  updateCheck?: boolean;
+  /** Throttle state for that notice — never a version source, just a cache. */
+  updateCheckedAt?: number;
+  updateLatestSeen?: string;
   providers?: {
     openai?: { apiKey?: string };
     anthropic?: { apiKey?: string };
@@ -142,10 +152,26 @@ export function listAgentDirs(): string[] {
 export function loadConfigFile(): ProteusConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as ProteusConfig;
+    const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as ProteusConfig;
+    if (config.reasoningEffort !== undefined && !isReasoningEffort(config.reasoningEffort)) {
+      delete config.reasoningEffort;
+    }
+    return config;
   } catch {
     return {};
   }
+}
+
+export function setDefaultModel(spec: string): void {
+  const normalized = spec.trim();
+  if (!normalized) throw new Error('model spec required');
+  updateConfigFile((config) => { config.model = normalized; });
+}
+
+export function setDefaultReasoningEffort(effort: unknown): ReasoningEffort {
+  if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+  updateConfigFile((config) => { config.reasoningEffort = effort; });
+  return effort;
 }
 
 export function saveConfigFile(config: ProteusConfig): void {
@@ -166,16 +192,24 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 }
 
 export function requireAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
-  const config = loadConfigFile();
-  const origin = resolveCloudOrigin();
   // CI path: a token from the environment (typically a scoped `pta_…` access
   // token from `proteus tokens create`) wins over the stored interactive
   // session. Long-lived by design — the server is the validity authority.
   const envToken = process.env.PROTEUS_TOKEN?.trim();
-  if (envToken) return { origin, token: envToken };
+  if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
+  return storedAuthConfig('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
+}
+
+export function requireStoredAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
+  return storedAuthConfig('No interactive CLI session found. Run: proteus auth');
+}
+
+function storedAuthConfig(missingTokenMessage: string): { origin: string; token: string; user?: ProteusConfig['user'] } {
+  const config = loadConfigFile();
+  const origin = resolveCloudOrigin();
   const token = config.accessToken;
   if (!token) {
-    throw new Error('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
+    throw new Error(missingTokenMessage);
   }
   if (config.tokenExpiresAt) {
     const expiresAt = Date.parse(config.tokenExpiresAt);
@@ -227,6 +261,27 @@ export function upsertAgentConfig(agent: Omit<ProteusAgentConfig, 'createdAt' | 
     config.agents = { ...(config.agents ?? {}), [agent.name]: saved };
   });
   return saved;
+}
+
+export function removeCloudAgentConfig(cloudName: string): boolean {
+  let removed = false;
+  updateConfigFile((config) => {
+    const agents = config.agents ?? {};
+    const removedNames = new Set<string>();
+    for (const [name, agent] of Object.entries(agents)) {
+      if (agent.mode !== 'cloud' || (agent.cloudName ?? agent.name) !== cloudName) continue;
+      delete agents[name];
+      removedNames.add(name);
+      removed = true;
+    }
+    if (config.aliases) {
+      for (const [alias, target] of Object.entries(config.aliases)) {
+        if (removedNames.has(target)) delete config.aliases[alias];
+      }
+    }
+    config.agents = agents;
+  });
+  return removed;
 }
 
 export function setAliasConfig(agentName: string, alias: string): void {
@@ -455,6 +510,19 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
     };
   }
 
+  // OpenCode bridge — no credential stored in config; the provider reads
+  // opencode's auth.json and remote config at request time. We just need to
+  // return a config whose `name` maps to the opencode provider in the
+  // registry so the model spec resolves correctly.
+  if (providerModel?.startsWith('opencode/')) {
+    return {
+      name: 'opencode',
+      baseURL: '',
+      headers: {},
+      model: stripProvider(providerModel, 'opencode'),
+    };
+  }
+
   return null;
 }
 
@@ -484,5 +552,6 @@ function directEndpointModelId(model: string): string {
   if (model.startsWith('openai/')) return model.slice('openai/'.length);
   if (model.startsWith('openrouter/')) return model.slice('openrouter/'.length);
   if (model.startsWith('openai-compat/')) return model.slice('openai-compat/'.length);
+  if (model.startsWith('opencode/')) return model.slice('opencode/'.length);
   return model;
 }

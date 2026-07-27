@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/providers/judge-model.ts b/packages/core/src/providers/judge-model.ts
+index ac80c98..2168e3f 100644
+--- a/packages/core/src/providers/judge-model.ts
++++ b/packages/core/src/providers/judge-model.ts
+@@ -33,7 +33,7 @@ const PROVIDER_VENDOR: Readonly<Record<string, string>> = {
+ export function modelVendorFamily(spec: string): string {
+   const { provider, modelId } = parseModelSpec(spec);
+   const segments = modelId.split('/');
+-  if (segments.length > 1) return segments[segments.length - 2].toLowerCase();
++  if (segments.length > 1) return segments[segments.length - 1].toLowerCase();
+   const p = provider.toLowerCase();
+   return PROVIDER_VENDOR[p] ?? p;
+ }

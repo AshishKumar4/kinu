@@ -1,5 +1,6 @@
 import { initProductChangeTables } from '@proteus/core';
 import { initAccessTokenTable } from '../cli/access-token-store.js';
+import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
 // UserDO SQL schema. All tables live inside a single Durable Object instance
 // keyed by the stable Proteus userId resolved by the D1 auth store.
@@ -34,10 +35,13 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Agents this user has created. UserDO is the source of truth — replaces
-  // the old browser-side localStorage registry.
+  // Workspaces this user has created (each 1:1 with an OrchestratorAgent DO
+  // that hosts the workspace + its default agent). UserDO is the source of
+  // truth — replaces the old browser-side localStorage registry.
+  // Renamed from user_agents with no back-compat migration by design —
+  // pre-production, DB is recreated on deploy (owner decision 2026-06-13).
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_agents (
+    CREATE TABLE IF NOT EXISTS user_workspaces (
       name          TEXT PRIMARY KEY,
       display_name  TEXT NOT NULL,
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -45,7 +49,25 @@ export function initUserTables(sql: SqlExec): void {
       archived_at   INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_agents_last_visited ON user_agents (last_visited DESC)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
+
+  // Per-workspace capability tokens + the taint registry — the caller boundary
+  // every privileged method below is gated on. Table shape owned by the module
+  // that implements the gate.
+  initWorkspaceCapabilityTables(sql);
+
+  // Cross-owner peer-messaging grants: which foreign (sender_user_id,
+  // sender_agent_name) pairs may message THIS user's agents. Enforced by the
+  // receiving agent's receivePeerMessage via UserDO.hasPeerGrant — default
+  // deny; same-owner peers never need a row here.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_peer_grants (
+      sender_user_id    TEXT NOT NULL,
+      sender_agent_name TEXT NOT NULL,
+      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (sender_user_id, sender_agent_name)
+    )
+  `);
 
   // Credentials (the source-of-truth secret store). Value is JSON-encoded
   // Credential discriminated union (kind: bearer | oauth | openai-compat).

@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/bench/report.ts b/packages/core/src/bench/report.ts
+index 4941dad..b9a4642 100644
+--- a/packages/core/src/bench/report.ts
++++ b/packages/core/src/bench/report.ts
+@@ -175,7 +175,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
+     b.sort(byRepeat);
+     const foldA = foldRepeats(a);
+     const foldB = foldRepeats(b);
+-    budgetBreaches += foldA.breachCount + foldB.breachCount;
++    budgetBreaches += foldA.breachCount + foldA.breachCount;
+     cases.push({
+       taskId,
+       attempts: config.repeats,

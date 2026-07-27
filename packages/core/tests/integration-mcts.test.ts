@@ -13,7 +13,7 @@ import { runMCTS } from '../src/mcts/engine.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
-import type { SearchNode } from '../src/types/mcts.js';
+import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts.js';
 import type { Executor, LLM } from '../src/types/primitives.js';
 
 /** Executor that fails any code containing FAIL_MARKER, passes the rest. */
@@ -47,6 +47,31 @@ function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
 }
 
 describe('MCTS integration', () => {
+  // A branch runs behind a backend seam (facet RPC on cf, forked worker
+  // locally), so a resolved value is still untrusted input. One that resolves
+  // malformed used to crash the search AFTER its nodes were recorded; it must
+  // score 0 like any other failed branch and be reported.
+  test('a branch that resolves a malformed exploration is reported, not fatal', async () => {
+    const { rt } = createTestRuntime();
+    const failures: string[] = [];
+    rt.spawnBranch = async () => ({
+      // Resolves — but with nothing the engine can read.
+      explore: (async () => undefined) as unknown as never,
+      generateReflection: async () => 'n/a',
+    });
+
+    initTables(rt);
+    const result = await runMCTS(rt, createMockSession(), 'pick a strategy', {
+      budget: 1,
+      branches: 2,
+      onProgress: (e) => { if (e.type === 'branch-failed') failures.push(e.error); },
+    });
+
+    expect(result).toBeDefined();
+    expect(failures.length).toBeGreaterThan(0);
+    expect(failures.some((e) => e.includes('no exploration'))).toBe(true);
+  });
+
   test('DO-NOW #1: sibling diversity — each branch in an expansion gets a DISTINCT prompt naming the other branch angles', async () => {
     const { rt } = createTestRuntime();
     // Capture the siblings arg each branch received in its expansion.
@@ -93,14 +118,15 @@ describe('MCTS integration', () => {
       },
     });
 
-    // Even branches carry code that fails execution; odd branches are prose.
+    // Even branches carry code that PASSES execution; odd branches are prose.
+    // Each expansion pairs one code branch with one prose branch.
     rt.executor = markerExecutor();
     rt.spawnBranch = async () => {
       const i = branchCounter++;
       return {
         explore: async () => ({
           text: `branch ${i} explored`,
-          codeUsed: i % 2 === 0 ? 'const x = FAIL_MARKER;' : null,
+          codeUsed: i % 2 === 0 ? 'const x = 1;' : null,
         }),
         generateReflection: async () => `reflection for branch ${i}`,
       };
@@ -113,25 +139,28 @@ describe('MCTS integration', () => {
       branches: 2,
     });
 
-    // The prose branches (judge mock 0.5 → 0.75×0.5 = 0.375) clear the
-    // default minAcceptableScore; the failing-code branches cannot.
+    // The passing-code branch (judge 0.5 → 0.6 + 0.4×0.5 = 0.8) wins and clears
+    // the default minAcceptableScore.
     expect(result.converged).toBe(true);
-    expect(result.winnerValue).toBeGreaterThan(0.3);
+    expect(result.winnerValue).toBeGreaterThan(0.6);
 
     // Tree should have root + 3 iterations × 2 branches = 7 nodes
     const allNodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes`;
     expect(allNodes.length).toBe(7); // 1 root + 6 children
 
-    // Execution grounding dominates: every failing-code branch is valued
-    // below every prose branch, regardless of identical judge prose.
+    // Execution grounding dominates AND the A5 band loophole is closed: the
+    // prose branch shares an expansion with a code branch, so it is capped at
+    // the FAIL ceiling (0.30×0.5 = 0.15) — it cannot beat a passing code branch
+    // by declining to attempt code.
     const children = allNodes.filter((n) => n.parent_id !== null);
     const codeBranches = children.filter((n) => n.code_used);
     const proseBranches = children.filter((n) => !n.code_used);
     expect(codeBranches.length).toBeGreaterThan(0);
     expect(proseBranches.length).toBeGreaterThan(0);
-    const maxFailing = Math.max(...codeBranches.map((n) => n.value));
-    const minProse = Math.min(...proseBranches.map((n) => n.value));
-    expect(maxFailing).toBeLessThan(minProse);
+    const minPassing = Math.min(...codeBranches.map((n) => n.value));
+    const maxProse = Math.max(...proseBranches.map((n) => n.value));
+    expect(maxProse).toBeLessThanOrEqual(0.3);   // capped at the fail ceiling
+    expect(minPassing).toBeGreaterThan(maxProse); // passing code dominates
 
     // Root should have been visited (backprop propagates to ancestors)
     const root = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NULL`[0]!;
@@ -180,66 +209,11 @@ describe('MCTS integration', () => {
     expect(result.winnerId).toBe(passing.id);
   });
 
-  test('#6 step-PRM gate (on): a low-scoring proposal is pruned and SKIPS the grounded evaluator', async () => {
-    // One LLM answers both judge surfaces by prompt marker: the step-PRM judge
-    // ('scoring ONE STEP') scores the bad proposal low + the good one high; the
-    // grounded evaluator ('scoring ONE candidate') always loves a candidate.
-    let stepCalls = 0;
+  test('every branch reaches the grounded evaluator (one call per branch)', async () => {
     let candidateCalls = 0;
     const llm: LLM = {
       async *stream() { yield ''; },
       async complete(prompt: string) {
-        if (prompt.includes('scoring ONE STEP')) {
-          stepCalls++;
-          return prompt.includes('BAD approach') ? '{"score": 0.05}' : '{"score": 0.9}';
-        }
-        if (prompt.includes('scoring ONE candidate')) candidateCalls++;
-        return '{"score": 0.8}';
-      },
-    };
-    const { rt } = createTestRuntime();
-    rt.llm = llm;
-    rt.judgeModel = llm;
-    let i = 0;
-    rt.spawnBranch = async () => {
-      const idx = i++;
-      return {
-        explore: async () => ({ text: idx === 0 ? 'a BAD approach' : 'a good approach', codeUsed: null }),
-        generateReflection: async () => 'n/a',
-      };
-    };
-
-    initTables(rt);
-    await runMCTS(rt, createMockSession(), 'choose an approach', {
-      budget: 1,
-      branches: 2,
-      stepPrm: true,
-      stepPrmPruneThreshold: 0.3,
-      judgeSamples: 1,
-    });
-
-    // Both proposals were step-scored (2 step-PRM calls).
-    expect(stepCalls).toBe(2);
-    // Only the kept (good) branch reached the grounded evaluator — the pruned
-    // BAD branch skipped it entirely, the beam-search efficiency win.
-    expect(candidateCalls).toBe(1);
-
-    // The pruned branch carries its low step score; the kept branch a passing one.
-    const children = rt.storage.sql<SearchNode>`
-      SELECT * FROM search_nodes WHERE parent_id IS NOT NULL ORDER BY action`;
-    const bad = children.find((n) => n.action.includes('BAD'))!;
-    const good = children.find((n) => !n.action.includes('BAD'))!;
-    expect(bad.value).toBeLessThanOrEqual(0.05);
-    expect(good.value).toBeGreaterThan(bad.value);
-  });
-
-  test('#6 step-PRM gate (default off): every branch reaches the grounded evaluator', async () => {
-    let stepCalls = 0;
-    let candidateCalls = 0;
-    const llm: LLM = {
-      async *stream() { yield ''; },
-      async complete(prompt: string) {
-        if (prompt.includes('scoring ONE STEP')) stepCalls++;
         if (prompt.includes('scoring ONE candidate')) candidateCalls++;
         return '{"score": 0.5}';
       },
@@ -255,8 +229,7 @@ describe('MCTS integration', () => {
     initTables(rt);
     await runMCTS(rt, createMockSession(), 'no gate task', { budget: 1, branches: 2, judgeSamples: 1 });
 
-    // Gate off by default: no step-PRM calls, every branch judged by the evaluator.
-    expect(stepCalls).toBe(0);
+    // Every branch is judged by the grounded evaluator — no pre-prune gate.
     expect(candidateCalls).toBe(2);
   });
 
@@ -393,6 +366,132 @@ describe('MCTS integration', () => {
     `[0]!;
     expect(child.visits).toBe(1);
     expect(child.value).toBe(0);
+  });
+});
+
+describe('MCTS branch lifetime', () => {
+  /** Runtime whose spawn/abort calls are recorded; branches are real handles. */
+  function trackedBranches(rt: ReturnType<typeof createTestRuntime>['rt']) {
+    const spawned: string[] = [];
+    const aborted: string[] = [];
+    rt.spawnBranch = async (id) => {
+      spawned.push(id);
+      return {
+        explore: async () => ({ text: 'a solid approach', codeUsed: null }),
+        generateReflection: async () => 'lesson',
+      };
+    };
+    rt.abortBranch = async (id) => { aborted.push(id); };
+    return { spawned, aborted };
+  }
+
+  test('every branch an expansion spawns is released when the iteration ends', async () => {
+    const { rt } = createTestRuntime();
+    const { spawned, aborted } = trackedBranches(rt);
+
+    initTables(rt);
+    await runMCTS(rt, createMockSession(), 'plan the work', { budget: 2, branches: 2 });
+
+    expect(spawned.length).toBe(4);
+    expect(new Set(aborted)).toEqual(new Set(spawned));
+  });
+
+  test('a branch is released even when the iteration throws', async () => {
+    const { rt } = createTestRuntime();
+    const { spawned, aborted } = trackedBranches(rt);
+    // Reflection is written to memory; a memory failure aborts the iteration.
+    rt.memory.append = async () => { throw new Error('memory offline'); };
+
+    initTables(rt);
+    await expect(runMCTS(rt, createMockSession(), 'plan the work', {
+      budget: 1, branches: 2,
+    })).rejects.toThrow('memory offline');
+
+    expect(spawned.length).toBe(2);
+    expect(new Set(aborted)).toEqual(new Set(spawned));
+  });
+});
+
+describe('MCTS progress reporting', () => {
+  test('phases are announced per iteration, in order', async () => {
+    const { rt } = createTestRuntime();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'a solid approach', codeUsed: null }),
+      generateReflection: async () => 'n/a',
+    });
+
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    await runMCTS(rt, createMockSession(), 'plan the work', {
+      budget: 2, branches: 2,
+      onProgress: (event) => events.push(event),
+    });
+
+    expect(events.filter(e => e.type === 'phase' && e.phase === 'explore').length).toBe(2);
+    expect(events.filter(e => e.type === 'phase' && e.phase === 'evaluate').length).toBe(2);
+    const iterations = events.flatMap(e => e.type === 'iteration-complete' ? [e] : []);
+    expect(iterations.map(e => e.iteration)).toEqual([1, 2]);
+    expect(iterations[0]!.remainingBudget).toBe(1);
+    expect(iterations[0]!.scores.length).toBe(2);
+    // The first thing reported for an iteration is the phase it entered.
+    expect(events[0]).toMatchObject({ type: 'phase', phase: 'explore', iteration: 1, branches: 2 });
+  });
+
+  test('a failed exploration is reported with its provider error, and the search continues', async () => {
+    const { rt } = createTestRuntime();
+    let branch = 0;
+    rt.spawnBranch = async () => {
+      const failing = branch++ === 0;
+      return {
+        explore: async () => {
+          if (failing) throw new Error('Failed after 3 attempts. Last error: 429 rate limited');
+          return { text: 'a solid approach', codeUsed: null };
+        },
+        generateReflection: async () => 'n/a',
+      };
+    };
+
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    const result = await runMCTS(rt, createMockSession(), 'plan the work', {
+      budget: 1, branches: 2,
+      onProgress: (event) => events.push(event),
+    });
+
+    expect(result).toBeDefined();
+    const failures = events.flatMap(e => e.type === 'branch-failed' && e.stage === 'explore' ? [e] : []);
+    expect(failures.length).toBe(1);
+    expect(failures[0]!.iteration).toBe(1);
+    expect(failures[0]!.error).toBe('Failed after 3 attempts. Last error: 429 rate limited');
+    expect(failures[0]!.branchId.length).toBeGreaterThan(0);
+  });
+
+  test('a failed reflection is reported and does not abort a search that already scored its branches', async () => {
+    const { rt } = createTestRuntime({
+      llmResponses: { 'weak attempt': '{"score": 0.05}' },
+    });
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: 'weak attempt', codeUsed: null }),
+      generateReflection: async () => { throw new Error('reflection provider down'); },
+    });
+
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    const result = await runMCTS(rt, createMockSession(), 'improve myself', {
+      budget: 1, branches: 1,
+      onProgress: (event) => events.push(event),
+    });
+
+    // The search finished (nodes recorded, converge ran) instead of dying on an
+    // optional post-scoring model call.
+    expect(result.converged).toBe(false);
+    expect(rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE parent_id IS NOT NULL`.length).toBe(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'branch-failed', stage: 'reflect', iteration: 1, error: 'reflection provider down',
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'phase', phase: 'reflect', branches: 1,
+    }));
   });
 });
 

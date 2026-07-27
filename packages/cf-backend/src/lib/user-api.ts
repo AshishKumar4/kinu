@@ -11,7 +11,7 @@ export interface UserProfile {
   lastSeenAt: number;
 }
 
-export interface AgentEntry {
+export interface WorkspaceEntry {
   name: string;
   displayName: string;
   createdAt: number;
@@ -80,15 +80,15 @@ export const getProfile = () => api<UserProfile | null>('GET', '/profile');
 export const getCliSetup = () => api<CliSetup>('GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
-export const listAgents     = () => api<AgentEntry[]>('GET', '/agents');
+export const listWorkspaces     = () => api<WorkspaceEntry[]>('GET', '/workspaces');
 // `purpose` is the initial mission. When `name` is omitted the server creates
 // the agent identity using the user's connected model.
-export const registerAgent  = (name?: string, purpose?: string, displayName?: string) =>
-  api<AgentEntry>('POST', '/agents', { name, displayName, purpose });
-export const touchAgent     = (name: string) =>
-  api<{ ok: boolean }>('POST', `/agents/${encodeURIComponent(name)}/touch`);
-export const removeAgent    = (name: string) =>
-  api<{ ok: boolean }>('DELETE', `/agents/${encodeURIComponent(name)}`);
+export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
+  api<WorkspaceEntry>('POST', '/workspaces', { name, displayName, purpose });
+export const touchWorkspace     = (name: string) =>
+  api<{ ok: boolean }>('POST', `/workspaces/${encodeURIComponent(name)}/touch`);
+export const removeWorkspace    = (name: string) =>
+  api<{ ok: boolean }>('DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
 // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
 export interface UserDevice {
@@ -109,6 +109,21 @@ export const registerDevice = (label?: string) =>
   api<RegisteredDevice>('POST', '/devices', { label });
 export const revokeDevice   = (id: string) =>
   api<{ ok: boolean }>('DELETE', `/devices/${encodeURIComponent(id)}`);
+
+/** Per-(agent, device) remembered consent: base local-action grant, or the
+ *  stronger full-filesystem tier that lifts the /pc subtree scope. */
+export type DeviceConsentScope = 'all_local_actions' | 'full_filesystem';
+export interface DeviceConsent {
+  agentName: string;
+  deviceId: string;
+  policy: string;
+  scope: string;
+  lastMethod: string | null;
+  lastSummary: string | null;
+}
+export const listDeviceConsents = () => api<DeviceConsent[]>('GET', '/devices/consents');
+export const setDeviceConsentScope = (deviceId: string, agentName: string, scope: DeviceConsentScope) =>
+  api<{ ok: boolean }>('PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
 
 // ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api<CredentialSummary[]>('GET', '/credentials');
@@ -267,7 +282,7 @@ export interface EventRow {
 
 /** Agent-scoped HTTP fetch; same auth as the user routes. */
 async function agentApi<T>(method: string, agentName: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}${path}`, {
+  const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -275,7 +290,7 @@ async function agentApi<T>(method: string, agentName: string, path: string, body
   if (!res.ok) {
     let detail = '';
     try { const j = await res.json() as { error?: string }; detail = j?.error ?? ''; } catch { /* nop */ }
-    throw new Error(`${method} /api/agents/${agentName}${path} → ${res.status} ${detail}`);
+    throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${detail}`);
   }
   return await res.json() as T;
 }

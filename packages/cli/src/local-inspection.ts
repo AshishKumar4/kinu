@@ -12,13 +12,16 @@ import {
   createAgentConfigStore,
   initAgentConfigTable,
   initEventsHubTables,
+  alignmentConvergence,
   listGepaRuns,
   loadGepaCandidates,
   nextCronFire,
   productChangeSqlFromExec,
+  type AlignmentConvergence,
   type EventVariant,
   type ProductChangeBoard,
   type SearchNode,
+  type ReasoningEffort,
   readSoul,
   summarizeSoul,
 } from '@proteus/core';
@@ -77,6 +80,8 @@ export interface LocalAgentInfoSnapshot {
   memorySize: number;
   createdAt: number;
   conversationCount: number;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
 }
 
 export function getLocalAgentState(name: string): unknown {
@@ -102,6 +107,8 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       scaffoldVersion: number;
       searchNodeCount: number;
       craftedToolCount: number;
+      model: string | null;
+      reasoningEffort: ReasoningEffort | null;
     };
     return {
       id: status.id ?? name,
@@ -121,6 +128,8 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       conversationCount: tableExists(db, 'messages')
         ? get<{ c: number }>(db, `SELECT COUNT(DISTINCT session_id) AS c FROM messages`)?.c ?? 0
         : 0,
+      model: status.model,
+      reasoningEffort: status.reasoningEffort,
     };
   });
 }
@@ -293,6 +302,12 @@ export function listLocalGepaRuns(name: string, limit = 20): unknown[] {
   });
 }
 
+/** K_align for a local agent. A workspace with no outcome ledger yet reads as
+ *  an empty result — alignmentConvergence already owns that case. */
+export function getLocalAlignment(name: string): AlignmentConvergence {
+  return withLocalDb(name, (db) => alignmentConvergence(makeSql(db)));
+}
+
 export function getLocalGepaRun(name: string, runId: string): unknown {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'gepa_runs')) return null;
@@ -355,6 +370,18 @@ export function setLocalStoredModel(name: string, spec: string): { ok: true; spe
   });
 }
 
+export function getLocalReasoningEffort(name: string): { effort: ReasoningEffort | null } {
+  return withLocalDb(name, (db) => ({ effort: createAgentConfigStore(makeSql(db)).getReasoningEffort() }));
+}
+
+export function setLocalReasoningEffort(name: string, effort: ReasoningEffort): { ok: true; effort: ReasoningEffort } {
+  return withLocalWritableDb(name, (db) => {
+    initAgentConfigTable((ddl) => db.exec(ddl));
+    createAgentConfigStore(makeSql(db)).setReasoningEffort(effort);
+    return { ok: true, effort };
+  });
+}
+
 export function listLocalTriggers(name: string): { triggers: unknown[] } {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'triggers')) return { triggers: [] };
@@ -377,6 +404,7 @@ export function createLocalTimerTrigger(name: string, input: { cron?: string; at
     const nextFireAt = input.cron
       ? nextCronFire(input.cron, now)
       : input.atMs;
+    if (input.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${input.cron}`);
     if (!nextFireAt) throw new Error('A future trigger time is required.');
     const id = registry.register({
       kind: input.cron ? 'timer_cron' : 'timer_oneshot',
@@ -404,7 +432,7 @@ export function cancelLocalJob(name: string, id: string): { ok: boolean } {
     const store = new BackgroundJobStore(makeSql(db));
     const before = store.get(id);
     if (!before || before.status !== 'running') return { ok: false };
-    store.cancel(id, Date.now());
+    store.cancel(id, before.epoch, Date.now());
     return { ok: true };
   });
 }
@@ -555,10 +583,10 @@ function summarizeMcts(node: SearchNode): LocalMctsNodeDetail['path'][number] {
 }
 
 function getLocalStatus(db: SqliteDb): unknown {
-  const identity = tableExists(db, 'agent_identity')
-    ? get<{ id: string; name: string; created_at: number }>(db, `SELECT id, name, created_at FROM agent_identity LIMIT 1`)
+  const identity = tableExists(db, 'workspace_identity')
+    ? get<{ id: string; name: string; created_at: number }>(db, `SELECT id, name, created_at FROM workspace_identity LIMIT 1`)
     : null;
-  const soul = readSoul(makeSql(db));
+  const soul = tableExists(db, 'vfs_files') ? readSoul(makeSql(db)) : null;
   return {
     id: identity?.id ?? null,
     name: identity?.name ?? null,
@@ -579,6 +607,9 @@ function getLocalStatus(db: SqliteDb): unknown {
       : 0,
     model: tableExists(db, 'agent_config')
       ? get<{ value: string | null }>(db, `SELECT value FROM agent_config WHERE key = 'model' LIMIT 1`)?.value ?? null
+      : null,
+    reasoningEffort: tableExists(db, 'agent_config')
+      ? createAgentConfigStore(makeSql(db)).getReasoningEffort()
       : null,
   };
 }

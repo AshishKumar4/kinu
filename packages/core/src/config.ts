@@ -13,14 +13,22 @@ export interface MCTSDefaults {
   branches: number;
   maxDepth: number;
   explorationWeight: number;
+  /** Prune settled branches scoring below this. Sits INSIDE the fail band
+   *  [0.05,0.30] (mcts/evaluation.ts BAND TABLE) — below the fail ceiling, so a
+   *  branch at the very top of the fail band gets a reprieve. */
   pruneThreshold: number;
+  /** Convergence acceptance floor = the FAIL ceiling (0.30). A converged answer
+   *  must clear the whole failed-execution / prose-dodge band. */
   minAcceptableScore: number;
   maxCostUSD: number;
   /** Minimum visits before a node can be pruned */
   minVisitsForPrune: number;
-  /** Score threshold below which reflections are generated */
+  /** Score below which a failure lesson is generated = FAIL ceiling + thin
+   *  margin (0.35), so every fail-band node earns a reflection. */
   reflectionThreshold: number;
-  /** Score threshold above which crafted tools are extracted */
+  /** Score above which crafted tools are extracted = pass-band MIDPOINT (0.80 =
+   *  PASS_FLOOR 0.60 + ½·PASS_SPAN 0.40): executed code with an at-or-above-
+   *  median judge only. Unreachable by any prose branch (cap 0.75). */
   craftExtractionThreshold: number;
   /** Judge ensemble size per branch evaluation (median-aggregated). */
   judgeSamples: number;
@@ -30,12 +38,6 @@ export interface MCTSDefaults {
   /** Score gap within which a rival branch counts as a near-tied Alternate
    *  Take at convergence (see mcts/takes.ts). */
   takesEpsilon: number;
-  /** Step-level Process Reward gate. Off by default — at single-step rollout
-   *  depth it duplicates the grounded evaluator at extra cost (mcts/step-prm.ts). */
-  stepPrm: boolean;
-  /** Step-PRM prune threshold: proposals scoring below this skip the grounded
-   *  evaluator. Only consulted when stepPrm is on. */
-  stepPrmPruneThreshold: number;
 }
 
 /** Branching-heads parameters. The per-head grounded score reuses the MCTS
@@ -59,9 +61,7 @@ export interface CraftStoreDefaults {
   minUsesBeforeRetirement: number;
   /** Minimum effective score to be included in codemode preamble */
   minEffectiveScoreForInjection: number;
-  /** Maximum tools injected per codemode execution */
-  maxToolsPerExecution: number;
-  /** Word overlap threshold for semantic conflict detection */
+  /** Word overlap threshold for semantic conflict detection (craft/conflict.ts) */
   conflictSimilarityThreshold: number;
 }
 
@@ -69,14 +69,6 @@ export interface CraftStoreDefaults {
 export interface ScaffoldDefaults {
   /** Minimum rationale length for scaffold modifications */
   minRationaleLength: number;
-  /** Score gap threshold: canary must be within this of baseline */
-  canaryScoreGap: number;
-  /** Error rate threshold for auto-rollback (absolute) */
-  autoRollbackErrorRate: number;
-  /** Error rate relative increase threshold for auto-rollback */
-  autoRollbackRelativeIncrease: number;
-  /** Minimum task history entries before error-rate monitoring kicks in */
-  minTasksForMonitoring: number;
 }
 
 /** Full agent configuration */
@@ -108,8 +100,6 @@ export const DEFAULT_CONFIG: AgentConfig = {
     judgeSamples: 3,
     maxEvalLLMCalls: 4,
     takesEpsilon: 0.1,
-    stepPrm: false,
-    stepPrmPruneThreshold: 0.3,
   },
   heads: {
     mergeSamples: 3,
@@ -120,15 +110,10 @@ export const DEFAULT_CONFIG: AgentConfig = {
     retirementThreshold: 0.1,
     minUsesBeforeRetirement: 2,
     minEffectiveScoreForInjection: 0.2,
-    maxToolsPerExecution: 10,
     conflictSimilarityThreshold: 0.85,
   },
   scaffold: {
     minRationaleLength: 50,
-    canaryScoreGap: 0.10,
-    autoRollbackErrorRate: 0.1,
-    autoRollbackRelativeIncrease: 1.2,
-    minTasksForMonitoring: 5,
   },
 };
 

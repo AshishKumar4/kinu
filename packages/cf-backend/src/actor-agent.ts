@@ -1,0 +1,2155 @@
+/**
+ * ActorAgent — the actor-agnostic substrate beneath every full-loop Proteus
+ * actor on the Cloudflare backend.
+ *
+ * OrchestratorAgent (the top-level workspace DO) and any future facet actor
+ * (a subordinate riding the workspace via subAgent()) are Think subclasses
+ * that differ only in the profile members below — identity bootstrap
+ * (getOwnerUserId), exec-plane keying (workspaceName), tool surface
+ * (actorToolDeps / extraCodemodeProviders), evolution engine, and owner
+ * notification. Everything else — the CF runtime assembly, the BackendHost,
+ * the shared AgentOrchestrator, ExtensionHost + compaction, the ephemeral
+ * ledger, prompt/model/tool caches, and the Think hook bridge (beforeTurn /
+ * beforeStep / tool hooks) — lives here, once.
+ *
+ * Tool gating is structural: an actor whose profile wires no `team` deps has
+ * no team tool. No flags.
+ */
+
+import { type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { parseProtocolMessage } from "agents/chat";
+import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate.js";
+import {
+  createCompactionExtension, createVfsTranscriptStore,
+  createCompactionStateStore, createModelSummarizer,
+  type CompactionStateStore, type Logger as CompactionLogger,
+} from "@proteus/compaction";
+import { Think, Session } from "@cloudflare/think";
+// preamble-injection pattern: we construct the codemode tool
+// directly via createCodeTool + PreambleCraftedExecutor. The executor reads
+// craftStore.list() on every call and splices a `const tools = {...}`
+// preamble into the LLM's sandbox arrow, so mid-turn additions are visible
+// on the next execute_tools call and tool bodies share lexical scope with
+// workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
+import { streamText, tool, jsonSchema, stepCountIs } from "ai";
+import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
+import type { SerializableToolDescriptor } from "./user/mcp.js";
+import { contextWindowForModel } from "./lib/context-window.js";
+import type {
+  TurnContext, TurnConfig,
+  ToolCallResultContext, StepContext, ChunkContext,
+  PrepareStepContext, StepConfig,
+  ToolCallContext as ThinkToolCallContext,
+  ChatResponseResult,
+} from "@cloudflare/think";
+import {
+  EvolutionEngine,
+  resolveMaxSteps,
+  // canonical tool + prompt surface — single source of truth
+  buildBuiltinTools,
+  createWebCodemodeProvider, type WebSearchProvider,
+  buildSystemPromptSync,
+  currentDateForPrompt,
+  EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
+  // Public extension seam — the SAME host contract runChat drives on the CLI
+  ExtensionHost, composePrepareStep,
+  // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
+  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
+  TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
+  EventInjectionBuffer, type MidTurnEventBatch,
+  type BuiltinToolName,
+  ACTIVE_TOOLS,
+  nanoid,
+  // Branching heads
+  HeadController, HeadJournal,
+  type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
+  // Canonical memory-note read (the ephemeral MEMORY.md tail)
+  readMemoryTail,
+  // Durable run-event log
+  RunEventRecorder,
+  // agent_facts world model
+  createFactsStore, renderFactsBlock, type FactsStore,
+  // Per-turn device awareness (laptop runtime presence + change notice)
+  observeDevicePresence,
+  // Typed agent_config store
+  createAgentConfigStore,
+  type SessionWriter, type SessionMessage, type SqlExecutor,
+  // Unified strategy dispatch
+  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
+  createHeadsStrategy, createThinkTool,
+  // Background-job system (#173 — auto-background >30s tool calls)
+  BackgroundJobStore, BackgroundJobRunner, withBackgroundThreshold, JobNotResumable,
+  MctsSearchStore,
+  // EventsHub primitives (spec §1)
+  EventLog,
+  // Skills (Claude-Code / Hermes SKILL.md spec, VFS-backed)
+  discoverSkills, resolveActiveSkills, extractExplicitInvocations,
+  unionAllowedTools, toolAllowedBySkills, BUILTIN_SKILLS,
+  type ActiveSkillSet, type SkillsVfs, recordHeadsTakeSet,
+  type ProductChangeToolDeps,
+  isVfsError,
+  type ParentRpcResult,
+  type ParentRpcWrite,
+  // Subordinate teams + cross-workspace peers + the report spine
+  type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
+  readSoul,
+  parseModelSpec, catalogModelInfo,
+  // Model-capability attachment sanitization (the PDF-400 fix)
+  acceptedMediaForModel, sanitizeAttachmentsForModel, type MediaModality, type ModelInfo,
+  // AGENTS.md (agents.md standard) — cloud workspace discovery
+  collectWorkspaceAgentsMd,
+  mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+} from "@proteus/core";
+import { combineAbortSignals } from "@proteus/agent-utils";
+import { createCodeTool } from "@cloudflare/codemode/ai";
+import { createCFRuntime, type CFRuntime } from "./runtime.js";
+import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
+import { createCFHeadRuntime } from "./heads/head-runtime.js";
+import type { AgentProviderRegistry } from "./providers/agent-registry.js";
+import { OwnedModelServices } from "./owned-model-services.js";
+import {
+  // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
+  resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
+  hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
+} from "@proteus/core";
+import { createRLMProvider, type CodemodeProvider } from "./rlm.js";
+import type { UserDO } from "./user/user-do.js";
+import type { UserCaller } from "./user/workspace-capability.js";
+import { sha256Hex } from "./lib/crypto.js";
+
+const SESSION_REFLECTION_INTERVAL = 5; // turns between session reflections
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+interface ClientRpcFrame {
+  id: string;
+  method: string;
+}
+
+function parseClientRpcFrame(message: unknown): ClientRpcFrame | null {
+  if (typeof message !== 'string') return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(message); } catch { return null; }
+  if (!isRecord(parsed) || parsed.type !== 'rpc'
+    || typeof parsed.id !== 'string' || typeof parsed.method !== 'string'
+    || !Array.isArray(parsed.args)) return null;
+  return { id: parsed.id, method: parsed.method };
+}
+
+/** Extract plain text from the last user message in a ModelMessage[]. Used
+ *  by skills resolution to look for `/skill-name` invocations and keyword
+ *  matches without needing to know the AI SDK content-part union shape.
+ *  Deliberately text-only: file/image attachment parts are dropped here, but
+ *  they still reach the model — the evolved-scaffold path hands this flattened
+ *  text to the scaffold as `task` while `host.defaultInference()` streams the
+ *  prepared turn with all parts intact (see _transformInferenceResult). */
+export function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    const c = m.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c
+        .map((p) => (p && typeof p === 'object' && 'text' in p ? String((p as { text: unknown }).text ?? '') : ''))
+        .filter(Boolean)
+        .join('\n');
+    }
+    return '';
+  }
+  return '';
+}
+
+function readCliCwd(body?: Record<string, unknown>): string | null {
+  const cwd = body?.cwd;
+  return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null;
+}
+
+function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
+  const prefix = `Current terminal working directory: ${cwd}\n\n`;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'user') continue;
+    const next = [...messages];
+    next[i] = {
+      ...message,
+      content: prefixCliCwdContent(message.content, prefix) as ModelMessage['content'],
+    } as ModelMessage;
+    return next;
+  }
+  return [...messages];
+}
+
+function prefixCliCwdContent(content: unknown, prefix: string): unknown {
+  if (typeof content === 'string') return `${prefix}${content}`;
+  if (Array.isArray(content)) return [{ type: 'text', text: prefix }, ...content];
+  return prefix;
+}
+
+/** One activity-log line per compaction engine event: message + compact JSON. */
+function compactionLogDetail(message: string, data?: unknown): string {
+  if (data === undefined) return message;
+  try {
+    return `${message} ${JSON.stringify(data)}`;
+  } catch {
+    return message;
+  }
+}
+
+/** Flatten a stored UIMessage-JSON content string to plain text (assistant_messages rows). */
+export function uiMessageText(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as { parts?: unknown };
+    if (Array.isArray(parsed.parts)) {
+      return parsed.parts
+        .flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])
+        .join('');
+    }
+  } catch { /* plain text fallback */ }
+  return content;
+}
+
+/** The per-actor-class tool deps `getRawTools` wires into the shared
+ *  builtin factory. Structural absence IS the gate: a tool whose deps an
+ *  actor class does not wire neither exists in the ToolSet nor is advertised
+ *  in the prompt (actorActiveTools). */
+export interface ActorToolDeps {
+  /** In-workspace subordinate management — orchestrator-only. */
+  team?: TeamToolDeps;
+  /** Cross-workspace peer messaging — orchestrator-only. */
+  peers?: PeersToolDeps;
+  /** Subordinate → parent progress spine — subordinate-only. */
+  report?: ReportToolDeps;
+  productChanges?: ProductChangeToolDeps | undefined;
+}
+
+/** The deps-gated builtins: names dropped from the advertised tool surface
+ *  when the actor profile wires no deps for them. */
+const DEPS_GATED_TOOLS = ['team', 'peers', 'report', 'product_change'] as const;
+
+/** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
+ *  and the activeTools whitelist must not advertise structurally absent
+ *  tools. */
+export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
+  const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
+    team: !!deps.team,
+    peers: !!deps.peers,
+    report: !!deps.report,
+    product_change: !!deps.productChanges,
+  };
+  return ACTIVE_TOOLS.filter((name) =>
+    !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
+}
+
+export abstract class ActorAgent extends Think<Env> {
+  // ── The actor profile — what a concrete actor class supplies ─────────
+  // The rest of this class is actor-agnostic; these members are the whole
+  // difference between actor kinds (orchestrator vs a future facet actor).
+
+  /** Owner userId, or null while unclaimed — the actor's identity bootstrap.
+   *  The orchestrator reads workspace_identity; a facet actor reads the
+   *  owner row its parent seeded. */
+  protected abstract getOwnerUserId(): string | null;
+
+  /** The workspace whose exec planes (sandbox container, Nimbus session,
+   *  /pc device consent) this actor rides. A top-level workspace DO is its
+   *  own workspace; a facet actor overrides with its parent's name. */
+  protected workspaceName(): string { return this.name; }
+
+  /** This actor's proof of workspace identity to the owner's UserDO. A
+   *  top-level workspace DO holds its own token; a facet actor holds a pushed
+   *  copy of its PARENT's, which is why every facet of a workspace is
+   *  attenuated exactly as the workspace is, with no per-facet bookkeeping to
+   *  forget. Null before the Worker has claimed the workspace and issued one.
+   *
+   *  Stored in its own table rather than agent_config: it is identity, not
+   *  configuration, and must not be reachable through any config or snapshot
+   *  surface. There is deliberately no RPC that reads it back out — the token
+   *  only ever travels parent -> facet, so nothing name-addressable can be
+   *  asked for another workspace's secret. */
+  protected async workspaceCapabilityToken(): Promise<string | null> {
+    try {
+      this.ensureCapabilityTable();
+      const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+      return rows[0]?.token || null;
+    } catch { return null; }
+  }
+
+  /** The hash of the token this workspace holds, or null when it holds none.
+   *  Safe to hand out — it is what lets the owner's UserDO detect that the two
+   *  sides disagree without either of them exchanging the secret. */
+  protected async workspaceCapabilityHash(): Promise<string | null> {
+    const token = await this.workspaceCapabilityToken();
+    return token ? sha256Hex(token) : null;
+  }
+
+  /** Install the capability token the owner's UserDO minted for this
+   *  workspace. Worker-side DO RPC only — deliberately not `@callable`. */
+  async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
+    if (!token) throw new Error('capability token required');
+    this.ensureCapabilityTable();
+    this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
+             ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  private ensureCapabilityTable(): void {
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
+      id    INTEGER PRIMARY KEY CHECK (id = 1),
+      token TEXT NOT NULL
+    )`);
+  }
+
+  /** Tool deps only this actor class wires. Structural absence is the gating
+   *  mechanism (the same way `team` is absent on the CLI backend): an actor
+   *  that returns {} simply has no team / product-change tools. */
+  protected abstract actorToolDeps(): ActorToolDeps;
+
+  /** Codemode providers beyond the shared set. Spliced between `rlm` and
+   *  `web` so provider order — and therefore the LLM-visible type
+   *  description — is stable across actor kinds. */
+  protected extraCodemodeProviders(): CodemodeProvider[] { return []; }
+
+  /** The evolution engine the shared AgentOrchestrator drives. */
+  protected abstract get engine(): EvolutionEngine;
+
+  /** Out-of-band owner notification (mission-inbox email on the
+   *  orchestrator). Fired when a background job settles. */
+  protected abstract notifyOwner(subject: string, body: string): void;
+
+  /** Browser/socket-only RPC policy. Durable Object stub calls do not pass
+   * through onMessage, so subclasses can keep bootstrap methods available to
+   * trusted worker callers while denying the same method to client sockets. */
+  protected isClientRpcMethodDenied(_method: string): boolean { return false; }
+
+  override maxSteps = resolveMaxSteps();
+
+  private readonly ownedModelServices = new OwnedModelServices({
+    env: this.env,
+    agentName: () => this.name,
+    appTitle: 'Proteus',
+    ownerRequired: true,
+    getOwnerUserId: () => this.getOwnerUserId(),
+    getUserCaller: () => this.userCaller(),
+  });
+
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
+    // websockets, and the REST scope gate never sees websocket frames — so
+    // out-of-scope @callable requests are rejected here, ahead of the
+    // agents-SDK rpc dispatcher (installed as an own-property onMessage
+    // wrapper by the Agent constructor, hence the re-wrap instead of an
+    // onMessage override). Chat frames pass through untouched.
+    const dispatchMessage = this.onMessage;
+    this.onMessage = async (connection, message) => {
+      const rejection = rejectOutOfScopeRpc(connection.tags, message);
+      if (rejection) {
+        connection.send(rejection);
+        return;
+      }
+      const rpc = parseClientRpcFrame(message);
+      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
+        connection.send(JSON.stringify({
+          type: 'rpc',
+          id: rpc.id,
+          success: false,
+          error: `${rpc.method} is not available from client connections.`,
+        }));
+        return;
+      }
+      const event = typeof message === 'string' ? parseProtocolMessage(message) : null;
+      try {
+        return await dispatchMessage.call(this, connection, message);
+      } finally {
+        if (event?.type === 'clear') {
+          this.ephemeralLedger.reset();
+          this._pendingDrainReplyTurns.clear();
+          try {
+            await this.compactionState.plans.save(this.name, null);
+          } catch (err) {
+            console.warn('[proteus] clear-history compaction reset failed:', err);
+          }
+        }
+      }
+    };
+    // Constructor body (not a field initializer): boundSql's memo field must
+    // be initialized before the getter caches its closure.
+    this.compactionState = createCompactionStateStore(this.boundSql);
+    this.registerCompactionExtension();
+    // Mid-turn background-event injection: batches the reactor bound to a live
+    // turn (host.injectIntoActiveTurn) splice into its next agentic step.
+    this.extensions.register({
+      name: 'proteus.event-injection',
+      prepareStep: (ctx) => this._eventInjections.prepareStep(ctx),
+    });
+  }
+
+  /** Drain batches bound to the LIVE turn (BackendHost.injectIntoActiveTurn),
+   *  spliced into its next step by the proteus.event-injection extension and
+   *  settled in onChatResponse (absorbed → reply dispatch, leftover → the
+   *  standard programmatic drain turn). */
+  protected readonly _eventInjections = new EventInjectionBuffer();
+
+  protected async reenqueueEventBatch(batch: MidTurnEventBatch, source: 'leftover' | 'aborted'): Promise<void> {
+    try {
+      const result = await this.host.enqueueTurn({
+        text: batch.turnText,
+        metadata: { proteusEvent: 'event_drain', drainTurnId: batch.turnId },
+      });
+      if (result.status === 'queued') return;
+      console.warn(`[proteus] ${source} event re-enqueue skipped; returning events to pending`);
+    } catch (err) {
+      console.warn(`[proteus] ${source} event re-enqueue failed:`, err);
+    }
+    for (const id of batch.ids) {
+      try {
+        this.eventLog.unbind(id);
+      } catch (err) {
+        console.warn('[proteus] event unbind failed:', id, err);
+      }
+    }
+  }
+
+  /** The settled turn's actor-generic front half — every actor's
+   *  onChatResponse calls this FIRST (before anything that can throw or
+   *  return early). Resolves the drain identity, clears in-flight turn
+   *  state, and settles mid-turn event injection: absorbed batches keep
+   *  their reply dispatch with this turn's answer; batches that never saw a
+   *  step boundary (or an aborted turn's) re-enqueue as the standard
+   *  programmatic drain turn, same metadata shape enqueueTurn stamps, so
+   *  the event card and reply dispatch work unchanged. */
+  protected settleTurnEvents(result: ChatResponseResult): {
+    drainTurnId: string | undefined;
+    programmaticUserMessage: UIMessage | null;
+    errorText: string | undefined;
+    completed: boolean;
+    injectedEvents: ReturnType<EventInjectionBuffer['settle']>;
+  } {
+    const drainTurnId = this._activeDrainTurnId ?? this._pendingDrainReplyTurns.get(result.requestId);
+    const programmaticUserMessage = this._activeProgrammaticUserMessage;
+    this._activeDrainTurnId = null;
+    this._activeProgrammaticUserMessage = null;
+    // Persist the provider error TEXT, not just the status — Think keeps only
+    // the LAST terminal error, which the next failure overwrites, so this row
+    // (and the run_end event in recordTurnTelemetry) is the durable evidence
+    // trail.
+    const errorText = result.error?.slice(0, 500);
+    this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status);
+    // Clear the in-flight flag once the turn is durably completed — forkAgent
+    // is allowed again from here forward. Evolution (the orchestrator's detached engine.reviewTurn)
+    // runs fire-and-forget and does NOT extend the busy window.
+    this._inFlight = false;
+    this._cliCwd = null;
+    const completed = result.status === 'completed';
+    const injectedEvents = this._eventInjections.settle({ retainForContinuation: completed });
+    const batchesToReenqueue = completed
+      ? injectedEvents.leftover
+      : [...injectedEvents.absorbed, ...injectedEvents.leftover];
+    for (const batch of batchesToReenqueue) {
+      void this.reenqueueEventBatch(batch, completed ? 'leftover' : 'aborted');
+    }
+    return { drainTurnId, programmaticUserMessage, errorText, completed, injectedEvents };
+  }
+
+  /** The settled turn's telemetry — the measured compaction trigger, the
+   *  shared overflow-recovery policy, and the durable turn_end/run_end
+   *  events. Runs for completed AND aborted/errored turns. */
+  protected recordTurnTelemetry(result: ChatResponseResult, turn: {
+    errorText: string | undefined;
+    completed: boolean;
+    programmaticUserMessage: UIMessage | null;
+  }): void {
+    const { errorText, completed, programmaticUserMessage } = turn;
+    // Persist the turn's final provider-priced prompt size — the NEXT turn's
+    // measured compaction trigger. Recorded even on aborted/errored turns:
+    // any step that reported was a real priced request. Bound to the turn's
+    // durable-history length so a later shrink voids it.
+    if (this.acc.lastPromptTokens > 0) {
+      this.compactionState.savePromptTokens(this.name, this.acc.lastPromptTokens, this._turnDurableLength);
+    }
+    // Overflow recovery (core turn-failure policy, shared with the CLI): a
+    // context_length-class provider failure arms force-compaction for the
+    // next assembly and enqueues ONE retry turn — a failed retry never
+    // enqueues another. Rate limits never force-compact (throughput is not
+    // size) unless the measured PER-REQUEST prompt crossed half the window.
+    if (!completed && result.error) {
+      const recovery = planOverflowRecovery({
+        error: result.error,
+        lastPromptTokens: this.acc.lastPromptTokens,
+        contextWindow: this._turnContextWindow > 0 ? this._turnContextWindow : this.sessionContextWindow(),
+        turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
+      });
+      if (recovery.forceCompaction) {
+        this.compactionState.armForceCompaction(this.name);
+        this.logActivity('overflow_detected',
+          `${recovery.failureClass} — force compaction armed${recovery.enqueueRetry ? ', retry enqueued' : ''}`);
+        if (recovery.enqueueRetry) {
+          void this.host.enqueueTurn({
+            text: OVERFLOW_RETRY_TEXT,
+            metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
+          }).catch((err: unknown) => console.warn('[proteus] overflow retry enqueue failed:', err));
+        }
+      }
+    }
+    // Emit turn_end + run_end into the durable event log.
+    try {
+      if (this._currentRunId) {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'turn_end',
+          turnIndex: this.orch.sessionTurnIndex,
+          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
+        });
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'run_end',
+          reason: result.status,
+          ...(errorText ? { error: errorText } : {}),
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at onChatResponse:', err);
+    }
+  }
+
+  /** Durable per-session compaction state (plan snapshot + the measured
+   *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
+  protected readonly compactionState: CompactionStateStore;
+
+  /** Durable-history length (ModelMessage count) at the in-flight turn's
+   *  assembly — the length the turn's prompt-token measurement is bound to. */
+  protected _turnDurableLength = 0;
+
+  /** Better-compact is THE default (and only) compaction path: the staged
+   *  pruning ladder runs as a transformContext extension once per turn
+   *  assembly, replaying its persisted plan byte-stably until the context
+   *  regrows. Registered unconditionally at construction; every port
+   *  dereferences `this` lazily, so nothing heavy (the CF runtime, the model)
+   *  is built before it is first needed. */
+  private registerCompactionExtension(): void {
+    const logger: CompactionLogger = {
+      info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
+      debug: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
+      warn: (message, data) => {
+        console.warn(`[proteus:compaction] ${message}`, data ?? '');
+        this.logActivity('compaction_warn', compactionLogDetail(message, data));
+      },
+      error: (message, data) => {
+        console.error(`[proteus:compaction] ${message}`, data ?? '');
+        this.logActivity('compaction_error', compactionLogDetail(message, data));
+      },
+    };
+    this.extensions.register(createCompactionExtension({
+      ports: {
+        transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
+        plans: this.compactionState.plans,
+        logger,
+      },
+      summarize: createModelSummarizer(() => this.getModel()),
+      onOutcome: ({ outcome }) => {
+        // The model-visible stream changed shape — a NEW plan rewrote it
+        // ('planned') or a cached plan was discarded after a history rewrite
+        // ('invalidated') — so the ephemeral ledger's frozen block positions
+        // are meaningless. This fires inside runTransformContext, BEFORE
+        // beforeTurn's weave, so the next weave starts over with one fresh
+        // block at the tail. A byte-stable replay keeps positions valid.
+        if (outcome !== 'replayed') this.ephemeralLedger.reset();
+      },
+    }));
+  }
+
+  /** Persist the verified connect-ticket scopes (edge-set header, see
+   *  appendIdentityHeaders) as a connection tag — tags ride the WebSocket
+   *  attachment, so the rpc gate survives DO hibernation. */
+  override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
+    const tags = await super.getConnectionTags(connection, ctx);
+    const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
+    return scopeTag ? [...tags, scopeTag] : tags;
+  }
+
+  /** Scoped access-token connections may chat but never write agent state. */
+  override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
+    return super.shouldConnectionBeReadonly(connection, ctx)
+      || !!ctx.request.headers.get(CLI_SCOPES_HEADER);
+  }
+
+  private _rt: CFRuntime | null = null;
+  /** Backend-agnostic per-turn accounting (tool calls, steps, usage, errors).
+   *  Lazily built with cf sinks → activity_log + the durable run-event recorder.
+   *  Shared with the CLI backend (core/orchestrator/turn-accumulator). */
+  // The backend-agnostic agent logic (per-turn accounting + session-evolution
+  // cadence + the event→turn reactor). The DO provides the BackendHost
+  // (broadcast + programmatic-turn via saveMessages) + the cf sinks. The CLI
+  // backend builds the same AgentOrchestrator with its own host.
+  private _orch: AgentOrchestrator | null = null;
+  protected get orch(): AgentOrchestrator {
+    if (!this._orch) {
+      this._orch = new AgentOrchestrator({
+        host: this.host,
+        engine: this.engine,
+        eventLog: this.eventLog,
+        sessionReflectionInterval: SESSION_REFLECTION_INTERVAL,
+        sinks: {
+          logActivity: (e, d) => this.logActivity(e, d),
+          onToolCallEvent: (ev) => {
+            try {
+              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
+            } catch (err) { console.warn('[proteus] event emit failed at afterToolCall:', err); }
+          },
+          onStepEvent: (ev) => {
+            try {
+              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
+            } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
+          },
+        },
+      });
+    }
+    return this._orch;
+  }
+  protected get acc(): TurnAccumulator { return this.orch.acc; }
+
+  // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
+  // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
+  // the resume path for the reactor + background-job wake + consent.
+  private _host: BackendHost | null = null;
+  protected get host(): BackendHost {
+    if (!this._host) {
+      const agent = this;
+      this._host = {
+        broadcast: (event) => { try { this.broadcast(JSON.stringify(event)); } catch { /* nop */ } },
+        enqueueTurn: async ({ text, metadata }) => {
+          const drainTurnId = isRecord(metadata) && typeof metadata.drainTurnId === 'string'
+            ? metadata.drainTurnId
+            : null;
+          const message = {
+            id: crypto.randomUUID(), role: 'user' as const, parts: [{ type: 'text' as const, text }],
+            ...(metadata ? { metadata } : {}),
+          };
+          try {
+            const result = await this.saveMessages(() => {
+              this._activeDrainTurnId = drainTurnId;
+              this._activeProgrammaticUserMessage = message;
+              return [message];
+            });
+            return { status: result.status === 'completed' ? 'queued' : 'skipped' };
+          } finally {
+            if (this._activeProgrammaticUserMessage === message) {
+              this._activeDrainTurnId = null;
+              this._activeProgrammaticUserMessage = null;
+            }
+          }
+        },
+        // Mid-turn delivery: a drained batch bound while a turn is live rides
+        // that turn's next step boundary (the event-injection extension)
+        // instead of queueing behind it. Check + push are one synchronous
+        // tick, so the turn observed here is the one whose prepareStep will
+        // drain the buffer (turns are TurnQueue-serialized); a turn that
+        // settles first hands the batch back through settle()'s leftover path.
+        injectIntoActiveTurn: (batch) => {
+          if (!this._inFlight) return false;
+          this._eventInjections.push(batch);
+          this.logActivity('event_injected', `${batch.turnId} → live turn`);
+          return true;
+        },
+        // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
+        // the evolution hooks already rely on) holds the DO through the window
+        // + the drain so the debounced drain completes within the live
+        // activation instead of racing eviction. If the DO dies anyway, the
+        // events are still durable in the EventLog — the next ingress / cron
+        // alarm / post-turn drain picks them up (delayed, never dropped).
+        setTimer: (fn, ms) => {
+          void agent.keepAliveWhile(() => new Promise<void>((resolve) => {
+            setTimeout(() => {
+              fn().catch((err: unknown) =>
+                console.warn('[proteus] drain timer callback failed:', (err as Error).message),
+              ).finally(resolve);
+            }, ms);
+          })).catch((err: unknown) =>
+            console.warn('[proteus] drain timer keepAlive failed:', (err as Error).message));
+        },
+        // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
+        // heads need the owner for UserDO auth, set by first-turn time. undefined
+        // before then ⇒ heads degrade (getHeadController throws the no-owner error).
+        get headRuntime() { return agent.getCFHeadRuntime(); },
+      };
+    }
+    return this._host;
+  }
+  /** Executors whose tools ran this turn — debounces the last-active-executor
+   *  write to one SQL upsert per executor per turn. Reset in beforeTurn. */
+  protected _executorsUsedThisTurn = new Set<string>();
+  // ── Tool cache: avoid rebuilding the built-in ToolSet + codemode types every turn ──
+  protected _cachedTools: ToolSet | null = null;
+  protected _cachedToolsKey: string = "";
+
+  // ── User MCP tools cache ─────────────────────────────────────────────
+  // Per-user MCP tools live in UserDO. Per turn we ask UserDO for the
+  // current tool descriptors (cheap RPC) and cache them against UserDO's
+  // monotonic mcp_updated_at watermark so we only rebuild closures when
+  // the user has actually added/removed/edited a server.
+  private _cachedMcpTools: ToolSet = {};
+  private _cachedMcpToolsKey: number = -1;
+
+  // Preamble-injection: the codemode tool is built once per DO lifetime.
+  // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
+  // execute call, so newly-saved tools appear on the next execute_tools
+  // invocation without any registry or cache coherence work.
+  private _craftExecTool: unknown = null;
+
+  // Branching-heads controller — lazily built once per DO lifetime. Wraps a
+  // HeadJournal + HeadRuntime (Facet spawner + merge LLM). The `think` tool's
+  // heads strategy drives it, injecting inheritedContext + an onPhase event
+  // sink via defaultOptions().
+  private _headController: HeadController | null = null;
+
+  // The orchestrator's view of head activity (journal + runs + steps). Shared by
+  // getHeadController (write path) and getHeadRuns (read path).
+  private _headJournal: HeadJournal | null = null;
+  protected get headJournal(): HeadJournal {
+    if (!this._headJournal) this._headJournal = new HeadJournal(this.boundSql);
+    return this._headJournal;
+  }
+
+  // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
+  // Backed by `agent_log` rows of kind in {step, tool_call, tool_result,
+  // reactor_decision}. The RunEventRecorder shim adapts the existing emit()
+  // API to the unified log so the SSE stream and the events sidebar share
+  // one source of truth.
+  private _eventRecorder: RunEventRecorder | null = null;
+  protected get eventRecorder(): RunEventRecorder {
+    if (!this._eventRecorder) {
+      this._eventRecorder = new RunEventRecorder(this.boundSql);
+    }
+    return this._eventRecorder;
+  }
+
+  // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
+  // Load-bearing primitives (spec §1):
+  //   - `agent_log`     unified append-only ledger (initEventsHubTables)
+  //   - EventLog        publish/pending/defer/dismiss/query
+  //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
+  //   - ReplyChannelStore  durable reply-channel rows + dispatchers
+  // Spec: docs/EVENTS-HUB-SPEC.md
+  private _eventLog: import('@proteus/core').EventLog | null = null;
+  protected get eventLog(): EventLog {
+    if (!this._eventLog) {
+      this._eventLog = new EventLog(this.ctx.storage.sql);
+    }
+    return this._eventLog;
+  }
+  // agent_facts world model — typed, idempotent, keyed.
+  private _factsStore: FactsStore | null = null;
+  protected get facts(): FactsStore {
+    if (!this._factsStore) this._factsStore = createFactsStore(this.boundSql);
+    return this._factsStore;
+  }
+
+  // Background-job registry — work auto-detached past the 30s threshold (#173).
+  private _jobs: BackgroundJobStore | null = null;
+  protected get jobs(): BackgroundJobStore {
+    if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
+    return this._jobs;
+  }
+
+  // Durable MCTS search checkpoints — the resume record a think(mcts) evicted
+  // mid-search continues from (B6). One per DO; keyed by search root id.
+  private _mctsSearchStore: MctsSearchStore | null = null;
+  protected get mctsSearchStore(): MctsSearchStore {
+    if (!this._mctsSearchStore) this._mctsSearchStore = new MctsSearchStore(this.boundSql);
+    return this._mctsSearchStore;
+  }
+  // The backend-agnostic background-job lifecycle (detach → settle → wake +
+  // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
+  // and the BackendHost programmatic-turn wake. Owns the cancel-controller map.
+  private _jobRunner: BackgroundJobRunner | null = null;
+  protected get jobRunner(): BackgroundJobRunner {
+    if (!this._jobRunner) {
+      this._jobRunner = new BackgroundJobRunner({
+        store: this.jobs,
+        fiber: this.rt.schedule.fiber,
+        host: this.host,
+        eventLog: this.eventLog,
+        scheduleDrain: () => this.orch.scheduleDrain(),
+        logActivity: (event, detail) => this.logActivity(event, detail),
+        // Mission Inbox: a settled background job also notifies the owner
+        // (email on the orchestrator; skips silently when pieces are absent).
+        onSettled: (job) => this.notifyOwner(
+          `Background ${job.kind} job ${job.status}`,
+          job.status === 'completed'
+            ? `Background ${job.kind} job ${job.id} completed.\n\nResult:\n${job.result ?? '(empty)'}`
+            : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
+        ),
+        // Evict-resume (B6): re-drive an interrupted job from its durable
+        // checkpoint. `think` re-runs the raw strategy tool — MCTS continues its
+        // remaining search budget via the search store; heads re-run from input.
+        // Side-effecting kinds (execute_tools / run) are not safe to blindly
+        // re-execute, so they decline and fall back to the eviction failure.
+        resume: (kind, input, signal) => this.resumeBackgroundJob(kind, input, signal),
+      });
+    }
+    return this._jobRunner;
+  }
+  /** Foreground long-tool controllers before they cross the background
+   *  threshold. Once detached, BackgroundJobRunner owns cancellation. */
+  protected readonly _activeToolControllers = new Set<AbortController>();
+
+  // Typed accessors over the `agent_config` key/value table — replaces
+  // scattered raw SQL with a single deep module.
+  private _config: import('@proteus/core').AgentConfigStore | null = null;
+  protected get config(): import('@proteus/core').AgentConfigStore {
+    if (!this._config) this._config = createAgentConfigStore(this.boundSql);
+    return this._config;
+  }
+
+  // StrategyRegistry — single-shot + MCTS + Heads adapters. Powers the
+  // unified `think(strategy, task, budget)` tool.
+  private _strategyRegistry: import('@proteus/core').StrategyRegistry | null = null;
+  private get strategyRegistry(): import('@proteus/core').StrategyRegistry {
+    if (this._strategyRegistry) return this._strategyRegistry;
+    const reg = createStrategyRegistry();
+    reg.register(createSingleShotStrategy());
+    reg.register(createMCTSStrategy());
+    reg.register(createHeadsStrategy());
+    this._strategyRegistry = reg;
+    return reg;
+  }
+
+  private _thinkTool: ToolSet[string] | null = null;
+  private getThinkTool(): ToolSet[string] {
+    if (this._thinkTool) return this._thinkTool;
+    this._thinkTool = createThinkTool({
+      registry: this.strategyRegistry,
+      rt: this.rt,
+      model: this.getModel(),
+      // Host-injected infrastructure the LLM must not set. Recomputed per
+      // think() call: MCTS gets a fresh SessionWriter + the operator's stored
+      // overrides (mcts_c/iterations/depth/branches — an explicit LLM budget
+      // still wins); heads get the shared controller, the live conversation as
+      // inheritedContext, and an onPhase sink that streams head_split /
+      // head_merge into the durable event log.
+      defaultOptions: () => ({
+        mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
+        heads: {
+          controller: this.getHeadController(),
+          inheritedContext: this.readInheritedContext(),
+          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
+        },
+      }),
+    });
+    return this._thinkTool;
+  }
+
+  /** Convenience: current runId for event emission. One run per turn. */
+  protected _currentRunId = '';
+
+  // ── Skills (turn-scoped) ───────────────────────────────────────
+  /** Skill names invoked this turn (via /name or skills({action:'invoke'})).
+   *  Cleared at beforeTurn; closures from the skills tool mutate via .add(). */
+  private readonly _turnInvokedSkills = new Set<string>();
+  /** Resolved active set for the current turn. Built in beforeTurn, read by
+   *  the system-prompt assembly via TurnConfig.system override. */
+  private _turnActiveSkills: ActiveSkillSet | null = null;
+  /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
+  private _skillsVfs: SkillsVfs | null = null;
+  private getSkillsVfs(): SkillsVfs {
+    if (this._skillsVfs) return this._skillsVfs;
+    const vfs = this.rt.storage.vfs;
+    this._skillsVfs = {
+      exists: (p) => vfs.exists(p),
+      readFile: (p, opts) => vfs.readFile(p, opts),
+      writeFile: (p, data) => vfs.writeFile(p, data),
+      readdir: (p) => vfs.readdir(p),
+      unlink: (p) => vfs.unlink(p),
+      mkdir: (p, opts) => vfs.mkdir(p, opts),
+    };
+    return this._skillsVfs;
+  }
+
+  // ── Activity logging: persisted + broadcast to Logs pane ──
+  private _turnT0 = 0;
+
+  // Per-turn in-flight flag — forkAgent rejects with "agent busy" while set.
+  // Set in beforeTurn, cleared in onChatResponse (after durable persist;
+  // evolution is fire-and-forget and does not extend the busy window).
+  protected _inFlight = false;
+  /** Synthetic drain id captured when its programmatic queue entry actually
+   *  starts. `this.messages` may already contain a newer queued user message
+   *  by the time this turn finishes. */
+  protected _activeDrainTurnId: string | null = null;
+  protected _activeProgrammaticUserMessage: UIMessage | null = null;
+  /** Standalone drains may span Think auto-continuations under one request id. */
+  protected readonly _pendingDrainReplyTurns = new Map<string, string>();
+
+  /** The public extension seam on the cloud backend — the SAME ExtensionHost
+   *  contract `runChat` drives on the CLI, bridged onto Think's subclass
+   *  hooks: beforeTurn → onTurnStart + transformContext, beforeStep → the
+   *  shared step pipeline (composePrepareStep), beforeToolCall/afterToolCall
+   *  → onToolCall/onToolResult, onChatResponse → onTurnEnd. Persistent for
+   *  the DO activation. The default compaction extension registers here at
+   *  construction (registerCompactionExtension). */
+  protected readonly extensions = new ExtensionHost();
+
+  /** Ephemeral system-state blocks for this DO activation (core
+   *  volatile-context.ts). In-memory only — hibernation/reset empties it, so
+   *  a cold start attaches exactly one fresh block; the compaction
+   *  extension's onOutcome resets it whenever the model-visible stream
+   *  changed shape ('planned'/'invalidated') because the frozen block
+   *  positions are meaningless against a rewritten stream. */
+  private readonly ephemeralLedger = new EphemeralContextLedger();
+  protected _cliCwd: string | null = null;
+  // Current turn identity for the device daemon's pre-mutation shadow-git
+  // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
+  // turn so background tool continuations keep tagging their originating turn.
+  private _turnCheckpoint: { turnId: string; sessionId: string } | null = null;
+
+  // The prepared streamText opts of the LAST live chat inference, stashed at
+  // the end of beforeTurn — Think 0.8's one turn-assembly hook on the live
+  // inference path (the effective TurnConfig: final system/messages/tools/
+  // model; Think then only wraps tool execute and re-applies the same values,
+  // so a replay of these opts is the same request modulo per-step cache
+  // markers, which are inert decoration). The shadow eval replays these for
+  // the pending scaffold's host.defaultInference so the A/B measures the
+  // scaffold delta, not a context handicap: the live answer saw the whole
+  // conversation while the shadow's reconstruction used to see only the task
+  // text — structurally tie-prone. Also the task source for the evolved-
+  // scaffold inference transform. In-memory only: turns are serialized on
+  // the TurnQueue and the shadow eval captures the reference synchronously
+  // in the same onChatResponse, so it cannot be overwritten by a later turn;
+  // after a DO restart the shadow falls back to the task-only reconstruction.
+  protected _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
+
+  getCliCwdForDevice(): string | null {
+    return this._cliCwd;
+  }
+
+  getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
+    return this._turnCheckpoint;
+  }
+
+  // ── Bound SQL executor ────────────────────────────────────────────────
+  // `this.sql` is a plain method on the Agent base class — it needs `this`
+  // bound to reach `this.ctx.storage.sql`. Passing `this.sql` as a bare
+  // function reference to any helper (readForkLineage, forkWorkspaceStorage)
+  // loses the binding and fails with `Cannot read properties of undefined
+  // (reading 'ctx')`. This closure captures `this` once and can be safely
+  // passed by reference.
+  private _boundSql: SqlExecutor | null = null;
+  protected get boundSql(): SqlExecutor {
+    if (!this._boundSql) {
+      this._boundSql = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+        (this.sql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown[])(strings, ...values)
+      ) as SqlExecutor;
+    }
+    return this._boundSql;
+  }
+
+  protected logActivity(event: string, detail?: string) {
+    const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
+    const now = Date.now();
+    console.log(`[proteus:${String(elapsed).padStart(6)}ms] ${event}${detail ? ` — ${detail}` : ""}`);
+    try {
+      this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
+        VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
+    } catch { /* table may not exist on very first start */ }
+  }
+
+  protected get rt(): CFRuntime {
+    if (!this._rt) {
+      // No onToolRegistered hook: PreambleCraftedExecutor reads craftStore.list()
+      // fresh on every execute_tools call, so mid-turn saves propagate
+      // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
+      // `this` (a subclass) DOES have access to its protected env/ctx; cast to
+      // the AgentHost view createCFRuntime needs.
+      const runtime = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0], {
+        ownerUserId: () => this.getOwnerUserId(),
+        workspaceName: this.workspaceName(),
+        capabilityToken: () => this.workspaceCapabilityToken(),
+      });
+      this.configureRuntime(runtime);
+      this._rt = runtime;
+    }
+    return this._rt;
+  }
+
+  /** Synchronous post-construction hook for actor-specific mounts. The runtime
+   * is not cached until this returns, so implementations must use the argument
+   * and must not re-enter `this.rt`. */
+  protected configureRuntime(_runtime: CFRuntime): void {}
+
+  /**
+   * Build (or return cached) the execute_tools AI tool for this DO.
+   *
+   * Construction (once per DO lifetime):
+   *   - Build the list of codemode providers: a `codemode` provider seeded
+   *     with the pre-existing crafted tools at CONSTRUCTION time (for
+   *     type-generation in the description string), plus every registered
+   *     executor provider (workspace / nimbus / sandbox / laptop).
+   *   - Wire a `PreambleCraftedExecutor` as the executor. It wraps
+   *     upstream `DynamicWorkerExecutor` and injects a `const tools = {...}`
+   *     preamble per execute, reading craftStore.list() fresh — so tools
+   *     saved mid-turn are callable on the next execute_tools step and
+   *     crafted-tool bodies inherit lexical scope with `workspace.*` and
+   *     `codemode.*` (Phase A + C of CRAFT-ARCHITECTURE.md).
+   *
+   * Newly-named crafted tools (saved after this tool is constructed) are
+   * NOT reflected in the LLM-visible description string, but codemode's
+   * sandbox Proxy forwards any property access to the dispatcher — so
+   * `codemode.<new_name>(args)` still dispatches into the preamble's
+   * `tools.<new_name>` via regular lexical lookup.
+   */
+  private getExecuteToolsTool(): unknown {
+    if (!this._craftExecTool) {
+      const env = this.env as Env & Record<string, unknown>;
+      if (!env.LOADER) throw new Error("CF runtime missing LOADER binding");
+
+      const executor = new PreambleCraftedExecutor(env.LOADER, this.rt.craftStore, this.boundSql);
+
+      // Seed the `codemode` provider with the INJECTABLE crafted tools at
+      // construction time so the LLM's initial description string lists them
+      // — the same selection the preamble makes, so the advertised set can't
+      // disagree with the callable set. No-op bodies suffice.
+      const seededCraftedTools: Record<string, { description: string; execute: (arg: unknown) => Promise<unknown> }> = {};
+      for (const t of selectInjectableCraftedTools(this.rt.craftStore, this.boundSql)) {
+        seededCraftedTools[t.name] = {
+          description: t.description || `Crafted tool: ${t.name}`,
+          // This execute is never invoked — the preamble injects the real
+          // body as a `tools.<name>` literal in-sandbox. The dispatcher
+          // miss that would otherwise occur is irrelevant because the
+          // sandbox's `codemode.<name>(args)` goes to the local `tools`
+          // object, not through the dispatcher. We provide an execute
+          // stub only because createCodeTool's ToolProvider shape requires it.
+          execute: async () => ({ error: 'crafted tools run through the preamble, not the dispatcher' }),
+        };
+      }
+
+      const executionRouter = this.rt.executionRouter;
+      const executorProviders = executionRouter?.getProviders() ?? [];
+      const craftedProvider = { name: 'codemode', tools: seededCraftedTools };
+      // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
+      // Sub-call has no llm.query in scope, so depth is bounded at 1.
+      const rlmProvider = createRLMProvider(
+        this.providerRegistry(),
+        () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
+      );
+      // `web.*` — same web search/fetch provider that backs the web_* tools.
+      const webProvider = createWebCodemodeProvider(this.getWebSearchProvider());
+      // Record which executor the agent actually works in, so the UI (diff /
+      // file manager) defaults to where work happened. One upsert per executor
+      // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
+      const recordExecutor = (name: string) => {
+        if (this._executorsUsedThisTurn.has(name)) return;
+        this._executorsUsedThisTurn.add(name);
+        try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
+      };
+      const allProviders = [craftedProvider, rlmProvider, ...this.extraCodemodeProviders(), webProvider, ...executorProviders.map(p => {
+        const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+        const wrapped: typeof tools = {};
+        for (const [k, tool] of Object.entries(tools)) {
+          wrapped[k] = { ...tool, execute: async (...args) => { const r = await tool.execute(...args); recordExecutor(p.name); return r; } };
+        }
+        return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
+      })];
+
+      this._craftExecTool = createCodeTool({
+        tools: allProviders as Parameters<typeof createCodeTool>[0]["tools"],
+        executor: executor as unknown as Parameters<typeof createCodeTool>[0]["executor"],
+      });
+    }
+    return this._craftExecTool;
+  }
+
+  // ── Model resolution ───────────────────────────────────────────
+
+  protected providerRegistry(): AgentProviderRegistry {
+    return this.ownedModelServices.providerRegistry();
+  }
+
+  protected getOwnerUserDO(): DurableObjectStub<UserDO> | null {
+    const userId = this.getOwnerUserId();
+    if (!userId) return null;
+    return this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  }
+
+  protected requireOwnerUserDO(): DurableObjectStub<UserDO> {
+    const stub = this.getOwnerUserDO();
+    if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
+    return stub;
+  }
+
+  /** The identity this actor presents on every privileged user-level call.
+   *  Throws rather than falling back when no token exists — an unclaimed
+   *  workspace reaches nothing. */
+  protected async userCaller(): Promise<UserCaller> {
+    const workspaceToken = await this.workspaceCapabilityToken();
+    if (!workspaceToken) {
+      throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
+    }
+    return { workspaceToken };
+  }
+
+  /** The owner's UserDO paired with this actor's identity — the two things
+   *  every privileged user-level call needs. */
+  protected async userHub(): Promise<{ stub: DurableObjectStub<UserDO>; caller: UserCaller }> {
+    return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
+  }
+
+  // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
+
+  /** Subordinate facets mount these methods at `/workspace`. They deliberately
+   * carry no `@callable`: only a worker-held parent stub can reach them. */
+  private workspaceFileFailure<T>(path: string, error: unknown): ParentRpcResult<T> {
+    return {
+      ok: false,
+      error: {
+        code: isVfsError(error) ? error.code : 'EIO',
+        message: error instanceof Error ? error.message : String(error),
+        path,
+      },
+    };
+  }
+
+  async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
+    try {
+      const content = await this.rt.sqliteFS.readFile(path);
+      return { ok: true, value: typeof content === 'string' ? new TextEncoder().encode(content) : content };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
+    try {
+      if (input.kind === 'file') await this.rt.sqliteFS.writeFile(input.path, input.data);
+      else await this.rt.sqliteFS.mkdir(input.path, { recursive: input.recursive });
+      return { ok: true, value: null };
+    } catch (error) {
+      return this.workspaceFileFailure(input.path, error);
+    }
+  }
+
+  async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
+    try {
+      return { ok: true, value: await this.rt.sqliteFS.readdir(path) };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
+    try {
+      return { ok: true, value: await this.rt.sqliteFS.stat(path) };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
+    try {
+      await this.rt.sqliteFS.unlink(path);
+      return { ok: true, value: null };
+    } catch (error) {
+      return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  /** The web search + fetch provider — built once per DO lifetime. Key-less by
+   *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
+   *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
+   *  routes through env.AI.toMarkdown when the AI binding is present. */
+  private getWebSearchProvider(): WebSearchProvider {
+    return this.ownedModelServices.getWebSearchProvider();
+  }
+
+  /** Stored model spec, or null when unset (registry will pick the default). */
+  protected getStoredModelId(): string | null {
+    return this.config.getModel();
+  }
+
+  // ── Think lifecycle overrides ──────────────────────────────────
+
+  /** Think calls `getModel()` synchronously per turn — cache to avoid
+   *  reconstructing on every turn when the stored spec hasn't changed. */
+  private _cachedModel: LanguageModel | null = null;
+  private _cachedModelSpec: string | null = null;
+  getModel(): LanguageModel {
+    this.logActivity("getmodel");
+    const stored = this.getStoredModelId();
+    if (this._cachedModel && this._cachedModelSpec === stored) return this._cachedModel;
+    const model = this.ownedModelServices.resolveModel(stored);
+    this._cachedModel = model; this._cachedModelSpec = stored;
+    return model;
+  }
+
+  /**
+   * Delegates to @proteus/core's canonical prompt builder (F1 fix: documents
+   * `codemode.*` — the real namespace crafted tools land in — instead of the
+   * former `tools.*` lie). Cached across turns; invalidated when the soul
+   * text or the registered executor set changes.
+   */
+  protected _cachedSystemPrompt: string | null = null;
+  protected _cachedSystemPromptKey: string = "";
+  /** Cached SOUL.md text. Loaded lazily on first read, invalidated by
+   *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
+  protected _cachedSoulText: string | null = null;
+  private getSoulText(): string {
+    if (this._cachedSoulText === null) {
+      this._cachedSoulText = readSoul(this.boundSql) ?? '';
+    }
+    return this._cachedSoulText;
+  }
+
+  getSystemPrompt(): string {
+    this.logActivity("getsystemprompt_start");
+    const execs = this.rt.executionRouter?.listExecutors() ?? [];
+    const execKey = execs.map(e =>
+      `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
+    ).join(",");
+    const model = this.promptModelContext();
+    const availableTools = actorActiveTools(this.actorToolDeps());
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}`;
+    let base: string;
+    if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
+      base = this._cachedSystemPrompt;
+      this.logActivity("getsystemprompt_end", "cache hit");
+    } else {
+      // Always build the BASE prompt here — no turn-scoped state. The
+      // authoritative per-turn prompt (skills, MCP tools, fresh device
+      // status, change notice) is assembled in `beforeTurn` and ALWAYS
+      // returned via TurnConfig.system, which overrides this one for chat
+      // turns (Think calls getSystemPrompt() BEFORE beforeTurn()). Mixing
+      // turn state in here would poison the cache across turns.
+      base = buildSystemPromptSync(this.rt, {
+        executors: execs,
+        availableTools,
+        backend: 'cf',
+        model,
+      });
+      this._cachedSystemPrompt = base;
+      this._cachedSystemPromptKey = key;
+      this.logActivity("getsystemprompt_end", `${base.length} chars`);
+    }
+    // BYTE-STABLE: no per-turn state rides here. The volatile half (facts,
+    // executor status, device notice, skill activations) is appended to the
+    // turn's MESSAGES in beforeTurn — see prompting/volatile-context.ts.
+    return base;
+  }
+
+  /** The recent-facts block for the volatile turn-context message — rendered
+   *  fresh each turn (facts change), so it stays out of the cacheable system
+   *  prefix. Undefined when there are no facts yet. */
+  private renderFactsForTurn(): string | undefined {
+    try {
+      return renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 }) || undefined;
+    } catch { return undefined; /* facts table not yet initialized */ }
+  }
+
+  /**
+   * Compute a lightweight cache key from CraftStore + score state.
+   * Includes craft_scores.MAX(last_used_at) because effective-score filtering
+   * depends on recency — without it, the cached ToolSet would keep re-using a
+   * stale score-filtered view across turns even as usage shifts.
+   */
+  private _craftCacheKey(): string {
+    try {
+      const craft = this.sql<{ cnt: number; latest: number }>`
+        SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest FROM crafted_tools`;
+      const scores = (() => {
+        try {
+          return this.sql<{ lastUsed: number }>`
+            SELECT COALESCE(MAX(last_used_at), 0) as lastUsed FROM craft_scores`;
+        } catch { return [{ lastUsed: 0 }]; }
+      })();
+      const { cnt, latest } = craft[0] ?? { cnt: 0, latest: 0 };
+      const lastUsed = scores[0]?.lastUsed ?? 0;
+      return `${cnt}:${latest}:${lastUsed}`;
+    } catch { return ""; }
+  }
+
+  getTools(): ToolSet {
+    // The Think chat loop's tool source (first hook called by _runInferenceLoop).
+    // Returns the CHAT view = the raw surface + the auto-background wrap (#173).
+    // Internal eval side-streams use getRawTools() instead, so a >30s tool run
+    // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
+    // injects an unsolicited "job completed" turn into the user's chat.
+    this._turnT0 = performance.now();
+    this.logActivity("gettools_start");
+    return this.wrapToolsForBackground(this.getRawTools());
+  }
+
+  /** The UNWRAPPED tool surface — built + cached. Shared by the chat path (via
+   *  getTools, which adds the background wrap) and by internal eval side-streams
+   *  that must run tools to completion inline (never auto-background). */
+  protected getRawTools(): ToolSet {
+    // Cache key includes CraftStore updated_at AND craft_scores last_used_at
+    // because effective-score filtering depends on recency.
+    const cacheKey = this._craftCacheKey();
+    if (this._cachedTools && cacheKey === this._cachedToolsKey) {
+      return this._cachedTools;
+    }
+    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
+
+    try {
+      const orchestrator = this;
+
+      // No registry sync: PreambleCraftedExecutor reads craftStore.list()
+      // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
+
+      const shellApprovalMode = this.config.getShellApprovalMode();
+
+      const tools = buildBuiltinTools({
+        rt: this.rt,
+        preBuiltExecuteTool: this.getExecuteToolsTool(),
+        // Unified strategy dispatcher (single-shot / mcts / heads). Internally
+        // owns the HeadController + MCTS session — the bare `explore` /
+        // `split_heads` tools were folded into this single entry point.
+        thinkTool: this.getThinkTool(),
+        // Vectorize-backed semantic memory. memory.search auto-uses
+        // hybrid retrieval when this is provided + available; FTS5-only fallback.
+        vectorStore: this.rt.vectorStore,
+        // Per-agent approval policy for shell exec.
+        shellApprovalMode,
+        // Typed, keyed world-model store — exposes the `fact` tool.
+        facts: this.facts,
+        // Single `skills` tool — list/read/invoke/create/edit/delete actions.
+        // Per-turn invocation state lives on the orchestrator; closures here
+        // mutate / read it without ever recreating the Set, so the binding
+        // stays stable across the cached toolset.
+        skills: {
+          vfs: orchestrator.getSkillsVfs(),
+          recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
+          currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
+        },
+        // Per-actor-class deps (peer teams, product changes) — the owner is
+        // resolved lazily per action, so the cached toolset stays valid
+        // across claimOwner; actors without these deps have no such tools.
+        ...this.actorToolDeps(),
+        // Web research — key-less default, codemode web.* wired below.
+        webSearch: this.getWebSearchProvider(),
+      });
+
+      // Anthropic prompt-caching: one breakpoint on the last tool caches the
+      // whole stable tool surface (tools precede system+messages in Anthropic's
+      // cache hierarchy). Namespaced → inert for non-Anthropic providers.
+      markLastToolForAnthropicCache(tools);
+
+      this._cachedTools = tools;
+      this._cachedToolsKey = cacheKey;
+      this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
+      return tools;
+    } catch (err) {
+      console.error("[proteus] getRawTools() FAILED:", err);
+      throw err;
+    }
+  }
+
+  /**
+   * Lazily build the HeadController that spawns ExplorationAgent Facets in
+   * head mode (initHead / runAsHead / abortHead). Driven by the `think` tool's
+   * heads strategy; inheritedContext + the onPhase event sink are injected
+   * per call via readInheritedContext() / emitHeadPhase().
+   */
+  private getHeadController(): HeadController {
+    if (this._headController) return this._headController;
+    // The HeadRuntime flows through the BackendHost seam (CLI supplies a
+    // subprocess-backed one or undefined → single-shot degrade).
+    const runtime = this.host.headRuntime;
+    if (!runtime) throw new Error('Agent has no owner — branching heads need UserDO access for auth.');
+    this._headController = new HeadController(runtime, this.headJournal);
+    return this._headController;
+  }
+
+  /** Record the comparable heads of a completed think({strategy:'heads'}) run as
+   *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
+   *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only grounded
+   *  scores are a real preference signal, so emit nothing when ungrounded. */
+  private recordHeadsTake(merge: MergeResult, task: string): void {
+    if (!merge.grounded) return;
+    const heads = merge.headScores
+      .filter((s) => s.status === 'completed')
+      .map((s) => ({ id: s.id, text: s.text, score: s.score }));
+    try {
+      recordHeadsTakeSet(this.boundSql, { task, heads });
+    } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
+  }
+
+  /** Build the CF HeadRuntime (Facet spawner + merge LLM) once per DO lifetime,
+   *  lazily — heads need the agent's owner for UserDO auth. undefined when the
+   *  agent has no owner; surfaced via host.headRuntime. */
+  private _cfHeadRuntime: HeadRuntime | null = null;
+  protected getCFHeadRuntime(): HeadRuntime | undefined {
+    if (this._cfHeadRuntime) return this._cfHeadRuntime;
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) return undefined;
+    this._cfHeadRuntime = createCFHeadRuntime(
+      this as unknown as Parameters<typeof createCFHeadRuntime>[0],
+      ownerUserId,
+      () => this.workspaceCapabilityToken(),
+      this.workspaceName(),
+      {
+        executor: this.rt.executor,
+        explorer: this.rt.llm,
+        ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
+      },
+    );
+    return this._cfHeadRuntime;
+  }
+
+  /**
+   * The parent's recent conversation, handed to each spawned head so it sees
+   * the full context. Capped to the last N messages to bound head LLM context
+   * over long sessions (Think Session already compacts the table at the
+   * orchestrator level; this is a second safety net for head spawns).
+   */
+  protected readInheritedContext(): SerializedMessage[] {
+    const INHERITED_CONTEXT_CAP = 50;
+    try {
+      type Row = { id: string; role: string; content: string; created_at: string };
+      const rows = this.sql<Row>`
+        SELECT id, role, content, created_at
+        FROM (
+          SELECT id, role, content, created_at
+          FROM assistant_messages
+          ORDER BY created_at DESC
+          LIMIT ${INHERITED_CONTEXT_CAP}
+        ) sub
+        ORDER BY created_at ASC`;
+      return rows.map((r) => ({
+        id: r.id,
+        role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
+          ? r.role
+          : 'assistant',
+        content: uiMessageText(r.content),
+        createdAt: Date.parse(r.created_at) || 0,
+      }));
+    } catch {
+      // assistant_messages table may not yet exist on a fresh agent.
+      return [];
+    }
+  }
+
+  /** Stream head_split / head_merge into the durable event log so SSE
+   *  subscribers + MCP `list_run_events` see the split lifecycle. */
+  private emitHeadPhase(event: SplitPhaseEvent): void {
+    try {
+      if (!this._currentRunId) return;
+      if (event.kind === 'split') {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'head_split',
+          rootId: event.rootId,
+          headIds: [...event.headIds],
+          rationale: event.rationale,
+        });
+      } else {
+        this.eventRecorder.emit(this._currentRunId, {
+          type: 'head_merge',
+          rootId: event.rootId,
+          headCount: event.headCount,
+          mergedNarrative: event.mergedNarrative,
+        });
+      }
+    } catch (err) {
+      console.warn('[proteus] event emit failed at head onPhase:', err);
+    }
+  }
+
+  /**
+   * Fetch the user's MCP tool descriptors and reconstruct AI-SDK Tool
+   * adapters whose `execute` closures dispatch back to UserDO via RPC.
+   *
+   * Cache invalidation:
+   *   - UserDO holds a monotonic `mcp_updated_at` watermark, bumped on
+   *     add/remove/edit + on OAuth-callback completion.
+   *   - We cache descriptors + closures by that integer; rebuild only when
+   *     it changes. Result is stable across turns until the user actually
+   *     reconfigures something.
+   *
+   * Closure boundary: the descriptor that crosses RPC carries only the JSON
+   * Schema + name + serverId; we re-construct the AI-SDK `Tool` here so the
+   * `execute` arrow can capture `userDOStub`, the caller identity, `serverId`,
+   * and `name` lexically. The identity is the workspace capability token, so a
+   * facet dispatches as its parent workspace and cannot name another.
+   */
+  private async buildUserMcpTools(): Promise<ToolSet> {
+    const userId = this.getOwnerUserId();
+    if (!userId) return {};
+    const userDOStub = this.env.UserDO.get(this.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+
+    // No identity, no user-level tools: advertising descriptors the actor can
+    // no longer dispatch just spends context on calls that will be refused.
+    let caller: UserCaller;
+    try { caller = await this.userCaller(); }
+    catch { return {}; }
+
+    let watermark: number;
+    try { watermark = await userDOStub.userMcp_updatedAt(caller); }
+    catch (err) {
+      console.warn('[proteus] mcp watermark fetch failed:', (err as Error).message);
+      return this._cachedMcpTools;
+    }
+    if (watermark === this._cachedMcpToolsKey && Object.keys(this._cachedMcpTools).length > 0) {
+      return this._cachedMcpTools;
+    }
+    // Watermark = 0 means UserDO has never seen an MCP mutation. Skip the
+    // descriptor fetch entirely so cold UserDOs don't pay for MCP plumbing.
+    if (watermark === 0) {
+      this._cachedMcpTools = {};
+      this._cachedMcpToolsKey = 0;
+      return this._cachedMcpTools;
+    }
+
+    let descriptors: SerializableToolDescriptor[];
+    try { descriptors = await userDOStub.userMcp_toolDescriptors(caller); }
+    catch (err) {
+      console.warn('[proteus] mcp descriptor fetch failed:', (err as Error).message);
+      return this._cachedMcpTools;
+    }
+
+    const tools: ToolSet = {};
+    for (const d of descriptors) {
+      const serverId = d.serverId;
+      const mcpName = d.name;
+      tools[d.toolKey] = tool({
+        description: d.description ?? `${d.serverName}/${mcpName}`,
+        inputSchema: jsonSchema<Record<string, unknown>>(
+          (d.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0],
+        ),
+        execute: async (args: unknown) => {
+          try { return await userDOStub.userMcp_callTool(caller, serverId, mcpName, args); }
+          catch (err) { return { isError: true, error: (err as Error).message }; }
+        },
+      });
+    }
+
+    this._cachedMcpTools = tools;
+    this._cachedMcpToolsKey = watermark;
+    this.logActivity('mcp_tools_rebuilt', `${Object.keys(tools).length} tools @ wm=${watermark}`);
+    return tools;
+  }
+
+  configureSession(session: Session): Session {
+    // The agent's durable context is `getSystemPrompt()` (soul + tools) plus
+    // the persisted conversation and the ephemeral/turn-local context split —
+    // a single source of truth, not Think's freezable context blocks. No
+    // Session policy attaches here: compaction is the transformContext
+    // extension (registerCompactionExtension), which rewrites the turn's
+    // model-visible history without ever touching the stored messages.
+    return session;
+  }
+
+  /** Resolved `<provider>/<modelId>` the next turn will actually use — the
+   *  same resolution getModel() applies. Computing the threshold from the RAW
+   *  stored spec was the 41%-of-Kimi bug: an unset model gave "" → the 128k
+   *  default window instead of the resolved default model's real 262k. Falls
+   *  back to the raw spec only pre-claim (no provider registry yet). */
+  private effectiveModelSpec(): string {
+    const stored = this.getStoredModelId();
+    try {
+      return this.providerRegistry().normalizeSpecSync(stored);
+    } catch {
+      return stored ?? '';
+    }
+  }
+
+  protected effectiveModelProviderFamily(): string {
+    try { return parseModelSpec(this.effectiveModelSpec()).provider; }
+    catch { return ''; }
+  }
+
+  /** Prompt model context from the RESOLVED spec. The raw stored id is null
+   *  on default-configured agents, which left family gating (the Kimi bare
+   *  tool-name index + operating guidance) inert on the primary hosted path —
+   *  the same raw-spec class of bug effectiveModelSpec() fixed for the
+   *  compaction threshold. */
+  private promptModelContext(): { id?: string; provider?: string } {
+    const spec = this.effectiveModelSpec();
+    if (!spec) return {};
+    try {
+      const { provider, modelId } = parseModelSpec(spec);
+      return { id: modelId, provider };
+    } catch {
+      return { id: spec };
+    }
+  }
+
+  /** Catalog ModelInfo for the resolved spec, cached per spec. Arms an async
+   *  catalog lookup on first sight of a spec; until (and unless) it lands,
+   *  static fallbacks answer (window table / conservative media policy). */
+  private _catalogModel: { spec: string; info: ModelInfo | null } | null = null;
+  private catalogInfoForSession(): ModelInfo | null {
+    const spec = this.effectiveModelSpec();
+    if (this._catalogModel?.spec !== spec) {
+      this._catalogModel = { spec, info: null };
+      void this.lookupCatalogModel(spec);
+    }
+    return this._catalogModel.info;
+  }
+
+  /** The resolved model's context window: catalog-reported when the async
+   *  lookup has landed, else the static fallback table. Feeds the compaction
+   *  extension through the transformContext seam. */
+  protected sessionContextWindow(): number {
+    return this.catalogInfoForSession()?.contextWindow ?? contextWindowForModel(this.effectiveModelSpec());
+  }
+
+  /** Media kinds the next turn's model request can carry — the attachment
+   *  sanitizer's policy input. Provider class caps the wire format (the
+   *  openai-compatible chat schema is text+image ONLY — the proven Workers AI
+   *  PDF 400); the catalog's input modalities narrow it per model once the
+   *  async lookup lands. Until then the conservative default answers, which
+   *  only errs toward sanitizing (never toward a rejected request). */
+  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
+    const info = this.catalogInfoForSession();
+    const spec = this.effectiveModelSpec();
+    let provider: string | undefined;
+    try { provider = parseModelSpec(spec).provider; } catch { /* pre-claim empty spec */ }
+    return acceptedMediaForModel({
+      ...(provider !== undefined ? { provider } : {}),
+      ...(info?.inputModalities ? { catalogInputModalities: info.inputModalities } : {}),
+    });
+  }
+
+  private async lookupCatalogModel(spec: string): Promise<void> {
+    if (!spec) return;
+    try {
+      const { provider, modelId } = parseModelSpec(spec);
+      const reg = this.providerRegistry();
+      const info = await catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
+      if (info && this._catalogModel?.spec === spec) this._catalogModel.info = info;
+    } catch { /* catalog unavailable — static fallbacks stay authoritative */ }
+  }
+
+  // ── Think lifecycle hooks ──────────────────────────────────────
+
+  // Tools the model is allowed to call. Think merges workspace tools (read, write,
+  // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
+  // activeTools restricts the model to the built-in tools + session context tools,
+  // preventing Think's workspace tools from being sent in the request payload.
+  // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
+
+  async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    this.acc.reset(Date.now());
+    this._executorsUsedThisTurn.clear();
+    this._cliCwd = readCliCwd(ctx.body);
+    // Reset event-injection splice state; a continuation turn re-absorbs the
+    // just-settled batches so injected events ride into it the same way the
+    // enqueued drain path's durable message does. Batches still waiting
+    // inject into this turn either way.
+    this._eventInjections.beginTurn(ctx.continuation);
+    this._inFlight = true;
+    this.logActivity("beforeturn", "streamText() called next");
+    // A real user message is the verdict on the previous turn — dispatch the
+    // detached outcome review (Hermes-style forked background review). Runs
+    // concurrently with this turn; never blocks it. Programmatic turns
+    // (reactor / job wake) are not user verdicts.
+    if (!this.lastUserTurnIsProgrammatic()) {
+      this.orch.observeUserTurn(extractLastUserText(ctx.messages));
+    }
+    // Start a new run for the event log, with provenance so cross-run history
+    // (Supervise altitude) can show what kicked each run off. This is the chat
+    // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
+    this._currentRunId = `run-${nanoid()}`;
+    // Tag this turn for device-side file checkpoints: the user message id is
+    // what the web turn card holds, so restore-by-turn resolves directly.
+    {
+      const userMessages = this.messages.filter((m) => m.role === 'user');
+      const lastUserId = userMessages[userMessages.length - 1]?.id;
+      this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
+    }
+    try {
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'run_start',
+        agentId: this.name,
+        caused_by: 'chat',
+        userMessage: extractLastUserText(ctx.messages)?.slice(0, 500),
+      });
+      this.eventRecorder.emit(this._currentRunId, {
+        type: 'turn_start',
+        turnIndex: this.orch.sessionTurnIndex,
+      });
+    } catch (err) {
+      console.warn('[proteus] event emit failed at beforeTurn:', err);
+    }
+
+    // ── Skills resolution for this turn ──────────────────────────
+    // Reset per-turn invocation set (don't reassign — closures from the
+    // skills tool hold a stable reference).
+    this._turnInvokedSkills.clear();
+    this._turnActiveSkills = null;
+    // The actor's REAL tool surface: deps-gated builtins (team/peers/report/
+    // product_change) are advertised only when this actor class wires them.
+    const activeTools: BuiltinToolName[] = actorActiveTools(this.actorToolDeps());
+    let activeSetForPrompt: ActiveSkillSet | undefined;
+    try {
+      const lastUserText = extractLastUserText(ctx.messages);
+      const explicit = extractExplicitInvocations(lastUserText);
+      const alwaysActive = this.config.getAlwaysActiveSkills();
+
+      // Only do the (async) VFS scan when there's a real chance a skill
+      // activates — explicit invocation, always_active config, OR any
+      // built-in that auto_activates on keywords. Avoids a per-turn
+      // filesystem walk for vanilla turns.
+      const anyAutoActivate = BUILTIN_SKILLS.some(s => s.auto_activate);
+      const mightActivate = explicit.length > 0 || alwaysActive.length > 0 || anyAutoActivate;
+
+      if (mightActivate) {
+        const available = await discoverSkills(this.getSkillsVfs());
+        const activeSet = resolveActiveSkills({
+          available, explicit, userMessage: lastUserText, alwaysActive,
+        });
+        if (activeSet.active.length > 0) {
+          this._turnActiveSkills = activeSet;
+          activeSetForPrompt = activeSet;
+          // Mirror the resolved explicit set onto the turn-invoked tracker so
+          // skills.list reflects what's active right now.
+          for (const r of activeSet.reasons) this._turnInvokedSkills.add(r.name);
+
+          // Intersect activeTools with the union of allowed_tools across the
+          // active skills. Empty union (skills don't restrict) = leave the
+          // base set untouched. Glob-suffix matching is owned by
+          // `toolAllowedBySkills` — orchestrator + render share the same impl.
+          const allowedUnion = unionAllowedTools(activeSet.active);
+          if (allowedUnion.length > 0) {
+            const filtered = activeTools.filter(t => toolAllowedBySkills(t, allowedUnion));
+            // Always keep the skills tool itself reachable so the LLM can
+            // list / read / invoke more skills mid-turn. Filtering it out
+            // would lock the agent into the first activation.
+            if (!filtered.includes('skills')) filtered.push('skills');
+            activeTools.length = 0;
+            activeTools.push(...(filtered as BuiltinToolName[]));
+          }
+
+          this.logActivity('skills_active',
+            activeSet.active.map(s => s.name).join(',') || '(none)');
+        }
+      }
+    } catch (err) {
+      console.warn('[proteus] skills resolution failed:', (err as Error).message);
+      // Don't fail the turn — vanilla path is fine.
+    }
+
+    // Per-user MCP tools — fetched from UserDO, dispatched back via RPC.
+    // Failure is non-fatal; the turn proceeds with builtins only and the UI
+    // surfaces the broken-server status via /api/user/mcp/servers polling.
+    let mcpTools: ToolSet = {};
+    try { mcpTools = await this.buildUserMcpTools(); }
+    catch (err) { console.warn('[proteus] buildUserMcpTools failed:', (err as Error).message); }
+
+    // Expose MCP tool keys to the active-tools allowlist so Think doesn't
+    // strip them out. Builtin names + MCP `tool_<id>_<name>` keys are
+    // disjoint by construction (assertion above).
+    const mcpToolNames = Object.keys(mcpTools);
+    const effectiveActiveTools = mcpToolNames.length > 0
+      ? [...activeTools, ...mcpToolNames]
+      : activeTools;
+    const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
+
+    // ── Per-turn device awareness ────────────────────────────────
+    // One authoritative hub check (a cheap DO-to-DO RPC) so the executor list
+    // below reflects the CURRENT device state — the transport's TTL-cached
+    // snapshot can lag a mid-session `proteus connect` by a turn. The persisted
+    // watermark is only a diff anchor for the one-turn change notice; the hub
+    // stays the single source of truth.
+    let deviceNotice: string | null = null;
+    try {
+      const status = await this.rt.deviceTransport.refreshStatus();
+      deviceNotice = observeDevicePresence(this.config, status).notice;
+    } catch (err) {
+      console.warn('[proteus] device status refresh failed:', (err as Error).message);
+    }
+
+    // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
+    // when one is already active. Like skills/MCP, this is turn-scoped state,
+    // so it rides the beforeTurn system override, not the cached base prompt.
+    const agentsMd = await collectWorkspaceAgentsMd(
+      this.rt.storage.vfs,
+      this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
+    );
+
+    // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
+    // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
+    // this path can reflect the turn's active skills and MCP tools. It is the
+    // byte-stable cache prefix: it changes only on real agent events (soul,
+    // model, skill set, tool surface, AGENTS.md). System state — facts, the
+    // live executor status — rides the ephemeral ledger's frozen blocks, and
+    // turn-local state — the device notice, activation reasons — rides one
+    // trailing message (prompting/volatile-context.ts), so neither ever
+    // re-prefills the prefix.
+    const execs = this.rt.executionRouter?.listExecutors() ?? [];
+    const model = this.promptModelContext();
+    const systemOverride = buildSystemPromptSync(this.rt, {
+      executors: execs,
+      availableTools: activeTools,
+      ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
+      ...(agentsMd.length > 0 ? { agentsMd } : {}),
+      externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
+      backend: 'cf',
+      model,
+      currentDate: currentDateForPrompt(),
+    });
+    this.recordSystemPromptHash(systemOverride);
+
+    const cfg: TurnConfig = { system: systemOverride };
+
+    // Model-capability attachment sanitization — the WHOLE model-visible
+    // history, every turn: file/media parts the resolved model cannot accept
+    // become content-addressed VFS references (core attachment-sanitizer).
+    // Deterministic and byte-stable, it heals already-poisoned transcripts
+    // without ever touching the persisted messages. It runs BEFORE the
+    // extension transform so compaction sees sanitized history, and BEFORE
+    // the ledger weave so the frozen blocks freeze over sanitized messages —
+    // the ordering keeps ledger indices stable because sanitization is
+    // per-part in-place replacement: the message COUNT never changes.
+    const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+    const baseMessages = await sanitizeAttachmentsForModel(rawMessages, {
+      accepts: this.sessionAcceptedMedia(),
+      vfs: this.rt.storage.vfs,
+    });
+
+    // ── Extension seam: turn start + the awaited context transform ─────
+    // The same ExtensionHost contract runChat fires on the CLI. The
+    // transform sees ONLY the durable history — the ephemeral ledger blocks
+    // and the turn-local tail are woven/spliced after it, so a compaction
+    // plugin can never see (or persist) either.
+    await this.extensions.emitTurnStart({ system: systemOverride, history: baseMessages });
+    // The measured trigger: the previous turn's final request as the provider
+    // actually priced it, persisted at turn end (onChatResponse). Null until
+    // the session's first turn completes — the engine's char estimate gates
+    // alone until then — and voided by the length guard when the durable
+    // history shrank (undo/restore) since the measurement.
+    this._turnDurableLength = baseMessages.length;
+    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, baseMessages.length);
+    this._turnContextWindow = this.sessionContextWindow();
+    // Overflow recovery (onChatResponse arms the flag on a context_length
+    // failure): consume it — at most one forced rebuild per arm, never a loop.
+    const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
+    if (trigger === 'force') this.logActivity('compaction_forced', 'overflow recovery — forced context rebuild');
+    const transformed = await this.extensions.runTransformContext({
+      sessionKey: this.name,
+      messages: baseMessages,
+      system: systemOverride,
+      contextWindow: this._turnContextWindow,
+      ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
+      trigger,
+    });
+    // The newest MEMORY.md lessons/reflections ride the ephemeral block too
+    // (the same bounded tail the CLI weave supplies) — the reflection loop
+    // assumes the model sees its latest lessons in-turn.
+    const memoryTail = await readMemoryTail(this.rt.memory);
+    const woven = this.ephemeralLedger.weave(transformed ?? baseMessages, {
+      factsBlock: this.renderFactsForTurn(),
+      ...(memoryTail ? { memoryTail } : {}),
+      executors: execs,
+    });
+    const turnLocal = turnLocalContextMessage({
+      deviceNotice,
+      ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
+    });
+    cfg.messages = turnLocal ? [...woven, turnLocal] : woven;
+
+    // Extension-contributed tools join the turn's ToolSet without ever
+    // shadowing a built-in or MCP tool (runChat's merge order, mirrored:
+    // caller tools win, only extension-vs-extension collisions throw).
+    const extensionTools = Object.fromEntries(
+      Object.entries(this.extensions.tools())
+        .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
+    );
+    const extensionToolNames = Object.keys(extensionTools);
+    const extraTools: ToolSet = { ...extensionTools, ...(effectiveTools ?? {}) };
+    if (Object.keys(extraTools).length > 0) cfg.tools = extraTools;
+    cfg.activeTools = extensionToolNames.length > 0
+      ? [...effectiveActiveTools, ...extensionToolNames]
+      : effectiveActiveTools;
+
+    // Prompt-cache plan for this turn (core prompting/cache-breakpoints.ts).
+    // Request-level cache routing (prompt_cache_key / promptCacheKey) rides
+    // TurnConfig.providerOptions; the cache-eligible system message + rolling
+    // tail breakpoints for marker providers (Anthropic) ride beforeStep —
+    // PrepareStepResult carries typed system/messages overrides for every
+    // step's request, whereas TurnConfig.system is string-typed.
+    const cacheStrategy = resolvePromptCacheStrategy(model.provider, model.id);
+    this._turnCachePlan = hasCacheMarkers(cacheStrategy)
+      ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
+      : null;
+    const cacheOptions = promptCacheOptions(cacheStrategy, this.ownedModelServices.affinityKey);
+    const reasoningOptions = reasoningEffortOptions(
+      this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat,
+      this.effectiveModelProviderFamily(),
+    );
+    const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
+    if (providerOptions) cfg.providerOptions = providerOptions;
+
+    // Shadow-eval context parity + the evolved-scaffold task source (see the
+    // _lastTurnOpts field doc): the effective opts the streamText Think runs
+    // next will see — final system/messages/merged tools/model. Think only
+    // adds its tool-decision wrapping and the per-step cache markers on top,
+    // both inert for a replay.
+    this._lastTurnOpts = {
+      model: ctx.model,
+      system: systemOverride,
+      messages: cfg.messages,
+      tools: { ...ctx.tools, ...(cfg.tools ?? {}) },
+      activeTools: cfg.activeTools,
+      stopWhen: stepCountIs(this.maxSteps),
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+    return cfg;
+  }
+
+  /** The in-flight turn's prompt-cache plan — set in beforeTurn, non-null only
+   *  for marker strategies (Anthropic / OpenRouter-Claude), whose breakpoints
+   *  beforeStep re-rolls onto the newest tail each step. */
+  private _turnCachePlan: { strategy: PromptCacheStrategy; system: string | SystemModelMessage } | null = null;
+
+  /** The in-flight turn's resolved context window — set in beforeTurn, read
+   *  by beforeStep's prune budget every step. */
+  protected _turnContextWindow = 0;
+
+  beforeStep(ctx: PrepareStepContext): StepConfig | void {
+    // The shared step pipeline (core prompting/prepare-step.ts, identical on
+    // the CLI): extension prepareStep rewrites first, step-boundary tool-output
+    // pruning against the window budget next, then the cache plan rolls the
+    // tail breakpoints onto the FINAL message array so each request of the
+    // agentic loop reads the prefix the previous step wrote.
+    return composePrepareStep(
+      this.extensions,
+      { stepNumber: ctx.stepNumber, messages: ctx.messages },
+      this._turnCachePlan,
+      this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
+    );
+  }
+
+  /** The byte-stability invariant as telemetry: the system prompt hash should
+   *  change only on real agent events (soul/skill/craft/device/model), never
+   *  between two vanilla consecutive turns. A "(changed)" entry in the
+   *  activity log without a nearby skills_active / device / craft event is a
+   *  cache-prefix regression. */
+  private _lastSystemPromptHash: string | null = null;
+  private recordSystemPromptHash(system: string): void {
+    const hash = fnv1a64(system);
+    const prev = this._lastSystemPromptHash;
+    this._lastSystemPromptHash = hash;
+    this.logActivity('system_prompt_hash', `${hash}${prev === null ? '' : prev === hash ? ' (stable)' : ' (changed)'}`);
+  }
+
+  onChunk(_ctx: ChunkContext): void {
+    this.acc.onFirstChunk();
+  }
+
+  /** Whether the in-flight turn was injected programmatically (reactor drain,
+   *  background-job wake, consent resume) — enqueueTurn stamps proteusEvent
+   *  metadata on the saved user message; real chat messages carry none. */
+  protected lastUserTurnIsProgrammatic(): boolean {
+    return this.turnUserMessageEvent(null) !== null;
+  }
+
+  /** The turn's proteusEvent metadata value — from the active programmatic
+   *  message when one drove the turn, else the last durable user message.
+   *  Null for real chat turns. */
+  protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
+    const source = programmaticUserMessage
+      ?? (this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined);
+    const metadata = source?.metadata;
+    return isRecord(metadata) && typeof metadata.proteusEvent === 'string' ? metadata.proteusEvent : null;
+  }
+
+  async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
+    // Extension observation before the tool's execute runs (returning void =
+    // allow with the original input — the seam observes, it does not gate).
+    await this.extensions.emitToolCall({
+      toolName: ctx.toolName,
+      args: (ctx.input ?? {}) as Record<string, unknown>,
+    });
+  }
+
+  async afterToolCall(ctx: ToolCallResultContext): Promise<void> {
+    // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
+    // accumulator records it + fires the activity log + run-event sinks.
+    this.acc.recordToolCall(ctx as unknown as Parameters<TurnAccumulator['recordToolCall']>[0]);
+    await this.extensions.emitToolResult({
+      toolName: ctx.toolName,
+      // Same shape the CLI seam emits: stringified, capped at 1000 chars.
+      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? '').slice(0, 1000),
+    });
+  }
+
+  onStepFinish(ctx: StepContext): void {
+    this.acc.recordStep(ctx as unknown as StepLike);
+  }
+
+  /** Tools whose work can be long enough to auto-detach to the background. */
+  private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
+
+  /** Return a SHALLOW CLONE of the raw toolset with the long-running tools'
+   *  execute wrapped in the 30s background threshold. Never mutates the cached
+   *  raw toolset — so getRawTools() stays unwrapped for the eval side-streams. */
+  private wrapToolsForBackground(raw: ToolSet): ToolSet {
+    const wrapped: ToolSet = { ...raw };
+    for (const key of ActorAgent.BACKGROUNDABLE_TOOLS) {
+      const orig = wrapped[key];
+      const exec = orig?.execute;
+      if (!orig || typeof exec !== 'function') continue;
+      wrapped[key] = {
+        ...orig,
+        execute: (input, options) => {
+          // Per-call AbortController so a hard-cancel aborts the underlying work.
+          // Merge it with the turn's own signal so a turn abort still propagates.
+          const controller = new AbortController();
+          const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+          const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
+          const deps = this.jobRunner.thresholdDeps(key, input, controller);
+          this._activeToolControllers.add(controller);
+          return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps)
+            .finally(() => this._activeToolControllers.delete(controller));
+        },
+      };
+    }
+    return wrapped;
+  }
+
+  /** Model for review/judge tasks: the operator's `review_model`, else a
+   *  different-vendor model when one is connected, else the chat model — the
+   *  self-preference policy in core's selectJudgeModel. Async because
+   *  cross-family availability is a credential-aware registry query; the
+   *  answer is cached until the owner's provider set is invalidated. */
+  protected getModelForReview(): Promise<import('ai').LanguageModel> {
+    return this.ownedModelServices.resolveJudgeModel({
+      reviewSpec: this.config.getReviewModel(),
+      chatSpec: this.getStoredModelId(),
+    });
+  }
+
+  // ── Fiber recovery — durable execution surviving DO eviction ──
+  //
+  // The MCTS engine (mcts/engine.ts) calls rt.schedule.fiber('mcts', fn) which
+  // delegates to agent.runFiber(). Per-iteration ctx.stash(phase) checkpoints
+  // progress to cf_agents_runs. If the DO is evicted mid-MCTS, the Agent SDK
+  // re-invokes onFiberRecovered with the last snapshot on cold-start.
+  //
+  // The default base implementation just warns; we override to:
+  //   • log the recovery into evolution_events for the UI
+  //   • broadcast a "recovered" event so the chat panel can show the resume
+  //   • write a memory note so future turns know about the interruption
+  override async onFiberRecovered(ctx: {
+    id: string;
+    name: string;
+    snapshot: unknown;
+    createdAt: number;
+  }): Promise<void> {
+    try {
+      const summary = ctx.snapshot && typeof ctx.snapshot === 'object'
+        ? JSON.stringify(ctx.snapshot).slice(0, 400)
+        : String(ctx.snapshot ?? 'null');
+      console.log(`[proteus] fiber recovered: name=${ctx.name} id=${ctx.id}; snapshot=${summary}`);
+      // Background-job fiber (bg:*) is operational plumbing, not an evolution
+      // event: the runner re-fails + wakes an orphaned 'running' job (a 'settled'
+      // one already recorded its outcome + woke), skipping the MEMORY.md note +
+      // evolution_events INSERT that the user-facing recovery path emits.
+      if (ctx.name.startsWith('bg:')) {
+        await this.jobRunner.recover(ctx.snapshot);
+        return;
+      }
+      // Persist for the UI's evolution-events stream.
+      this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+        VALUES (${nanoid()}, 'fiber_recovered',
+                ${`Fiber "${ctx.name}" recovered after interruption`},
+                ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot: ctx.snapshot, createdAt: ctx.createdAt })},
+                ${Date.now()})`;
+      try {
+        await this.rt.memory.append(
+          'memory/MEMORY.md',
+          `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n` +
+          `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. ` +
+          `Snapshot at interruption: ${summary}\n`,
+        );
+      } catch { /* memory may not be initialized yet */ }
+    } catch (err) {
+      console.error('[proteus] onFiberRecovered handler failed:', err);
+    }
+  }
+
+  /** Invalidate every cache that depends on the resolved model so the next
+   *  getModel() / getThinkTool() / providerRegistry() call rebuilds. */
+  protected invalidateModelCaches(): void {
+    this._cachedModel = null;
+    this._cachedModelSpec = null;
+    this._thinkTool = null;
+    // Provider registry caches per-agent OAuth refreshers; rebuild so a
+    // disconnected provider stops being marked available.
+    this.ownedModelServices.invalidate();
+  }
+
+  // ── Credentials & Codex OAuth ─────────────────────────────────────
+  //
+  // All credentials live in UserDO (single source of truth across the user's
+  // agents). The orchestrator no longer stores, refreshes, or even reads
+  // raw credentials — providers resolve auth headers through the UserDO
+  // stub at fetch time. Use the `/api/user/codex/*` routes (or the user
+  // settings UI) to connect ChatGPT / save BYO API keys.
+
+  /** Worker fan-out target (user/workspace-access notifyWorkspacesCredentialsChanged):
+   *  invoked after credential mutations in UserDO so cached provider/model
+   *  state in this agent is dropped. Cheap; no-op if nothing is cached. */
+  async onCredentialsChanged(): Promise<{ ok: true }> {
+    this.invalidateModelCaches();
+    return { ok: true };
+  }
+
+  // ── Internal: MCTS session writer ──────────────────────────────
+
+  private createMCTSSession(): SessionWriter {
+    // Source of truth is the durable `messages` table (session_id='mcts'), NOT an
+    // in-memory array: after a DO eviction, a resumed search re-enters with a
+    // fresh session, and getHistory(leafId) must still reconstruct a branch's
+    // ancestry from the persisted rows so resumed branches keep their context (B6).
+    const sql = this.boundSql;
+
+    return {
+      async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
+        const content = msg.parts.map(p => p.text).join("");
+        sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+          VALUES (${msg.id}, ${"mcts"}, ${parentId ?? null}, ${msg.role}, ${content})`;
+      },
+      getHistory(leafId?: string | null): Array<{ role: string; content: string }> {
+        if (!leafId) {
+          return sql<{ role: string; content: string }>`
+            SELECT role, content FROM messages WHERE session_id='mcts' ORDER BY created_at ASC`
+            .map(r => ({ role: r.role, content: r.content }));
+        }
+        // Walk ancestry by parent_id from the durable table (cycle-guarded).
+        type MsgRow = { parent_id: string | null; role: string; content: string };
+        const result: Array<{ role: string; content: string }> = [];
+        const seen = new Set<string>();
+        let currentId: string | null = leafId;
+        while (currentId && !seen.has(currentId)) {
+          seen.add(currentId);
+          const row: MsgRow | undefined = sql<MsgRow>`
+            SELECT parent_id, role, content FROM messages WHERE id=${currentId} LIMIT 1`[0];
+          if (!row) break;
+          result.unshift({ role: row.role, content: row.content });
+          currentId = row.parent_id;
+        }
+        return result;
+      },
+    };
+  }
+
+  /** Re-drive an evicted background job from its durable checkpoint (B6).
+   *  Only `think` is resumable: re-running the RAW strategy tool (no 30s re-detach)
+   *  continues an evicted MCTS from its search checkpoint — runMCTS.findResumable
+   *  matches the unfinished run by task — and re-runs heads. The runner settles the
+   *  returned result onto the job under a fresh lease epoch. Side-effecting kinds
+   *  (execute_tools / run) can't be safely re-executed, so they decline. */
+  protected async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
+    if (kind !== 'think') throw new JobNotResumable(kind);
+    const tool = this.getRawTools()[kind];
+    const exec = tool?.execute;
+    if (typeof exec !== 'function') throw new JobNotResumable(kind);
+    return (exec as (i: unknown, o: unknown) => unknown)(input, {
+      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
+    });
+  }
+}

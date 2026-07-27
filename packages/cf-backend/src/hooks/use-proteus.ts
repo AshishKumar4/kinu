@@ -4,29 +4,36 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
-import { ORCHESTRATOR_AGENT_SLUG } from "@proteus/core";
+import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
-import type { ToolInfo, MemoryEntry, MCTSNode, TimelineSpan, BackgroundJob, PendingConsent, Rpc } from "../lib/protocol";
-import { touchAgent } from "../lib/user-api";
+import type {
+  ToolInfo,
+  MemoryEntry,
+  MCTSNode,
+  TimelineSpan,
+  BackgroundJob,
+  PendingConsent,
+  Rpc,
+  SubordinateActivityEvent,
+  SubordinateRosterEntry,
+} from "../lib/protocol";
+import type { ExecutorInfo } from "../lib/executors";
+import { touchWorkspace } from "../lib/user-api";
+
+export type { ExecutorInfo };
 
 export interface ExecutorOutput {
   id: string; command: string; stdout: string; stderr: string;
   exit_code: number; created_at: number;
 }
 
-export interface ExecutorInfo {
-  name: string;
-  kind: string;
-  capabilities: string[];
-  available: boolean;
-  configured: boolean;
-  active: boolean;
-  status: "not_configured" | "idle" | "active" | "disconnected" | "error";
-  reason?: string;
-}
-
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export interface ProteusActorAddress {
+  workspace: string;
+  subordinate?: string;
+}
 
 /** One Steer-as-Branch run as the chat chip renders it — driven entirely by
  *  the server's branch_status broadcasts (single source of truth). */
@@ -42,8 +49,8 @@ export interface BranchRun {
 }
 
 export interface ForkLineage {
-  sourceAgentId: string;
-  sourceAgentName: string;
+  sourceWorkspaceId: string;
+  sourceWorkspaceName: string;
   sourceMessageId: string;
   sourceMessageCreatedAt: number;
   forkedAt: number;
@@ -76,6 +83,28 @@ export interface WorkspaceSnapshot {
   lastActiveExecutor: string | null;
 }
 
+interface CallableAgent {
+  call(method: string, args: unknown[]): Promise<unknown>;
+}
+
+function bindRpc(agent: CallableAgent): Rpc {
+  return <T = unknown>(method: string, args: unknown[] = []) => agent.call(method, args) as Promise<T>;
+}
+
+/** A lightweight agent connection for surfaces that only need callable RPCs. */
+export function useWorkspaceRpc(agentId: string) {
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const agent = useAgent({
+    agent: ORCHESTRATOR_AGENT_SLUG,
+    name: agentId,
+    onOpen: useCallback(() => setConnectionStatus("connected"), []),
+    onClose: useCallback(() => setConnectionStatus("disconnected"), []),
+    onError: useCallback(() => setConnectionStatus("error"), []),
+  });
+  const rpc = useMemo(() => bindRpc(agent), [agent]);
+  return { rpc, connectionStatus };
+}
+
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
  * Fetches all surface data via @callable RPCs on connect. The unified Run
@@ -83,7 +112,14 @@ export interface WorkspaceSnapshot {
  * former evolution-events + activity-log streams, so the hook no longer
  * maintains those separately.
  */
-export function useProteus(agentId?: string) {
+export function useProteus(target?: string | ProteusActorAddress) {
+  const workspace = typeof target === "string" ? target : target?.workspace;
+  const subordinate = typeof target === "string" ? undefined : target?.subordinate;
+  const actorAddress = useMemo<ProteusActorAddress>(() => ({
+    workspace: workspace || "default",
+    ...(subordinate ? { subordinate } : {}),
+  }), [workspace, subordinate]);
+  const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
@@ -98,8 +134,8 @@ export function useProteus(agentId?: string) {
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
   // Pinned (exposed) ports for sandbox previews. Refreshed with the live-data
-  // poll on every surface so auto-switch-to-preview, the Output/Devices badges
-  // and ExecutorsPanel auto-focus stay live wherever the user is. Listing
+  // poll on every surface so auto-switch-to-preview, the Output badge and the
+  // Environment preview auto-focus stay live wherever the user is. Listing
   // ports never provisions a sandbox: getExposedPorts returns [] server-side
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
@@ -114,10 +150,23 @@ export function useProteus(agentId?: string) {
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
+  // Chat-turn error — the turn failed (provider error, stream break) and the
+  // error card in the thread shows the honest body. Fed by BOTH channels a
+  // terminal error can arrive on: useChat's live stream error, and the
+  // on-connect `cf_agent_use_chat_response` replay frame (whose request id is
+  // no longer active, so the ws transport drops it — the reason a reload used
+  // to show nothing). Cleared on the next send.
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
+  const [subordinatesLoaded, setSubordinatesLoaded] = useState(false);
+  const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
 
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
-    name: agentId || "default",
+    name: actorAddress.workspace,
+    ...(subordinate ? {
+      sub: [{ agent: SUBORDINATE_AGENT_SLUG, name: subordinate }],
+    } : {}),
     // onOpen always wins — even if a prior onError pinned the status to
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
@@ -130,13 +179,22 @@ export function useProteus(agentId?: string) {
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
     onError: useCallback(() => {}, []),
-    // Live AI auto-title: the agent broadcasts `agent_renamed` after the first
+    // Live AI auto-title: the agent broadcasts `workspace_renamed` after the first
     // turn — nudge the Sidebar roster to refetch so the new name shows at once.
     onMessage: useCallback((ev: MessageEvent) => {
       try {
         const data = JSON.parse(typeof ev.data === "string" ? ev.data : "");
-        if (data?.type === "agent_renamed") {
-          window.dispatchEvent(new CustomEvent("proteus:agent-renamed"));
+        if (data?.type === "workspace_renamed") {
+          if (typeof data.displayName === "string" && data.displayName.trim()) {
+            setAgentStatus((prev) => prev ? { ...prev, displayName: data.displayName } : prev);
+          }
+          window.dispatchEvent(new CustomEvent("proteus:workspace-renamed"));
+        } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
+          // Terminal-error frame. During a live stream the transport also
+          // surfaces it as useChat's `error`; on connect the server REPLAYS
+          // the last terminal error with a stale request id the transport
+          // drops — this handler is the only place that frame is seen.
+          setChatError(typeof data.body === "string" && data.body.trim() ? data.body : "The turn failed with an unknown error.");
         }
       } catch { /* not our JSON */ }
     }, []),
@@ -148,12 +206,20 @@ export function useProteus(agentId?: string) {
     clearHistory,
     stop,
     isStreaming,
+    error: streamError,
   } = useAgentChat({
     agent,
     // Throttle UI updates during high-frequency token deltas (50ms ≈ 20fps).
     // The chat library forwards this option to @ai-sdk's useChat.
     experimental_throttle: 50,
   } as Parameters<typeof useAgentChat>[0] & { experimental_throttle: number });
+
+  // The live-stream error channel: the ws transport turns an in-band
+  // `error:true` frame into useChat's `error` state — fold it into the same
+  // exposed chat-error surface as the on-connect replay.
+  useEffect(() => {
+    if (streamError) setChatError(streamError.message || String(streamError));
+  }, [streamError]);
 
   // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
   // The framework's resume effect fires once; partysocket reconnects don't
@@ -220,28 +286,28 @@ export function useProteus(agentId?: string) {
   // Typed RPC — the single boundary cast (unknown → T) lives here so call sites
   // read rpc<T>("getFoo", []) cast-free. Memoized on `agent` so it's a stable
   // identity (surface effects keyed on [rpc] don't refetch each render).
-  const rpc = useMemo<Rpc>(() =>
-    <T = unknown>(method: string, args: unknown[] = []) => agent.call(method, args) as Promise<T>,
-  [agent]);
+  const rpc = useMemo(() => bindRpc(agent), [agent]);
 
   // Fetch all tab data on connect
   const fetched = useRef(false);
   useEffect(() => {
     if (!isConnected || fetched.current) return;
     fetched.current = true;
-    loadAllData();
-  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (isSubordinate) loadSubordinateData();
+    else loadAllData();
+  }, [isConnected, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
   useEffect(() => {
+    if (isSubordinate) return;
     if (isStreaming) {
       wasStreaming.current = true;
     } else if (wasStreaming.current) {
       wasStreaming.current = false;
       refreshLiveData();
     }
-  }, [isStreaming, agent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isStreaming, agent, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshTimeline = useCallback(() => {
     rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
@@ -251,16 +317,16 @@ export function useProteus(agentId?: string) {
   // carries the conversation, so streaming only adds a faster (1s) poll of
   // the run timeline for near-real-time spans — not all seven RPCs.
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected || isSubordinate) return;
     const interval = setInterval(refreshLiveData, 5000);
     return () => clearInterval(interval);
-  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isConnected, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!isConnected || !isStreaming) return;
+    if (!isConnected || !isStreaming || isSubordinate) return;
     const interval = setInterval(refreshTimeline, 1000);
     return () => clearInterval(interval);
-  }, [isConnected, isStreaming, refreshTimeline]);
+  }, [isConnected, isStreaming, isSubordinate, refreshTimeline]);
 
   const refreshBackgroundJobs = useCallback(() => {
     rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
@@ -269,9 +335,9 @@ export function useProteus(agentId?: string) {
   const abortChat = useCallback(() => {
     stop();
     rpc("cancelCurrentWork", [])
-      .then(() => refreshBackgroundJobs())
-      .catch(() => refreshBackgroundJobs());
-  }, [stop, rpc, refreshBackgroundJobs]);
+      .then(() => { if (!isSubordinate) refreshBackgroundJobs(); })
+      .catch(() => { if (!isSubordinate) refreshBackgroundJobs(); });
+  }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
   // Listen for MCTS progress broadcasts from the server. We attach to the
   // outer `agent` EventTarget — NOT the inner `_ws` private field — so the
@@ -316,12 +382,25 @@ export function useProteus(agentId?: string) {
               message: typeof msg.message === "string" ? msg.message : undefined,
             },
           ]);
+        } else if (!isSubordinate && msg.type === "subordinates_changed") {
+          const roster = parseSubordinateRoster(msg.subordinates);
+          if (roster) {
+            setSubordinates(roster);
+            setSubordinatesLoaded(true);
+          }
+        } else if (!isSubordinate) {
+          const subordinateEvent = parseSubordinateActivityEvent(msg);
+          if (subordinateEvent) {
+            setSubordinateEvents((current) => current.some((event) => event.id === subordinateEvent.id)
+              ? current
+              : [...current.slice(-49), subordinateEvent]);
+          }
         }
       } catch { /* not JSON or not our message */ }
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent, refreshTimeline, refreshBackgroundJobs, setMctsTreeFromRows]);
+  }, [agent, refreshTimeline, refreshBackgroundJobs, setMctsTreeFromRows, isSubordinate]);
 
   const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
     setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
@@ -359,7 +438,7 @@ export function useProteus(agentId?: string) {
     rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
       .then((snap) => {
         setAgentStatus(snap.status);
-        if (agentId) touchAgent(agentId).catch(() => {});
+        if (workspace) touchWorkspace(workspace).catch(() => {});
         setTools(mapToolDescriptions(snap.tools));
         setMemoryContent(snap.memoryContent);
         if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
@@ -380,6 +459,54 @@ export function useProteus(agentId?: string) {
       });
   }
 
+  function loadSubordinateData() {
+    rpc<{
+      name: string;
+      displayName: string;
+      role: string;
+      mission: string;
+      model: string | null;
+    }>("getSubordinateSnapshot", [])
+      .then((snapshot) => {
+        setAgentStatus({
+          id: snapshot.name,
+          name: snapshot.name,
+          displayName: snapshot.displayName,
+          purpose: snapshot.role,
+          soul: snapshot.mission,
+          createdAt: 0,
+          scaffoldVersion: 0,
+          searchNodeCount: 0,
+          craftedToolCount: 0,
+          messageCount: messages.length,
+          model: snapshot.model ?? "",
+          forkLineage: null,
+        });
+      })
+      .catch((err) => {
+        fetched.current = false;
+        setError(`Subordinate snapshot failed: ${errorMessage(err)}`);
+      });
+  }
+
+  const refreshSubordinates = useCallback(() => {
+    if (isSubordinate) return Promise.resolve();
+    return rpc<SubordinateRosterEntry[]>("listSubordinates", [])
+      .then((roster) => {
+        setSubordinates(roster);
+        setSubordinatesLoaded(true);
+      })
+      .catch((err) => {
+        setSubordinatesLoaded(true);
+        setError(`Subordinate roster failed: ${errorMessage(err)}`);
+      });
+  }, [isSubordinate, rpc]);
+
+  useEffect(() => {
+    if (!isConnected || isSubordinate) return;
+    void refreshSubordinates();
+  }, [isConnected, isSubordinate, refreshSubordinates]);
+
   useEffect(() => {
     fetched.current = false;
     setAgentStatus(null);
@@ -391,7 +518,13 @@ export function useProteus(agentId?: string) {
     setRunTimeline([]);
     setPinnedPorts([]);
     setError(null);
-  }, [agentId]);
+    setChatError(null);
+    if (!isSubordinate) {
+      setSubordinates([]);
+      setSubordinatesLoaded(false);
+      setSubordinateEvents([]);
+    }
+  }, [workspace, subordinate]);
 
   useEffect(() => {
     if (error) {
@@ -409,8 +542,18 @@ export function useProteus(agentId?: string) {
       ...(content ? [{ type: "text" as const, text: content }] : []),
     ];
     if (parts.length === 0) return;
+    setChatError(null);
     sendMessage({ role: "user", parts });
   }, [sendMessage]);
+
+  // Retry affordance for the error card: re-send the last user message's
+  // parts as a fresh turn (the failed turn persisted nothing to answer it).
+  const retryLastMessage = useCallback(() => {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    setChatError(null);
+    sendMessage({ role: "user", parts: lastUser.parts });
+  }, [messages, sendMessage]);
 
   const searchMemory = useCallback((q: string) => {
     if (!q.trim()) {
@@ -418,11 +561,11 @@ export function useProteus(agentId?: string) {
       if (memoryContent) setMemory(parseMemoryContent(memoryContent));
       return;
     }
-    rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; score: number }>>("doSearchMemory", [q])
+    rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q])
       .then((results) => setMemory((results ?? []).map(r => ({
         path: r.path,
         content: r.snippet,
-        matchScore: r.score,
+        matchScore: r.rrfScore,
         updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
       }))))
       .catch(() => {});
@@ -444,6 +587,13 @@ export function useProteus(agentId?: string) {
         setAgentStatus(prev => prev ? { ...prev, model: r.spec ?? '' } : prev);
       }).catch(() => {});
     });
+  }, [rpc]);
+
+  const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
+    const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
+    const saved = result.displayName;
+    setAgentStatus((prev) => prev ? { ...prev, displayName: saved } : prev);
+    return saved;
   }, [rpc]);
 
   // Single source of truth: the server-side broadcast. executeInExecutor ONLY
@@ -487,6 +637,11 @@ export function useProteus(agentId?: string) {
     isStreaming,
     connectionStatus,
     error,
+    /** The last chat turn's terminal error (live stream error or the
+     *  on-connect replay) — rendered as an error card in the thread. */
+    chatError,
+    clearChatError: () => setChatError(null),
+    retryLastMessage,
     agentStatus,
     tools,
     memory,
@@ -499,6 +654,7 @@ export function useProteus(agentId?: string) {
     refreshTools: () => loadAllData(),
     clearHistory,
     setModel,
+    setDisplayName,
     executors,
     executorOutputs,
     lastActiveExecutor,
@@ -529,6 +685,22 @@ export function useProteus(agentId?: string) {
       rpc<{ id: string; name: string; url: string; forkPointMs: number }>("forkAgent", [untilMessageId, opts ?? {}]),
     rpc,
     rawAgent: agent,
+    actorAddress,
+    isSubordinate,
+    subordinates,
+    subordinatesLoaded,
+    subordinateEvents,
+    refreshSubordinates,
+    spawnSubordinate: async (role: string, mission: string) => {
+      const result = await rpc<{ name: string; displayName: string }>("spawnSubordinate", [role, mission]);
+      await refreshSubordinates();
+      return result;
+    },
+    dismissSubordinate: async (name: string) => {
+      const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", [name]);
+      await refreshSubordinates();
+      return result;
+    },
   };
 }
 
@@ -538,6 +710,58 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === "string" && err.trim()) return err;
   try { return JSON.stringify(err); } catch { return "unknown error"; }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseSubordinateRoster(value: unknown): SubordinateRosterEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const roster: SubordinateRosterEntry[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)
+      || typeof entry.name !== "string"
+      || typeof entry.displayName !== "string"
+      || typeof entry.role !== "string"
+      || (entry.createdBy !== "orchestrator" && entry.createdBy !== "user")
+      || (entry.status !== "idle" && entry.status !== "working"
+        && entry.status !== "awaiting_input" && entry.status !== "dismissed")
+      || (entry.currentTask !== null && typeof entry.currentTask !== "string")
+      || typeof entry.createdAt !== "number"
+      || (entry.dismissedAt !== null && typeof entry.dismissedAt !== "number")) return null;
+    roster.push({
+      name: entry.name,
+      displayName: entry.displayName,
+      role: entry.role,
+      createdBy: entry.createdBy,
+      status: entry.status,
+      currentTask: entry.currentTask,
+      createdAt: entry.createdAt,
+      dismissedAt: entry.dismissedAt,
+    });
+  }
+  return roster;
+}
+
+function parseSubordinateActivityEvent(value: unknown): SubordinateActivityEvent | null {
+  if (!isRecord(value)
+    || value.type !== "subordinate_event"
+    || typeof value.id !== "string"
+    || (value.kind !== "task" && value.kind !== "report")
+    || typeof value.subordinate !== "string"
+    || typeof value.content !== "string"
+    || typeof value.timestamp !== "number") return null;
+  return {
+    type: "subordinate_event",
+    id: value.id,
+    kind: value.kind,
+    subordinate: value.subordinate,
+    ...(typeof value.status === "string" ? { status: value.status } : {}),
+    content: value.content,
+    ...(typeof value.task === "string" ? { task: value.task } : {}),
+    timestamp: value.timestamp,
+  };
 }
 
 export interface MctsRow {

@@ -1,9 +1,9 @@
-import type { SelectOption } from '@opentui/core';
-import type { ReactNode } from 'react';
+import type { SelectOption, SelectRenderable } from '@opentui/core';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@proteus/core';
 import { takeEvidence } from '@proteus/core';
 import type { SlashCommandInfo } from '../slash-commands.js';
-import type { AgentModelEntry } from '../model-catalog.js';
+import { filterModels, type AgentModelEntry } from '../model-catalog.js';
 import type { AgentChangelogView, ForkPoint } from '../agent-client.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
 import { clipText } from './format.js';
@@ -70,9 +70,12 @@ interface ModelPickerProps {
 }
 
 export function ModelPickerOverlay({ models, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
+  const [filter, setFilter] = useState('');
+  const selectRef = useRef<SelectRenderable | null>(null);
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 56, 84);
   const innerWidth = Math.max(1, paletteWidth - 4);
-  const options: SelectOption[] = models.map((model) => {
+  const filteredModels = filterModels(models, filter);
+  const options: SelectOption[] = filteredModels.map((model) => {
     const context = formatContextWindow(model.contextWindow);
     return {
       name: clipText([
@@ -87,9 +90,12 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
       value: model,
     };
   });
-  const paletteHeight = Math.min(Math.max(options.length + 6, 11), Math.max(11, terminal.height - 6), 22);
+  const paletteHeight = Math.min(Math.max(models.length + 7, 11), Math.max(11, terminal.height - 6), 22);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
-  const selectedIndex = Math.max(0, models.findIndex((model) => model.spec === currentSpec));
+  const selectedIndex = clamp(filteredModels.findIndex((model) => model.spec === currentSpec), 0, Math.max(0, options.length - 1));
+  useEffect(() => {
+    if (options.length > 0) selectRef.current?.setSelectedIndex(selectedIndex);
+  }, [currentSpec, filter, models, options.length, selectedIndex]);
 
   return (
     <PaletteFrame
@@ -100,16 +106,44 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
       top={position.top}
       dim={true}
     >
-      <PaletteLine text="↑/↓ move · Enter select · Esc close" width={innerWidth} color={tuiColors.muted} />
+      <PaletteLine text="Type to filter · ↑/↓ move · Enter select · Esc close" width={innerWidth} color={tuiColors.muted} />
+      <input
+        focused={true}
+        placeholder="Filter models…"
+        onInput={setFilter}
+        onKeyDown={(event) => {
+          if (event.name === 'up') selectRef.current?.moveUp();
+          else if (event.name === 'down') selectRef.current?.moveDown();
+          else if (event.name === 'return') selectRef.current?.selectCurrent();
+          else return;
+          event.preventDefault();
+        }}
+        style={{
+          width: '100%',
+          backgroundColor: tuiColors.panelStrong,
+          textColor: tuiColors.text,
+          focusedBackgroundColor: tuiColors.panelStrong,
+          focusedTextColor: tuiColors.textStrong,
+          placeholderColor: tuiColors.muted,
+          cursorColor: tuiColors.accentStrong,
+        }}
+      />
       {loading ? (
         <PaletteLine text="Loading models…" width={innerWidth} color={tuiColors.accent} />
       ) : error ? (
         <PaletteLine text={error} width={innerWidth} color={tuiColors.red} />
       ) : options.length === 0 ? (
-        <PaletteLine text="No connected model providers. Run proteus provider connect." width={innerWidth} color={tuiColors.muted} />
+        <PaletteLine
+          text={models.length === 0
+            ? 'No connected model providers. Run proteus provider connect.'
+            : `No models match "${filter.trim()}".`}
+          width={innerWidth}
+          color={tuiColors.muted}
+        />
       ) : (
         <select
-          focused={true}
+          ref={selectRef}
+          focused={false}
           options={options}
           selectedIndex={selectedIndex}
           showDescription={false}
@@ -121,7 +155,7 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
           }}
           style={{
             flexGrow: 1,
-            height: Math.max(3, paletteHeight - 5),
+            height: Math.max(3, paletteHeight - 6),
             backgroundColor: tuiColors.panel,
             textColor: tuiColors.text,
             focusedBackgroundColor: tuiColors.panel,
@@ -451,11 +485,19 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
   );
 }
 
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 export function PhaseLine({ label }: { label: string | null }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!label) { setFrame(0); return; }
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    return () => clearInterval(id);
+  }, [label]);
   if (!label) return null;
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={tuiColors.accent}>⟳ {label}</span></text>
+      <text><span fg={tuiColors.accent}>{`${SPINNER_FRAMES[frame]} ${label}`}</span></text>
     </box>
   );
 }

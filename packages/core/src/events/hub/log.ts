@@ -257,10 +257,21 @@ export class EventLog {
   // ── markConsumed ────────────────────────────────────────────────
 
   /** Bind an event to the turn that's about to handle it. */
-  markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number): void {
+  markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.sql.exec(
-      `UPDATE agent_log SET turn_id = ?, step_idx = ? WHERE id = ? AND kind = 'event'`,
-      turnId, stepIdx, eventId,
+      `UPDATE agent_log SET turn_id = ?, step_idx = ?, consumed_at = ?
+       WHERE id = ? AND kind = 'event'`,
+      turnId, stepIdx, now, eventId,
+    );
+  }
+
+  /** Close the recovery lease after a drain turn completed. The durable
+   *  turn binding remains available for reply dispatch and audit queries. */
+  markTurnCompleted(turnId: TurnId): void {
+    this.sql.exec(
+      `UPDATE agent_log SET consumed_at = NULL
+       WHERE turn_id = ? AND kind = 'event'`,
+      turnId,
     );
   }
 
@@ -268,9 +279,30 @@ export class EventLog {
    *  they re-enter the pending pool. */
   unbind(eventId: EventId): void {
     this.sql.exec(
-      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL WHERE id = ? AND kind = 'event'`,
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE id = ? AND kind = 'event'`,
       eventId,
     );
+  }
+
+  /** Re-pend unfinished synthetic drain deliveries whose recovery lease has
+   *  been stranded past the activation grace period. */
+  unbindStale(olderThanMs: number, now = Date.now()): EventId[] {
+    const cutoff = now - olderThanMs;
+    const rows = this.sql.exec(
+      `UPDATE agent_log
+       SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE id IN (
+         SELECT id FROM agent_log
+         WHERE kind = 'event'
+           AND turn_id LIKE 'evt-%'
+           AND consumed_at IS NOT NULL
+           AND consumed_at <= ?
+       )
+       RETURNING id`,
+      cutoff,
+    ).toArray() as Array<{ id: EventId }>;
+    return rows.map((row) => row.id);
   }
 
   // ── defer ───────────────────────────────────────────────────────
@@ -286,7 +318,7 @@ export class EventLog {
     const payload = JSON.parse(row[0].payload);
     payload.__defer_revisit = revisitAt;
     this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL WHERE id = ?`,
+      `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
       JSON.stringify(payload), eventId,
     );
   }
@@ -303,7 +335,7 @@ export class EventLog {
     const payload = JSON.parse(row[0].payload);
     payload.__dismissed = { reason, by, at: Date.now() };
     this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL WHERE id = ?`,
+      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
       JSON.stringify(payload), eventId,
     );
   }
@@ -364,10 +396,11 @@ export class EventLog {
 
   // ── audit-log writes (steps, tool calls, etc.) ─────────────────
 
-  /** Append a row to the unified log. The TurnRunner uses this for phase
-   *  transitions, step boundaries, tool calls/results, reactor decisions,
-   *  and reply attempts. Direct callers must NOT use this to insert
-   *  `kind='event'` rows — only `publish()` is allowed. */
+  /** Append a non-event row to the unified log (phase transitions, step
+   *  boundaries, tool calls/results, reactor decisions, reply attempts —
+   *  e.g. the email dispatcher's reply_attempt audit rows). Direct callers
+   *  must NOT use this to insert `kind='event'` rows — only `publish()` is
+   *  allowed. */
   appendNonEventRow(opts: {
     kind: 'phase' | 'step' | 'tool_call' | 'tool_result' | 'reactor_decision' | 'reply_attempt';
     turn_id: TurnId | null;
@@ -390,9 +423,8 @@ export class EventLog {
     return id;
   }
 
-  /** The latest phase row for a turn — used by recovery + by the TurnRunner
-   *  to read current phase. Orders by received_at desc (strictly monotonic
-   *  per write) with id desc as a tiebreaker. */
+  /** The latest phase row for a turn. Orders by received_at desc (strictly
+   *  monotonic per write) with id desc as a tiebreaker. */
   currentPhase(turn_id: TurnId): { phase: string; at: number } | null {
     const rows = this.sql.exec(
       `SELECT payload, received_at FROM agent_log

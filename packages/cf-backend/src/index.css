@@ -25,6 +25,13 @@ html, body, #root {
   --c-success:  #7FB069;
   --c-warning:  #D99A4E;
   --c-danger:   #E07A5F;
+  --c-info:     #7CA0C4;
+
+  --c-success-tint: rgba(127, 176, 105, 0.16);
+  --c-warning-tint: rgba(217, 154, 78, 0.16);
+  --c-danger-tint:  rgba(224, 122, 95, 0.16);
+  --c-info-tint:    rgba(124, 160, 196, 0.16);
+  --c-neutral-tint: rgba(245, 239, 230, 0.08);
 
   --c-text:     #F5EFE6;
   --c-text-2:   #B6A893;
@@ -55,6 +62,13 @@ html, body, #root {
   --c-success:  #5e8a45;
   --c-warning:  #b07a2e;
   --c-danger:   #c0563a;
+  --c-info:     #4a6f96;
+
+  --c-success-tint: rgba(94, 138, 69, 0.14);
+  --c-warning-tint: rgba(176, 122, 46, 0.14);
+  --c-danger-tint:  rgba(192, 86, 58, 0.14);
+  --c-info-tint:    rgba(74, 111, 150, 0.12);
+  --c-neutral-tint: rgba(60, 45, 25, 0.07);
 
   --c-text:     #241E18;
   --c-text-2:   #6f6457;
@@ -108,9 +122,36 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-accent-subtle  { background: var(--c-accent-subtle); }
 
 /* ── Status ─────────────────────────────────────────────────────── */
+/* text */
 .p-success { color: var(--c-success); }
 .p-warning { color: var(--c-warning); }
 .p-danger  { color: var(--c-danger); }
+.p-info    { color: var(--c-info); }
+
+/* solid fills — status dots and progress-bar fills */
+.p-dot-success { background: var(--c-success); }
+.p-dot-warning { background: var(--c-warning); }
+.p-dot-danger  { background: var(--c-danger); }
+.p-dot-info    { background: var(--c-info); }
+.p-dot-neutral { background: var(--c-text-3); }
+.p-dot-accent  { background: var(--c-accent); }
+
+/* pill badges — tinted background + legible foreground */
+.p-badge-success { background: var(--c-success-tint); color: var(--c-success); }
+.p-badge-warning { background: var(--c-warning-tint); color: var(--c-warning); }
+.p-badge-danger  { background: var(--c-danger-tint);  color: var(--c-danger); }
+.p-badge-info    { background: var(--c-info-tint);    color: var(--c-info); }
+.p-badge-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); }
+
+/* tinted attention cards — background + hairline only; body text stays neutral
+   (pair with a `border` width class). For colored-text alerts use .p-notice-*. */
+.p-tint-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); }
+
+/* inline notice boxes — tint + text + hairline border */
+.p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 35%, transparent); }
+.p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 35%, transparent); }
+.p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 35%, transparent); }
+.p-notice-info    { background: var(--c-info-tint);    color: var(--c-info);    border: 1px solid color-mix(in srgb, var(--c-info) 35%, transparent); }
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .p-card {

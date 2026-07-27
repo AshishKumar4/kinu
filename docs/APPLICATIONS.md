@@ -1,5 +1,7 @@
 # Applications & Research Positioning
 
+> Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
+
 ## 1. What Proteus Is
 
 Proteus is a general-purpose AI agent that improves itself over time. Unlike stateless LLMs that forget everything between conversations, or fixed-tool agents that can only use pre-defined capabilities, Proteus:
@@ -8,7 +10,7 @@ Proteus is a general-purpose AI agent that improves itself over time. Unlike sta
 - **Explores multiple strategies** in parallel via Monte Carlo Tree Search
 - **Rewrites its own execution logic** (scaffold) based on observed performance patterns
 - **Remembers everything** in a persistent, FTS5-searchable memory
-- **Has formally verified safety bounds** — Lean 4 proofs guarantee the sandbox can't escalate privileges and MCTS branches can't corrupt shared state
+- **Includes CI-gated Lean 4 models** — 84 theorems check selected abstract invariants, with assumptions and implementation-evidence gaps tracked explicitly
 
 ```mermaid
 graph LR
@@ -21,7 +23,7 @@ graph LR
         B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
         B2 --> B3[MCTS Exploration<br/>Parallel strategies]
         B3 --> B4[Self-Modifying Scaffold<br/>4-gate validated]
-        B4 --> B5[Formal Safety<br/>Lean 4 proofs]
+        B4 --> B5[Lean 4 Models<br/>CI-gated traceability]
     end
 
     style A3 fill:#533483
@@ -57,7 +59,7 @@ The web UI exposes the agent's internal state across 6 tabs: Identity, Tools, Me
 
 ### Personal AI Assistant That Learns
 
-Each agent is a Durable Object with its own SQLite database. Conversations persist across sessions. The agent builds up:
+Each workspace is a Durable Object with its own SQLite database, hosting its default agent. Conversations persist across sessions. The agent builds up:
 
 - **Long-term memory** (MEMORY.md) — reflections, notes, learned facts
 - **Crafted tools** — reusable code patterns extracted from successful problem-solving
@@ -67,14 +69,19 @@ Unlike ChatGPT or Claude (which start fresh each conversation), a Proteus agent 
 
 ### Multi-Model Comparison
 
-The model selector supports switching between models mid-conversation:
+The model selector supports switching between models mid-conversation, across
+every connected provider — not just Workers AI. On Workers AI the usual spread is:
 
 | Model | Description | Best For |
 |-------|-------------|----------|
-| Kimi K2.5 | Advanced reasoning model with extended thinking | Complex problems, CTF challenges, algorithm design |
-| Llama 4 Scout 17B | General-purpose instruction model | Quick tasks, simple questions, iteration |
+| Kimi K2.6 | Reasoning + tools + vision, 262k context. The default. | Complex problems, CTF challenges, algorithm design |
+| Nemotron 3 Super 120B / GPT OSS 120B | Reasoning models, 256k / 128k context | Alternate reasoning trajectories |
+| Llama 4 Scout | General-purpose instruction model | Quick tasks, simple questions, iteration |
 
-Different models produce different evolution trajectories. Kimi K2.5 tends to extract more complex tool patterns; Llama 4 Scout produces different evolution patterns.
+Different models produce different evolution trajectories — a reasoning model
+tends to extract more complex tool patterns than an instruction model. Reasoning
+effort is a separate dial: `/effort low|medium|high` maps onto each provider
+family's native knob, so the same model can be run cheap or deep.
 
 ### With Nimbus: Full Development Environment
 
@@ -97,7 +104,7 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 ```bash
 proteus create dev-helper --purpose "A TypeScript development assistant"
 proteus chat dev-helper
-# Agent has access to execute_tools, run, explore, save_note, search_memory
+# Agent has access to execute_tools, run, skills, think, memory, fact, web_search, web_fetch
 # Evolution happens locally — crafted tools persist in ~/.proteus/dev-helper/agent.db
 ```
 
@@ -167,7 +174,7 @@ graph TB
     end
 
     subgraph "Proteus (this work)"
-        P[Combines all three<br/>+ formal verification<br/>+ persistent state<br/>+ scaffold mutation]
+        P[Combines all three<br/>+ CI-gated Lean models<br/>+ persistent state<br/>+ scaffold mutation]
     end
 
     TF -.->|"tool discovery"| P
@@ -189,40 +196,52 @@ graph TB
 | **Self-Refine** (Madaan 2023) | No | No | Iterative refinement | No | No |
 | **OMNI** (Zhang 2024) | Tool creation | No | Yes | No | No |
 | **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
-| **Proteus** | CraftStore + EMA | MCTS + Facets | Scaffold mutation | 75 Lean 4 theorems (8 sorry) | DO SQLite |
+| **Proteus** | CraftStore + EMA | MCTS + Facets | Scaffold mutation | 84 theorems over abstract models; 1 documented SQLite assumption | DO SQLite |
 
 ### What's Genuinely Novel
 
-1. **Three-timescale evolution with formal guarantees.** No other system combines turn/session/lifetime evolution with Lean 4 proofs. The formal verification isn't cosmetic — it proves that sandbox capabilities are bounded, MCTS branches are isolated, and budget terminates.
+1. **Three-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
 
 2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is genuine self-modifying code, but guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
 
 3. **CraftStore with automatic lifecycle management.** Tools aren't just learned — they're scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful. No other tool-learning system has this lifecycle.
 
-4. **MCTS branches as isolated Durable Objects.** Each exploration branch is a separate DO with its own SQLite, proven isolated from the orchestrator via Lean 4's `StorageIsolated` invariant. This is stronger isolation than any other MCTS-for-LLM system, and it runs on commodity infrastructure (Cloudflare Workers).
+4. **MCTS branches as isolated Durable Objects.** Each exploration branch has its own Durable Object and SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
 
-5. **TypeScript ↔ Lean 4 correspondence via TSLean.** The formal spec's types are auto-generated from the TypeScript interfaces, ensuring the proofs operate on the same structures as the code. This level of formal-implementation correspondence is rare in AI agent research.
+5. **Traceable Lean and TypeScript models.** Each formal requirement records theorem names, modeled TypeScript source locations, classification, and remaining evidence. CI rejects missing theorems, undocumented axioms, and traceability mismatches. The models are hand-maintained rather than generated from TypeScript.
 
 ## 5. Current Limitations
 
-### No Multi-Agent Collaboration
+### Collaboration exists, but the coordination quality is unproven
 
-Each Proteus agent is an isolated DO. There's no mechanism for agents to communicate, share tools, or collaborate on tasks. The `ExplorationAgent` facets are MCTS branches, not independent collaborators.
+This limitation used to read "no multi-agent collaboration at all," and that is
+no longer true. A workspace can staff durable `SubordinateAgent` facets through
+the `team` tool — each with its own turn loop, sharing the workspace's files —
+and reach the owner's other workspaces through `peers`. What is *not* yet shown
+is that delegating produces better results than working linearly: there is no
+measurement of whether decomposition beats a single long turn, how often
+subordinates duplicate each other's work, or how much coordination overhead the
+orchestrator pays.
 
 ### Evolution is Slow in Practice
 
-- **Turn-level** works well — pattern extraction fires reliably after successful tool usage
-- **Session-level** requires 5+ turns to trigger, and scaffold mutation requires 3+ sessions with clear patterns
-- **Lifetime** MCTS requires explicit trigger (via `explore` tool or `triggerEvolution` RPC)
-- The LLM's ability to generalize tool patterns into reusable code is inconsistent (~50% success rate with Kimi K2.5)
+- **Turn-level** works well — pattern extraction fires reliably after an accepted turn that used tools
+- **Session-level** needs 5 turns *and* a turn that errored or drew negative feedback; scaffold mutation additionally needs 3+ conversations
+- **Lifetime** fires automatically every 5 conversations, or on the `triggerEvolution` RPC
+- The LLM's ability to generalize tool patterns into reusable code is inconsistent
 
-### No Evaluation Framework
+### Evaluation exists; coverage is thin
 
-There's no automated benchmark suite to measure whether evolution actually improves agent performance. The evolution-proof E2E test (CTF challenges) showed improvement, but this isn't a systematic evaluation. Key missing metrics:
+There is now a runnable quality benchmark (`scripts/eval.ts` over
+`core/src/eval/`) that scores a candidate model against a baseline with an LLM
+judge and exits non-zero below a committed floor, plus a replay eval
+(`runReplayEval`) that re-runs labeled past turns through the live scaffold to
+produce a loss curve. That is a real measurable signal, and it is what the
+shadow-veto promotion decision leans on. What is still missing is breadth — the
+seed corpus is small, and these metrics remain unmeasured:
 
 - Task completion rate before vs after evolution
 - Tool reuse frequency
-- Scaffold mutation impact on quality scores
 - Memory utilization efficiency
 
 ### Scaffold Mutation Rarely Triggers
@@ -232,9 +251,12 @@ The scaffold mutation pipeline exists and is fully implemented (4-gate validatio
 - The LLM often produces scaffolds that fail structural validation (forbidden patterns like `import`)
 - Successful mutations are rare — most conversations don't generate enough data for meaningful scaffold improvements
 
-### MCTS Exploration is Not Real-Time Visible
+### MCTS Exploration is Only Coarsely Visible
 
-The MCTS tree visualization in the web UI is a static snapshot loaded once on page load. During active exploration, the UI shows a tool-call spinner with no intermediate tree state. The D3 visualization is fully capable of incremental rendering — it just never receives live updates.
+The engine broadcasts per-iteration progress (`onMctsProgress` →
+`broadcastMctsProgress`), so the UI is no longer a single static snapshot. But
+what it receives is an iteration counter and remaining budget — not incremental
+tree state, so the shape of the search still only resolves once it finishes.
 
 ## 6. Future Roadmap
 
@@ -266,22 +288,23 @@ graph LR
 
 ### Multi-Agent Coordination
 
-Using Cloudflare's Agents SDK, multiple Proteus agents could:
+Delegation to specialist agents shipped — `team` for in-workspace subordinates,
+`peers` for cross-workspace handoff. What's left of the original idea:
 - Share crafted tools via a global CraftStore (using R2 for cross-DO storage)
-- Delegate subtasks to specialized agents (code review agent, testing agent, deployment agent)
 - Coordinate MCTS exploration across agents for larger search spaces
+- Measure whether staffing actually beats working linearly
 
 ### Evaluation Benchmarks
 
-Build a systematic evaluation framework:
+Broaden the existing harness beyond its seed corpus:
 - **CryptoHack** (308 crypto challenges) — CTF-style verification with known flags
 - **SWE-bench** — software engineering tasks with automated verification
 - **Custom evolution benchmarks** — measure tool extraction rate, scaffold improvement, memory utilization
 
-### TSLean Continuous Verification
+### Lean-to-TypeScript Evidence
 
 Extend the Lean pipeline:
-- Add Mathlib dependency to replace Float axioms with proper real analysis proofs
-- Generate Lean types from more TypeScript files (MCTS engine, evolution engine)
-- Create a `TypeBridge.lean` that proves equivalence between generated and hand-written types
-- CI rejects commits that break any formal property
+- Add shared differential fixtures that execute Lean models and TypeScript on the same inputs
+- Mirror proved properties as property-based tests over production functions and SQL paths
+- Keep every theorem, trusted assumption, source reference, and missing evidence item enrolled in the CI traceability gate
+- Add the missing FTS5 index-to-search and multi-chunk VFS integration coverage

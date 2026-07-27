@@ -2,11 +2,21 @@
  * Evolution engine types — the three timescales of self-evolution.
  */
 
+import type { MCTSProgressEvent } from '../types/mcts.js';
+
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {
   name: string;
   args: Record<string, unknown>;
   result: unknown;
+}
+
+/** Provider-reported token usage for one turn, summed over its steps.
+ *  `cached` is the cache-read share of `input`, not an addition to it. */
+export interface TurnUsage {
+  input: number;
+  output: number;
+  cached: number;
 }
 
 /** A completed turn — input + output + metadata for the evolution engine */
@@ -33,6 +43,9 @@ export interface CompletedTurn {
    *  verdicts on user-origin turns; programmatic turns (reactor / job wake)
    *  carry no user signal. */
   origin?: 'user' | 'programmatic';
+  /** What the turn spent, as the provider reported it per step. Absent when
+   *  the provider reported no usage at all. */
+  usage?: TurnUsage;
 }
 
 /** A completed session — sequence of turns */
@@ -62,8 +75,8 @@ export interface EvolutionConfig {
   lifetimeEvolutionInterval: number;
   lifetimeMCTSBudget: number;
   lifetimeMCTSBranches: number;
-  /** Called after each MCTS iteration — for real-time UI broadcasting */
-  onMctsProgress?: (iteration: number, remainingBudget: number) => void;
+  /** Called as the lifetime MCTS search progresses — for real-time UI broadcasting */
+  onMctsProgress?: (event: MCTSProgressEvent) => void;
   /** Re-run a task against the CURRENT config (scaffold/prompt/tools) — the
    *  backend seam the replay-eval harness rolls out through. Absent = the
    *  periodic replay eval is skipped. */
