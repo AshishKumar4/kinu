@@ -30,3 +30,7 @@ packages/core/tests/helpers.d.ts.map
 # Internal working notes: dated audits, program ledgers, design studies.
 # Useful locally, not part of the published project.
 /*-2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
+
+# External benchmark corpora (downloaded via harbor, not our source)
+/deep-swe/
+/terminal-bench/
