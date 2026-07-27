@@ -166,7 +166,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     };
     const orch = new AgentOrchestrator({
       host, eventLog: log,
-      engine: { reviewTurnDetached: () => {}, reviewTurn: async () => {}, onSessionComplete: async () => {} } as unknown as EvolutionEngine,
+      engine: { reviewTurn: async () => {}, onSessionComplete: async () => {} } as unknown as EvolutionEngine,
     });
     await orch.drainPendingEvents();
 

@@ -70,6 +70,11 @@ export {
   initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay.js';
+// The durable evolution window + pending outcome review — the state neither
+// backend's instance outlives (one process per `proteus exec`; DO eviction).
+export {
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+} from './evolution/session-window.js';
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {

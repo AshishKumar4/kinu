@@ -143,7 +143,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(events).toHaveLength(0);
   });
 
-  test('no follow-up (session end): abandoned, neutral, no reflection unless errored', async () => {
+  test('no follow-up: no outcome row at all — an absent verdict is not a neutral one', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
@@ -152,11 +152,13 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const clean = makeTurn();
     await engine.reviewTurn(clean, null);
     expect(clean.feedback).toBeNull();
-    expect(listTurnOutcomes(rt.storage.sql)[0].outcome).toBe('abandoned');
+    // The follow-up may still arrive (in headless usage it is the next
+    // `proteus exec` invocation), so nothing is recorded on no evidence.
+    expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
     expect(events.filter(e => e.type === 'reflection')).toHaveLength(0);
   });
 
-  test('abandoned turn with an error: reflects, but the lesson stays provisional and OUT of MEMORY.md', async () => {
+  test('ungraded turn with an error: reflects, but the lesson stays provisional and OUT of MEMORY.md', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
 
@@ -313,10 +315,23 @@ describe('EvolutionEngine — Session-level', () => {
     expect(provisional.some(l => l.source === 'session_reflection' && l.turnIds.includes('e1'))).toBe(true);
   });
 
-  test('onSessionComplete tracks conversation count', async () => {
+  test('the lifetime cadence counts closed windows durably — a new engine resumes it', async () => {
     const { rt } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
-    await engine.onSessionComplete(session([makeTurn(), makeTurn(), makeTurn()]));
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftScoreTables(rt.storage.execRaw);
+    const window = session([makeTurn(), makeTurn(), makeTurn()]);
+
+    // Five windows, each closed by a DIFFERENT engine instance — one per
+    // `proteus exec` process, or one per Durable Object lifetime.
+    const events: EvolutionEvent[] = [];
+    for (let i = 0; i < 5; i++) {
+      const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 5, lifetimeMCTSBudget: 1, lifetimeMCTSBranches: 1 });
+      engine.onEvent(e => events.push(e));
+      await engine.onSessionComplete(window);
+    }
+    // The 5th window is the interval — an instance-local counter never got here.
+    expect(events.filter(e => e.type === 'mcts_started')).toHaveLength(1);
   });
 });
 

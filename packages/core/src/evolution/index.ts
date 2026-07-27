@@ -36,6 +36,9 @@ export {
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './replay.js';
 export {
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+} from './session-window.js';
+export {
   buildChangelog, countUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,

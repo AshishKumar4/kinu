@@ -809,11 +809,14 @@ export class LocalAgentSession implements BackendHost {
     await this.orch.drainPendingEvents();
   }
 
-  /** End the session: flush a partial evolution window + disconnect MCP. */
+  /** End the session: let the evolution this run started finish before the
+   *  process goes away, then disconnect MCP. The evolution window itself is
+   *  durable, so a partial one carries over to the next run rather than being
+   *  force-closed here. */
   async end(): Promise<void> {
     this.ended = true;
     this.clearLocalAlarm();
-    await this.orch.flushSession();
+    await this.orch.settleEvolution();
     try { await this.mcpClose?.(); } catch { /* best effort */ }
   }
 

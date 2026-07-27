@@ -3,7 +3,9 @@
 // were extracted from the cf-backend OrchestratorAgent's onChatResponse.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { createTestSql } from '@proteus/test-utils';
 import { AgentOrchestrator } from '../src/orchestrator/agent-orchestrator.js';
+import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window.js';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index.js';
 import type { BackendHost, BroadcastEvent, MidTurnEventBatch, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { EvolutionEngine } from '../src/evolution/engine.js';
@@ -34,11 +36,16 @@ function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): 
   } as IngressDescriptor;
 }
 
+/** A stand-in engine over a REAL in-memory session window — the store the
+ *  engine owns in production, so the cadence is exercised against the durable
+ *  buffer rather than orchestrator-instance state. */
 function fakeEngine() {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
+  const { sql, execRaw } = createTestSql();
+  initSessionWindowTable(execRaw);
   const engine = {
-    reviewTurnDetached: (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
+    sessionWindow: createSessionWindowStore(sql),
     reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
   } as unknown as EvolutionEngine;
@@ -72,24 +79,66 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 3 });
     for (let i = 0; i < 7; i++) orch.recordTurn(aTurn(i));
-    expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (count resets)
+    expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (window closes)
     expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
   });
 
-  test('flushSession reviews the pending turn as abandoned, then reflects the partial window', async () => {
+  test('a partial window survives the session ending — it is not force-closed or graded', async () => {
     const { engine, reviews, sessions } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 5 });
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i));   // below the interval — no auto reflection
     expect(sessions).toEqual([]);
-    await orch.flushSession();
-    expect(sessions).toEqual([2]);                            // the 2 buffered turns reflected
-    expect(orch.sessionTurnIndex).toBe(0);                    // window reset
-    // The last user-origin turn had no follow-up — reviewed as abandoned.
-    expect(reviews).toEqual([{ turn: aTurn(1), followup: null }]);
-    await orch.flushSession();                                // nothing buffered now
-    expect(sessions).toEqual([2]);                            // still just the one
-    expect(reviews).toHaveLength(1);
+    await orch.settleEvolution();
+    // No session is manufactured out of a 2-turn window, and the last turn's
+    // follow-up may still arrive — so nothing is graded on no evidence.
+    expect(sessions).toEqual([]);
+    expect(reviews).toEqual([]);
+    expect(orch.sessionTurnIndex).toBe(2);                    // the window carries over
+  });
+
+  test('settleEvolution waits for the evolution the run dispatched', async () => {
+    const { engine, sessions } = fakeEngine();
+    const { host } = fakeHost();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    (engine as unknown as { onSessionComplete: (s: { turns: CompletedTurn[] }) => Promise<void> })
+      .onSessionComplete = async (s) => { await gate; sessions.push(s.turns.length); };
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
+    orch.recordTurn(aTurn(0));
+    orch.recordTurn(aTurn(1));
+    expect(sessions).toEqual([]);            // still in flight
+    const settled = orch.settleEvolution();
+    release();
+    await settled;
+    expect(sessions).toEqual([2]);           // the process would have killed this before
+  });
+});
+
+describe('AgentOrchestrator — the durable session window', () => {
+  // `proteus exec` is one process per turn: a fresh orchestrator every time,
+  // against the same workspace database. The window and the pending review
+  // have to live in that database or headless usage never evolves at all.
+  test('the window accumulates across orchestrator instances and fires at the interval', () => {
+    const { engine, sessions } = fakeEngine();
+    const eventLog = newEventLog();
+    for (let i = 0; i < 5; i++) {
+      const { host } = fakeHost();
+      new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 }).recordTurn(aTurn(i));
+    }
+    expect(sessions).toEqual([5]);
+  });
+
+  test('the pending review survives the process boundary — the next run grades it', () => {
+    const { engine, reviews } = fakeEngine();
+    const eventLog = newEventLog();
+    const { host } = fakeHost();
+    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0));
+    expect(reviews).toHaveLength(0);
+    // A new process against the same workspace: its user message IS turn 0's
+    // follow-up, so the turn is graded by real signal instead of a constant.
+    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build');
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
   });
 });
 

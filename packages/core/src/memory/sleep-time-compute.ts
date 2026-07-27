@@ -10,7 +10,7 @@
 // — it runs fire-and-forget after the turn completes.
 //
 // Proteus implements this as a sibling of the detached outcome review
-// (`EvolutionEngine.reviewTurnDetached`) — same forked pattern, additional work.
+// (`AgentOrchestrator`'s detached `engine.reviewTurn`) — same forked pattern, additional work.
 // The keyed world model is its lever; long-conversation summarization is owned
 // by Session compaction (configureSession), so there is no parallel prose summary.
 //

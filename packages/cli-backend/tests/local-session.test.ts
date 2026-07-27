@@ -929,14 +929,30 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await session.end();
   });
 
-  test('end() reviews the still-pending turn as abandoned', async () => {
-    const { db, session } = setupWithEvolution('unused');
+  // `proteus exec` is one process per turn. The evolution window and the turn
+  // awaiting its verdict therefore have to outlive the session object, or
+  // headless usage never reaches the reflection cadence and every turn is
+  // graded by the same constant.
+  test('the window and the pending review survive end() — the next run grades the turn', async () => {
+    const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
+    const { db, rt, session } = setupWithEvolution(classifierJson);
 
     await session.send('please summarize the deployment runbook for me');
     await session.end();
 
-    const row = db.query(`SELECT outcome, source FROM turn_outcomes`).get() as { outcome: string; source: string } | null;
-    expect(row).toEqual({ outcome: 'abandoned', source: 'session_end' });
+    // Nothing invented about a turn nobody has graded yet…
+    expect((db.query(`SELECT count(*) AS c FROM turn_outcomes`).get() as { c: number }).c).toBe(0);
+    // …and the turn is still in the window, still waiting for its verdict.
+    expect((db.query(`SELECT count(*) AS c FROM session_window WHERE in_window = 1`).get() as { c: number }).c).toBe(1);
+
+    // A second run against the same workspace: its prompt IS the follow-up.
+    const next = new LocalAgentSession({ rt, db, model: fakeModel('here is the runbook'), onEvent: () => {} });
+    await next.send('no — that summary missed the rollback step entirely');
+    await next.end();
+
+    const row = db.query(`SELECT outcome, source FROM turn_outcomes`).get() as { outcome: string; source: string };
+    expect(row).toEqual({ outcome: 'corrected', source: 'classifier' });
+    expect((db.query(`SELECT count(*) AS c FROM session_window WHERE in_window = 1`).get() as { c: number }).c).toBe(2);
   });
 });
 

@@ -441,7 +441,7 @@ export abstract class ActorAgent extends Think<Env> {
     const errorText = result.error?.slice(0, 500);
     this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status);
     // Clear the in-flight flag once the turn is durably completed — forkAgent
-    // is allowed again from here forward. Evolution (engine.reviewTurnDetached)
+    // is allowed again from here forward. Evolution (the orchestrator's detached engine.reviewTurn)
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;

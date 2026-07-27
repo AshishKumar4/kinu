@@ -14,7 +14,7 @@ import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
-import type { CompletedTurn, CompletedSession } from '../evolution/types.js';
+import type { CompletedTurn } from '../evolution/types.js';
 import { nanoid } from '../utils/nanoid.js';
 
 export interface AgentOrchestratorDeps {
@@ -31,15 +31,12 @@ export class AgentOrchestrator {
   /** Per-turn accounting — tool calls, steps, token usage, errors. */
   readonly acc: TurnAccumulator;
   private readonly reflectionInterval: number;
-  private sessionTurnCount = 0;
-  private sessionTurns: CompletedTurn[] = [];
-  private sessionStartedAt = Date.now();
-  /** The last completed user-origin turn, awaiting its outcome review — the
-   *  next user message grades it (engine.reviewTurn); a session flush grades
-   *  it as abandoned. */
-  private pendingReview: CompletedTurn | null = null;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
+  /** Evolution dispatched by this instance and not yet settled. Detached so it
+   *  never blocks a turn; tracked so a process that is about to exit can wait
+   *  for it (settleEvolution). */
+  private readonly inFlight = new Set<Promise<void>>();
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks);
@@ -50,9 +47,16 @@ export class AgentOrchestrator {
     );
   }
 
+  /** The window and the turn awaiting its review — durable, because neither
+   *  backend's instance outlives them (`proteus exec` is one process per turn;
+   *  a Durable Object is evicted between requests). */
+  private get window() {
+    return this.deps.engine.sessionWindow;
+  }
+
   /** Completed turns in the current session — the turn index for run events. */
   get sessionTurnIndex(): number {
-    return this.sessionTurnCount;
+    return this.window.size();
   }
 
   /** Reset per-turn accounting at the start of a turn. */
@@ -65,77 +69,62 @@ export class AgentOrchestrator {
    * the detached outcome review (engine.reviewTurn: trivial pre-filter, one
    * cheap LLM classification, turn_outcomes row + downstream evolution).
    * Backends call this at user-turn start; programmatic turns must not.
+   *
+   * The previous turn may have been completed by an earlier process — that is
+   * the whole point of the durable window: in headless usage the follow-up IS
+   * the next `proteus exec` invocation's prompt.
    */
   observeUserTurn(userText: string): void {
-    const previous = this.pendingReview;
+    const previous = this.window.takePendingReview();
     if (!previous) return;
-    this.pendingReview = null;
-    this.deps.engine.reviewTurnDetached(previous, userText);
+    this.detach(this.deps.engine.reviewTurn(previous, userText), 'Turn review');
   }
 
   /**
-   * Advance the session-reflection cadence + fire turn/session evolution. All
-   * fire-and-forget — never blocks the loop. Does NOT drain events (the backend
+   * Buffer the turn in the durable window, fire session evolution when the
+   * window reaches the interval, and review programmatic turns immediately.
+   * All detached — never blocks the loop. Does NOT drain events (the backend
    * calls drainPendingEvents() separately so it controls ordering vs its own
    * platform-specific post-turn work).
    *
    * Turn-level evolution is outcome-driven: a user-origin turn waits for the
-   * user's follow-up (observeUserTurn) or the session flush (abandoned); a
-   * programmatic turn has no user verdict coming, so it reviews immediately.
+   * user's next message to grade it; a programmatic turn has no user verdict
+   * coming, so it reviews immediately.
    */
   recordTurn(turn: CompletedTurn): void {
-    this.sessionTurnCount++;
-    this.sessionTurns.push(turn);
-    if (this.sessionTurnCount >= this.reflectionInterval) {
-      const sessionData = this.snapshotSession();
-      if (sessionData) {
-        void this.deps.engine.onSessionComplete(sessionData).catch((err) =>
-          console.error('[proteus] Session evolution failed:', err));
+    const startedAt = this.window.startedAt() ?? Date.now();
+    this.window.append(turn);
+    if (this.window.size() >= this.reflectionInterval) {
+      const turns = this.window.close();
+      if (turns.length > 0) {
+        this.detach(this.deps.engine.onSessionComplete({
+          sessionId: `sess-${nanoid()}`, turns, startedAt, endedAt: Date.now(),
+        }), 'Session evolution');
       }
     }
-    if (turn.origin === 'programmatic') this.deps.engine.reviewTurnDetached(turn, null);
-    else this.pendingReview = turn;
+    if (turn.origin === 'programmatic') {
+      this.detach(this.deps.engine.reviewTurn(turn, null), 'Turn review');
+    }
   }
 
   /**
-   * Flush a partial session (fewer than N turns) — review the still-pending
-   * last turn as abandoned (the session ended with no follow-up), then fire
-   * session evolution on the buffered turns and reset, AWAITING the
-   * reflection. For backends with an explicit session end (the CLI on exit);
-   * the always-on DO rolls over via the N-turn cadence in recordTurn instead.
+   * Wait for the evolution this instance dispatched. Evolution makes LLM calls
+   * that outlive a turn, so a process that is about to exit (`proteus exec`,
+   * a chat session closing) must wait or the work is simply killed — which is
+   * what made headless runs produce no evolution at all.
+   *
+   * The window itself needs no flushing: it is durable, so a partial window
+   * carries over to the next run instead of being force-closed as a session.
    */
-  async flushSession(): Promise<void> {
-    const pending = this.pendingReview;
-    this.pendingReview = null;
-    if (pending) {
-      try {
-        await this.deps.engine.reviewTurn(pending, null);
-      } catch (err) {
-        console.error('[proteus] Turn review failed at flush:', err);
-      }
-    }
-    const sessionData = this.snapshotSession();
-    if (!sessionData) return;
-    try {
-      await this.deps.engine.onSessionComplete(sessionData);
-    } catch (err) {
-      console.error('[proteus] Session evolution failed:', err);
-    }
+  async settleEvolution(): Promise<void> {
+    while (this.inFlight.size > 0) await Promise.all([...this.inFlight]);
   }
 
-  /** Snapshot + reset the current session window. Returns null when empty. */
-  private snapshotSession(): CompletedSession | null {
-    if (this.sessionTurns.length === 0) return null;
-    const data: CompletedSession = {
-      sessionId: `sess-${nanoid()}`,
-      turns: [...this.sessionTurns],
-      startedAt: this.sessionStartedAt,
-      endedAt: Date.now(),
-    };
-    this.sessionTurnCount = 0;
-    this.sessionTurns = [];
-    this.sessionStartedAt = Date.now();
-    return data;
+  private detach(work: Promise<void>, label: string): void {
+    const tracked = work
+      .catch((err) => console.error(`[proteus] ${label} failed:`, err))
+      .then(() => { this.inFlight.delete(tracked); });
+    this.inFlight.add(tracked);
   }
 
   /**

@@ -45,6 +45,11 @@ export const AGENT_CONFIG_KEYS = {
   /** Epoch ms of the operator's last Evolution Changelog view — entries newer
    *  than this drive the unseen badge. */
   changelogSeenAt: 'changelog_seen_at',
+  /** Session windows this agent has closed over its lifetime — the pace the
+   *  lifetime timescale (replay eval → consolidation → MCTS) runs at. Durable
+   *  because no agent instance outlives it: a `proteus exec` process handles
+   *  one turn, and a Durable Object is evicted between requests. */
+  closedSessionWindows: 'closed_session_windows',
   /** Total outcome-labeled instances a GEPA run draws into its train/val
    *  split (buildOutcomeEvalSplit) — see DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
@@ -120,6 +125,8 @@ export interface AgentConfigStore {
   /** Epoch ms of the last changelog view (0 = never seen). */
   getChangelogSeenAt(): number;
   setChangelogSeenAt(ms: number): void;
+  /** Count one more closed session window and return the new lifetime total. */
+  countClosedSessionWindow(): number;
   /** GEPA eval budget — labeled instances per run (train + val). See
    *  DEFAULT_GEPA_EVAL_BUDGET / clampGepaEvalBudget. */
   getGepaEvalBudget(): number;
@@ -308,6 +315,12 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     setChangelogSeenAt(ms) {
       if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
+    },
+    countClosedSessionWindow() {
+      const previous = Math.floor(Number(get(AGENT_CONFIG_KEYS.closedSessionWindows)));
+      const next = (Number.isFinite(previous) && previous > 0 ? previous : 0) + 1;
+      set(AGENT_CONFIG_KEYS.closedSessionWindows, String(next));
+      return next;
     },
     getMctsOverrides() {
       const positive = (key: string): number | undefined => {
