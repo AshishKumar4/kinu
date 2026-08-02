@@ -326,7 +326,11 @@ function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
     'You are judging two candidate responses to the SAME task.',
     'They are shown in a random order and are deliberately unlabelled — their',
     'position tells you nothing about where they came from or how good they are.',
-    'Score each from 0.0 to 1.0 on (a) correctness, (b) helpfulness, (c) clarity.',
+    // One number per response, said twice: asking for three criteria and a
+    // single `scoreA` field led models to answer with a per-criterion object,
+    // which fails schema validation and throws the whole trial away.
+    'Give each response ONE overall score from 0.0 to 1.0, weighing correctness,',
+    'helpfulness and clarity together.',
     'Pick a winner ("a" / "b" / "tie") and give a one-sentence rationale.',
     '',
     `Task:\n${opts.task.slice(0, 1500)}`,
@@ -335,7 +339,8 @@ function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
     '',
     `Response B:\n${responseB.slice(0, 2500)}`,
     '',
-    'Respond with the structured JSON {winner, rationale, scoreA, scoreB}.',
+    'Respond with the structured JSON {winner, rationale, scoreA, scoreB},',
+    'where scoreA and scoreB are plain numbers, not objects.',
   ].join('\n');
 }
 

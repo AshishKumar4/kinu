@@ -62,6 +62,7 @@ import {
   scaffoldChatTransform, type ScaffoldRunOptions,
   runAutoShadowEval, createStructuredJudge, modifyScaffold, listScaffoldArchive,
   getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
+  initShadowTables,
   type AlternateTakeSet, type TakePickOutcome,
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
@@ -309,6 +310,11 @@ export class LocalAgentSession implements BackendHost {
     // agent_config (typed key/value) — backs always-active skills, etc.
     initAgentConfigTable(this.rt.storage.execRaw);
     this.config = createAgentConfigStore(this.rt.storage.sql);
+
+    // Shadow-rollout ledger (scaffold_evaluations). Provisioned at session
+    // init, exactly as the DO does — creation-time-only would leave every
+    // workspace made before this silently unable to record a trial.
+    initShadowTables(this.rt.storage.execRaw);
 
     // agent_facts world model — exposes the `fact` tool (parity with the DO).
     initFactsTable(this.rt.storage.execRaw);

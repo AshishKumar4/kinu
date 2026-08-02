@@ -18,7 +18,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentRuntime, LLM, LLMProviderConfig } from '@proteus/core';
 import {
-  initScaffoldTables, initShadowTables, createAgentConfigStore, initAgentConfigTable,
+  initScaffoldTables, createAgentConfigStore, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
@@ -63,8 +63,10 @@ function setup(defaultAnswer: string) {
   const rt = createCLIRuntime(db as never, {
     dbPath: `/tmp/proteus-scaffold-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
   });
+  // What `proteus create` provisions. The shadow-rollout ledger is
+  // deliberately NOT created here — LocalAgentSession must provision it, the
+  // way the DO does, or no trial can ever be recorded.
   initScaffoldTables(rt.storage.execRaw);
-  initShadowTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({

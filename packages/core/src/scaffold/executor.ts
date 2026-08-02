@@ -309,14 +309,18 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const providers = await assembleProviders(rt, hostProvider);
 
   const execPromise = exec.execute(wrapperCode, providers, { timeoutMs });
-  const timeoutPromise = new Promise<{ result: unknown; error: string }>((resolve) =>
-    setTimeout(
+  // The timer is cleared once the race settles. A live timer is invisible on
+  // the DO, but it pins a CLI process open for the whole budget after every
+  // scaffold turn — `proteus exec` hung for five minutes past its answer.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<{ result: unknown; error: string }>((resolve) => {
+    timer = setTimeout(
       () => resolve({ result: undefined, error: `scaffold timeout after ${timeoutMs}ms` }),
       timeoutMs,
-    ),
-  );
+    );
+  });
 
-  const result = await Promise.race([execPromise, timeoutPromise]);
+  const result = await Promise.race([execPromise, timeoutPromise]).finally(() => clearTimeout(timer));
   const durationMs = Date.now() - startedAt;
 
   if ((result as { error?: string }).error) {
