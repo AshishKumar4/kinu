@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/mcts/pruning.ts b/packages/core/src/mcts/pruning.ts
-index e9ec3df..46fdc54 100644
+index dfbade6..fcd0d1d 100644
 --- a/packages/core/src/mcts/pruning.ts
 +++ b/packages/core/src/mcts/pruning.ts
-@@ -33,7 +33,7 @@ export async function pruneLowValueBranches(
- ): Promise<void> {
+@@ -38,7 +38,7 @@ export async function pruneLowValueBranches(
    const doomed = rt.storage.sql<{ id: string; branch_agent_key: string | null }>`
      SELECT id, branch_agent_key FROM search_nodes
--    WHERE status = 'open' AND value < ${threshold} AND visits >= ${minVisits}
-+    WHERE status = 'open' AND value > ${threshold} AND visits >= ${minVisits}
+     WHERE root_id = ${rootId} AND status = 'open'
+-      AND value < ${threshold} AND visits >= ${minVisits}
++      AND value > ${threshold} AND visits >= ${minVisits}
    `;
  
    for (const node of doomed) {

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
-index e480aad..f0d59c9 100644
+index fe38d50..94a3c4a 100644
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -414,7 +414,7 @@ export class EvolutionEngine {
-     this.conversationCount++;
+@@ -419,7 +419,7 @@ export class EvolutionEngine {
+     const windowsClosed = this.agentConfig.countClosedSessionWindow();
  
      // Reflect on the entire session (skip trivially short windows)
 -    if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
 +    if (session.turns.length > 3 && this.sessionWarrantsReflection(session)) {
-       await this.onSessionReflection(session);
+       await this.onSessionReflection(session, windowsClosed);
      }
  

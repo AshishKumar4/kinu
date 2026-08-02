@@ -1,15 +1,15 @@
 diff --git a/packages/core/src/memory/hybrid-search.ts b/packages/core/src/memory/hybrid-search.ts
-index 6094aaa..71c796f 100644
+index a012576..5d1f9b9 100644
 --- a/packages/core/src/memory/hybrid-search.ts
 +++ b/packages/core/src/memory/hybrid-search.ts
-@@ -111,8 +111,8 @@ export async function hybridSearch(
-       snippet: l?.snippet ?? '',
+@@ -151,8 +151,8 @@ export async function hybridSearch(
+       snippet,
        rrfScore: m.rrfScore,
        sources,
 -      lexicalScore: l?.score,
 -      semanticScore: s?.score,
 +      lexicalScore: s?.score,
 +      semanticScore: l?.score,
-     });
-     if (enriched.length >= finalK) break;
-   }
+     };
+   }));
+ }

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/mcts/convergence.ts b/packages/core/src/mcts/convergence.ts
-index a510ad2..db9ca91 100644
+index 567f7e8..aa3217a 100644
 --- a/packages/core/src/mcts/convergence.ts
 +++ b/packages/core/src/mcts/convergence.ts
-@@ -58,7 +58,7 @@ export async function converge(
-     // Close every remaining open node so the next runMCTS starts from its own
-     // fresh root: global-argmax UCT only considers status='open', and leaving
-     // these open let a later task expand under this task's nodes.
--    rt.storage.sql`UPDATE search_nodes SET status = 'failed' WHERE status = 'open'`;
-+    rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE status = 'open'`;
-     await recordTaskOutcome(rt, winner.task, 'error', winner.value);
-     return {
-       winnerId: winner.id,
+@@ -130,7 +130,7 @@ export async function converge(
+  * this is what makes the durable 'failed' record honest.
+  */
+ export function abandonSearchTree(sql: SqlExecutor, rootId: string): void {
+-  sql`UPDATE search_nodes SET status = 'failed'
++  sql`UPDATE search_nodes SET status = 'pruned'
+       WHERE root_id = ${rootId} AND status = 'open'`;
+ }
+ 

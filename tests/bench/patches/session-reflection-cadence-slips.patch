@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
-index be3e5d5..ae5adc3 100644
+index 7767b96..73afd4b 100644
 --- a/packages/core/src/orchestrator/agent-orchestrator.ts
 +++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -86,7 +86,7 @@ export class AgentOrchestrator {
+@@ -94,7 +94,7 @@ export class AgentOrchestrator {
    recordTurn(turn: CompletedTurn): void {
-     this.sessionTurnCount++;
-     this.sessionTurns.push(turn);
--    if (this.sessionTurnCount >= this.reflectionInterval) {
-+    if (this.sessionTurnCount > this.reflectionInterval) {
-       const sessionData = this.snapshotSession();
-       if (sessionData) {
-         void this.deps.engine.onSessionComplete(sessionData).catch((err) =>
+     const startedAt = this.window.startedAt() ?? Date.now();
+     this.window.append(turn);
+-    if (this.window.size() >= this.reflectionInterval) {
++    if (this.window.size() > this.reflectionInterval) {
+       const turns = this.window.close();
+       if (turns.length > 0) {
+         this.detach(this.deps.engine.onSessionComplete({

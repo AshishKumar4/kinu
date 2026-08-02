@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/config/store.ts b/packages/core/src/config/store.ts
-index ee5d3a2..165fa41 100644
+index c47f50d..2d0b005 100644
 --- a/packages/core/src/config/store.ts
 +++ b/packages/core/src/config/store.ts
-@@ -168,7 +168,7 @@ export const DEFAULT_GEPA_EVAL_BUDGET = 24;
+@@ -187,7 +187,7 @@ export const DEFAULT_GEPA_EVAL_BUDGET = 24;
   *  disjoint split possible at all (2 failures + 2 guards); the ceiling is the
   *  most an operator can spend on one pass. */
  export function clampGepaEvalBudget(n: number): number {
@@ -10,4 +10,4 @@ index ee5d3a2..165fa41 100644
 +  return Number.isFinite(n) ? Math.max(Math.min(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
  }
  
- export function initAgentConfigTable(execRaw: RawSqlExec): void {
+ /** Validate a rate/share setting. Rejects rather than clamps: an out-of-range
