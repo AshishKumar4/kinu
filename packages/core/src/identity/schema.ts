@@ -8,6 +8,7 @@
  */
 
 import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
+import { initScaffoldTables } from '../scaffold/schemas.js';
 import { migrateSoulStorage } from './soul.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 
@@ -49,32 +50,10 @@ const ACTOR_DDL = [
   `CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(status, value DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(root_id, status)`,
 
-  // ── Scaffold management ────────────────────────────────────────
-  `CREATE TABLE IF NOT EXISTS scaffold_versions (
-    version        INTEGER PRIMARY KEY,
-    written_at     INTEGER NOT NULL,
-    rationale      TEXT NOT NULL,
-    canary_score   REAL,
-    baseline_score REAL
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS scaffold_regression_fixtures (
-    id                TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
-    task              TEXT NOT NULL,
-    expected_keywords TEXT NOT NULL,
-    created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
-
-  // ── Task history (for calibration + error monitoring) ──────────
-  `CREATE TABLE IF NOT EXISTS task_history (
-    id               TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
-    task             TEXT NOT NULL,
-    scaffold_version INTEGER NOT NULL DEFAULT 0,
-    outcome          TEXT NOT NULL DEFAULT 'success'
-                     CHECK(outcome IN ('success','error','timeout')),
-    score            REAL,
-    created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
+  // ── Scaffold management + task history ─────────────────────────
+  // Canonical DDL owned by scaffold/schemas.ts (initScaffoldTables, run below):
+  // it carries the shadow-rollout `status` and DGM `parent_version` columns plus
+  // their in-place migration, and a second copy here would silently drift again.
 
   // ── CraftStore quality tracking ────────────────────────────────
   `CREATE TABLE IF NOT EXISTS craft_scores (
@@ -183,17 +162,18 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     forked_at                     INTEGER NOT NULL
   )`;
 
-const DDL = [WORKSPACE_IDENTITY_DDL, ...ACTOR_DDL, FORK_LINEAGE_DDL];
-
 /** Initialize state local to one full-loop actor without materializing a
  * workspace ownership root or independent fork lineage. */
 export function initActorTables(execRaw: RawSqlExec): void {
   for (const ddl of ACTOR_DDL) execRaw(ddl);
+  initScaffoldTables(execRaw);
 }
 
 /** Initialize all workspace tables. Idempotent — safe to call on every startup. */
 export function initAllTables(execRaw: RawSqlExec): void {
-  for (const ddl of DDL) execRaw(ddl);
+  execRaw(WORKSPACE_IDENTITY_DDL);
+  initActorTables(execRaw);
+  execRaw(FORK_LINEAGE_DDL);
 }
 
 /**

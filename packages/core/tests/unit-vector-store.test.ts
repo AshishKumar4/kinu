@@ -2,11 +2,12 @@
  * Unit tests for VectorStore + Reciprocal Rank Fusion + Embedder adapters.
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, setSystemTime } from 'bun:test';
 import {
   reciprocalRankFusion,
   createCloudflareVectorStore,
   createNoopVectorStore,
+  VECTOR_BACKEND_COOLDOWN_MS,
   createWorkersAIEmbedder,
   type VectorizeIndex,
   type Embedder,
@@ -172,6 +173,56 @@ describe('CloudflareVectorStore', () => {
     const hits = await store.search('anything');
     expect(hits).toEqual([]);
     expect(store.available).toBe(false);
+  });
+
+  test('a failed write rejects instead of reporting success', async () => {
+    const failingIndex: VectorizeIndex = {
+      async insert() { return {}; },
+      async upsert() { throw new Error('vectorize down'); },
+      async query() { return { matches: [] }; },
+      async deleteByIds() { throw new Error('vectorize down'); },
+      async getByIds() { return []; },
+    };
+    const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
+    const chunk: VectorMemoryChunk = { id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hello' };
+
+    // Swallowing these is what let the backfill mark itself done over chunks
+    // it never embedded — a caller cannot tell an indexed chunk from a lost one.
+    await expect(store.upsertChunk(chunk)).rejects.toThrow('vectorize down');
+    await expect(store.upsertChunks([chunk])).rejects.toThrow('vectorize down');
+    await expect(store.deleteChunks(['x'])).rejects.toThrow('vectorize down');
+    // Empty batches still short-circuit without touching the backend.
+    await expect(store.upsertChunks([])).resolves.toBeUndefined();
+    await expect(store.deleteChunks([])).resolves.toBeUndefined();
+  });
+
+  test('availability re-arms after the cooldown instead of latching off forever', async () => {
+    let down = true;
+    const flakyIndex: VectorizeIndex = {
+      async insert() { return {}; },
+      async upsert() { if (down) throw new Error('vectorize down'); return {}; },
+      async query() { if (down) throw new Error('vectorize down'); return { matches: [] }; },
+      async deleteByIds() { return {}; },
+      async getByIds() { return []; },
+    };
+    const store = createCloudflareVectorStore({ index: flakyIndex, embedder: constEmbedder });
+    const start = Date.now();
+    setSystemTime(new Date(start));
+    try {
+      await store.search('anything');
+      expect(store.available).toBe(false);
+      // A latch here disabled semantic WRITES too, so everything indexed after
+      // one transient error was lost rather than merely unsearchable.
+      down = false;
+      setSystemTime(new Date(start + VECTOR_BACKEND_COOLDOWN_MS - 1));
+      expect(store.available).toBe(false);          // no retry storm meanwhile
+      setSystemTime(new Date(start + VECTOR_BACKEND_COOLDOWN_MS));
+      expect(store.available).toBe(true);
+      await expect(store.upsertChunks([{ id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hi' }]))
+        .resolves.toBeUndefined();
+    } finally {
+      setSystemTime();
+    }
   });
 });
 

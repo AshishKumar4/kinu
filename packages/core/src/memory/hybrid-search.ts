@@ -14,6 +14,7 @@
  * The RRF merge surfaces the best of both regardless.
  */
 
+import type { Memory } from '../types/primitives.js';
 import type { VectorStore, VectorSearchHit } from './vector-store.js';
 import { reciprocalRankFusion } from './vector-store.js';
 
@@ -50,6 +51,38 @@ export interface HybridHit {
  */
 export type LexicalSearchFn = (query: string, limit: number) => Promise<LexicalHit[]>;
 
+/**
+ * Reads back the text of a hit only the semantic index surfaced. The vector
+ * store deliberately stores no chunk text (metadata cost), so without this a
+ * semantic-only hit — exactly what semantic search exists to find — renders
+ * with an empty snippet and is useless to the agent and the user.
+ *
+ * Returns null when the text can no longer be read.
+ */
+export type SnippetRehydrator = (hit: VectorSearchHit) => Promise<string | null>;
+
+/**
+ * The standard rehydrator: a memory chunk's `path` + line range IS its address
+ * in the file plane, so the text is read straight back from the source file.
+ * Reads are memoized per rehydrator, so a page of hits into one file costs one
+ * read.
+ */
+export function memorySnippetRehydrator(memory: Pick<Memory, 'read'>): SnippetRehydrator {
+  const reads = new Map<string, Promise<string | null>>();
+  return async (hit) => {
+    if (!hit.path) return null;
+    let content = reads.get(hit.path);
+    if (!content) {
+      content = memory.read(hit.path).catch(() => null);
+      reads.set(hit.path, content);
+    }
+    const text = await content;
+    if (text === null) return null;
+    // 1-based, inclusive — the line convention memory chunk ids are minted with.
+    return text.split('\n').slice(Math.max(0, hit.startLine - 1), hit.endLine).join('\n');
+  };
+}
+
 export interface HybridSearchOptions {
   /** Per-source candidate count. We take topK from each, then merge. Default 20. */
   perSourceK?: number;
@@ -57,6 +90,10 @@ export interface HybridSearchOptions {
   finalK?: number;
   /** RRF constant. Default 60 (Cormack/Lynam). */
   rrfK?: number;
+  /** Fills in the snippet for a hit that has no text of its own. Omit only
+   *  where the caller has no memory to read back from — semantic-only hits then
+   *  carry the score but no text. */
+  rehydrate?: SnippetRehydrator;
 }
 
 /**
@@ -96,25 +133,26 @@ export async function hybridSearch(
   const byIdLex = new Map(lexical.map((h) => [h.id, h]));
   const byIdSem = new Map(semantic.map((h) => [h.id, h]));
 
-  const enriched: HybridHit[] = [];
-  for (const m of merged) {
+  return Promise.all(merged.slice(0, finalK).map(async (m): Promise<HybridHit> => {
     const l = byIdLex.get(m.id);
     const s = byIdSem.get(m.id);
     const sources: Array<'lexical' | 'semantic'> = [];
     if (l) sources.push('lexical');
     if (s) sources.push('semantic');
-    enriched.push({
+    // A semantic-only hit has no lexical snippet to borrow: read its text back
+    // from the chunk's own address, or it arrives blank and unusable.
+    let snippet = l?.snippet ?? s?.text ?? '';
+    if (!snippet && s && options.rehydrate) snippet = await options.rehydrate(s) ?? '';
+    return {
       id: m.id,
       path: l?.path ?? s?.path ?? '',
       startLine: l?.startLine ?? s?.startLine ?? 0,
       endLine: l?.endLine ?? s?.endLine ?? 0,
-      snippet: l?.snippet ?? '',
+      snippet,
       rrfScore: m.rrfScore,
       sources,
       lexicalScore: l?.score,
       semanticScore: s?.score,
-    });
-    if (enriched.length >= finalK) break;
-  }
-  return enriched;
+    };
+  }));
 }

@@ -494,6 +494,7 @@ export {
   createCloudflareVectorStore,
   createWorkersAIEmbedder,
   createNoopVectorStore,
+  VECTOR_BACKEND_COOLDOWN_MS,
   type VectorStore,
   type Embedder,
   type VectorizeIndex,
@@ -504,6 +505,8 @@ export {
 } from './memory/vector-store.js';
 export {
   hybridSearch,
+  memorySnippetRehydrator,
+  type SnippetRehydrator,
   type LexicalHit,
   type HybridHit,
   type LexicalSearchFn,

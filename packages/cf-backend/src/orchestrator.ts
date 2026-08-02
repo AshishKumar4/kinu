@@ -68,7 +68,7 @@ import {
   // Voyager curriculum + Absolute Zero learnability proposer
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
-  hybridSearch, type HybridHit,
+  hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
   effortFor, reasoningEffortOptions, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
@@ -2878,7 +2878,9 @@ export class OrchestratorAgent extends ActorAgent {
         snippet: r.snippet,
       }));
     };
-    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, { finalK: limit });
+    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, {
+      finalK: limit, rehydrate: memorySnippetRehydrator(this.rt.memory),
+    });
   }
 
   // ── SKILL.md export/import — make crafted tools git-friendly ──

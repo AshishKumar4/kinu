@@ -5,6 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   hybridSearch,
+  memorySnippetRehydrator,
   createNoopVectorStore,
   type LexicalHit,
   type VectorStore,
@@ -81,6 +82,41 @@ describe('hybridSearch', () => {
     const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus));
     const shared = out.find((h) => h.id === 'shared')!;
     expect(shared.snippet).toBe('shared snippet');
+  });
+
+  test('a semantic-only hit carries its text, rehydrated from the chunk it points at', async () => {
+    // What semantic search exists for: the lexical index missed it entirely, so
+    // there is no snippet to borrow — and a blank one is useless to the reader.
+    const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
+    const reads: string[] = [];
+    const memory = {
+      read: async (path: string) => { reads.push(path); return path === 'x.md' ? lines : null; },
+    };
+    const sem: VectorSearchHit[] = [
+      { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 0.9 },
+      { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, score: 0.8 },
+      { id: 'gone.md:1-2', path: 'gone.md', startLine: 1, endLine: 2, score: 0.7 },
+    ];
+    const out = await hybridSearch('q', async () => [], vectorStore(sem), {
+      rehydrate: memorySnippetRehydrator(memory),
+    });
+
+    expect(out.map((h) => h.snippet)).toEqual([
+      'line 3\nline 4\nline 5',
+      'line 7\nline 8',
+      '',                                  // unreadable source → no invented text
+    ]);
+    expect(out.map((h) => h.sources)).toEqual([['semantic'], ['semantic'], ['semantic']]);
+    // One read per file, not per hit.
+    expect(reads).toEqual(['x.md', 'gone.md']);
+  });
+
+  test('a lexical snippet is never replaced by a rehydrated one', async () => {
+    const memory = { read: async () => 'rehydrated text' };
+    const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), {
+      rehydrate: memorySnippetRehydrator(memory),
+    });
+    expect(out.find((h) => h.id === 'shared')!.snippet).toBe('shared snippet');
   });
 
   test('fuses lexical + semantic hits keyed on the canonical chunk id', async () => {

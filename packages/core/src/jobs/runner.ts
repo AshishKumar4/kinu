@@ -112,26 +112,70 @@ export class BackgroundJobRunner {
   private runToSettlement(jobId: string, kind: string, exec: () => Promise<unknown>): void {
     void this.deps.fiber(`bg:${kind}`, async (ctx) => {
       ctx.stash({ phase: 'running', jobId, kind });
-      const epoch = this.deps.store.epochOf(jobId) ?? 0;
-      let outcome: { ok: true; result: unknown } | { ok: false; error: string };
-      try { outcome = { ok: true, result: await exec() }; }
-      catch (err) {
-        // A kind the resumer can't re-drive is a clean interruption, not a crash:
-        // record the same eviction message a non-resumable job always has.
-        const error = err instanceof JobNotResumable ? EVICTION_INTERRUPT_ERROR
-          : err instanceof Error ? err.message : String(err);
-        outcome = { ok: false, error };
+      try {
+        await this.settleAndWake(jobId, exec);
+      } catch (err) {
+        // The settlement path itself threw — a store write, or the undeliverable
+        // wake's durable retry breadcrumb. Letting the fiber reject here would
+        // strand the job: both fiber implementations DELETE their recovery row in
+        // a `finally`, so a rejected body is never handed to onFiberRecovered and
+        // the job would sit at 'running' forever — never resumed, never failed.
+        console.warn('[proteus] background-job settlement failed:',
+          err instanceof Error ? err.message : err);
+        this.failUnsettled(jobId, err);
       }
-      this.controllers.delete(jobId);
-      // A cancelled job was already marked; its promise rejects with the abort,
-      // which we must NOT relabel as a generic failure.
-      if (this.deps.store.get(jobId)?.status === 'cancelled') { ctx.stash({ phase: 'settled', jobId, kind }); return; }
-      if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
-      else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
-      this.notifySettled(jobId);
-      await this.wake(jobId);
-      ctx.stash({ phase: 'settled', jobId, kind });
+      // Only a job that actually reached a terminal status is 'settled'; if even
+      // the force-fail could not write, the snapshot stays 'running' so an
+      // eviction in this window still hands the job to recover().
+      ctx.stash({ phase: this.isSettled(jobId) ? 'settled' : 'running', jobId, kind });
     });
+  }
+
+  /** exec → record the outcome → notify → wake. Throws only when a store write
+   *  or the wake's durable retry breadcrumb fails; runToSettlement owns that. */
+  private async settleAndWake(jobId: string, exec: () => Promise<unknown>): Promise<void> {
+    const epoch = this.deps.store.epochOf(jobId) ?? 0;
+    let outcome: { ok: true; result: unknown } | { ok: false; error: string };
+    try { outcome = { ok: true, result: await exec() }; }
+    catch (err) {
+      // A kind the resumer can't re-drive is a clean interruption, not a crash:
+      // record the same eviction message a non-resumable job always has.
+      const error = err instanceof JobNotResumable ? EVICTION_INTERRUPT_ERROR
+        : err instanceof Error ? err.message : String(err);
+      outcome = { ok: false, error };
+    }
+    this.controllers.delete(jobId);
+    // A cancelled job was already marked; its promise rejects with the abort,
+    // which we must NOT relabel as a generic failure.
+    if (this.deps.store.get(jobId)?.status === 'cancelled') return;
+    if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
+    else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
+    this.notifySettled(jobId);
+    await this.wake(jobId);
+  }
+
+  /** Last-resort terminal write for a job the settlement path left running. A
+   *  job whose outcome was already recorded keeps it — only the wake was lost,
+   *  and its result stays readable via agent.jobResult. No wake is attempted:
+   *  the wake is what usually failed, and the settle notification (which never
+   *  throws) already surfaces the job in the Tasks view. */
+  private failUnsettled(jobId: string, err: unknown): void {
+    try {
+      const job = this.deps.store.get(jobId);
+      if (!job || job.status !== 'running') return;
+      this.deps.store.fail(jobId, job.epoch, err instanceof Error ? err.message : String(err), Date.now());
+      this.notifySettled(jobId);
+    } catch (failErr) {
+      console.warn('[proteus] background-job force-fail failed:',
+        failErr instanceof Error ? failErr.message : failErr);
+    }
+  }
+
+  /** True once the job carries a terminal status. A store that cannot even be
+   *  read is reported as not settled — the recoverable answer. */
+  private isSettled(jobId: string): boolean {
+    try { return this.deps.store.get(jobId)?.status !== 'running'; }
+    catch { return false; }
   }
 
   /** Wake the agent with a synthesis turn carrying the settled job. The metadata

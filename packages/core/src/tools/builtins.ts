@@ -49,7 +49,7 @@ import type { CraftedToolExecute } from './crafted-executor.js';
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { appendMemoryNote } from '../memory/note.js';
-import { hybridSearch, type LexicalHit } from '../memory/hybrid-search.js';
+import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
 import { SessionSearchStore } from '../memory/session-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
@@ -604,7 +604,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           score: r.score, snippet: r.snippet,
         }));
       };
-      const hits = await hybridSearch(query, lexicalFn, vs, { finalK: 10 });
+      const hits = await hybridSearch(query, lexicalFn, vs, {
+        finalK: 10, rehydrate: memorySnippetRehydrator(memory),
+      });
       if (hits.length === 0) return 'No results found.';
       return hits.map((h) =>
         `[${h.path}:${h.startLine}-${h.endLine}] ` +

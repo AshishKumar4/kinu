@@ -24,7 +24,12 @@ import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
-export type TurnOutcome = 'accepted' | 'corrected' | 'frustrated' | 'abandoned';
+/** Every outcome kind, in the ledger's canonical order. The one list — the
+ *  table's CHECK constraint, the query filter and the changelog tally all
+ *  derive from it. */
+export const TURN_OUTCOMES = ['accepted', 'corrected', 'frustrated', 'abandoned'] as const;
+
+export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
 
 /** Where an outcome row came from: the user's explicit thumbs, the LLM
  *  follow-up classifier, the session-end (abandoned) rule, or an Alternate
@@ -140,7 +145,7 @@ const TURN_OUTCOMES_DDL = `(
     id TEXT PRIMARY KEY,
     turn_id TEXT,
     session_id TEXT NOT NULL DEFAULT 'default',
-    outcome TEXT NOT NULL CHECK (outcome IN ('accepted','corrected','frustrated','abandoned')),
+    outcome TEXT NOT NULL CHECK (outcome IN (${TURN_OUTCOMES.map((o) => `'${o}'`).join(',')})),
     confidence REAL NOT NULL,
     source TEXT NOT NULL CHECK (source IN ('explicit','classifier','session_end','take_pick')),
     user_message TEXT NOT NULL,
@@ -262,17 +267,27 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
   };
 }
 
-/** Recorded outcomes, newest first, optionally filtered by outcome kinds. */
+/** Recorded outcomes, newest first, optionally filtered by outcome kinds.
+ *
+ *  The filter is applied in SQL so `limit` bounds the rows actually wanted.
+ *  Filtering a bounded window in JS instead silently dropped the rare outcomes
+ *  (`corrected`/`frustrated` — the only ones the optimizer learns from) as soon
+ *  as enough newer `accepted` rows existed to fill the window. */
 export function listTurnOutcomes(
   sql: SqlExecutor,
   opts: { limit?: number; outcomes?: ReadonlyArray<TurnOutcome> } = {},
 ): TurnOutcomeRow[] {
   const limit = opts.limit ?? 50;
+  // The outcome set is closed, so a fixed four-slot IN list expresses every
+  // filter with the tagged-template executor's fixed-arity binding. Unused
+  // slots bind '' — a value the CHECK constraint forbids, so it matches nothing.
+  const wanted = TURN_OUTCOMES.filter((o) => !opts.outcomes || opts.outcomes.includes(o));
+  const [w0, w1, w2, w3] = [wanted[0] ?? '', wanted[1] ?? '', wanted[2] ?? '', wanted[3] ?? ''];
   try {
-    const rows = sql<RawOutcomeRow>`
-      SELECT * FROM turn_outcomes ORDER BY created_at DESC, id DESC LIMIT ${limit * 4}`;
-    const filtered = opts.outcomes ? rows.filter((r) => opts.outcomes!.includes(r.outcome)) : rows;
-    return filtered.slice(0, limit).map(toOutcomeRow);
+    return sql<RawOutcomeRow>`
+      SELECT * FROM turn_outcomes
+      WHERE outcome IN (${w0}, ${w1}, ${w2}, ${w3})
+      ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toOutcomeRow);
   } catch {
     return [];
   }

@@ -82,13 +82,15 @@ export interface VectorSearchHit {
 export interface VectorStore {
   /** True if the underlying binding is reachable + ready. */
   readonly available: boolean;
-  /** Embed + insert a chunk. Idempotent on id. */
+  /** Embed + insert a chunk. Idempotent on id. Rejects when the write did not
+   *  land, so no caller can record it as indexed. */
   upsertChunk(chunk: VectorMemoryChunk): Promise<void>;
-  /** Embed + insert many chunks (batched). */
+  /** Embed + insert many chunks (batched). Rejects when the write did not land. */
   upsertChunks(chunks: readonly VectorMemoryChunk[]): Promise<void>;
-  /** Delete chunks by id. */
+  /** Delete chunks by id. Rejects when the delete did not land. */
   deleteChunks(ids: readonly string[]): Promise<void>;
-  /** Semantic search — returns top-K hits with their scores. */
+  /** Semantic search — returns top-K hits with their scores. Degrades to [] on
+   *  a backend failure: a search must never fail the turn, only return less. */
   search(query: string, topK?: number): Promise<VectorSearchHit[]>;
 }
 
@@ -122,6 +124,14 @@ export function reciprocalRankFusion<T extends { id: string }>(
 }
 
 /**
+ * How long a vector-backend failure suppresses further calls to it. The next
+ * use after the cooldown re-probes the backend, so semantic memory recovers
+ * from a transient error on its own instead of staying off for the process
+ * lifetime — while a hard-down backend is still not retried per operation.
+ */
+export const VECTOR_BACKEND_COOLDOWN_MS = 30_000;
+
+/**
  * Build a CloudflareVectorStore — pairs an Embedder with a Vectorize index.
  *
  * Metadata convention: { path, startLine, endLine, chunkId } on every record.
@@ -149,7 +159,17 @@ export function createCloudflareVectorStore(opts: {
   namespace?: string;
 }): VectorStore {
   const { index, embedder, namespace } = opts;
-  let available = true;
+
+  // A cooldown, not a latch. `available` gates writes as well as reads, so a
+  // permanent latch turned one transient error into semantic memory being off
+  // for the whole process lifetime — content indexed in that window was lost,
+  // not merely unsearchable. The cooldown re-arms on its own, and is long
+  // enough that a hard-down backend is not re-probed once per operation.
+  let unavailableUntil = 0;
+  const trip = (op: string, err: unknown): void => {
+    console.warn(`[vector-store] ${op} failed:`, err instanceof Error ? err.message : err);
+    unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
+  };
 
   // Namespace-scoped, collision-free, ≤64-byte storage id for a chunk. SHA-256
   // of `${namespace}\0${chunkId}`, truncated to 40 hex chars (160 bits — a
@@ -174,6 +194,18 @@ export function createCloudflareVectorStore(opts: {
     })));
   }
 
+  async function upsertRecords(chunks: readonly VectorMemoryChunk[], op: string): Promise<void> {
+    try {
+      await index.upsert(await toRecords(chunks));
+    } catch (err) {
+      // Rethrown, never swallowed: a caller that treats a failed embed as an
+      // indexed chunk (the backfill cursor, the write-path sync) records a
+      // completeness the index does not have.
+      trip(op, err);
+      throw err;
+    }
+  }
+
   async function safeQuery(text: string, topK: number): Promise<VectorSearchHit[]> {
     try {
       const vec = await embedder.embed(text);
@@ -192,30 +224,22 @@ export function createCloudflareVectorStore(opts: {
         score: m.score,
       }));
     } catch (err) {
-      console.warn('[vector-store] query failed:', err instanceof Error ? err.message : err);
-      available = false;
+      // Reads degrade to lexical-only rather than failing the turn.
+      trip('query', err);
       return [];
     }
   }
 
   return {
-    get available() { return available; },
+    get available() { return Date.now() >= unavailableUntil; },
 
     async upsertChunk(chunk: VectorMemoryChunk) {
-      try {
-        await index.upsert(await toRecords([chunk]));
-      } catch (err) {
-        console.warn('[vector-store] upsert failed:', err instanceof Error ? err.message : err);
-      }
+      await upsertRecords([chunk], 'upsert');
     },
 
     async upsertChunks(chunks: readonly VectorMemoryChunk[]) {
       if (chunks.length === 0) return;
-      try {
-        await index.upsert(await toRecords(chunks));
-      } catch (err) {
-        console.warn('[vector-store] batch upsert failed:', err instanceof Error ? err.message : err);
-      }
+      await upsertRecords(chunks, 'batch upsert');
     },
 
     async deleteChunks(ids: readonly string[]) {
@@ -223,7 +247,8 @@ export function createCloudflareVectorStore(opts: {
       try {
         await index.deleteByIds(await Promise.all(ids.map(storageId)));
       } catch (err) {
-        console.warn('[vector-store] delete failed:', err instanceof Error ? err.message : err);
+        trip('delete', err);
+        throw err;
       }
     },
 
