@@ -4,6 +4,7 @@
  */
 
 import chalk from 'chalk';
+import type { Command } from 'commander';
 import { BUILTIN_TOOLS } from '@proteus/core';
 import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
 import cliPackage from '../package.json' with { type: 'json' };
@@ -280,54 +281,140 @@ export function printError(message: string, hint?: string): void {
 
 // ── Help screen ──────────────────────────────────────────────────
 
-export function printHelp(): void {
-  console.log('');
-  console.log(`${BRAND} ${DIM(`v${VERSION}`)}`);
-  console.log(`${DIM('Self-evolving workspaces with MCTS exploration')}\n`);
-  console.log(`${chalk.bold('Usage:')}  proteus <command> [options]\n`);
-  console.log(`${chalk.bold('Commands:')}`);
-  console.log(`  ${ACCENT('setup')}              Connect your account; optionally configure local models`);
-  console.log(`  ${ACCENT('provider')}           List or connect model/account providers`);
-  console.log(`  ${ACCENT('auth')}               Sign into your Proteus account`);
-  console.log(`  ${ACCENT('whoami')}             Show the signed-in account`);
-  console.log(`  ${ACCENT('tokens')}             Manage long-lived CI access tokens`);
-  console.log(`  ${ACCENT('create')} [name]      Create a cloud or local workspace`);
-  console.log(`  ${ACCENT('workspace delete')} <name>  Permanently delete a cloud workspace`);
-  console.log(`  ${ACCENT('run')}    <name>      Run once, open chat, or use JSON/RPC mode`);
-  console.log(`  ${ACCENT('exec')}   "task"      Headless one-shot run for scripts and CI (--json)`);
-  console.log(`  ${ACCENT('chat')}   <name>      Interactive conversation`);
-  console.log(`  ${ACCENT('sessions')} [workspace]  List recorded CLI sessions`);
-  console.log(`  ${ACCENT('alias')}  <workspace>  Create an executable alias command`);
-  console.log(`  ${ACCENT('connect')}            Link this computer as the execution engine`);
-  console.log(`  ${ACCENT('daemon')}             Manage local scheduled workspace wakeups`);
-  console.log(`  ${ACCENT('status')} <name>      Show workspace state and evolution history`);
-  console.log(`  ${ACCENT('model')}  <name>      Show or change the active model`);
-  console.log(`  ${ACCENT('tools')}  <name>      List the workspace tool surface`);
-  console.log(`  ${ACCENT('triggers')} <name>    List, schedule, or cancel triggers`);
-  console.log(`  ${ACCENT('jobs')}   <name>      List or cancel background jobs`);
-  console.log(`  ${ACCENT('evolve')} <name>      Trigger a local MCTS evolution cycle`);
-  console.log(`  ${ACCENT('update')}             Update the installed command`);
-  console.log(`  ${ACCENT('doctor')}             Inspect local installation state`);
-  console.log(`  ${ACCENT('list')}               List all workspaces`);
-  console.log(`\n${chalk.bold('Options:')}`);
-  console.log(`  ${DIM('--origin <url>')}      Proteus app origin`);
-  console.log(`  ${DIM('--mode <mode>')}       Workspace mode: cloud or local`);
-  console.log(`  ${DIM('--alias <name>')}      Alias command for create`);
-  console.log(`  ${DIM('--session <id>')}      Resume a recorded CLI session`);
-  console.log(`  ${DIM('--model <id>')}        Model ID ${DIM('(env: PROTEUS_MODEL)')}`);
-  console.log(`  ${DIM('--base-url <url>')}    LLM API base URL ${DIM('(env: PROTEUS_BASE_URL)')}`);
-  console.log(`  ${DIM('--auth <header>')}     Auth header ${DIM('(env: PROTEUS_AUTH)')}`);
-  console.log(`  ${DIM('--purpose <text>')}    Workspace purpose (for create)`);
-  console.log(`\n${chalk.bold('Examples:')}`);
-  console.log(`  ${DIM('$')} proteus setup`);
-  console.log(`  ${DIM('$')} proteus provider connect codex`);
-  console.log(`  ${DIM('$')} proteus provider list`);
-  console.log(`  ${DIM('$')} proteus create jarvis --mode cloud --alias jarvis`);
-  console.log(`  ${DIM('$')} jarvis "review this repo"`);
-  console.log(`  ${DIM('$')} jarvis`);
-  console.log(`  ${DIM('$')} proteus sessions jarvis`);
-  console.log(`  ${DIM('$')} proteus daemon status`);
-  console.log(`  ${DIM('$')} proteus connect\n`);
+/** Where a command lands when it was registered without a `.helpGroup()`. Its
+ *  existence is the drift guarantee: a new command is always listed. */
+const UNGROUPED_HEADING = 'Other commands:';
+
+/** Environment variables that apply to every command. Per-command options are
+ *  deliberately not repeated here — `proteus <command> --help` owns those. */
+const ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
+  ['PROTEUS_HOME', 'Workspace + config directory (default ~/.proteus)'],
+  ['PROTEUS_ORIGIN', 'Proteus app origin'],
+  ['PROTEUS_TOKEN', 'Account access token (CI)'],
+  ['PROTEUS_MODEL', 'Default model ID'],
+  ['PROTEUS_BASE_URL', 'LLM API base URL'],
+  ['PROTEUS_AUTH', 'LLM auth header value'],
+];
+
+const EXAMPLES: ReadonlyArray<string> = [
+  'proteus setup',
+  'proteus provider connect codex',
+  'proteus create jarvis --mode cloud --alias jarvis',
+  'jarvis "review this repo"',
+  'proteus sessions jarvis',
+  'proteus daemon status',
+  'proteus connect',
+];
+
+interface HelpEntry {
+  /** Invocation term, e.g. `workspace delete <name>`. */
+  term: string;
+  description: string;
+  heading: string;
+}
+
+/** Every runnable command in the tree, in registration order, with its heading
+ *  inherited from the nearest ancestor that declared one. */
+function helpEntries(program: Command): HelpEntry[] {
+  const helper = program.createHelp();
+  // visibleCommands() applies the hidden-command policy but also appends
+  // Commander's implicit `help` placeholder, which is not a registered command;
+  // intersecting with .commands keeps the policy and drops the placeholder.
+  const children = (cmd: Command): Command[] =>
+    helper.visibleCommands(cmd).filter((child) => cmd.commands.includes(child));
+
+  const entries: HelpEntry[] = [];
+  const walk = (parent: Command, prefix: string, inherited: string): void => {
+    for (const cmd of children(parent)) {
+      const term = `${prefix}${cmd.name()}${argumentSuffix(cmd)}`;
+      const heading = cmd.helpGroup() || inherited;
+      if (children(cmd).length > 0) walk(cmd, `${term} `, heading);
+      else entries.push({ term, description: cmd.description(), heading });
+    }
+  };
+  walk(program, '', UNGROUPED_HEADING);
+  return entries;
+}
+
+function argumentSuffix(cmd: Command): string {
+  const args = cmd.registeredArguments.map((arg) => {
+    const name = `${arg.name()}${arg.variadic ? '...' : ''}`;
+    return arg.required ? `<${name}>` : `[${name}]`;
+  });
+  return args.length > 0 ? ` ${args.join(' ')}` : '';
+}
+
+/**
+ * The branded root help, rendered from the registered command tree. Nothing is
+ * curated by hand here, so `--help` cannot drift from what the CLI accepts;
+ * grouping and wording live on the registrations themselves (src/program.ts).
+ */
+export function renderHelp(program: Command): string {
+  const entries = helpEntries(program);
+  const width = termWidth();
+  const termColumn = Math.min(Math.max(0, ...entries.map((e) => e.term.length)) + 2, 34);
+  const lines: string[] = [
+    '',
+    `${BRAND} ${DIM(`v${VERSION}`)}`,
+    DIM(program.description()),
+    '',
+    `${chalk.bold('Usage:')}  proteus <command> [options]`,
+  ];
+
+  const headings = [...new Set(entries.map((e) => e.heading))];
+  for (const heading of headings) {
+    lines.push('', chalk.bold(heading));
+    for (const entry of entries.filter((e) => e.heading === heading)) {
+      lines.push(...helpRow(ACCENT(entry.term), entry.term.length, entry.description, termColumn, width));
+    }
+  }
+
+  lines.push('', chalk.bold('Options:'));
+  lines.push(...helpRow(DIM('-v, --version'), 13, 'Print the installed version', termColumn, width));
+  lines.push(...helpRow(DIM('-h, --help'), 10, 'Show this help; `proteus <command> --help` for one command', termColumn, width));
+
+  lines.push('', chalk.bold('Environment:'));
+  for (const [name, description] of ENVIRONMENT) {
+    lines.push(...helpRow(DIM(name), name.length, description, termColumn, width));
+  }
+
+  lines.push('', chalk.bold('Examples:'));
+  for (const example of EXAMPLES) lines.push(`  ${DIM('$')} ${example}`);
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** One `term    description` row, wrapping the description under a hanging
+ *  indent. An over-long term takes its own line so the column never shears. */
+function helpRow(term: string, termLength: number, description: string, termColumn: number, width: number): string[] {
+  const gutter = '  ';
+  const descriptionWidth = Math.max(24, width - gutter.length - termColumn);
+  const wrapped = description ? wrapText(description, descriptionWidth) : [];
+  const continuation = `${gutter}${' '.repeat(termColumn)}`;
+  if (termLength + 1 > termColumn) {
+    return [`${gutter}${term}`, ...wrapped.map((line) => `${continuation}${DIM(line)}`)];
+  }
+  const [first = '', ...rest] = wrapped;
+  return [
+    `${gutter}${term}${' '.repeat(termColumn - termLength)}${DIM(first)}`,
+    ...rest.map((line) => `${continuation}${DIM(line)}`),
+  ];
+}
+
+function wrapText(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let current = '';
+  for (const word of text.split(/\s+/)) {
+    if (!current) current = word;
+    else if (current.length + 1 + word.length <= width) current += ` ${word}`;
+    else { lines.push(current); current = word; }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+export function printHelp(program: Command): void {
+  console.log(renderHelp(program));
 }
 
 // ── Utilities ────────────────────────────────────────────────────

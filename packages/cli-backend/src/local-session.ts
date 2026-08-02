@@ -19,7 +19,7 @@ import {
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
-  AgentRuntime, LLMProviderConfig, CompletedTurn,
+  AgentRuntime, LLMProviderConfig, CompletedTurn, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
@@ -30,7 +30,8 @@ import type {
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold,
+  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, initBackgroundJobsTable, withBackgroundThreshold,
+  MctsSearchStore, nanoid,
   EventLog, initEventsHubTables,
   RunEventRecorder, initRunEventTables,
   TriggerRegistry, nextCronFire,
@@ -50,7 +51,7 @@ import {
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
-  acceptedMediaForModel, type MediaModality, type ModelInputModality,
+  acceptedMediaForModel, type MediaModality, type ModelInfo,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
@@ -202,10 +203,18 @@ export class LocalAgentSession implements BackendHost {
   private cachedModel: LanguageModel | null = null;
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
+  /** The UNWRAPPED tool surface (no 30s background threshold). The turn path
+   *  uses `tools`; job resume runs the raw tool so a re-drive can't detach a
+   *  second job (the DO's getRawTools). */
+  private rawTools: ToolSet = {};
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
   private readonly jobs: BackgroundJobStore;
   private readonly jobRunner: BackgroundJobRunner;
+  /** Durable MCTS search checkpoint — what makes an interrupted think(mcts)
+   *  resumable instead of losing its whole budget. runMCTS creates the table
+   *  on first use. */
+  private readonly mctsSearchStore: MctsSearchStore;
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
   private readonly eventLog: EventLog;
@@ -296,6 +305,7 @@ export class LocalAgentSession implements BackendHost {
     // this session as the BackendHost (enqueueTurn wakes the agent).
     initBackgroundJobsTable(this.rt.storage.execRaw);
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
+    this.mctsSearchStore = new MctsSearchStore(this.rt.storage.sql);
     // agent_config (typed key/value) — backs always-active skills, etc.
     initAgentConfigTable(this.rt.storage.execRaw);
     this.config = createAgentConfigStore(this.rt.storage.sql);
@@ -381,11 +391,14 @@ export class LocalAgentSession implements BackendHost {
     });
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
-      fiber: this.rt.schedule.fiber,
+      fiber: (name, fn) => this.trackFiber(name, fn),
       host: this,
       eventLog: this.eventLog,
       scheduleDrain: () => this.orch.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
+      // Process exit is the local analogue of a DO eviction: re-drive an
+      // interrupted job from its durable checkpoint instead of failing it.
+      resume: (kind, input, signal) => this.resumeBackgroundJob(kind, input, signal),
     });
     this.restoreHistory(opts.historyLimit ?? 40);
     this.ensureModelState();
@@ -716,6 +729,10 @@ export class LocalAgentSession implements BackendHost {
    *  backs the reactor + background-job wake. Self-starts the pump when idle so
    *  a job that settles mid-idle wakes the agent immediately. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    // A job settling during shutdown must not start a turn the ending session
+    // will never drain: 'skipped' sends the caller down its durable-breadcrumb
+    // path instead, and the next run drains it from the event log.
+    if (this.ended) return Promise.resolve({ status: 'skipped' });
     return new Promise((resolve) => {
       this.queue.push({
         text: input.text,
@@ -823,22 +840,51 @@ export class LocalAgentSession implements BackendHost {
     await this.orch.drainPendingEvents();
   }
 
-  /** End the session: let the evolution this run started finish before the
-   *  process goes away, then disconnect MCP. The evolution window itself is
-   *  durable, so a partial one carries over to the next run rather than being
-   *  force-closed here. */
+  /** End the session: let the evolution this run started finish, then let any
+   *  detached background fiber settle, then disconnect MCP. Both windows are
+   *  durable, so whatever does not finish carries over to the next run rather
+   *  than being force-closed here. */
   async end(): Promise<void> {
     this.ended = true;
     this.clearLocalAlarm();
     await this.orch.settleEvolution();
+    await this.settleBackgroundFibers();
     try { await this.mcpClose?.(); } catch { /* best effort */ }
+  }
+
+  /** Durable fibers detached from a turn — a backgrounded tool call, or an
+   *  evict-recovery resume. The DO stays alive for its fiber's duration; the
+   *  CLI's equivalent is refusing to close the database out from under one,
+   *  which would abort the settle write mid-flight. */
+  private readonly backgroundFibers = new Set<Promise<unknown>>();
+  private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
+    const running = this.rt.schedule.fiber(name, fn);
+    this.backgroundFibers.add(running);
+    void running.catch(() => { /* the runner owns the outcome */ })
+      .finally(() => this.backgroundFibers.delete(running));
+    return running;
+  }
+
+  /** Await every in-flight background fiber, including ones started by the
+   *  settle of an earlier one. Each is a single tool call, so this converges. */
+  private async settleBackgroundFibers(): Promise<void> {
+    if (this.backgroundFibers.size === 0) return;
+    this.emit({
+      type: 'evolution', event: 'bg_jobs_settling',
+      message: `${this.backgroundFibers.size} background job(s) still running — waiting for their results`,
+    });
+    while (this.backgroundFibers.size > 0) {
+      await Promise.allSettled([...this.backgroundFibers]);
+    }
   }
 
   /**
    * Recover background jobs orphaned by a previous CLI exit (durable detach). An
-   * interrupted bg:* fiber leaves a row stashed phase 'running'; fail + wake it
-   * (DO onFiberRecovered parity), then clear all stale fiber rows from the prior
-   * run. Call once at startup (no fibers are live yet, so every row is an orphan).
+   * interrupted bg:* fiber leaves a row stashed phase 'running': a checkpoint-
+   * backed kind is re-driven under a fresh lease epoch, anything else fails +
+   * wakes (DO onFiberRecovered parity). Then clear all stale fiber rows from the
+   * prior run — a resume runs in a NEW fiber row, so this never deletes it.
+   * Call once at startup (no fibers are live yet, so every row is an orphan).
    */
   async recoverBackgroundJobs(): Promise<void> {
     let orphans: ReturnType<typeof detectOrphanedFibers>;
@@ -849,6 +895,22 @@ export class LocalAgentSession implements BackendHost {
       }
       try { this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`; } catch { /* nop */ }
     }
+  }
+
+  /** Re-drive a background job interrupted by a previous process exit. Only
+   *  `think` is resumable: re-running the RAW strategy tool continues an
+   *  interrupted MCTS from its durable search checkpoint (runMCTS.findResumable
+   *  matches the unfinished run by task) and re-runs heads. Side-effecting kinds
+   *  (execute_tools / run) can't be blindly re-executed, so they decline and the
+   *  runner falls back to failing the job. */
+  private async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
+    if (kind !== 'think') throw new JobNotResumable(kind);
+    this.ensureModelState();
+    const exec = this.rawTools[kind]?.execute;
+    if (typeof exec !== 'function') throw new JobNotResumable(kind);
+    return (exec as (i: unknown, o: unknown) => unknown)(input, {
+      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
+    });
   }
 
   // ── Internals ──────────────────────────────────────────────────────
@@ -1011,7 +1073,7 @@ export class LocalAgentSession implements BackendHost {
       externalTools,
       backend: 'cli-local',
       mode: promptModeForTurnEvent(event),
-      model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
@@ -1088,10 +1150,13 @@ export class LocalAgentSession implements BackendHost {
     const transformTrigger = this.compactionState.takeForceCompaction(cache.sessionKey)
       ? 'force' as const
       : 'auto' as const;
+    // Resolved once for the whole turn so compaction, the step-prune budget,
+    // and overflow recovery all budget against the same number.
+    const contextWindow = this.sessionContextWindow();
 
     const defaultTurn = runChat({
       model,
-      modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      modelContext: { id: this.effectiveModelSpec(), contextWindow },
       system: systemPrompt,
       history: this.history,
       // Model-capability attachment sanitization — runChat applies it to
@@ -1193,7 +1258,7 @@ export class LocalAgentSession implements BackendHost {
       const recovery = planOverflowRecovery({
         error: message,
         lastPromptTokens: this.orch.acc.lastPromptTokens,
-        contextWindow: contextWindowForModel(this.cachedModelSpec ?? this.fallbackModelSpec),
+        contextWindow,
         turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
       });
       if (recovery.forceCompaction) {
@@ -1343,7 +1408,7 @@ export class LocalAgentSession implements BackendHost {
    *  same `proteus-<name>` scheme Workers AI affinity pins with). */
   private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string } {
     const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
-    const spec = this.cachedModelSpec ?? this.fallbackModelSpec;
+    const spec = this.effectiveModelSpec();
     try {
       const { provider, modelId } = parseModelSpec(spec);
       return { providerId: provider, modelId, sessionKey };
@@ -1569,13 +1634,13 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, {
       backend: 'cli-local',
       mode: 'chat',
-      model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      model: { id: this.effectiveModelSpec() },
       currentDate: currentDateForPrompt(),
     });
     let text = '';
     for await (const ev of runChat({
       model,
-      modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      modelContext: { id: this.effectiveModelSpec(), contextWindow: this.sessionContextWindow() },
       system: systemPrompt,
       history: [{ role: 'user', content: task }],
       // A fresh ledger per replay: the same seam live turns use, isolated
@@ -1627,7 +1692,9 @@ export class LocalAgentSession implements BackendHost {
       model: this.cachedModel ?? this.fallbackModel,
       defaultOptions: () => ({
         // Stored operator overrides ride along; an explicit LLM budget wins.
-        mcts: { session: this.createMCTSSession(), ...this.config.getMctsOverrides() },
+        // `search` is the durable checkpoint: an MCTS interrupted by Ctrl-C or
+        // a process exit continues its remaining budget instead of restarting.
+        mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
         heads: {
           controller: this.headController,
           inheritedContext: this.readInheritedContext(),
@@ -1751,35 +1818,56 @@ export class LocalAgentSession implements BackendHost {
     throw new Error('Model switching is unavailable for this local session; construct it with a modelResolver.');
   }
 
-  /** Media the active model request can carry — the attachment sanitizer's
-   *  policy input, mirroring the DO's cached non-blocking catalog lookup:
-   *  the provider-class ceiling answers immediately (conservative — errs
-   *  toward sanitizing, never toward a rejected request) and the catalog's
-   *  per-model input modalities narrow it once the async lookup lands. */
-  private _mediaAcceptance: { spec: string; catalogModalities: ModelInputModality[] | null } | null = null;
-  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
-    const spec = this.cachedModelSpec ?? this.fallbackModelSpec;
-    if (this._mediaAcceptance?.spec !== spec) {
-      this._mediaAcceptance = { spec, catalogModalities: null };
-      void this.lookupInputModalities(spec);
+  /** The model spec every turn resolves against — the stored/claimed one, or
+   *  the constructed fallback before a model has been claimed. */
+  private effectiveModelSpec(): string {
+    return this.cachedModelSpec ?? this.fallbackModelSpec;
+  }
+
+  /** The resolved model's catalog entry — one cached, non-blocking lookup per
+   *  spec (the DO's catalogInfoForSession). Feeds BOTH the context-window
+   *  budget and the attachment policy; until it lands, the static fallbacks
+   *  answer. */
+  private _catalogModel: { spec: string; info: ModelInfo | null } | null = null;
+  private catalogInfoForSession(): ModelInfo | null {
+    const spec = this.effectiveModelSpec();
+    if (this._catalogModel?.spec !== spec) {
+      this._catalogModel = { spec, info: null };
+      void this.lookupCatalogModel(spec);
     }
+    return this._catalogModel.info;
+  }
+
+  /** The resolved model's context window: catalog-reported when the async
+   *  lookup has landed, else the static fallback table. Feeds the compaction
+   *  extension, the step-prune budget, and overflow recovery — the same number
+   *  the DO's sessionContextWindow supplies for the same model. */
+  private sessionContextWindow(): number {
+    return this.catalogInfoForSession()?.contextWindow ?? contextWindowForModel(this.effectiveModelSpec());
+  }
+
+  /** Media the active model request can carry — the attachment sanitizer's
+   *  policy input: the provider-class ceiling answers immediately
+   *  (conservative — errs toward sanitizing, never toward a rejected request)
+   *  and the catalog's per-model input modalities narrow it once the lookup
+   *  lands. */
+  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
+    const info = this.catalogInfoForSession();
+    const spec = this.effectiveModelSpec();
     let provider: string | undefined;
     try { provider = parseModelSpec(spec).provider; } catch { /* bare fallback spec */ }
-    const catalog = this._mediaAcceptance.catalogModalities;
     return acceptedMediaForModel({
       ...(provider !== undefined ? { provider } : {}),
-      ...(catalog ? { catalogInputModalities: catalog } : {}),
+      ...(info?.inputModalities ? { catalogInputModalities: info.inputModalities } : {}),
     });
   }
 
-  private async lookupInputModalities(spec: string): Promise<void> {
+  private async lookupCatalogModel(spec: string): Promise<void> {
     if (!this.modelResolver) return;
     try {
       const info = await this.modelResolver.modelInfo(spec);
-      if (info?.inputModalities && this._mediaAcceptance?.spec === spec) {
-        this._mediaAcceptance.catalogModalities = info.inputModalities;
-      }
-    } catch { /* catalog unavailable — the conservative default stays */ }
+      if (info && this._catalogModel?.spec === spec) this._catalogModel.info = info;
+    } catch { /* catalog unavailable — the static fallbacks stay */ }
   }
 
   private ensureModelState(): LanguageModel {
@@ -1788,6 +1876,12 @@ export class LocalAgentSession implements BackendHost {
     const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.fallbackModel;
     this.cachedModel = model;
     this.cachedModelSpec = spec;
+    // Start the catalog lookup at claim time rather than at first use. A CLI
+    // process is short-lived — `proteus exec` runs ONE turn — so a lookup that
+    // only starts when the first turn assembles would never land in time and
+    // that turn would budget against the static table. Still non-blocking:
+    // whatever has not landed falls back exactly as before.
+    this.catalogInfoForSession();
     this.rebuildModelBoundState(model);
     return model;
   }
@@ -1802,7 +1896,7 @@ export class LocalAgentSession implements BackendHost {
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime({
       model,
-      providerFamily: providerFamilyForSpec(this.cachedModelSpec ?? this.fallbackModelSpec),
+      providerFamily: providerFamilyForSpec(this.effectiveModelSpec()),
       sharedVfs: this.rt.storage.vfs,
       webSearch: this.getWebSearchProvider(),
       grounding: this.buildHeadGrounding(),
@@ -1832,6 +1926,7 @@ export class LocalAgentSession implements BackendHost {
       // toolset) never advertises it. Hosted agents get the full team surface.
       webSearch: this.getWebSearchProvider(),
     });
+    this.rawTools = rawTools;
     this.tools = this.wrapToolsForBackground(rawTools);
   }
 }

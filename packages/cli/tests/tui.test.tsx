@@ -84,13 +84,13 @@ describe('CLI TUI layout', () => {
   test('CLI version has package.json as its single source', () => {
     const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')) as { version: string };
     const displaySource = readFileSync(resolve(repoRoot, 'packages/cli/src/display.ts'), 'utf8');
-    const binSource = readFileSync(resolve(repoRoot, 'packages/cli/bin/cli.ts'), 'utf8');
+    const programSource = readFileSync(resolve(repoRoot, 'packages/cli/src/program.ts'), 'utf8');
     const homeSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
 
     expect(VERSION).toBe(packageJson.version);
     expect(displaySource).toContain("import cliPackage from '../package.json'");
-    expect(binSource).toContain(".version(VERSION, '-v, --version')");
-    expect(binSource).not.toContain(".version('0.1.0'");
+    expect(programSource).toContain(".version(VERSION, '-v, --version')");
+    expect(programSource).not.toContain(".version('0.1.0'");
     expect(homeSource).toContain('workspaces · cli {VERSION}');
   });
 
