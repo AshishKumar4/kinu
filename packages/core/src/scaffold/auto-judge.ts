@@ -19,6 +19,8 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { LLM } from '../types/primitives.js';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn, type ShadowTrialVerdict,
@@ -48,6 +50,17 @@ export type JudgeOutput = v.InferOutput<typeof JudgeOutputSchema>;
  * per trial (see judgeTrialOrderSwapped).
  */
 export type StructuredJudgeFn = (prompt: string, schema: typeof JudgeOutputSchema) => Promise<JudgeOutput>;
+
+/**
+ * The default judge: core's own provider-agnostic structured-output idiom
+ * (ask for a JSON object, extract, validate) over any `LLM`. A backend that
+ * needs provider-specific request options builds its own; a backend that just
+ * needs a working judge uses this instead of writing a fourth copy.
+ */
+export function createStructuredJudge(llm: LLM): StructuredJudgeFn {
+  return async (prompt, schema) =>
+    v.parse(schema, extractJsonObject(await llm.complete(`${prompt}\n\n${jsonObjectOnlyInstruction()}`)));
+}
 
 export interface AutoJudgeConfig {
   /** Fraction of turns to evaluate (0..1). Default 0.25. */

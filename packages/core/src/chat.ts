@@ -34,6 +34,11 @@ export type ChatEvent =
    *  caller's measured compaction signal, cachedInputTokens feeds cache
    *  telemetry. */
   | { type: 'step-finish'; stepIndex: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
+  /** A failure the turn survived. `runChat` itself never yields this — it
+   *  throws, and the caller owns the turn-failure policy. The scaffold seam
+   *  (scaffold/chat-transform.ts) does: an evolved scaffold reports a failed
+   *  sub-step or a failed run without losing the output already streamed. */
+  | { type: 'error'; message: string }
   | { type: 'done'; text: string; responseMessages: ModelMessage[] };
 
 export interface ChatOptions {

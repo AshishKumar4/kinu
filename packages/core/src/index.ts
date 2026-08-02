@@ -368,7 +368,7 @@ export { initCraftScoreTables } from './craft/schemas.js';
 
 // Scaffold management
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap.js';
-export { modifyScaffold } from './scaffold/modify.js';
+export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
 // Misevolution gate — fixed safety criteria over every evolution surface
 // (scaffold acceptance + promotion, extracted tools, GEPA candidates).
@@ -391,8 +391,12 @@ export {
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from './scaffold/executor.js';
+export { pumpScaffoldEvents } from './scaffold/event-pump.js';
 export { scaffoldEventsToUIStream } from './scaffold/ui-stream.js';
+// The two backend inference seams: the DO's UI message stream and a local
+// turn's ChatEvent stream. Same decision, same delegation contract.
 export { scaffoldInferenceTransform, type InferenceStreamResult } from './scaffold/inference-transform.js';
+export { scaffoldChatTransform } from './scaffold/chat-transform.js';
 export {
   initShadowTables,
   getPendingScaffold,
@@ -418,6 +422,7 @@ export {
 // auto-applies promotion/rollback when minTrials is reached.
 export {
   runAutoShadowEval,
+  createStructuredJudge,
   JudgeOutputSchema,
   DEFAULT_AUTO_JUDGE_CONFIG,
   type AutoJudgeConfig,

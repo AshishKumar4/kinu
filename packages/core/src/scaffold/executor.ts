@@ -308,7 +308,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const exec: Executor = rt.executor;
   const providers = await assembleProviders(rt, hostProvider);
 
-  const execPromise = exec.execute(wrapperCode, providers);
+  const execPromise = exec.execute(wrapperCode, providers, { timeoutMs });
   const timeoutPromise = new Promise<{ result: unknown; error: string }>((resolve) =>
     setTimeout(
       () => resolve({ result: undefined, error: `scaffold timeout after ${timeoutMs}ms` }),

@@ -23,34 +23,20 @@
  */
 
 import type { UIMessageChunk } from 'ai';
-import type { ScaffoldEvent, ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
+import type { ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
+import { pumpScaffoldEvents } from './event-pump.js';
 
 /** Run a scaffold (via the supplied runner) and yield a UI message stream. */
 export async function* scaffoldEventsToUIStream(
   run: (emit: ScaffoldEmitFn) => Promise<ScaffoldRunResult>,
   opts: { messageId?: string; idPrefix?: string } = {},
 ): AsyncGenerator<UIMessageChunk> {
-  const queue: ScaffoldEvent[] = [];
-  let resolveNext: (() => void) | null = null;
-  let finished = false;
-
-  const emit: ScaffoldEmitFn = (event) => {
-    queue.push(event);
-    if (resolveNext) { const r = resolveNext; resolveNext = null; r(); }
-  };
-
-  // Kick off the scaffold; mark finished when it settles (so the drain loop
-  // terminates even if the scaffold never emits a 'done').
-  const runPromise = run(emit).finally(() => {
-    finished = true;
-    if (resolveNext) { const r = resolveNext; resolveNext = null; r(); }
-  });
+  const pump = pumpScaffoldEvents(run);
 
   const idPrefix = opts.idPrefix ?? 'sc';
   let textId: string | null = null;
   let textSeq = 0;
   let finishEmitted = false;
-  let sawDone = false;
 
   function* openTextIfNeeded(): Generator<UIMessageChunk> {
     if (textId == null) {
@@ -67,13 +53,11 @@ export async function* scaffoldEventsToUIStream(
 
   yield { type: 'start', ...(opts.messageId ? { messageId: opts.messageId } : {}) };
 
-  while (!sawDone) {
-    if (queue.length === 0) {
-      if (finished) break;
-      await new Promise<void>((resolve) => { resolveNext = resolve; });
-      continue;
-    }
-    const ev = queue.shift()!;
+  let result: ScaffoldRunResult;
+  for (;;) {
+    const next = await pump.next();
+    if (next.done) { result = next.value; break; }
+    const ev = next.value;
     switch (ev.type) {
       case 'ui_chunk': {
         const chunk = ev.chunk as UIMessageChunk | undefined;
@@ -102,13 +86,11 @@ export async function* scaffoldEventsToUIStream(
         yield { type: 'error', errorText: ev.message };
         break;
       case 'done':
-        sawDone = true;
         break;
     }
   }
 
   // Close out: emit any failure the runner surfaced, then a single finish.
-  const result = await runPromise;
   if (!result.ok && result.error) {
     yield { type: 'error', errorText: result.error };
   }

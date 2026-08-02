@@ -12,7 +12,7 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
+import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, initCompactionStateTable, createModelSummarizer,
@@ -55,6 +55,9 @@ import {
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet, recordTakePick,
   recordHeadsTakeSet,
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
+  scaffoldChatTransform, type ScaffoldRunOptions,
+  runAutoShadowEval, createStructuredJudge, modifyScaffold, listScaffoldArchive,
+  getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
   type AlternateTakeSet, type TakePickOutcome,
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
@@ -90,6 +93,10 @@ function providerFamilyForSpec(spec: string): string | undefined {
   try { return parseModelSpec(spec).provider; }
   catch { return undefined; }
 }
+
+/** A scaffold turn is a whole agentic loop, not a tool call — it gets the
+ *  same wall-clock budget the DO gives it. */
+const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Tools whose calls auto-detach to the background past the 30s threshold —
  *  the same set the cf-backend wraps. */
@@ -1022,28 +1029,47 @@ export class LocalAgentSession implements BackendHost {
       ? 'force' as const
       : 'auto' as const;
 
+    const defaultTurn = runChat({
+      model,
+      modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+      system: systemPrompt,
+      history: this.history,
+      // Model-capability attachment sanitization — runChat applies it to
+      // the whole history BEFORE the transform seam and the ledger weave
+      // (same ordering as the DO's beforeTurn); this.history itself is
+      // never mutated.
+      attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
+      systemState,
+      turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
+      tools: turnTools,
+      ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
+      transformTrigger,
+      maxSteps: resolveMaxSteps(),
+      signal: abort.signal,
+      extensions,
+      cache,
+      ...(providerOptions ? { providerOptions } : {}),
+    });
+
+    // The mutable scaffold on the live turn seam — the local peer of the DO's
+    // _transformInferenceResult. An agent still on the bootstrap v0 gets
+    // `defaultTurn` back unchanged (same object, zero overhead); once shadow
+    // evaluation promotes a scaffold, THAT scaffold is the turn's inference
+    // loop, reaching the model and tools only through the host.* bridge.
+    const turnStream = scaffoldChatTransform({
+      currentVersion: getCurrentScaffoldVersion(this.rt.storage.sql) ?? 0,
+      chat: defaultTurn,
+      run: {
+        rt: this.rt,
+        task: item.text,
+        llmStream: this.makeScaffoldLLMStream(model, turnTools),
+        callTool: this.makeScaffoldCallTool(turnTools),
+        timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
+      },
+    });
+
     try {
-      for await (const ev of runChat({
-        model,
-        modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
-        system: systemPrompt,
-        history: this.history,
-        // Model-capability attachment sanitization — runChat applies it to
-        // the whole history BEFORE the transform seam and the ledger weave
-        // (same ordering as the DO's beforeTurn); this.history itself is
-        // never mutated.
-        attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
-        systemState,
-        turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
-        tools: turnTools,
-        ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
-        transformTrigger,
-        maxSteps: resolveMaxSteps(),
-        signal: abort.signal,
-        extensions,
-        cache,
-        ...(providerOptions ? { providerOptions } : {}),
-      })) {
+      for await (const ev of turnStream) {
         switch (ev.type) {
           case 'text-delta':
             this.orch.acc.onFirstChunk();
@@ -1072,6 +1098,13 @@ export class LocalAgentSession implements BackendHost {
                 ? { usage: { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedInputTokens: ev.cachedInputTokens } }
                 : {},
             );
+            break;
+          // Only the scaffold seam yields this: a failure the turn survived
+          // (a scaffold sub-step, or a scaffold run that died after streaming).
+          // Surface it and flag the turn, but let the stream finish.
+          case 'error':
+            this.orch.acc.hadError = true;
+            this.emit({ type: 'error', message: ev.message });
             break;
           case 'done': {
             // Replay the drained steers into the durable history at the exact
@@ -1182,6 +1215,15 @@ export class LocalAgentSession implements BackendHost {
       const turn = snapshotTurn();
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
       await this.orch.completeTurn(turn);
+      // Sampled auto-judge shadow rollout. Tracked rather than fire-and-forget:
+      // a `proteus exec` process exits the moment the turn ends, and the
+      // evaluation that resolves a pending scaffold must not die with it.
+      this.orch.track(
+        this.runShadowEvalSampled({
+          task: item.text, currentOutput: fullText, model, tools: turnTools, system: systemPrompt,
+        }),
+        'Scaffold shadow eval',
+      );
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1305,6 +1347,153 @@ export class LocalAgentSession implements BackendHost {
       if (name === 'skills' || toolAllowedBySkills(name, allowed)) filtered[name] = t;
     }
     return filtered;
+  }
+
+  /**
+   * Sampled per-turn auto-judge shadow rollout — the local peer of the DO's
+   * runShadowEvalSampled, and the ONLY thing that can resolve a pending
+   * scaffold. Without it the evolution engine proposes exactly one scaffold
+   * ever (engine.maybeEvolveScaffold refuses to propose while one is pending)
+   * and that proposal is never evaluated, promoted, or rolled back.
+   *
+   * Runs the pending against the same task the user just sent, with the same
+   * tool surface the live turn had, and judges the two outputs. `autoApply`
+   * follows agent_config.auto_promote_scaffold (default ON — every applied
+   * decision is visible and revertable in the Evolution Changelog).
+   */
+  private async runShadowEvalSampled(opts: {
+    task: string; currentOutput: string; model: LanguageModel; tools: ToolSet; system: string;
+  }): Promise<void> {
+    try {
+      const sampleRate = this.config.getShadowSampleRate();
+      if (sampleRate <= 0) return;
+      const task = opts.task.slice(0, 2000);
+      const result = await runAutoShadowEval({
+        rt: this.rt,
+        task,
+        currentOutput: opts.currentOutput.slice(0, 4000),
+        judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
+        llmStream: this.makeScaffoldLLMStream(opts.model, opts.tools),
+        callTool: this.makeScaffoldCallTool(opts.tools),
+        // A pending that delegates is judged on the scaffold delta alone, so
+        // it gets a real default turn for the shadow task — same system prompt
+        // and tool surface, isolated history.
+        defaultInference: () => runChat({
+          model: opts.model,
+          modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+          system: opts.system,
+          history: [{ role: 'user', content: task }],
+          tools: opts.tools,
+          maxSteps: resolveMaxSteps(),
+        }),
+        config: { sampleRate, autoApply: this.config.getAutoPromoteScaffold() },
+      });
+      if (result.applied) {
+        this.emit({
+          type: 'evolution',
+          event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+          message: `Shadow eval ${result.applied}d the pending scaffold`,
+        });
+        this.invalidateModelState();
+      }
+    } catch (err) {
+      console.warn('[proteus] shadow eval failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** The pending scaffold's rollout state — trials so far and what the
+   *  promotion gate currently says. */
+  getShadowStatus() {
+    const pending = getPendingScaffold(this.rt.storage.sql);
+    if (!pending) return { hasPending: false as const, versions: this.listScaffoldVersions(10) };
+    return {
+      hasPending: true as const,
+      pending,
+      decision: decidePromotion(pending, DEFAULT_SHADOW_CONFIG),
+      config: DEFAULT_SHADOW_CONFIG,
+    };
+  }
+
+  /** Resolve the pending scaffold by hand. 'auto' acts only on a conclusive
+   *  promotion gate; 'promote'/'rollback' force the corresponding action. */
+  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback') {
+    const pending = getPendingScaffold(this.rt.storage.sql);
+    if (!pending) return { ok: false as const, error: 'no pending scaffold' };
+    let decision: 'promote' | 'rollback';
+    if (mode === 'auto') {
+      const auto = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
+      if (auto === 'continue') return { ok: false as const, error: 'inconclusive; need more trials' };
+      decision = auto;
+    } else {
+      decision = mode;
+    }
+    const result = await applyPromotionDecision(this.rt, pending, decision);
+    this.invalidateModelState();
+    return { ok: true as const, ...result };
+  }
+
+  /** Propose a new scaffold version through the existing 4-gate pipeline. An
+   *  accepted proposal lands as `pending` and is resolved by the shadow eval. */
+  async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
+    return modifyScaffold(
+      this.rt, rationale, code,
+      baseVersion !== undefined ? { baseVersion } : undefined,
+    );
+  }
+
+  /** Read-only scaffold archive: versions with status, lineage and shadow record. */
+  listScaffoldVersions(limit = 20) {
+    return listScaffoldArchive(this.rt.storage.sql, limit).map((e) => ({
+      version: e.version,
+      written_at: e.writtenAt,
+      rationale: e.rationale,
+      status: e.status,
+      parent_version: e.parentVersion,
+      trials: e.trials,
+      wins: e.wins,
+      losses: e.losses,
+      ties: e.ties,
+      win_rate: e.winRate,
+    }));
+  }
+
+  /** `host.llmStream` — the scaffold's own inference bridge. Tool NAMES cross
+   *  the sandbox boundary; the host resolves them against THIS turn's surface. */
+  private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
+    return async function* (opts) {
+      const tools: ToolSet = (opts.tools && opts.tools.length > 0)
+        ? Object.fromEntries(opts.tools.filter((n) => turnTools[n]).map((n) => [n, turnTools[n]]))
+        : turnTools;
+      const result = streamText({
+        model,
+        system: opts.system,
+        messages: opts.messages.map((m) => ({
+          role: m.role as 'system' | 'user' | 'assistant', content: m.content,
+        })),
+        tools,
+        stopWhen: stepCountIs(opts.maxSteps ?? resolveMaxSteps()),
+      });
+      for await (const chunk of result.textStream) yield chunk;
+    };
+  }
+
+  /** `host.callTool` — dispatch into THIS turn's tool surface by name. */
+  private makeScaffoldCallTool(turnTools: ToolSet): NonNullable<ScaffoldRunOptions['callTool']> {
+    return async (name, args) => {
+      const t = turnTools[name];
+      if (!t || typeof t.execute !== 'function') return { error: `tool not found: ${name}` };
+      try {
+        // `args as never` is the legitimate dynamic-dispatch escape — the tool
+        // is picked by string name at runtime, so its input type is unknown
+        // here. The options object IS statically known, so it stays typed.
+        const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
+          messages: [], toolCallId: `scaffold-${Date.now()}`,
+        };
+        return await t.execute(args as never, options);
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    };
   }
 
   /** Re-run a task for the replay-eval harness: the current system prompt

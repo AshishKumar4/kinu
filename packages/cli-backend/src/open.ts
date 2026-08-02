@@ -10,7 +10,7 @@
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initAllTables, migrateWorkspaceStorage, readSoul, summarizeSoul } from '@proteus/core';
+import { initAllTables, migrateWorkspaceStorage, readSoul, summarizeSoul, getCurrentScaffoldVersion } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
@@ -80,9 +80,9 @@ export function openWorkspaceCLI(
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Gather stats for WorkspaceInfo display
-  const scaffoldVersion = sql<{ v: number }>`
-    SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
-  `[0]?.v ?? 0;
+  // The LIVE version — the one that actually drives a turn. MAX(version)
+  // reported an unresolved pending proposal as though it were already running.
+  const scaffoldVersion = getCurrentScaffoldVersion(sql) ?? 0;
   const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
   const searchNodeCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`[0]?.c ?? 0;
   const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;

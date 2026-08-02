@@ -593,8 +593,11 @@ function getLocalStatus(db: SqliteDb): unknown {
     purpose: summarizeSoul(soul),
     soul: soul ?? '',
     createdAt: identity?.created_at ?? null,
+    // The LIVE version — the one that actually drives a turn. MAX(version)
+    // reported an unresolved pending proposal as though it were already running.
     scaffoldVersion: tableExists(db, 'scaffold_versions')
-      ? get<{ v: number }>(db, `SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions`)?.v ?? 0
+      ? get<{ v: number }>(db,
+        `SELECT version AS v FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`)?.v ?? 0
       : 0,
     searchNodeCount: tableExists(db, 'search_nodes')
       ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM search_nodes`)?.c ?? 0
