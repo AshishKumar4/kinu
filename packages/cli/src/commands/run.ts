@@ -538,9 +538,37 @@ function parseRpc(line: string): { ok: true; value: Record<string, unknown> } | 
   }
 }
 
+/** Grace period for OPTIONAL stdin — see buildPrompt. Long enough for a real
+ *  pipe that already holds data, short enough that a harness which inherits an
+ *  idle stdin is not stalled. */
+const OPTIONAL_STDIN_GRACE_MS = 250;
+
+async function readStdin(): Promise<string> {
+  return await new Response(Bun.stdin.stream()).text();
+}
+
+/**
+ * Assemble the turn prompt from argv and, where it makes sense, stdin.
+ *
+ * When argv carries no prompt, stdin IS the prompt (`cat notes | proteus exec`)
+ * and waiting for EOF is correct. When argv already carries one, stdin is
+ * supplementary context — and waiting on it hangs forever against a pipe that
+ * is open but idle, which is exactly what a harness or CI runner inherits.
+ * That hang made every scripted use of `proteus exec` require a `</dev/null`
+ * incantation to work at all.
+ */
 async function buildPrompt(parts: string[]): Promise<string> {
-  const stdin = !process.stdin.isTTY ? await new Response(Bun.stdin.stream()).text() : '';
   const chunks = [...parts];
+  const argvPrompt = chunks.join(' ').trim();
+  let stdin = '';
+  if (!process.stdin.isTTY) {
+    stdin = argvPrompt
+      ? await Promise.race([
+          readStdin(),
+          new Promise<string>((resolve) => setTimeout(() => resolve(''), OPTIONAL_STDIN_GRACE_MS)),
+        ])
+      : await readStdin();
+  }
   if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
   return chunks.join(' ').trim();
 }

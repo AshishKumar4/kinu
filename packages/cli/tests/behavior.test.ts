@@ -395,3 +395,28 @@ function startFailingLlm(): { port: number; stop(): void } {
   });
   return { port: server.port, stop: () => server.stop(true) };
 }
+
+// `proteus exec "prompt"` blocked on stdin until EOF whenever stdin was not a
+// TTY. A harness or CI runner that spawns the CLI with an inherited, idle pipe
+// never sends EOF, so every scripted use hung forever and needed a `</dev/null`
+// incantation to work. Measured before the fix: the full 15s timeout; after: ~0.6s.
+describe("proteus exec — stdin must not hang a scripted run", () => {
+  test("returns promptly when argv carries the prompt and stdin stays open", async () => {
+    const cli = join(import.meta.dir, "..", "bin", "cli.ts");
+    const home = mkdtempSync(join(tmpdir(), "proteus-stdin-"));
+    const started = Date.now();
+    // stdin: 'pipe', never written to and never closed — exactly what a harness
+    // that inherits an idle stdin hands the process.
+    const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+      env: { ...process.env, PROTEUS_HOME: home },
+    });
+    await proc.exited;
+    rmSync(home, { recursive: true, force: true });
+    // The assertion is that it terminates at all, rather than waiting on an
+    // EOF that never arrives.
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 20_000);
+});
