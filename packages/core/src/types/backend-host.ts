@@ -5,8 +5,7 @@
 //   AgentRuntime  → storage / memory / executor / llm / schedule / identity /
 //                   craftStore / executionRouter / spawnBranch / shell
 //   BackendHost   → the loop capabilities that are inherently platform-shaped:
-//                   client fan-out, programmatic turns, head spawning, and
-//                   user-level tool injection.
+//                   client fan-out, programmatic turns, and head spawning.
 //
 // Implement both, then drive the loop harness through AgentOrchestrator's
 // lifecycle methods, and you have the whole agent. The Cloudflare Durable Object
@@ -17,8 +16,14 @@
 // genuinely differs per backend AND has no home on AgentRuntime. Durable fibers
 // (schedule.fiber), MCTS branch spawning (spawnBranch), and activity logging
 // (storage.sql) are NOT here — each already has a home (deletion test).
+//
+// User-level tools (connected MCP servers) are NOT here either: the core never
+// assembles a turn's ToolSet. Each backend builds its own tool surface where it
+// builds the turn config — cf caches the UserDO's MCP descriptors against that
+// DO's mcp_updated_at watermark, the CLI merges the tools its stdio clients
+// returned at connect time — and hands the merged set straight to the model.
+// A seam here would have no core caller to serve (deletion test).
 
-import type { ToolSet } from 'ai';
 import type { HeadRuntime } from '../heads/controller.js';
 
 /** A typed event fanned out to connected clients (mcts-progress, device_consent,
@@ -101,8 +106,4 @@ export interface BackendHost {
    *  for full think({strategy:'heads'}) parity. */
   readonly headRuntime?: HeadRuntime;
 
-  /** User-level tools beyond the builtins — connected MCP servers / per-user
-   *  tools — merged into the turn's tool surface. CF: fetched from the UserDO.
-   *  CLI: local MCP config. No extra tools when absent. */
-  resolveExtraTools?(): Promise<ToolSet> | ToolSet;
 }

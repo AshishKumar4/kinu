@@ -161,10 +161,13 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // Noop when env.AI / env.MEMORY_VECTORS aren't configured, so hybrid search
   // degrades to FTS5-only. Built before the memory adapter so writes embed.
   const vectorStore = buildVectorStore(agent, actor);
+  // Owns the semantic-index completeness markers, read by the backfill and
+  // cleared by the write path when a sync fails.
+  const memoryConfig = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
   // One-time backfill of chunks indexed before the vector store existed.
   // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
   // per boot, idempotent, and a no-op once the marker is set.
-  void backfillMemoryVectors(memoryStore, createAgentConfigStore(sql as unknown as CoreSqlExecutor), vectorStore);
+  void backfillMemoryVectors(memoryStore, memoryConfig, vectorStore);
 
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
@@ -177,7 +180,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const vfs: CoreVFS = compositeVfs;
 
   // Adapt MemoryStore to core's Memory interface (writes sync to vectorStore)
-  const memory = adaptMemory(memoryStore, vectorStore);
+  const memory = adaptMemory(memoryStore, vectorStore, memoryConfig);
 
   // Adapt CraftStore to core's CraftStore interface
   const craftStore = adaptCraftStore(craftStoreImpl);

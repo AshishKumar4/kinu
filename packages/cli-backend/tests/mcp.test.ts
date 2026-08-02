@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { LLMProviderConfig } from '@proteus/core';
+import { mcpToolKey, type LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
 import { connectMcpServers } from '../src/mcp.js';
@@ -70,12 +70,42 @@ function sessionWithModel(model: LanguageModel) {
 }
 
 describe('connectMcpServers', () => {
+  test('keys tools with the same core rule the cf backend uses', async () => {
+    // A prompt or skill that names an MCP tool has to resolve to the same tool
+    // on both backends. cf used to key on its random registration id
+    // (`tool_<nanoid>_<name>`) while the CLI keyed on the server name — so no
+    // reference to an MCP tool was portable. Both now go through mcpToolKey.
+    const conn = await connectMcpServers(mcpServers());
+    try {
+      expect(Object.keys(conn.tools)).toEqual(
+        [mcpToolKey('echo', 'echo'), mcpToolKey('echo', 'slow')],
+      );
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('a tool call gets the full call budget, not the startup budget', async () => {
+    // The 5s startup timeout used to apply to tool calls too, so any MCP tool
+    // doing real work (a fetch, a query, a build) failed. The fixture sleeps
+    // past that budget; cfg.timeoutMs still bounds it.
+    const conn = await connectMcpServers({
+      echo: { command: 'node', args: [fixtureServer] },
+    });
+    try {
+      const slow = conn.tools[mcpToolKey('echo', 'slow')] as { execute(i: unknown): Promise<string> };
+      await expect(slow.execute({ ms: 6_000 })).resolves.toBe('slept 6000ms');
+    } finally {
+      await conn.close();
+    }
+  }, 20_000);
+
   test('connects to a stdio MCP server, lists tools, and proxies a call', async () => {
     const logs: string[] = [];
     const conn = await connectMcpServers(mcpServers(), (msg) => logs.push(msg));
     try {
-      expect(Object.keys(conn.tools)).toEqual(['mcp_echo_echo']);
-      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 1 }]);
+      expect(Object.keys(conn.tools)).toEqual(['mcp_echo_echo', 'mcp_echo_slow']);
+      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 2 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
       const tool = conn.tools.mcp_echo_echo as { execute(input: unknown): Promise<string> };
       await expect(tool.execute({ text: 'hello' })).resolves.toBe('echo: hello');

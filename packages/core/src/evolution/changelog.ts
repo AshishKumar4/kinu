@@ -19,7 +19,7 @@ import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow.j
 import { rollbackScaffold } from '../scaffold/rollback.js';
 import { listGepaRuns } from './gepa/persistence.js';
 import { listReplayEvals } from './replay.js';
-import { listTurnOutcomes } from './outcomes.js';
+import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 
 export type ChangelogEntryKind = 'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes';
@@ -280,7 +280,7 @@ function outcomeEntry(sql: SqlExecutor, since: number | undefined): ChangelogEnt
   if (rows.length === 0) return null;
   const count = (k: string) => rows.filter((r) => r.outcome === k).length;
   const newest = rows.reduce((acc, r) => Math.max(acc, r.createdAt), 0);
-  const parts = (['accepted', 'corrected', 'frustrated', 'abandoned'] as const)
+  const parts = TURN_OUTCOMES
     .map((k) => [k, count(k)] as const)
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);

@@ -20,35 +20,35 @@ function setup() {
 describe('UCT selection', () => {
   test('returns null on empty tree', () => {
     const { sql } = setup();
-    expect(selectNode(sql)).toBeNull();
+    expect(selectNode(sql, 'r')).toBeNull();
   });
 
   test('selects the only open node', () => {
     const { sql } = setup();
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('root', 'test', 0, 0, 'open')`;
-    const node = selectNode(sql);
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'root', 'test', 0, 0, 'open')`;
+    const node = selectNode(sql, 'r');
     expect(node).not.toBeNull();
     expect(node!.id).toBe('root');
   });
 
   test('never selects pruned nodes', () => {
     const { sql } = setup();
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('pruned1', 'test', 0.99, 100, 'pruned')`;
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('open1', 'test', 0.1, 1, 'open')`;
-    const node = selectNode(sql);
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'pruned1', 'test', 0.99, 100, 'pruned')`;
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'open1', 'test', 0.1, 1, 'open')`;
+    const node = selectNode(sql, 'r');
     expect(node!.id).toBe('open1');
   });
 
   test('never selects failed nodes', () => {
     const { sql } = setup();
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('failed1', 'test', 0.99, 100, 'failed')`;
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('open1', 'test', 0.1, 1, 'open')`;
-    const node = selectNode(sql);
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'failed1', 'test', 0.99, 100, 'failed')`;
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'open1', 'test', 0.1, 1, 'open')`;
+    const node = selectNode(sql, 'r');
     expect(node!.id).toBe('open1');
   });
 
@@ -64,11 +64,11 @@ describe('UCT selection', () => {
   test('selects higher-value node when exploration bonus is equal', () => {
     const { sql } = setup();
     // Two nodes with same visits (so same exploration bonus)
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('low', 'test', 0.3, 5, 'open')`;
-    sql`INSERT INTO search_nodes (id, task, value, visits, status)
-        VALUES ('high', 'test', 0.9, 5, 'open')`;
-    const node = selectNode(sql);
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'low', 'test', 0.3, 5, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+        VALUES ('r', 'high', 'test', 0.9, 5, 'open')`;
+    const node = selectNode(sql, 'r');
     expect(node!.id).toBe('high');
   });
 
@@ -79,54 +79,54 @@ describe('UCT selection', () => {
     // never be re-selected to add MORE breadth (frozen at N=branches). With the
     // synthetic root parent-visit it retains a strictly-positive exploration
     // bonus and becomes selectable once its children are well-visited.
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('root', NULL, 't', 0.5, 2, 'open')`;
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('c1', 'root', 't', 0.5, 1, 'open')`;
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('c2', 'root', 't', 0.5, 1, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'root', NULL, 't', 0.5, 2, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'c1', 'root', 't', 0.5, 1, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'c2', 'root', 't', 0.5, 1, 'open')`;
 
     // Fresh children deepen first, but once they are well-visited the root's
     // surviving exploration term makes it the UCT-max → the tree re-widens.
     sql`UPDATE search_nodes SET visits = 50 WHERE id IN ('c1','c2')`;
-    const reselect = selectNode(sql)!;
+    const reselect = selectNode(sql, 'r')!;
     expect(reselect.id).toBe('root');
   });
 
   test('WP-A4: depth-capped nodes are skipped, not fatal — a shallower node is still selected', () => {
     const { sql } = setup();
     // The UCT-max node sits AT the depth cap; a lower-scoring node sits below it.
-    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
-        VALUES ('deep', 'test', 0.99, 1, 'open', 3)`;
-    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
-        VALUES ('shallow', 'test', 0.1, 1, 'open', 1)`;
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, depth)
+        VALUES ('r', 'deep', 'test', 0.99, 1, 'open', 3)`;
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, depth)
+        VALUES ('r', 'shallow', 'test', 0.1, 1, 'open', 1)`;
     // Old behavior aborted the whole search on the deep argmax. Now selection
     // skips it and returns the shallower node so the budget keeps flowing.
-    const node = selectNode(sql, undefined, 3);
+    const node = selectNode(sql, 'r', undefined, 3);
     expect(node!.id).toBe('shallow');
   });
 
   test('WP-A4: returns null only when every open node is at/beyond the cap', () => {
     const { sql } = setup();
-    sql`INSERT INTO search_nodes (id, task, value, visits, status, depth)
-        VALUES ('capped', 'test', 0.9, 1, 'open', 5)`;
-    expect(selectNode(sql, undefined, 5)).toBeNull();
-    expect(selectNode(sql, undefined, 6)!.id).toBe('capped');
+    sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, depth)
+        VALUES ('r', 'capped', 'test', 0.9, 1, 'open', 5)`;
+    expect(selectNode(sql, 'r', undefined, 5)).toBeNull();
+    expect(selectNode(sql, 'r', undefined, 6)!.id).toBe('capped');
   });
 
   test('exploration bonus favors less-visited nodes', () => {
     const { sql } = setup();
     // Root with many visits
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('root', NULL, 'test', 0.5, 100, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'root', NULL, 'test', 0.5, 100, 'open')`;
     // Well-visited child
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('visited', 'root', 'test', 0.6, 50, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'visited', 'root', 'test', 0.6, 50, 'open')`;
     // Barely-visited child (should get higher exploration bonus)
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('fresh', 'root', 'test', 0.5, 1, 'open')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'fresh', 'root', 'test', 0.5, 1, 'open')`;
 
-    const node = selectNode(sql);
+    const node = selectNode(sql, 'r');
     // fresh should be selected: it has visits=1 so exploration bonus is high
     // UCT(fresh) = 0.5 + √2 * √(ln(100)/1) ≈ 0.5 + 1.414 * √4.605 ≈ 0.5 + 3.03 = 3.53
     // UCT(visited) = 0.6 + √2 * √(ln(100)/50) ≈ 0.6 + 1.414 * √0.092 ≈ 0.6 + 0.43 = 1.03
@@ -149,13 +149,13 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
 
   function selectAmongSiblings(exploreVisits: number): string {
     const { sql } = setup();
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status)
-        VALUES ('root', NULL, 't', 0.9, 10000, 'terminal')`;
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status, depth)
-        VALUES ('exploit', 'root', 't', 0.9, 10000, 'open', 1)`;
-    sql`INSERT INTO search_nodes (id, parent_id, task, value, visits, status, depth)
-        VALUES ('explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
-    return selectNode(sql, W)!.id;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
+        VALUES ('r', 'root', NULL, 't', 0.9, 10000, 'terminal')`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth)
+        VALUES ('r', 'exploit', 'root', 't', 0.9, 10000, 'open', 1)`;
+    sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth)
+        VALUES ('r', 'explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
+    return selectNode(sql, 'r', W)!.id;
   }
 
   test('a 20-visit low-value sibling still out-explores the exploited node (log₁₀ would not)', () => {

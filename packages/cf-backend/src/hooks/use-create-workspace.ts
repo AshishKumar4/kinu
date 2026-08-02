@@ -4,23 +4,27 @@
  * state, createWorkspaceFromMission, and navigation into the new agent with the
  * mission riding along as the opening message.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 
 export function useCreateWorkspace() {
   const navigate = useNavigate();
-  /** null = still loading; false = no providers connected. */
-  const [hasModels, setHasModels] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    listAvailableModels()
-      .then((models) => setHasModels(models.length > 0))
-      .catch(() => setHasModels(false));
-  }, []);
+  const loadModels = useCallback(() => listAvailableModels(), []);
+  const { resource } = useAsyncResource(loadModels);
+  const models = lastValue(resource);
+  /**
+   * `false` — and only `false` — blocks creation behind the Connect Workers AI
+   * wall, so it may be said only of a listing that came back empty. A failed
+   * read leaves this null: creation stays enabled, and if there really is no
+   * provider the create call says so itself.
+   */
+  const hasModels = models === null ? null : models.length > 0;
 
   /** Create + navigate. `onBeforeNavigate` lets a modal dismiss itself first. */
   const create = useCallback(async (mission: string, onBeforeNavigate?: () => void) => {

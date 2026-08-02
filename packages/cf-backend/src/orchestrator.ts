@@ -68,7 +68,7 @@ import {
   // Voyager curriculum + Absolute Zero learnability proposer
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
-  hybridSearch, type HybridHit,
+  hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
   effortFor, reasoningEffortOptions, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
@@ -922,8 +922,11 @@ export class OrchestratorAgent extends ActorAgent {
     // the queue is blocked and the next message can't start processing until
     // evolution finishes. The user sees "nothing happens" for the second message.
     //
-    // Fix: fire evolution asynchronously. The DO stays alive via keepAliveWhile
-    // in the outer scope. Errors are caught and logged, never propagated.
+    // Fix: fire evolution asynchronously, then hold the DO open for it with a
+    // keepAlive heartbeat of our own (settleEvolutionInBackground). The outer
+    // keepAliveWhile Think wraps the turn in disposes the moment this hook
+    // returns, so without that the detached work races eviction. Errors are
+    // caught and logged, never propagated.
     //
     // The core AgentOrchestrator owns the shared cadence: advance the
     // session-reflection counter (firing engine.onSessionComplete every N
@@ -933,6 +936,9 @@ export class OrchestratorAgent extends ActorAgent {
     // pattern extraction). Programmatic turns review immediately. All
     // fire-and-forget; never blocks the TurnQueue.
     this.orch.recordTurn(turn);
+    // …and keep the DO alive until that detached evolution settles — the cf
+    // peer of the CLI's pre-exit `await orch.settleEvolution()`.
+    this.settleEvolutionInBackground();
 
     // Auto-judge shadow evaluation. When a pending scaffold exists,
     // sample-and-run (default 25%) the pending against this turn's task,
@@ -1316,11 +1322,15 @@ export class OrchestratorAgent extends ActorAgent {
         execRaw("DROP TABLE IF EXISTS memory_chunks_fts");
         console.log("[proteus] Migrated memory_chunks to FTS5 schema");
       }
-      // search_nodes: add code_used column if missing (new in this version)
+      // search_nodes: add code_used / root_id columns if missing.
       const snCols = this.sql<{ name: string }>`PRAGMA table_info(search_nodes)`;
       if (snCols.length > 0 && !snCols.some(c => c.name === "code_used")) {
         execRaw("ALTER TABLE search_nodes ADD COLUMN code_used TEXT");
         console.log("[proteus] Added code_used column to search_nodes");
+      }
+      if (snCols.length > 0 && !snCols.some(c => c.name === "root_id")) {
+        execRaw("ALTER TABLE search_nodes ADD COLUMN root_id TEXT");
+        console.log("[proteus] Added root_id column to search_nodes");
       }
     } catch { /* tables don't exist yet — fine */ }
 
@@ -2874,7 +2884,9 @@ export class OrchestratorAgent extends ActorAgent {
         snippet: r.snippet,
       }));
     };
-    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, { finalK: limit });
+    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, {
+      finalK: limit, rehydrate: memorySnippetRehydrator(this.rt.memory),
+    });
   }
 
   // ── SKILL.md export/import — make crafted tools git-friendly ──
@@ -3279,6 +3291,35 @@ export class OrchestratorAgent extends ActorAgent {
       branches: config.branchBudget,
     });
     return config;
+  }
+
+  /** The self-evolution knobs: who judges the agent, whether a proven scaffold
+   *  promotes itself, and how much each loop is allowed to spend. */
+  @callable() async getEvolutionConfig() {
+    return {
+      reviewModel: this.config.getReviewModel(),
+      autoPromoteScaffold: this.config.getAutoPromoteScaffold(),
+      gepaEvalBudget: this.config.getGepaEvalBudget(),
+      shadowSampleRate: this.config.getShadowSampleRate(),
+      scaffoldExploreShare: this.config.getScaffoldExploreShare(),
+    };
+  }
+
+  /** Set any subset of the evolution knobs. Returns the effective config, so a
+   *  caller sees what a clamped value actually became. */
+  @callable() async setEvolutionConfig(config: {
+    reviewModel?: string | null;
+    autoPromoteScaffold?: boolean;
+    gepaEvalBudget?: number;
+    shadowSampleRate?: number;
+    scaffoldExploreShare?: number;
+  }) {
+    if (config.reviewModel !== undefined) this.config.setReviewModel(config.reviewModel);
+    if (config.autoPromoteScaffold !== undefined) this.config.setAutoPromoteScaffold(config.autoPromoteScaffold);
+    if (config.gepaEvalBudget !== undefined) this.config.setGepaEvalBudget(config.gepaEvalBudget);
+    if (config.shadowSampleRate !== undefined) this.config.setShadowSampleRate(config.shadowSampleRate);
+    if (config.scaffoldExploreShare !== undefined) this.config.setScaffoldExploreShare(config.scaffoldExploreShare);
+    return this.getEvolutionConfig();
   }
 
   /**

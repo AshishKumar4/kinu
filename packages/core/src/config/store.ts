@@ -27,7 +27,8 @@ export const AGENT_CONFIG_KEYS = {
   /** Fraction of scaffold proposals that branch from an archived variant
    *  instead of the live current (DGM archive exploration). */
   scaffoldExploreShare: 'scaffold_explore_share',
-  toolSurfacingMode: 'tool_surfacing_mode',
+  /** `<provider>/<modelId>` the agent's own output is judged on. Unset = pick
+   *  the first available cross-family model (selectJudgeModel). */
   reviewModel: 'review_model',
   /** Comma-separated list of skill names the operator wants always-on. */
   alwaysActiveSkills: 'always_active_skills',
@@ -98,11 +99,19 @@ export interface AgentConfigStore {
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getAutoPromoteScaffold(): boolean;
+  setAutoPromoteScaffold(enabled: boolean): void;
+  /** Fraction of turns that also run through the candidate scaffold for the
+   *  shadow verdict (0..1, default 0.25). */
   getShadowSampleRate(): number;
+  setShadowSampleRate(rate: number): void;
   /** Archive-exploration share for proposal base selection (0..1, default 0.2). */
   getScaffoldExploreShare(): number;
-  getToolSurfacingMode(): 'all' | 'relevant';
+  setScaffoldExploreShare(share: number): void;
+  /** The model the agent's own output is judged on, or null to let
+   *  selectJudgeModel pick a cross-family one. */
   getReviewModel(): string | null;
+  /** Pin the review model; null / blank clears the pin. */
+  setReviewModel(spec: string | null): void;
   /** Skills the operator has pinned as always-active for this agent. */
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
@@ -130,6 +139,9 @@ export interface AgentConfigStore {
   /** GEPA eval budget — labeled instances per run (train + val). See
    *  DEFAULT_GEPA_EVAL_BUDGET / clampGepaEvalBudget. */
   getGepaEvalBudget(): number;
+  /** Set the GEPA eval budget. Clamped to the settable range rather than
+   *  rejected: the bounds are a cost policy, not a correctness constraint. */
+  setGepaEvalBudget(n: number): void;
   /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
    *  into runMCTS call sites so unset knobs keep engine defaults. */
   getMctsOverrides(): MctsOverrides;
@@ -176,6 +188,15 @@ export const DEFAULT_GEPA_EVAL_BUDGET = 24;
  *  most an operator can spend on one pass. */
 export function clampGepaEvalBudget(n: number): number {
   return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
+}
+
+/** Validate a rate/share setting. Rejects rather than clamps: an out-of-range
+ *  probability is a caller bug, and silently storing 1 for 100 would hide it. */
+function unitInterval(key: string, value: number): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`invalid ${key}: ${value} (expected a fraction between 0 and 1)`);
+  }
+  return value;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -240,21 +261,27 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     getAutoPromoteScaffold() {
       return get(AGENT_CONFIG_KEYS.autoPromoteScaffold) !== 'false';
     },
+    setAutoPromoteScaffold(enabled) {
+      set(AGENT_CONFIG_KEYS.autoPromoteScaffold, enabled ? 'true' : 'false');
+    },
     getShadowSampleRate() {
       const v = get(AGENT_CONFIG_KEYS.shadowSampleRate);
       const n = v ? Number(v) : 0.25;
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.25;
     },
+    setShadowSampleRate(rate) { set(AGENT_CONFIG_KEYS.shadowSampleRate, String(unitInterval('shadow_sample_rate', rate))); },
     getScaffoldExploreShare() {
       const v = get(AGENT_CONFIG_KEYS.scaffoldExploreShare);
       const n = v ? Number(v) : 0.2;
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
     },
-    getToolSurfacingMode() {
-      const v = get(AGENT_CONFIG_KEYS.toolSurfacingMode);
-      return v === 'relevant' ? 'relevant' : 'all';
-    },
+    setScaffoldExploreShare(share) { set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(unitInterval('scaffold_explore_share', share))); },
     getReviewModel() { return get(AGENT_CONFIG_KEYS.reviewModel); },
+    setReviewModel(spec) {
+      const trimmed = spec?.trim();
+      if (trimmed) set(AGENT_CONFIG_KEYS.reviewModel, trimmed);
+      else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.reviewModel}`;
+    },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
       if (!v) return [];
@@ -309,6 +336,7 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       const n = Number(raw);
       return Number.isFinite(n) ? clampGepaEvalBudget(n) : DEFAULT_GEPA_EVAL_BUDGET;
     },
+    setGepaEvalBudget(n) { set(AGENT_CONFIG_KEYS.gepaEvalBudget, String(clampGepaEvalBudget(n))); },
     getChangelogSeenAt() {
       const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));
       return Number.isFinite(n) && n > 0 ? n : 0;

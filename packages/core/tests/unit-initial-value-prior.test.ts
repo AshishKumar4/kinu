@@ -29,6 +29,7 @@ function record(session: SessionWriter, sql: SqlExecutor, nodeId: string): Promi
     nodeId,
     parentNodeId: null,
     parentMsgId: null,
+    rootId: 'r',
     task: 'ship the thing',
     action: `approach ${nodeId}`,
     observation: 'some output',
@@ -58,7 +59,7 @@ describe('BUG-1: the initial value prior', () => {
     await record(session, rt.storage.sql, 'b');
 
     // No backpropagate() call anywhere: no branch has earned a score.
-    const result = await converge(rt, session);
+    const result = await converge(rt, session, 'r');
 
     // A 0.5 prior would clear minAcceptableScore (0.3) on its own and report
     // success for a search that never scored a single branch.
@@ -77,7 +78,7 @@ describe('BUG-1: the initial value prior', () => {
     // and below a 0.5 prior, so the prior would steal the win.
     backpropagate(rt.storage.sql, 'scored', 0.35);
 
-    const result = await converge(rt, session);
+    const result = await converge(rt, session, 'r');
 
     expect(result.winnerId).toBe('scored');
     expect(result.winnerValue).toBeCloseTo(0.35, 5);

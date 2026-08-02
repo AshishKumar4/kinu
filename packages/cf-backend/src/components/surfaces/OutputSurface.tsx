@@ -15,6 +15,8 @@ import {
   type ExecutorInfo,
 } from "@/lib/executors";
 import { PreviewFrame } from "@/components/PreviewFrame";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
 export interface PinnedPort { port: number; url: string; name?: string }
@@ -94,9 +96,9 @@ interface DiffResult {
 }
 
 function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorInfo[]; lastActiveExecutor?: string | null; rpc: Rpc }) {
-  const [result, setResult] = useState<DiffResult | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [actionErr, setActionErr] = useState<string | null>(null);
 
   // Selector options: available execution devices first, internal state VFS last.
   const availableDevices = executors
@@ -117,18 +119,20 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
     }
   }, [exec, options, pickVisibleDefault]);
 
-  const load = useCallback(() => {
-    setResult(null);
-    rpc<DiffResult>("getExecutorDiff", [exec])
-      .then(setResult)
-      .catch(() => setResult({ files: [], mode: "git", error: "failed to load diff" }));
-  }, [rpc, exec]);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => rpc<DiffResult>("getExecutorDiff", [exec]), [rpc, exec]);
+  const { resource, reload } = useAsyncResource(load);
+  const result = lastValue(resource);
 
+  // Re-baselining is what "Mark reviewed" means: without a catch a failed
+  // write left the button un-busying with the change-set still on screen,
+  // while the user believed the baseline had moved.
   const markReviewed = useCallback(async () => {
     setBusy(true);
-    try { await rpc("resetWorkspaceBaseline", []); setExpanded(new Set()); load(); } finally { setBusy(false); }
-  }, [rpc, load]);
+    setActionErr(null);
+    try { await rpc("resetWorkspaceBaseline", []); setExpanded(new Set()); reload(); }
+    catch (e) { setActionErr(`Couldn't mark reviewed: ${describeError(e)}`); }
+    finally { setBusy(false); }
+  }, [rpc, reload]);
 
   const toggle = (path: string) => setExpanded((prev) => {
     const next = new Set(prev);
@@ -167,8 +171,12 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
         </div>
       )}
 
+      {actionErr && <div className="text-[11px] p-danger mb-2">{actionErr}</div>}
+
       {result === null ? (
-        <div className="flex justify-center py-8"><Loader size="sm" /></div>
+        resource.status === "error"
+          ? <LoadFailure what="the change-set" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-8"><Loader size="sm" /></div>
       ) : result.error ? (
         <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (

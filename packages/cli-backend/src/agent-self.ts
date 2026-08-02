@@ -15,6 +15,8 @@ export interface LocalAgentSelfHost {
   proposeCurriculumTasks(count?: number): Promise<unknown>;
   listCurriculumTasks(status?: CurriculumStatus): Promise<unknown>;
   setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<unknown>;
+  proposeScaffold(rationale: string, code: string, baseVersion?: number): Promise<unknown>;
+  listScaffoldVersions(limit?: number): unknown;
   createTimerTrigger(opts: {
     cron?: string;
     atMs?: number;
@@ -35,6 +37,20 @@ const TYPES = `export declare const agent: {
   listCurriculum(status?: 'pending' | 'accepted' | 'rejected' | 'completed'): Promise<unknown>;
   /** Accept a proposed task by id (it becomes runnable). */
   acceptCurriculumTask(id: string): Promise<unknown>;
+  /** Propose a new version of your own scaffold (the agentic loop). Routed
+   *  through the existing 4-gate validation + the fixed misevolution gate; an
+   *  accepted proposal becomes the pending version, is scored by shadow
+   *  evaluation against the live scaffold, and only goes live after winning
+   *  the promotion gate. The code must export \`async function* run(rt, task)\`
+   *  and reach the host only via the \`host.*\` bridge; rationale must be
+   *  ≥ 50 chars. Pass \`baseVersion\` to branch from an archived variant
+   *  (see scaffoldVersions) instead of the live current. */
+  proposeScaffold(rationale: string, code: string, baseVersion?: number):
+    Promise<{ ok: boolean; version?: number; error?: string; stage?: number }>;
+  /** Read-only scaffold archive: your versions with status (current/pending/
+   *  historical/rolled_back), lineage (parent_version) and shadow-eval record
+   *  (wins/losses/ties/win_rate). Stepping stones for proposeScaffold. */
+  scaffoldVersions(limit?: number): Promise<unknown>;
   /** Schedule a future autonomous turn. Pass { cron } for recurring OR
    *  { atMs } (epoch ms) for one-shot; optional label + payload. The reactor
    *  wakes you when it fires. */
@@ -84,6 +100,27 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): NodeCode
           if (typeof id !== 'string' || !id) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
           try { return await host.setCurriculumTaskStatus(id, 'accepted'); }
           catch (err) { return { error: `agent.acceptCurriculumTask: ${(err as Error).message}` }; }
+        },
+      },
+      proposeScaffold: {
+        description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + misevolution gate + shadow evaluation; only goes live after winning the promotion gate. rationale ≥ 50 chars; code must export async function* run(rt, task) and use the host.* bridge. Optional baseVersion branches from an archived variant.',
+        execute: async (...args: unknown[]) => {
+          const [rationale, code, baseVersion] = args;
+          if (typeof rationale !== 'string' || !rationale) return { error: 'agent.proposeScaffold: rationale must be a non-empty string' };
+          if (typeof code !== 'string' || !code) return { error: 'agent.proposeScaffold: code must be a non-empty string' };
+          if (baseVersion !== undefined && (typeof baseVersion !== 'number' || !Number.isInteger(baseVersion) || baseVersion < 0)) {
+            return { error: 'agent.proposeScaffold: baseVersion must be a non-negative integer when given' };
+          }
+          try { return await host.proposeScaffold(rationale, code, baseVersion); }
+          catch (err) { return { error: `agent.proposeScaffold: ${(err as Error).message}` }; }
+        },
+      },
+      scaffoldVersions: {
+        description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record — the stepping stones proposeScaffold can branch from.',
+        execute: async (...args: unknown[]) => {
+          const limit = typeof args[0] === 'number' ? args[0] : undefined;
+          try { return host.listScaffoldVersions(limit); }
+          catch (err) { return { error: `agent.scaffoldVersions: ${(err as Error).message}` }; }
         },
       },
       schedule: {

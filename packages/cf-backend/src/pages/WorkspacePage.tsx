@@ -12,7 +12,7 @@ import {
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
-import type { AlternateTakeSet, FileCheckpointEntry, FileRestorePlan, TakePickOutcome } from "@proteus/core";
+import type { AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { touchWorkspace } from "@/lib/user-api";
@@ -40,6 +40,23 @@ function getMessageText(msg: UIMessage): string {
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** The workspace's load/action failure, with the retry it needs. The hook keeps
+ *  the message until a load succeeds, so this is the only way back. */
+function WorkspaceErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="mb-2 flex items-center gap-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">
+      <span className="min-w-0 flex-1 truncate" title={message}>{message}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="shrink-0 inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 p-text-2 hover:p-text cursor-pointer"
+      >
+        <ArrowsClockwiseIcon size={11} /> Retry
+      </button>
+    </div>
+  );
 }
 
 function InlineWorkspaceTitle({ title, onRename }: {
@@ -620,6 +637,7 @@ function ForkModal({
       title="Fork from here"
       icon={<GitBranchIcon size={18} className="p-accent" />}
       onClose={onCancel}
+      busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
         <Button size="sm" variant="primary" onClick={submit} disabled={busy}>
@@ -679,6 +697,11 @@ function surfaceForKind(kind: TimelineKind): SurfaceKind | null {
  *  (no fork/feedback/takes/restore — the facet exposes none of those). */
 function SubordinateChatColumn({ workspace, subName }: { workspace: string; subName: string }) {
   const state = useProteus({ workspace, subordinate: subName });
+
+  // The picker is fire-and-forget; setModel rejects when the write didn't land
+  // and the hook has already surfaced that through state.error.
+  const setModel = state.setModel;
+  const onPickModel = useCallback((spec: string) => { void setModel(spec).catch(() => {}); }, [setModel]);
   const [input, setInput] = useState("");
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -719,7 +742,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
             {as?.purpose && <span className="block text-[11px] p-text-3 truncate max-w-[220px]">{as.purpose}</span>}
           </div>
         </div>
-        <ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs" className="w-52" />
+        <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="w-52" />
       </div>
 
       <ErrorBoundary label="Subordinate chat">
@@ -751,7 +774,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
       </ErrorBoundary>
 
       <div className="px-5 py-3 border-t p-border lg:px-7">
-        {state.error && <div className="mb-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+        {state.error && <WorkspaceErrorBanner message={state.error} onRetry={state.retryLoad} />}
         <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
           <InputArea ref={inputRef} value={input} onValueChange={setInput}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
@@ -773,6 +796,11 @@ export default function WorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = useProteus(agentId);
+
+  // The picker is fire-and-forget; setModel rejects when the write didn't land
+  // and the hook has already surfaced that through state.error.
+  const setModel = state.setModel;
+  const onPickModel = useCallback((spec: string) => { void setModel(spec).catch(() => {}); }, [setModel]);
   // ?altitude=supervise deep-links straight to the Supervise altitude (the
   // /triggers/:id redirect and settings' Automations link use it).
   const [altitude, setAltitude] = useState<"run" | "supervise">(
@@ -915,10 +943,15 @@ export default function WorkspacePage() {
     const t = chatInput.trim();
     if (!t || !state.isStreaming) return;
     setBranchNotice(null);
+    // The composer is cleared only once the branch was actually accepted — a
+    // refused or failed branch used to destroy what the user had typed. The
+    // identity check leaves anything typed while the RPC was in flight alone.
     state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t])
-      .then((r) => { if (!r.accepted) setBranchNotice(r.reason ?? "Branching is unavailable right now."); })
+      .then((r) => {
+        if (r.accepted) setChatInput((current) => current.trim() === t ? "" : current);
+        else setBranchNotice(r.reason ?? "Branching is unavailable right now.");
+      })
       .catch((err) => setBranchNotice(err instanceof Error ? err.message : String(err)));
-    setChatInput("");
   }, [chatInput, state]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
@@ -959,8 +992,18 @@ export default function WorkspacePage() {
   // user's device daemon; the DO forwards. Shows the plan (paths + counts)
   // before applying; the restore itself is preceded by a safety snapshot.
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+  // Planning is several sequential RPCs over the device tunnel; without a
+  // guard the affordance was re-entrant, and the plan was shown in a native
+  // confirm() — a browser-chrome box for an operation that overwrites files on
+  // the user's actual machine.
+  const [planning, setPlanning] = useState(false);
+  const [restorePlan, setRestorePlan] = useState<RestorePlan | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
   const onRestoreFiles = useCallback(async (mid: string) => {
+    if (planning || restoring) return;
     setRestoreNotice(null);
+    setPlanning(true);
     try {
       const entries = await state.rpc<FileCheckpointEntry[]>('listFileCheckpoints', [200]);
       const matches = entries.filter((e) => e.turnId === mid);
@@ -977,23 +1020,30 @@ export default function WorkspacePage() {
         setRestoreNotice('Files already match the state before this turn — nothing to restore.');
         return;
       }
-      const { modified, created, deleted } = summarizeRestorePlan(files);
-      const counts = [
-        modified ? `${modified} modified` : null,
-        created ? `${created} recreated` : null,
-        deleted ? `${deleted} removed` : null,
-      ].filter(Boolean).join(', ');
-      const preview = files.slice(0, 12).map((f) => `  ${f.kind === 'modify' ? '~' : f.kind === 'create' ? '+' : '-'} ${f.path}`).join('\n');
-      const more = files.length > 12 ? `\n  … ${files.length - 12} more` : '';
-      if (!confirm(`Restore ${plans.map((p) => p.dir).join(', ')} to before this turn?\n${counts}\n${preview}${more}`)) return;
-      for (const entry of matches) {
-        await state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]);
-      }
-      setRestoreNotice(`Restored ${files.length} file(s) to before this turn. Restoring again undoes the undo.`);
+      setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
     } catch (err) {
       setRestoreNotice(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPlanning(false);
     }
-  }, [state.rpc]);
+  }, [state.rpc, planning, restoring]);
+
+  const applyRestore = useCallback(async () => {
+    if (!restorePlan) return;
+    setRestoring(true);
+    try {
+      for (const entry of restorePlan.entries) {
+        await state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]);
+      }
+      setRestoreNotice(`Restored ${restorePlan.files.length} file(s) to before this turn. Restoring again undoes the undo.`);
+      setRestorePlan(null);
+    } catch (err) {
+      setRestoreNotice(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      setRestorePlan(null);
+    } finally {
+      setRestoring(false);
+    }
+  }, [restorePlan, state.rpc]);
 
   const onMessageFeedback = useCallback(async (mid: string, fb: 'positive' | 'negative' | null) => {
     await state.rpc('setTurnFeedback', [mid, fb]);
@@ -1090,7 +1140,7 @@ export default function WorkspacePage() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs" className="w-52" />
+                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="w-52" />
                 <button
                   onClick={toggleTimeline}
                   title={timelineOpen ? "Hide run timeline" : "Show run timeline"}
@@ -1171,12 +1221,17 @@ export default function WorkspacePage() {
                 regardless of which composer child holds focus. */}
             <div className="px-5 py-3 border-t p-border lg:px-7"
               onPaste={e => { if (e.clipboardData.files.length > 0) { e.preventDefault(); void addFiles(e.clipboardData.files); } }}>
-              {state.error && <div className="mb-2 text-xs p-danger p-card rounded-lg px-3 py-1.5">{state.error}</div>}
+              {state.error && <WorkspaceErrorBanner message={state.error} onRetry={state.retryLoad} />}
               {attachError && <div className="mb-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">{attachError}</div>}
               {branchNotice && (
                 <div className="mb-2 flex items-center justify-between gap-2 text-xs p-warning p-card rounded-lg px-3 py-1.5">
                   <span className="truncate">Branch unavailable: {branchNotice}</span>
                   <button onClick={() => setBranchNotice(null)} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss"><XIcon size={11} /></button>
+                </div>
+              )}
+              {planning && (
+                <div className="mb-2 flex items-center gap-1.5 text-xs p-text-3 p-card rounded-lg px-3 py-1.5">
+                  <Loader size="sm" /><span>Checking what this turn changed on your device…</span>
                 </div>
               )}
               {restoreNotice && (
@@ -1292,6 +1347,11 @@ export default function WorkspacePage() {
         />
       )}
 
+      {restorePlan && (
+        <RestoreFilesModal plan={restorePlan} busy={restoring}
+          onCancel={() => setRestorePlan(null)} onConfirm={applyRestore} />
+      )}
+
       {showClearConfirm && (
         <Modal
           title="Clear conversation history"
@@ -1309,5 +1369,61 @@ export default function WorkspacePage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+/** The device-file restore confirm. Shows the same plan the native confirm()
+ *  used to cram into a browser dialog — this overwrites files on the user's
+ *  real machine, so it gets the app's own destructive-action treatment. */
+interface RestorePlan {
+  entries: FileCheckpointEntry[];
+  dirs: string[];
+  files: FileRestoreChange[];
+}
+
+const RESTORE_PREVIEW_LIMIT = 12;
+const RESTORE_MARK: Record<FileRestoreChange["kind"], string> = { modify: "~", create: "+", delete: "-" };
+
+function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
+  plan: RestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
+}) {
+  const { modified, created, deleted } = summarizeRestorePlan(plan.files);
+  const counts = [
+    modified ? `${modified} modified` : null,
+    created ? `${created} recreated` : null,
+    deleted ? `${deleted} removed` : null,
+  ].filter(Boolean).join(", ");
+  const shown = plan.files.slice(0, RESTORE_PREVIEW_LIMIT);
+  return (
+    <Modal
+      title="Restore files to before this turn"
+      icon={<ClockCounterClockwiseIcon size={18} className="p-warning" />}
+      onClose={onCancel}
+      busy={busy}
+      footer={<>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+        <Button size="sm" variant="primary" onClick={onConfirm} disabled={busy}>
+          {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
+        </Button>
+      </>}
+    >
+      <div className="space-y-2">
+        <p className="text-xs p-text-2 leading-relaxed">
+          This rewrites files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
+          device — {counts}. A safety snapshot is taken first, so restoring again undoes the undo.
+        </p>
+        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto text-[11px] font-mono">
+          {shown.map((f) => (
+            <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
+              <span className={`shrink-0 ${f.kind === "create" ? "p-success" : f.kind === "delete" ? "p-danger" : "p-warning"}`}>{RESTORE_MARK[f.kind]}</span>
+              <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
+            </li>
+          ))}
+          {plan.files.length > shown.length && (
+            <li className="px-2.5 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
+          )}
+        </ul>
+      </div>
+    </Modal>
   );
 }

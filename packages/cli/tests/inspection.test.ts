@@ -169,6 +169,11 @@ describe("legacy workspaces stay readable", () => {
   });
 });
 
+/** Every test here spawns real `proteus` processes (several of them, some
+ *  reaching the live model catalog), so the 5s default is not a meaningful
+ *  budget — matching the import-hygiene probe's explicit allowance. */
+const CLI_SPAWN_TIMEOUT_MS = 30_000;
+
 describe("CLI inspection commands", () => {
   test("inspect local durable state without model credentials", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-inspect-"));
@@ -194,7 +199,7 @@ describe("CLI inspection commands", () => {
     const executors = runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
     expect(executors.stdout.toString()).toContain("laptop");
-  });
+  }, CLI_SPAWN_TIMEOUT_MS);
 
   test("proteus model normalizes specs through the provider resolver", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-"));
@@ -216,7 +221,7 @@ describe("CLI inspection commands", () => {
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
     expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).model)
       .toBe("workers-ai/@cf/meta/llama-3.1-8b-instruct");
-  });
+  }, CLI_SPAWN_TIMEOUT_MS);
 
   test("proteus effort sets workspace and global defaults and appears in status", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-effort-"));
@@ -242,7 +247,7 @@ describe("CLI inspection commands", () => {
     const invalid = runCli(home, ["effort", "localtest", "extreme"]);
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr.toString()).toContain("low, medium, or high");
-  });
+  }, CLI_SPAWN_TIMEOUT_MS);
 
   test("proteus model validates known, uncatalogued, and unknown-provider specs", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-model-validation-"));
@@ -273,5 +278,19 @@ describe("CLI inspection commands", () => {
     expect(unknownProvider.stderr.toString()).toContain('Unknown model provider "unknown"');
     expect(unknownProvider.stderr.toString()).toContain("workers-ai");
     expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
-  });
+  }, CLI_SPAWN_TIMEOUT_MS);
+
+  // `jobs` and `triggers` branch on opts.json in their command bodies but were
+  // never given the flag, so commander rejected the documented invocation.
+  test("jobs and triggers accept --json like every sibling inspector", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-json-"));
+    tempDirs.push(home);
+    createLocalAgent(home, "localtest");
+
+    for (const args of [["jobs", "localtest"], ["triggers", "localtest", "list"]]) {
+      const run = runCli(home, [...args, "--json"]);
+      expect([args, run.exitCode, run.stderr.toString()]).toEqual([args, 0, ""]);
+      expect(JSON.parse(run.stdout.toString())).toEqual([]);
+    }
+  }, CLI_SPAWN_TIMEOUT_MS);
 });

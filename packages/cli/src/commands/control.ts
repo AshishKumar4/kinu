@@ -188,13 +188,15 @@ export async function triggersCommand(
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     if (normalized === 'list') {
-      printTriggers((await callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers')).triggers);
+      const { triggers } = await callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers');
+      present(triggers, opts, printTriggers);
       return;
     }
     if (normalized === 'cancel') {
       if (!value) throw new Error('trigger id required');
       const cancelled = await callAgentRpc<{ ok: true; changed: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelTrigger', [value]);
-      console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`);
+      present({ id: value, ...cancelled }, opts, () =>
+        console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
       return;
     }
     if (normalized === 'webhook') {
@@ -206,8 +208,7 @@ export async function triggersCommand(
         ...(opts.contentType ? { accepted_content_type: opts.contentType } : {}),
         ...(opts.rateLimit ? { rate_limit_per_min: parsePositiveInt(opts.rateLimit, 'rate limit') } : {}),
       });
-      if (opts.json) console.log(JSON.stringify(created, null, 2));
-      else printCreatedWebhook(created);
+      present(created, opts, printCreatedWebhook);
       return;
     }
     const input = timerInput(normalized, value);
@@ -216,23 +217,27 @@ export async function triggersCommand(
     const created = await callAgentRpc<{ id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null }>(
       auth.origin, auth.token, target.cloudName, 'createTimerTrigger', [{ ...input, trust: 'owner' }],
     );
-    console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.nextFireAt)}`);
+    present(created, opts, () =>
+      console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.nextFireAt)}`));
     return;
   }
 
   if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
 
   if (normalized === 'list') {
-    printTriggers(listLocalTriggers(target.localName).triggers as Parameters<typeof printTriggers>[0]);
+    present(listLocalTriggers(target.localName).triggers as Parameters<typeof printTriggers>[0], opts, printTriggers);
     return;
   }
   if (normalized === 'cancel') {
     if (!value) throw new Error('trigger id required');
-    console.log(`${OK('cancelled')} ${cancelLocalTrigger(target.localName, value).changed ? value : `${value} (already inactive)`}`);
+    const cancelled = cancelLocalTrigger(target.localName, value);
+    present({ id: value, ...cancelled }, opts, () =>
+      console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
     return;
   }
   const created = createLocalTimerTrigger(target.localName, timerInput(normalized, value)) as { id?: string; kind?: string; nextFireAt?: number; next_fire_at?: number };
-  console.log(`${OK('scheduled')} ${created.id ?? '(trigger)'} ${DIM(created.kind ?? '')} ${formatTime(created.nextFireAt ?? created.next_fire_at ?? null)}`);
+  present(created, opts, () =>
+    console.log(`${OK('scheduled')} ${created.id ?? '(trigger)'} ${DIM(created.kind ?? '')} ${formatTime(created.nextFireAt ?? created.next_fire_at ?? null)}`));
 }
 
 export async function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
@@ -243,19 +248,30 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
     if (normalized === 'cancel') {
       if (!id) throw new Error('job id required');
       const cancelled = await callAgentRpc<{ ok: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelBackgroundJob', [id]);
-      console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`);
+      present({ id, ...cancelled }, opts, () =>
+        console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
       return;
     }
-    printJobs(await callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [20]));
+    const jobs = await callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [20]);
+    present(jobs, opts, printJobs);
     return;
   }
 
   if (normalized === 'cancel') {
     if (!id) throw new Error('job id required');
-    console.log(`${OK('cancelled')} ${cancelLocalJob(target.localName, id).ok ? id : `${id} (not running)`}`);
+    const cancelled = cancelLocalJob(target.localName, id);
+    present({ id, ...cancelled }, opts, () =>
+      console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
     return;
   }
-  printJobs(listLocalJobs(target.localName) as Parameters<typeof printJobs>[0]);
+  present(listLocalJobs(target.localName) as Parameters<typeof printJobs>[0], opts, printJobs);
+}
+
+/** Raw JSON under `--json`, the human rendering otherwise — the inspector
+ *  contract every read/mutate command in this CLI shares. */
+function present<T>(data: T, opts: ControlOpts, human: (data: T) => void): void {
+  if (opts.json) console.log(JSON.stringify(data, null, 2));
+  else human(data);
 }
 
 function timerInput(action: string, value: string | undefined): { cron?: string; atMs?: number; label?: string } {

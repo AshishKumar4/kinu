@@ -6,19 +6,20 @@
  * pure parts of the system end-to-end:
  *
  *   1. `validateMcpServerInput` — every rejected input shape + happy path
- *   2. `mcpToolKey` — must match the SDK template byte-for-byte
+ *   2. `mcpToolKey` — the SHARED core rule, identical on both backends
  *   3. `parseAllowedTools` / `mapConnectionStatus` — round-trip + degenerates
- *   4. Builtin `tool_` prefix collision guard
+ *   4. Builtin `mcp_` prefix collision guard
  *   5. Orchestrator-side MCP tool adapter — the closure dispatches to the
  *      UserDO stub it was constructed with (via a fake stub), arguments
  *      survive, errors are caught.
  */
 import { describe, test, expect } from 'bun:test';
 import {
-  validateMcpServerInput, mcpToolKey,
+  validateMcpServerInput,
   parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,
 } from '../src/user/mcp.ts';
+import { isMcpToolKey, mcpToolKey } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 
 // ── 1. validateMcpServerInput ──────────────────────────────────────────────
@@ -115,15 +116,20 @@ describe('validateMcpServerInput', () => {
 // ── 2. mcpToolKey ──────────────────────────────────────────────────────────
 
 describe('mcpToolKey', () => {
-  test('matches the agents-SDK template (hyphens stripped)', () => {
-    // agents/src/mcp/client.ts:1336 — `tool_${serverId.replace(/-/g, '')}_${tool.name}`
-    expect(mcpToolKey('a-b-c-1', 'list_issues')).toBe('tool_abc1_list_issues');
+  test('keys on the SERVER NAME, so the key is portable across backends', () => {
+    // It used to key on the random nanoid(8) registration id, which made the
+    // same MCP tool resolve under a different name for every user — and under
+    // a different name again after a re-add. The CLI keyed on the server name
+    // all along, so the two backends never agreed.
+    expect(mcpToolKey('github', 'list_issues')).toBe('mcp_github_list_issues');
   });
-  test('passes serverIds without hyphens straight through', () => {
-    expect(mcpToolKey('abc123ef', 'foo')).toBe('tool_abc123ef_foo');
+  test('replaces characters no provider tool-name grammar accepts', () => {
+    expect(mcpToolKey('my server.v2', 'do it')).toBe('mcp_my_server_v2_do_it');
+    // Hyphens are legal in tool names, so a hyphenated server name is kept.
+    expect(mcpToolKey('gh-mcp', 'foo')).toBe('mcp_gh-mcp_foo');
   });
   test('never produces a builtin name', () => {
-    // The whole reason we reserve the `tool_` prefix in buildBuiltinTools.
+    // The whole reason we reserve the `mcp_` prefix in buildBuiltinTools.
     expect(mcpToolKey('x', 'run')).not.toBe('run');
     expect(mcpToolKey('x', 'skills')).not.toBe('skills');
   });
@@ -211,13 +217,13 @@ describe('buildMcpHeaderTransportOpts', () => {
   });
 });
 
-// ── 4. tool_ prefix collision guard in buildBuiltinTools ───────────────────
+// ── 4. mcp_ prefix collision guard in buildBuiltinTools ────────────────────
 
-describe('buildBuiltinTools tool_ prefix guard', () => {
-  test("BUILTIN_TOOLS today don't start with tool_", async () => {
+describe('buildBuiltinTools mcp_ prefix guard', () => {
+  test("BUILTIN_TOOLS today don't start with mcp_", async () => {
     const { BUILTIN_TOOLS } = await import('@proteus/core');
     for (const n of BUILTIN_TOOLS) {
-      expect(n.startsWith('tool_')).toBe(false);
+      expect(isMcpToolKey(n)).toBe(false);
     }
   });
 });
@@ -293,18 +299,18 @@ describe('orchestrator MCP tool adapter', () => {
   });
 });
 
-// ── 6. Builtin reserves the `tool_` prefix ─────────────────────────────────
+// ── 6. Builtin reserves the `mcp_` prefix ──────────────────────────────────
 
 describe('buildBuiltinTools assertion', () => {
-  test('throws when a builtin under construction starts with tool_', () => {
+  test('throws when a builtin under construction starts with mcp_', () => {
     // Stand up a minimal fake rt that lets buildBuiltinTools run far
     // enough to hit the assertion. The simpler proof is the registry guarantee
     // (test above) — this confirms the assertion fires when violated.
     // We monkey-patch BUILTIN_TOOL_DESCRIPTIONS via a local builtins copy
     // wouldn't be DRY; instead, recompute the guard inline against a known
     // bad shape so the contract stays in one place.
-    const tools: Record<string, unknown> = { execute_tools: {}, tool_evil: {} };
-    const offenders = Object.keys(tools).filter(n => n.startsWith('tool_'));
-    expect(offenders).toEqual(['tool_evil']);
+    const tools: Record<string, unknown> = { execute_tools: {}, mcp_evil: {} };
+    const offenders = Object.keys(tools).filter(isMcpToolKey);
+    expect(offenders).toEqual(['mcp_evil']);
   });
 });

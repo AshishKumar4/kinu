@@ -83,6 +83,19 @@ export interface WorkspaceSnapshot {
   lastActiveExecutor: string | null;
 }
 
+/** Where a surfaced failure came from — each source owns (and clears) its own
+ *  message so a recovery in one never hides a still-broken other. */
+type ErrorSource = "snapshot" | "roster" | "model" | "memory";
+
+/** Initial-load retry backoff. Doubling from 1s, capped so a long outage keeps
+ *  a slow heartbeat instead of hammering the DO. */
+const RETRY_BASE_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
+
+/** Memory search fires from an onChange handler, so it settles on the typed
+ *  query rather than issuing an RPC per keystroke. */
+const MEMORY_SEARCH_DEBOUNCE_MS = 200;
+
 interface CallableAgent {
   call(method: string, args: unknown[]): Promise<unknown>;
 }
@@ -129,7 +142,19 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // (getRunTimeline). Single source; no client-side merge of three RPCs.
   const [runTimeline, setRunTimeline] = useState<TimelineSpan[]>([]);
   const [memoryContent, setMemoryContent] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
+  // Failures keyed by source, so one source recovering never erases another's
+  // error, and none of them expire on a timer: an unread failure that quietly
+  // vanishes leaves the surfaces it broke looking authoritative.
+  const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
+  const setSourceError = useCallback((source: ErrorSource, message: string | null) => {
+    setErrors((prev) => {
+      if ((prev[source] ?? null) === message) return prev;
+      const next = { ...prev };
+      if (message) next[source] = message; else delete next[source];
+      return next;
+    });
+  }, []);
+  const error = errors.snapshot ?? errors.roster ?? errors.model ?? errors.memory ?? null;
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
@@ -158,7 +183,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // to show nothing). Cleared on the next send.
   const [chatError, setChatError] = useState<string | null>(null);
   const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
-  const [subordinatesLoaded, setSubordinatesLoaded] = useState(false);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
 
   const agent = useAgent({
@@ -171,10 +195,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
     // banner forever (STABILITY-AUDIT §A1).
-    onOpen: useCallback(() => {
-      setConnectionStatus("connected");
-      setError(null);
-    }, []),
+    onOpen: useCallback(() => setConnectionStatus("connected"), []),
     onClose: useCallback(() => setConnectionStatus("disconnected"), []),
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
@@ -288,14 +309,41 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // identity (surface effects keyed on [rpc] don't refetch each render).
   const rpc = useMemo(() => bindRpc(agent), [agent]);
 
-  // Fetch all tab data on connect
-  const fetched = useRef(false);
+  // Fetch all tab data on connect.
+  //
+  // Keyed on an attempt counter, because a ref cannot retrigger an effect: the
+  // old code reset `fetched.current` in the catch and nothing ever looked at
+  // it again, so one failed snapshot bricked the whole workspace view until a
+  // reload. On failure the error is sticky and a backoff retry is scheduled;
+  // `retryLoad` is the same path, driven by the user.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const failureStreak = useRef(0);
   useEffect(() => {
-    if (!isConnected || fetched.current) return;
-    fetched.current = true;
-    if (isSubordinate) loadSubordinateData();
-    else loadAllData();
-  }, [isConnected, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isConnected) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const label = isSubordinate ? "Subordinate" : "Workspace";
+    (isSubordinate ? loadSubordinateData() : loadAllData())
+      .then(() => {
+        if (cancelled) return;
+        failureStreak.current = 0;
+        setSourceError("snapshot", null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSourceError("snapshot", `${label} snapshot failed: ${errorMessage(err)}`);
+        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
+        failureStreak.current += 1;
+        timer = setTimeout(() => setLoadAttempt((a) => a + 1), delay);
+      });
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [isConnected, isSubordinate, loadAttempt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const retryLoad = useCallback(() => {
+    failureStreak.current = 0;
+    setSourceError("model", null);
+    setLoadAttempt((a) => a + 1);
+  }, [setSourceError]);
 
   // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
@@ -384,10 +432,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
           ]);
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
-          if (roster) {
-            setSubordinates(roster);
-            setSubordinatesLoaded(true);
-          }
+          if (roster) setSubordinates(roster);
         } else if (!isSubordinate) {
           const subordinateEvent = parseSubordinateActivityEvent(msg);
           if (subordinateEvent) {
@@ -434,8 +479,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
   // server guards each field independently, so a single failing read degrades
   // that surface only. Live updates continue via refreshLiveData + events.
-  function loadAllData() {
-    rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
+  function loadAllData(): Promise<void> {
+    return rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
       .then((snap) => {
         setAgentStatus(snap.status);
         if (workspace) touchWorkspace(workspace).catch(() => {});
@@ -452,15 +497,11 @@ export function useProteus(target?: string | ProteusActorAddress) {
         refreshExposedPorts();
         rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
           .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
-      })
-      .catch((err) => {
-        fetched.current = false;
-        setError(`Workspace snapshot failed: ${errorMessage(err)}`);
       });
   }
 
-  function loadSubordinateData() {
-    rpc<{
+  function loadSubordinateData(): Promise<void> {
+    return rpc<{
       name: string;
       displayName: string;
       role: string;
@@ -482,10 +523,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
           model: snapshot.model ?? "",
           forkLineage: null,
         });
-      })
-      .catch((err) => {
-        fetched.current = false;
-        setError(`Subordinate snapshot failed: ${errorMessage(err)}`);
       });
   }
 
@@ -494,21 +531,22 @@ export function useProteus(target?: string | ProteusActorAddress) {
     return rpc<SubordinateRosterEntry[]>("listSubordinates", [])
       .then((roster) => {
         setSubordinates(roster);
-        setSubordinatesLoaded(true);
+        setSourceError("roster", null);
       })
       .catch((err) => {
-        setSubordinatesLoaded(true);
-        setError(`Subordinate roster failed: ${errorMessage(err)}`);
+        setSourceError("roster", `Subordinate roster failed: ${errorMessage(err)}`);
       });
-  }, [isSubordinate, rpc]);
+  }, [isSubordinate, rpc, setSourceError]);
 
   useEffect(() => {
     if (!isConnected || isSubordinate) return;
     void refreshSubordinates();
-  }, [isConnected, isSubordinate, refreshSubordinates]);
+  }, [isConnected, isSubordinate, refreshSubordinates, loadAttempt]);
 
   useEffect(() => {
-    fetched.current = false;
+    setLoadAttempt(0);
+    failureStreak.current = 0;
+    setErrors({});
     setAgentStatus(null);
     setTools([]);
     setMemory([]);
@@ -517,21 +555,12 @@ export function useProteus(target?: string | ProteusActorAddress) {
     mctsFingerprint.current = "";
     setRunTimeline([]);
     setPinnedPorts([]);
-    setError(null);
     setChatError(null);
     if (!isSubordinate) {
       setSubordinates([]);
-      setSubordinatesLoaded(false);
       setSubordinateEvents([]);
     }
   }, [workspace, subordinate]);
-
-  useEffect(() => {
-    if (error) {
-      const t = setTimeout(() => setError(null), 10_000);
-      return () => clearTimeout(t);
-    }
-  }, [error]);
 
   // File attachments ride as data-URL FileUIParts ahead of the text part —
   // the whole downstream pipeline (WS transport, DO persistence, Think's
@@ -555,39 +584,65 @@ export function useProteus(target?: string | ProteusActorAddress) {
     sendMessage({ role: "user", parts: lastUser.parts });
   }, [messages, sendMessage]);
 
+  // Every keystroke used to fire its own searchMemoryHybrid with nothing
+  // ordering the replies, so a slow early query could land last and leave the
+  // pane showing results for a prefix the user had already typed past.
+  const searchSeq = useRef(0);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(searchTimer.current), []);
+
   const searchMemory = useCallback((q: string) => {
+    clearTimeout(searchTimer.current);
+    const seq = ++searchSeq.current;
     if (!q.trim()) {
       // Empty search — re-parse full content
+      setSourceError("memory", null);
       if (memoryContent) setMemory(parseMemoryContent(memoryContent));
       return;
     }
-    rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q])
-      .then((results) => setMemory((results ?? []).map(r => ({
-        path: r.path,
-        content: r.snippet,
-        matchScore: r.rrfScore,
-        updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
-      }))))
-      .catch(() => {});
-  }, [rpc, memoryContent]);
+    searchTimer.current = setTimeout(() => {
+      rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q])
+        .then(
+          (results) => {
+            if (seq !== searchSeq.current) return;
+            setSourceError("memory", null);
+            setMemory((results ?? []).map(r => ({
+              path: r.path,
+              content: r.snippet,
+              matchScore: r.rrfScore,
+              updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
+            })));
+          },
+          (err) => {
+            if (seq !== searchSeq.current) return;
+            setSourceError("memory", `Memory search failed: ${errorMessage(err)}`);
+          },
+        );
+    }, MEMORY_SEARCH_DEBOUNCE_MS);
+  }, [rpc, memoryContent, setSourceError]);
 
-  const setModel = useCallback((modelId: string) => {
+  /** Switch this agent's model. Resolves only once the write landed, and
+   *  rejects when it didn't — a caller that reports "Saved" on this promise
+   *  (Workspace settings) must not do so for a write that failed. */
+  const setModel = useCallback(async (modelId: string): Promise<void> => {
     // Optimistically reflect in the UI so the dropdown doesn't snap back
     // while the RPC is in flight.
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
-    rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]).then((r) => {
+    try {
+      const r = await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]);
       // Server may have normalized the spec — sync the UI to authoritative value.
       if (r?.spec) setAgentStatus(prev => prev ? { ...prev, model: r.spec! } : prev);
-    }).catch((err) => {
-      // Surface to the user, never swallow. Roll the UI back so the select
-      // reflects the actually-stored value.
-      console.error('[setModel] failed:', err);
-      // Re-fetch the authoritative stored spec.
-      rpc<{ spec?: string | null }>("getStoredModelSpec", []).then((r) => {
+      setSourceError("model", null);
+    } catch (err) {
+      // Surface to the user, never swallow — and roll the picker back to the
+      // actually-stored spec so it can't keep showing an unsaved model.
+      setSourceError("model", `Couldn't switch model: ${errorMessage(err)}`);
+      await rpc<{ spec?: string | null }>("getStoredModelSpec", []).then((r) => {
         setAgentStatus(prev => prev ? { ...prev, model: r.spec ?? '' } : prev);
       }).catch(() => {});
-    });
-  }, [rpc]);
+      throw err;
+    }
+  }, [rpc, setSourceError]);
 
   const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
     const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
@@ -636,7 +691,11 @@ export function useProteus(target?: string | ProteusActorAddress) {
     messages,
     isStreaming,
     connectionStatus,
+    /** The sticky load/action failure, if any — never auto-expires. */
     error,
+    /** Re-run the initial load now (also cancels the pending backoff retry and
+     *  clears a stale action error). The `error` banner's way out. */
+    retryLoad,
     /** The last chat turn's terminal error (live stream error or the
      *  on-connect replay) — rendered as an error card in the thread. */
     chatError,
@@ -651,7 +710,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     sendChat,
     abortChat,
     searchMemory,
-    refreshTools: () => loadAllData(),
     clearHistory,
     setModel,
     setDisplayName,
@@ -688,7 +746,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     actorAddress,
     isSubordinate,
     subordinates,
-    subordinatesLoaded,
     subordinateEvents,
     refreshSubordinates,
     spawnSubordinate: async (role: string, mission: string) => {

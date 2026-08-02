@@ -198,6 +198,31 @@ describe('turn_outcomes ledger', () => {
     expect(rows[0].source).toBe('explicit');
   });
 
+  test('a rare outcome buried under many newer rows is still returned', () => {
+    const { sql } = setup();
+    // The failures the optimizer learns from, followed by far more accepted
+    // turns than any candidate window: a JS-side filter over a bounded window
+    // drops them silently, which truncates the whole evolution signal.
+    for (let i = 0; i < 3; i++) {
+      recordTurnOutcome(sql, {
+        turnId: `neg${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
+        userMessage: 'fix', assistantResponse: 'wrong', now: 1000 + i,
+      });
+    }
+    for (let i = 0; i < 500; i++) {
+      recordTurnOutcome(sql, {
+        turnId: `pos${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
+        userMessage: 'ok', assistantResponse: 'fine', now: 2000 + i,
+      });
+    }
+    expect(listTurnOutcomes(sql, { limit: 10, outcomes: ['corrected', 'frustrated'] })
+      .map((r) => r.turnId)).toEqual(['neg2', 'neg1', 'neg0']);
+    // The limit now bounds the rows actually wanted, not a pre-filter window.
+    expect(listTurnOutcomes(sql, { limit: 4, outcomes: ['accepted'] })).toHaveLength(4);
+    expect(listTurnOutcomes(sql, { limit: 2 }).map((r) => r.turnId)).toEqual(['pos499', 'pos498']);
+    expect(listTurnOutcomes(sql, { outcomes: [] })).toEqual([]);
+  });
+
   test('hasNegativeOutcome keys on the given turn ids', () => {
     const { sql } = setup();
     recordTurnOutcome(sql, { turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a' });
@@ -277,6 +302,23 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
     const trainTurns = new Set(split.train.map(turnOf));
     expect(split.val.filter((i) => trainTurns.has(turnOf(i)))).toEqual([]);
+  });
+
+  test('failures far older than the accepted rows still reach train/val', () => {
+    const { sql } = setup();
+    seed(sql, 5, 0);
+    // The optimizer's targets are the OLDEST rows here. A bounded pre-filter
+    // window would leave the split with nothing to optimize toward.
+    for (let i = 0; i < 400; i++) {
+      recordTurnOutcome(sql, {
+        turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
+        userMessage: 'ok', assistantResponse: 'fine', now: 5000 + i,
+      });
+    }
+    const split = buildOutcomeEvalSplit(sql, 8);
+    expect(split.degeneracy).toBeNull();
+    expect(split.train).toHaveLength(3);
+    expect(split.heldOutNegatives).toBe(1);
   });
 
   test('no instance is ever on both sides, across every budget', () => {

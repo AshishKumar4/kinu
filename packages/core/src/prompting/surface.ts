@@ -3,6 +3,7 @@ import {
   BUILTIN_TOOL_NAMES,
   type BuiltinToolName,
 } from '../tools/registry.js';
+import { isMcpToolKey } from '../tools/mcp-naming.js';
 import type { ExecutorLifecycleStatus } from '../execution/types.js';
 import {
   resolvePromptModelProfile,
@@ -12,6 +13,22 @@ import {
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
 export type PromptMode = 'chat' | 'plan' | 'build' | 'background_resume' | 'product_change' | 'cron';
+
+/**
+ * The turn's prompt mode from the `proteusEvent` metadata a programmatic turn
+ * carries (BackendHost.enqueueTurn stamps it; a real chat turn carries none).
+ *
+ * Shared by BOTH backends: the guidance that tells the agent it was woken by a
+ * timer, or resumed to collect a background job's result, has to reach the
+ * model identically whether the turn ran in a Durable Object or a local
+ * process.
+ */
+export function promptModeForTurnEvent(proteusEvent: string | null | undefined): PromptMode {
+  const event = proteusEvent ?? '';
+  if (event === 'background_job') return 'background_resume';
+  if (event.includes('timer') || event.includes('cron')) return 'cron';
+  return 'chat';
+}
 
 export interface PromptExecutorInfo {
   name: string;
@@ -114,7 +131,7 @@ function normalizeExternalTool(tool: PromptExternalToolInfo | string): PromptExt
   if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
   return {
     name,
-    source: raw.source ?? (name.startsWith('tool_') ? 'mcp' : 'external'),
+    source: raw.source ?? (isMcpToolKey(name) ? 'mcp' : 'external'),
     ...(raw.description ? { description: raw.description.trim() } : {}),
   };
 }

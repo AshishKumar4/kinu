@@ -15,7 +15,7 @@ import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
-  CompositeVFS,
+  CompositeVFS, type MountPolicy,
   DefaultExecutionRouter, createInlineExecutor,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
@@ -23,6 +23,7 @@ import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
 import { createHostCheckpoints } from './checkpoints.js';
+import { createHostMountVFS } from './host-mount.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
 import { createLocalProviderLLM, type LocalProviderCredentials } from './model-resolver.js';
@@ -192,10 +193,18 @@ export function createCLIRuntime(
   // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
   const sqliteFs = new SqliteFS(sql);
   sqliteFs.init();
-  // Storage.vfs is the CompositeVFS mount table; locally only /local (SqliteFS,
-  // which implements the core VFS directly) is mounted — remote environments
-  // have no raw handles on this backend.
+  // Storage.vfs is the CompositeVFS mount table. /local (SqliteFS, which
+  // implements the core VFS directly) is the durable base; /pc is the host
+  // filesystem, mounted below once the checkpoint engine exists. /sandbox and
+  // /nimbus are Cloudflare bindings with no local equivalent, so they are
+  // RESERVED rather than absent — an agent addressing them gets the honest
+  // reason the cloud backend gives for an unconfigured binding, instead of a
+  // silent compat-route into /local.
   const vfs = new CompositeVFS({ local: sqliteFs });
+  const remoteOnlyPolicy: MountPolicy =
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+  vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
+  vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
 
   // MemoryStore consumes the full agent-utils VFS surface (FTS index walks).
   const memoryStore = new MemoryStore(sqliteFs, sql);
@@ -218,6 +227,15 @@ export function createCLIRuntime(
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
   executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints));
+  // The laptop executor's FILE plane, at the same /pc prefix the cloud backend
+  // reaches the user's machine through (EXECUTOR_MOUNT_PREFIX.laptop). Live
+  // unconditionally: the machine is right here. Unscoped, like the `run` tool
+  // and laptop.writeFile that already address the host filesystem directly.
+  vfs.mount('pc', {
+    vfs: createHostMountVFS(checkpoints),
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    workingDir: process.cwd(),
+  });
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,

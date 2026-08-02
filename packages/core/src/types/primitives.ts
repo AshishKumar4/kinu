@@ -91,6 +91,11 @@ export interface Executor {
   execute(
     code: string,
     providers: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
+    /** Caller-declared wall-clock budget. Tool-call code gets the executor's
+     *  own short default; a scaffold turn is a whole agentic loop and declares
+     *  its own (runScaffold). Executors that cannot honour it may ignore it —
+     *  every caller races its own timeout regardless. */
+    opts?: { timeoutMs?: number },
   ): Promise<ExecuteResult>;
 }
 

@@ -147,7 +147,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(drainSchedules()).toBe(1);
   });
 
-  test('a retry-ledger failure keeps wake unsettled for fiber recovery', async () => {
+  test('a retry-ledger failure surfaces from wake', async () => {
     const { runner, store, eventLog, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
     const id = runner.create('run', {}, new AbortController());
@@ -155,6 +155,37 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     eventLog.publish = () => { throw new Error('ledger unavailable'); };
 
     await expect(runner.wake(id)).rejects.toThrow('ledger unavailable');
+  });
+
+  test('an undeliverable wake still drives the fiber to a terminal snapshot', async () => {
+    const { runner, store, eventLog, stashes, settled, setRejection } = setup();
+    setRejection(new Error('queue unavailable'));
+    eventLog.publish = () => { throw new Error('ledger unavailable'); };
+    const id = runner.create('think', {}, new AbortController());
+
+    runner.detach(id, 'think', Promise.resolve('the answer'));
+    // Both fiber implementations DELETE their recovery row in a `finally`, so a
+    // rejected body is never handed to onFiberRecovered — it must not reject.
+    await settled();
+
+    expect(store.get(id)?.status).toBe('completed');
+    expect(store.get(id)?.result).toBe('"the answer"');
+    expect(stashes.at(-1)).toEqual({ phase: 'settled', jobId: id, kind: 'think' });
+  });
+
+  test('a store write that fails mid-settlement still reaches a terminal status', async () => {
+    const { runner, store, stashes, settled, notified } = setup();
+    const id = runner.create('think', {}, new AbortController());
+    store.settle = () => { throw new Error('storage unavailable'); };
+
+    runner.detach(id, 'think', Promise.resolve('the answer'));
+    await settled();
+
+    // Recorded as failed rather than left running forever with no fiber alive.
+    expect(store.get(id)?.status).toBe('failed');
+    expect(store.get(id)?.error).toBe('storage unavailable');
+    expect(notified).toEqual([{ id, status: 'failed' }]);
+    expect(stashes.at(-1)).toEqual({ phase: 'settled', jobId: id, kind: 'think' });
   });
 });
 

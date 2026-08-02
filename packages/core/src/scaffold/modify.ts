@@ -15,7 +15,8 @@ import {
 } from './safety-patterns.js';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
 
-interface ModifyResult {
+/** Outcome of one scaffold proposal through the 4-gate pipeline. */
+export interface ModifyResult {
   ok: boolean;
   version?: number;
   error?: string;

@@ -21,6 +21,9 @@
  *
  * Reflections on failed branches are written to memory by the engine's REFLECT
  * step before this runs; pruning only marks status and aborts branch agents.
+ *
+ * Scoped to the calling search's tree (`root_id`) — an unscoped sweep would
+ * retire, and abort the branch agents of, another search's live nodes.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
@@ -28,12 +31,14 @@ import { DEFAULT_CONFIG } from '../config.js';
 
 export async function pruneLowValueBranches(
   rt: AgentRuntime,
+  rootId: string,
   threshold: number = DEFAULT_CONFIG.mcts.pruneThreshold,
   minVisits: number = DEFAULT_CONFIG.mcts.minVisitsForPrune,
 ): Promise<void> {
   const doomed = rt.storage.sql<{ id: string; branch_agent_key: string | null }>`
     SELECT id, branch_agent_key FROM search_nodes
-    WHERE status = 'open' AND value < ${threshold} AND visits >= ${minVisits}
+    WHERE root_id = ${rootId} AND status = 'open'
+      AND value < ${threshold} AND visits >= ${minVisits}
   `;
 
   for (const node of doomed) {

@@ -1,23 +1,35 @@
 // Local MCP — connect the CLI agent to configured stdio MCP servers, discover
-// their tools, and expose them as ai-SDK tools merged into the agent's surface
-// (the BackendHost.resolveExtraTools seam). The cf backend reaches MCP via the
-// per-user UserDO; locally we are the MCP CLIENT directly over child processes.
+// their tools, and expose them as ai-SDK tools merged into the agent's surface.
+// The cf backend reaches MCP via the per-user UserDO; locally we are the MCP
+// CLIENT directly over child processes.
 
 import { tool, jsonSchema, type ToolSet } from 'ai';
+import { mcpToolKey } from '@proteus/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const MCP_REQUEST_TIMEOUT_MS = 5_000;
+/** Startup budget — spawning the child and listing its tools happens inside a
+ *  turn, so a server that never comes up must not stall one. Mirrors the cap cf
+ *  puts on its own connection warmup (`waitForConnections({ timeout: 5_000 })`). */
+const MCP_STARTUP_TIMEOUT_MS = 5_000;
+
+/** A tool CALL is the server doing real work — a fetch, a query, a build — and
+ *  gets the MCP SDK's own default, which is what cf's dispatch path uses too.
+ *  The 5s startup budget used to apply here as well, which killed any MCP tool
+ *  that took longer than a trivial round-trip. Per-server `timeoutMs` overrides. */
+const MCP_CALL_TIMEOUT_MS = 60_000;
 
 /** One stdio MCP server (the standard mcpServers config shape). */
 export interface McpServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Per-call timeout in ms for this server's tools (default 60s). */
+  timeoutMs?: number;
 }
 
 export interface McpConnection {
-  /** Discovered tools, keyed `mcp_<server>_<tool>`. */
+  /** Discovered tools, keyed by core's `mcpToolKey` — `mcp_<server>_<tool>`. */
   readonly tools: ToolSet;
   /** Per-server connection status for UI/CLI diagnostics. */
   readonly diagnostics: McpConnectionDiagnostic[];
@@ -59,10 +71,11 @@ export async function connectMcpServers(
       transport.stderr?.on('data', (chunk) => {
         stderr = `${stderr}${String(chunk)}`.slice(-4_000);
       });
-      await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
-      const { tools: mcpTools } = await client.listTools(undefined, { timeout: MCP_REQUEST_TIMEOUT_MS });
+      await client.connect(transport, { timeout: MCP_STARTUP_TIMEOUT_MS });
+      const { tools: mcpTools } = await client.listTools(undefined, { timeout: MCP_STARTUP_TIMEOUT_MS });
+      const callTimeout = cfg.timeoutMs ?? MCP_CALL_TIMEOUT_MS;
       for (const t of mcpTools) {
-        tools[`mcp_${serverName}_${t.name}`] = tool({
+        tools[mcpToolKey(serverName, t.name)] = tool({
           description: t.description ?? `${serverName}/${t.name}`,
           inputSchema: jsonSchema((t.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0]),
           execute: async (args: unknown) => {
@@ -70,7 +83,7 @@ export async function connectMcpServers(
               const res = await client.callTool(
                 { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
                 undefined,
-                { timeout: MCP_REQUEST_TIMEOUT_MS },
+                { timeout: callTimeout },
               );
               return formatMcpResult(res as McpToolResult);
             } catch (err) {

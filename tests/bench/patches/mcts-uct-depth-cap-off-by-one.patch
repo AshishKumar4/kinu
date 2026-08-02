@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/mcts/uct.ts b/packages/core/src/mcts/uct.ts
-index 3cfbe94..f9b14d5 100644
+index 3820c78..12c9b3f 100644
 --- a/packages/core/src/mcts/uct.ts
 +++ b/packages/core/src/mcts/uct.ts
-@@ -50,7 +50,7 @@ export function selectNode(
+@@ -57,7 +57,7 @@ export function selectNode(
        COALESCE(p.visits, max(2, s.visits)) AS parent_visits
      FROM search_nodes s
      LEFT JOIN search_nodes p ON s.parent_id = p.id
--    WHERE s.status = 'open' AND s.depth < ${maxDepth}
-+    WHERE s.status = 'open' AND s.depth <= ${maxDepth}
+-    WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
++    WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth <= ${maxDepth}
      ORDER BY (
        s.value + ${W} * sqrt(
          (log(max(2.0, COALESCE(p.visits, max(2, s.visits)))) / log(exp(1.0))) /

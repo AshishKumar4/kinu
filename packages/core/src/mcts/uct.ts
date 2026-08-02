@@ -35,9 +35,16 @@ import { DEFAULT_CONFIG } from '../config.js';
  * A node at depth d expands children at d+1, so only nodes with depth < maxDepth
  * can still produce in-bounds children — selection skips the depth-capped ones
  * and keeps spending the budget on the shallower frontier instead of dying.
+ *
+ * TREE SCOPE: `rootId` confines the argmax to this search's own tree. Without
+ * it selection was a global argmax over every open node in the workspace, so a
+ * tree left open by an interrupted or failed search silently captured the next
+ * task's budget. Scoping is compatible with resume — a resumed run re-enters
+ * with the persisted rootId and sees exactly its own frontier.
  */
 export function selectNode(
   sql: SqlExecutor,
+  rootId: string,
   W: number = DEFAULT_CONFIG.mcts.explorationWeight,
   maxDepth: number = DEFAULT_CONFIG.mcts.maxDepth,
 ): SearchNode | null {
@@ -50,7 +57,7 @@ export function selectNode(
       COALESCE(p.visits, max(2, s.visits)) AS parent_visits
     FROM search_nodes s
     LEFT JOIN search_nodes p ON s.parent_id = p.id
-    WHERE s.status = 'open' AND s.depth < ${maxDepth}
+    WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
     ORDER BY (
       s.value + ${W} * sqrt(
         (log(max(2.0, COALESCE(p.visits, max(2, s.visits)))) / log(exp(1.0))) /

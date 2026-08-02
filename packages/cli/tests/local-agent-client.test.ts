@@ -345,15 +345,15 @@ describe('/takes — Alternate Takes over a real local client', () => {
     // run a turn so the session claims it.
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
-        VALUES ('win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
-    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
-        VALUES ('alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES ('r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES ('r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
     // Production captures happen mid-turn. This fixture seeds before send(), so
     // place it inside the upcoming turn's claim window instead of depending on
     // capture and turn start landing in the same millisecond.
     captureAlternateTakes(rt.storage.sql, {
-      task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000,
+      rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000,
     });
     await client.send('solve it');
 

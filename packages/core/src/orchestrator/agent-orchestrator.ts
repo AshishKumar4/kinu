@@ -120,6 +120,17 @@ export class AgentOrchestrator {
     while (this.inFlight.size > 0) await Promise.all([...this.inFlight]);
   }
 
+  /**
+   * Register post-turn evolution work the backend owns but this orchestrator
+   * must still join — the sampled scaffold shadow eval is the one case. It is
+   * detached like the rest (never blocks the loop) and is awaited by
+   * settleEvolution, so a process that exits right after a turn does not kill
+   * the evaluation that would have resolved a pending scaffold.
+   */
+  track(work: Promise<void>, label: string): void {
+    this.detach(work, label);
+  }
+
   private detach(work: Promise<void>, label: string): void {
     const tracked = work
       .catch((err) => console.error(`[proteus] ${label} failed:`, err))

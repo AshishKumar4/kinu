@@ -9,6 +9,7 @@ import { CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { DiffLine } from "@/lib/diff";
+import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
  *  scaffold-version diff (Brain) and the workspace change-set (Output). */
@@ -25,16 +26,16 @@ export function DiffLines({ lines }: { lines: DiffLine[] }) {
 }
 
 export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
-  const [copied, setCopied] = useState(false);
+  const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
   return (
     <div className="relative group my-2">
       <div className="flex items-center justify-between px-3 py-1 rounded-t-lg p-elevated border border-b-0 p-border text-[10px] p-text-3">
         <span>{lang || "code"}</span>
-        <button onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-          className="flex items-center gap-1 hover:p-text transition-colors">
-          <CopyIcon size={12} />{copied ? "Copied!" : "Copy"}
+        <button onClick={() => copy(code)}
+          className={`flex items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
+          <CopyIcon size={12} />{copyLabel(status)}
         </button>
       </div>
       <div className="rounded-b-lg border border-t-0 p-border overflow-hidden">

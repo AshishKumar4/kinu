@@ -1,10 +1,10 @@
 /**
- * Scaffold SQL schemas — DDL for scaffold versioning and task history.
+ * Scaffold SQL schemas — the one DDL for scaffold versioning and task history,
+ * plus the in-place migration that brings older workspaces up to it.
  *
- * NOTE: Must stay in sync with packages/core/src/identity/schema.ts
- * (the unified schema). Both are safe because of IF NOT EXISTS. The
- * duplicate exists so scaffold bootstrap can self-initialize without
- * requiring the full unified init.
+ * The unified workspace initializer (identity/schema.ts) calls this rather than
+ * carrying its own copy: a second definition drifted, and workspaces created
+ * through it were missing `status` and `parent_version`.
  */
 
 import type { RawSqlExec } from '../types/primitives.js';

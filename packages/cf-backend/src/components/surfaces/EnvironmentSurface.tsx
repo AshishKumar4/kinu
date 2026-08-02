@@ -34,6 +34,8 @@ import { FilesPane } from "@/components/FilesPane";
 import { ExecutorTerminal } from "@/components/ExecutorTerminal";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { listDevices, type UserDevice } from "@/lib/user-api";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import type { PinnedPort } from "./OutputSurface";
 import { EmptyState } from "./shared";
 
@@ -71,27 +73,24 @@ function mountTitle(mount: MountInfo, exec: ExecutorInfo | undefined): string {
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, pinnedPorts } = props;
-  const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
-  const [mounts, setMounts] = useState<MountInfo[]>([]);
-  const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null); // mount name
   const [pane, setPane] = useState<Pane>({ kind: "files" });
 
-  const refresh = useCallback(async () => {
-    setErr(null);
-    try {
-      const [roster, table] = await Promise.all([
-        rpc<WorkspaceAgent[]>("getWorkspaceAgents"),
-        rpc<MountInfo[]>("listMounts"),
-      ]);
-      setAgents(roster);
-      setMounts(table);
-    } catch (e) {
-      setErr((e as Error).message);
-    }
+  const load = useCallback(async () => {
+    const [agents, mounts] = await Promise.all([
+      rpc<WorkspaceAgent[]>("getWorkspaceAgents"),
+      rpc<MountInfo[]>("listMounts"),
+    ]);
+    return { agents, mounts };
   }, [rpc]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
+  const { resource, reload } = useAsyncResource(load);
+  // The rosters are read together and rendered separately, so each list needs
+  // to know whether it is empty or merely unread — `length === 0` conflated
+  // the two, printing "loading…" under an error banner and spinning forever on
+  // a workspace that genuinely has none.
+  const loaded = lastValue(resource);
+  const agents = loaded?.agents ?? [];
+  const mounts = loaded?.mounts ?? [];
 
   // Executor availability is polled live; when it flips (PC connects, sandbox
   // wakes) the mount table's live flags are stale — refetch them.
@@ -100,8 +99,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   useEffect(() => {
     if (lastSignature.current === availabilitySignature) return;
     lastSignature.current = availabilitySignature;
-    void refresh();
-  }, [availabilitySignature, refresh]);
+    reload();
+  }, [availabilitySignature, reload]);
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
 
@@ -146,7 +145,9 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   return (
     <div className="flex flex-col h-full -m-5">
       <div className="px-4 pt-3 pb-3 space-y-3 shrink-0 border-b p-border">
-        {err && <div className="text-xs p-danger p-card rounded-lg px-3 py-2">{err}</div>}
+        {resource.status === "error" && (
+          <LoadFailure what="the environment" message={resource.message} onRetry={reload} className="p-card rounded-lg px-3 py-2" />
+        )}
 
         {/* Agents — the actors inside this workspace */}
         <section>
@@ -154,7 +155,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
             <UsersThreeIcon size={14} className="p-accent" />
             <span className="text-xs font-semibold p-text">Agents</span>
             <span className="text-[10px] p-text-3">the workspace's default agent, plus team peers it can message or spawn</span>
-            <button onClick={() => void refresh()} className="ml-auto p-text-3 hover:p-text p-1" title="Refresh">
+            <button onClick={reload} className="ml-auto p-text-3 hover:p-text p-1" title="Refresh">
               <ArrowsClockwiseIcon size={12} />
             </button>
           </div>
@@ -174,7 +175,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                 <span className="text-[10px] p-text-3 rounded px-1 py-px border p-border">subordinate</span>
               </span>
             ))}
-            {agents.length === 0 && <span className="text-xs p-text-3">loading…</span>}
+            {agents.length === 0 && loaded && <span className="text-xs p-text-3">No agents in this workspace.</span>}
+            {agents.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
           </div>
         </section>
 
@@ -205,7 +207,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                 </button>
               );
             })}
-            {mounts.length === 0 && <span className="text-xs p-text-3">loading…</span>}
+            {mounts.length === 0 && loaded && <span className="text-xs p-text-3">No environments mounted.</span>}
+            {mounts.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
           </div>
         </section>
       </div>

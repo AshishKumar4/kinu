@@ -213,13 +213,15 @@ function renderExecutorSection(surface: PromptSurface): string {
   if (executors.length > 1) {
     parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
   }
-  // Mount-table doctrine — only on backends whose workspace VFS actually
-  // mounts the remote environments (the CLI-local VFS is /local alone).
+  // Mount-table doctrine. Every backend's workspace VFS mounts the file plane
+  // of the execution environments it actually has — /sandbox and /nimbus on cf,
+  // /pc on both (the device tunnel there, node:fs here) — so the doctrine
+  // follows the executor list rather than the backend.
   const mounts = devices.map((exec) => EXECUTOR_MOUNT_PREFIX[exec.name]).filter(Boolean);
-  if (surface.backend !== 'cli-local' && mounts.length > 0) {
+  if (mounts.length > 0) {
     parts.push(
       '',
-      `The workspace filesystem (workspace.* file ops) is a mount table: /local is the durable base, and ${mounts.join(', ')} are live windows into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
+      `The workspace filesystem (workspace.* file ops) is a mount table: /local is the durable base, and ${mounts.join(', ')} ${mounts.length === 1 ? 'is a live window' : 'are live windows'} into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
       'Mounts are the FILE plane only: command execution stays target-native — run commands via the environment\'s own namespace or the run tool, never against a mount path.',
     );
   }

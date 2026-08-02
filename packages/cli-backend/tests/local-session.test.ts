@@ -21,7 +21,8 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 /** A streaming LanguageModel stub (ai-SDK v2 spec parts) — emits the answer as
  *  two text-delta chunks then a finish, so runChat yields multiple text-delta
- *  events + a done. */
+ *  events + a done. doGenerate answers the non-streaming callers (the think
+ *  strategies) with the same text. */
 function fakeModel(answer: string): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
@@ -30,6 +31,13 @@ function fakeModel(answer: string): LanguageModel {
     provider: 'fake',
     modelId: 'fake-model',
     supportedUrls: {},
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: answer }],
+      finishReason: 'stop' as const,
+      usage,
+      response: { id: 'r', modelId: 'fake-model', timestamp: new Date() },
+      warnings: [],
+    }),
     doStream: async () => ({
       stream: new ReadableStream({
         start(controller) {
@@ -126,6 +134,14 @@ async function waitFor(pred: () => boolean, timeoutMs = 1000): Promise<void> {
     await new Promise<void>((r) => setTimeout(r, 2));
   }
 }
+
+function jobColumn(db: Database, id: string, column: 'status' | 'error' | 'result'): string {
+  const row = db.query(`SELECT ${column} v FROM background_jobs WHERE id=?`).get(id) as { v: string | null } | null;
+  return row?.v ?? '';
+}
+const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
+const jobError = (db: Database, id: string) => jobColumn(db, id, 'error');
+const jobResult = (db: Database, id: string) => jobColumn(db, id, 'result');
 
 const kinds = (events: SessionEvent[]) => events.map((e) => e.type);
 const turnStarts = (events: SessionEvent[]) =>
@@ -609,6 +625,65 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
   });
 });
 
+describe('LocalAgentSession — context window', () => {
+  /** Streams normally but reports a large provider-priced prompt, so the next
+   *  turn's compaction has a real measured trigger to budget against. */
+  function pricedModel(inputTokens: number): LanguageModel {
+    const base = fakeModel('ok') as unknown as Record<string, unknown> & { doStream: (o: unknown) => Promise<{ stream: ReadableStream }> };
+    const inner = base.doStream.bind(base);
+    return {
+      ...base,
+      doStream: async (options: unknown) => {
+        const { stream, ...rest } = await inner(options);
+        return {
+          ...rest,
+          stream: stream.pipeThrough(new TransformStream({
+            transform(part: { type: string; usage?: unknown }, controller) {
+              controller.enqueue(part.type === 'finish'
+                ? { ...part, usage: { inputTokens, outputTokens: 7, totalTokens: inputTokens + 7 } }
+                : part);
+            },
+          })),
+        };
+      },
+    } as unknown as LanguageModel;
+  }
+
+  /** A spec the static context-window table does not know, so the fallback is
+   *  its 128k default and any other number can only have come from the catalog. */
+  function resolverReporting(contextWindow: number | undefined, model: LanguageModel): LocalModelResolver {
+    return {
+      normalizeSpecSync: (spec) => spec?.trim() || 'openai-compatible/house-model',
+      resolveModel: () => model,
+      listProviders: async () => [],
+      listModels: async () => [],
+      modelInfo: async () => ({
+        id: 'house-model', label: 'house', capabilities: ['tools', 'streaming'],
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+      }),
+    };
+  }
+
+  const compacted = (db: Database) =>
+    (db.prepare(`SELECT COUNT(*) c FROM compaction_state WHERE plan_json IS NOT NULL`).get() as { c: number }).c > 0;
+
+  async function converse(session: LocalAgentSession): Promise<void> {
+    for (const turn of ['one', 'two', 'three', 'four']) await session.send(turn);
+  }
+
+  test("a 40k-token prompt compacts against the catalog's 8k window, not the 128k fallback", async () => {
+    const tight = setupWithResolver(resolverReporting(8_000, pricedModel(40_000)));
+    await converse(tight.session);
+    expect(compacted(tight.db)).toBe(true);
+
+    // Same traffic, same model, catalog silent on the window: 40k of the static
+    // table's 128k default is nowhere near the trigger, so nothing compacts.
+    const loose = setupWithResolver(resolverReporting(undefined, pricedModel(40_000)));
+    await converse(loose.session);
+    expect(compacted(loose.db)).toBe(false);
+  });
+});
+
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('always-active skills round-trip through agent_config', () => {
     const { session } = setup();
@@ -845,18 +920,61 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(new Set(captured)).toEqual(new Set(['memory', 'skills']));
   });
 
-  test('recoverBackgroundJobs fails + wakes an orphaned running bg job, clears stale fibers', async () => {
+  test('recoverBackgroundJobs fails + wakes an orphaned job of a non-resumable kind, clears stale fibers', async () => {
     const { db, session, events } = setup();
     // Simulate a previous CLI exit mid-background-job: a running job + its
-    // interrupted bg:* fiber row (stashed phase 'running').
+    // interrupted bg:* fiber row (stashed phase 'running'). `run` has partial
+    // side effects, so it declines the resume and fails as before.
     db.exec(`INSERT INTO background_jobs (id, kind, status, created_at) VALUES ('bgjob-x', 'run', 'running', 1)`);
     db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"run"}', 1)`);
 
     await session.recoverBackgroundJobs();
 
-    expect((db.query(`SELECT status FROM background_jobs WHERE id='bgjob-x'`).get() as { status: string }).status).toBe('failed');
-    expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
+    await waitFor(() => jobStatus(db, 'bgjob-x') === 'failed');
+    expect(jobError(db, 'bgjob-x')).toContain('interrupted');
+    // The stale row from the prior run is gone; the resume attempt's own fiber
+    // row clears itself when it settles.
+    expect(db.query(`SELECT COUNT(*) c FROM fibers WHERE id='f1'`).get()).toEqual({ c: 0 });
+    await waitFor(() => (db.query(`SELECT COUNT(*) c FROM fibers`).get() as { c: number }).c === 0);
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
+  });
+
+  test('recoverBackgroundJobs re-drives an orphaned think job instead of failing it', async () => {
+    const { db, session } = setup('resumed answer');
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'finish the interrupted exploration' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-t', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2', 'bg:think', '{"phase":"running","jobId":"bgjob-t","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+
+    await waitFor(() => jobStatus(db, 'bgjob-t') === 'completed');
+    // Reclaimed under a fresh lease epoch, fencing the executor that died.
+    expect(db.query(`SELECT epoch FROM background_jobs WHERE id='bgjob-t'`).get()).toEqual({ epoch: 1 });
+    expect(jobResult(db, 'bgjob-t')).toContain('resumed answer');
+  });
+
+  test('end() waits for a detached job to settle instead of closing the database under it', async () => {
+    // The resume runs in a fiber detached from any turn, so a session that
+    // ends while it is in flight would pull SQLite out from under its settle
+    // write — the CLI's version of evicting a DO mid-fiber.
+    const slow = fakeModel('slow answer') as unknown as Record<string, unknown> & { doGenerate: () => Promise<unknown> };
+    const inner = slow.doGenerate.bind(slow);
+    const model = {
+      ...slow,
+      doGenerate: async () => { await new Promise((r) => setTimeout(r, 50)); return inner(); },
+    } as unknown as LanguageModel;
+
+    const { db, session } = setup('unused', model);
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'finish the interrupted exploration' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-s', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f3', 'bg:think', '{"phase":"running","jobId":"bgjob-s","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    expect(jobStatus(db, 'bgjob-s')).toBe('running');
+
+    await session.end();
+    expect(jobStatus(db, 'bgjob-s')).toBe('completed');
+    expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
   });
 
   test('toolNames exposes the full surface (think/fact parity); end() resolves', async () => {
@@ -1325,15 +1443,15 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
   function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
-        VALUES ('win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
-    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
-        VALUES ('alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES ('win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES ('win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
     // In production the capture happens MID-turn (inside think-mcts), so its
     // timestamp falls inside the claiming turn's window. This seed runs
     // before send() — stamp it just ahead so the scoped claim sees it as a
     // mid-turn capture rather than a stale leftover.
-    captureAlternateTakes(rt.storage.sql, { task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
+    captureAlternateTakes(rt.storage.sql, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
     // Mirror converge()'s close: winner terminal, the near-tied rival pruned.
     rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
     rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
@@ -1666,5 +1784,74 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe('LocalAgentSession — the durable run-event log', () => {
+  test('a turn records a replayable run in run_events', async () => {
+    // Backend parity: the DO persists every run into run_events and can replay
+    // it (list_run_events / SSE Last-Event-ID resume). The CLI recorded nothing
+    // at all, so a local workspace had no run history — despite having the very
+    // same SQLite the cf recorder is written against.
+    const { session } = setup('hello there');
+    await session.send('hi');
+
+    const runs = session.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.eventCount).toBeGreaterThan(0);
+
+    const events = session.getRunEvents(runs[0]!.runId);
+    expect(events.map((e) => e.type)).toEqual([
+      'run_start', 'turn_start', 'step_finish', 'turn_end', 'run_end',
+    ]);
+
+    const start = events[0] as Extract<typeof events[number], { type: 'run_start' }>;
+    expect(start.caused_by).toBe('chat');
+    expect(start.userMessage).toBe('hi');
+
+    const end = events.at(-1) as Extract<typeof events[number], { type: 'run_end' }>;
+    expect(end.reason).toBe('completed');
+    expect(end.error).toBeUndefined();
+
+    // Monotonic indices are what makes a resume possible at all.
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4]);
+    // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
+    expect(session.getRunEvents(runs[0]!.runId, { since: 3 }).map((e) => e.type))
+      .toEqual(['turn_end', 'run_end']);
+
+    await session.end();
+  });
+
+  test('a programmatic turn records its trigger, and each turn is its own run', async () => {
+    const { session } = setup('done');
+    await session.send('first');
+    await session.enqueueTurn({ text: 'job finished', metadata: { proteusEvent: 'background_job' } });
+    await waitFor(() => session.listRuns().length === 2);
+
+    const runs = session.listRuns();
+    expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
+    const causes = runs.map((r) => {
+      const start = session.getRunEvents(r.runId)[0];
+      return start?.type === 'run_start' ? start.caused_by : null;
+    });
+    expect(causes.sort()).toEqual(['background_job', 'chat']);
+
+    await session.end();
+  });
+
+  test('a failed turn seals the run with the provider error text', async () => {
+    const exploding = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+      doStream: async () => { throw new Error('upstream is on fire'); },
+    } as unknown as LanguageModel;
+    const { session } = setup('unused', exploding);
+    await session.send('hi');
+
+    const run = session.listRuns()[0]!;
+    const end = session.getRunEvents(run.runId).at(-1);
+    expect(end?.type).toBe('run_end');
+    expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
+
+    await session.end();
   });
 });

@@ -1,9 +1,13 @@
 /**
  * Shared modal shell — the dimmed overlay + centered card used by every dialog
- * (create agent, fork, create webhook). Click-outside and Esc both dismiss.
+ * (create agent, fork, create webhook). Click-outside and Esc both dismiss,
+ * unless the dialog is `busy`: a stray backdrop click during an in-flight
+ * create/clear/dismiss used to tear the dialog down mid-write, leaving the
+ * result unreported. Two call sites guarded that themselves and four did not,
+ * so the policy lives here.
  * Callers supply the header icon/title, the body, and an optional footer row.
  */
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 
 export interface ModalProps {
   title: string;
@@ -14,20 +18,25 @@ export interface ModalProps {
   footer?: ReactNode;
   /** Tailwind max-width class; defaults to a standard form width. */
   maxWidthClass?: string;
+  /** A write is in flight — backdrop and Escape stop dismissing. An explicit
+   *  Cancel stays the caller's to offer (or disable). */
+  busy?: boolean;
 }
 
-export function Modal({ title, onClose, icon, children, footer, maxWidthClass = "max-w-md" }: ModalProps) {
+export function Modal({ title, onClose, icon, children, footer, maxWidthClass = "max-w-md", busy = false }: ModalProps) {
+  const dismiss = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [dismiss]);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.5)" }}
-      onClick={onClose}
+      onClick={dismiss}
     >
       <div
         className={`w-full ${maxWidthClass} max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border p-border p-elevated p-4 sm:p-5 space-y-4 animate-fade-in`}

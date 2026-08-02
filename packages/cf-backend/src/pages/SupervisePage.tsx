@@ -8,14 +8,17 @@
  * Run history (cross-run list), Automations (the ONE trigger surface:
  * list + create webhooks + revoke), Fork lineage.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import {
   GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon,
-  PlusIcon, TrashIcon, CopyIcon, WarningIcon, PlugIcon,
+  PlusIcon, TrashIcon, WarningIcon, PlugIcon,
 } from "@phosphor-icons/react";
 import { EmptyState } from "@/components/surfaces/shared";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
@@ -64,8 +67,9 @@ export function SupervisePage({ rpc, onRunTask, onOpenTasks }: SupervisePageProp
 /* ── Background tasks — supervise-level digest, cross-linking to RUN ─ */
 
 function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () => void }) {
-  const [jobs, setJobs] = useState<BackgroundJob[] | null>(null);
-  useEffect(() => { rpc<BackgroundJob[]>("listBackgroundJobs", [20]).then(setJobs).catch(() => setJobs([])); }, [rpc]);
+  const load = useCallback(() => rpc<BackgroundJob[]>("listBackgroundJobs", [20]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const jobs = lastValue(resource);
   const running = (jobs ?? []).filter((j) => j.status === "running").length;
   return (
     <section>
@@ -76,7 +80,11 @@ function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () 
         <div className="flex-1" />
         <Button size="sm" variant="ghost" onClick={onOpenTasks}>Manage in Tasks →</Button>
       </div>
-      {jobs === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
+      {jobs === null ? (
+        resource.status === "error"
+          ? <LoadFailure what="background tasks" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
+        )
         : jobs.length === 0 ? <p className="text-xs p-text-3">No background tasks — long tool calls (&gt;30s) detach here.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
@@ -97,22 +105,31 @@ function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () 
 /* ── Curriculum (Voyager self-proposed tasks) ──────────────────── */
 
 function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) => void }) {
-  const [tasks, setTasks] = useState<ProposedTask[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [actionErr, setActionErr] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    rpc<{ tasks: ProposedTask[] }>("listCurriculumTasks", []).then((r) => setTasks(r.tasks)).catch(() => setTasks([]));
-  }, [rpc]);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(async () => (await rpc<{ tasks: ProposedTask[] }>("listCurriculumTasks", [])).tasks, [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const tasks = lastValue(resource);
 
   const propose = useCallback(async () => {
     setBusy(true);
-    try { await rpc("proposeCurriculumTasks", [5]); load(); } finally { setBusy(false); }
-  }, [rpc, load]);
+    setActionErr(null);
+    try { await rpc("proposeCurriculumTasks", [5]); reload(); }
+    catch (e) { setActionErr(`Couldn't propose tasks: ${describeError(e)}`); }
+    finally { setBusy(false); }
+  }, [rpc, reload]);
 
+  /** Resolves only when the status write landed — "Run" starts a chat turn on
+   *  the back of this, and must not do so for a task that stayed pending. */
   const setStatus = useCallback(async (id: string, status: ProposedTask["status"]) => {
-    await rpc("setCurriculumTaskStatus", [id, status]); load();
-  }, [rpc, load]);
+    setActionErr(null);
+    try { await rpc("setCurriculumTaskStatus", [id, status]); reload(); }
+    catch (e) {
+      setActionErr(`Couldn't mark the task ${status}: ${describeError(e)}`);
+      throw e;
+    }
+  }, [rpc, reload]);
 
   return (
     <section>
@@ -124,7 +141,12 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
           icon={busy ? <Loader size="sm" /> : undefined}>Propose tasks</Button>
       </div>
       <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style) — predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
-      {tasks === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
+      {actionErr && <div className="text-[11px] p-danger mb-2">{actionErr}</div>}
+      {tasks === null ? (
+        resource.status === "error"
+          ? <LoadFailure what="the curriculum" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
+        )
         : tasks.length === 0 ? <EmptyState icon={<GraduationCapIcon size={28} />} title="No proposed tasks" hint="Click “Propose tasks” to have the agent author its own next challenges." />
         : (
           <div className="space-y-2">
@@ -148,9 +170,9 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
                 {t.status === "pending" && (
                   <div className="flex items-center gap-2 mt-2">
                     <Button size="sm" variant="primary" icon={<PlayIcon size={12} />}
-                      onClick={() => { void setStatus(t.id, "accepted"); onRunTask(t.task); }}>Run</Button>
-                    <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => setStatus(t.id, "accepted")}>Accept</Button>
-                    <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => setStatus(t.id, "rejected")}>Reject</Button>
+                      onClick={() => void setStatus(t.id, "accepted").then(() => onRunTask(t.task), () => {})}>Run</Button>
+                    <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => void setStatus(t.id, "accepted").catch(() => {})}>Accept</Button>
+                    <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => void setStatus(t.id, "rejected").catch(() => {})}>Reject</Button>
                   </div>
                 )}
               </div>
@@ -164,8 +186,9 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
 /* ── Run history ───────────────────────────────────────────────── */
 
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
-  const [runs, setRuns] = useState<RunSummary[] | null>(null);
-  useEffect(() => { rpc<RunSummary[]>("getRunSummaries", [30]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
+  const load = useCallback(() => rpc<RunSummary[]>("getRunSummaries", [30]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const runs = lastValue(resource);
   const totalTokens = (runs ?? []).reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
   const totalCached = (runs ?? []).reduce((s, r) => s + (r.tokensCached ?? 0), 0);
   // Cache hit-rate = cached input / total input (a proxy; cached is a subset of in).
@@ -182,7 +205,11 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
           {totalTokens > 0 && <span className="text-[11px] p-text-3">{fmtTokens(totalTokens)} tokens</span>}
         </span>
       </div>
-      {runs === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
+      {runs === null ? (
+        resource.status === "error"
+          ? <LoadFailure what="the run history" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
+        )
         : runs.length === 0 ? <p className="text-xs p-text-3">No recorded runs yet.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
@@ -205,23 +232,21 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
 
 function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { agentId } = useParams();
-  const [triggers, setTriggers] = useState<TriggerRow[] | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<CreateWebhookResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    rpc<{ triggers: TriggerRow[] }>("listTriggers", []).then((r) => setTriggers(r.triggers ?? [])).catch(() => setTriggers([]));
-  }, [rpc]);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(async () => (await rpc<{ triggers: TriggerRow[] }>("listTriggers", [])).triggers ?? [], [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const triggers = lastValue(resource);
 
   const revoke = useCallback(async (triggerId: string) => {
     if (!agentId) return;
     if (!confirm("Revoke this trigger? The URL stops working immediately.")) return;
     setErr(null);
     try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr((e as Error).message); }
-    load();
-  }, [agentId, load]);
+    reload();
+  }, [agentId, reload]);
 
   const active = (triggers ?? []).filter((t) => t.state === "active").length;
   const nextFire = (triggers ?? [])
@@ -241,7 +266,11 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
       <p className="text-xs p-text-3 mb-3">External systems that can wake this agent — webhooks (GitHub, Stripe, your CI) and timers.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
-      {triggers === null ? <div className="flex justify-center py-6"><Loader size="sm" /></div>
+      {triggers === null ? (
+        resource.status === "error"
+          ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
+        )
         : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered — create a webhook to let external systems wake this agent.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
@@ -254,7 +283,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <CreateWebhookModal
           agentName={agentId}
           onClose={() => setShowCreate(false)}
-          onCreated={(r) => { setCreated(r); setShowCreate(false); load(); }}
+          onCreated={(r) => { setCreated(r); setShowCreate(false); reload(); }}
         />
       )}
     </section>
@@ -279,8 +308,8 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
       {typeof trigger.fire_count === "number" && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
       {url && (
-        <button className="p-1 rounded hover:p-card-hover p-text-3 shrink-0" title="Copy webhook URL"
-          onClick={() => navigator.clipboard.writeText(url)}><CopyIcon size={11} /></button>
+        <CopyButton value={url} what="the webhook URL" size={11}
+          className="p-1 rounded hover:p-card-hover p-text-3 shrink-0" />
       )}
       <button
         onClick={onRevoke}
@@ -331,9 +360,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
           <div className="text-[10px] p-text-3 mb-1">URL</div>
           <div className="flex items-center gap-2">
             <code className="text-xs p-elevated px-2 py-1.5 rounded font-mono flex-1 break-all">{url}</code>
-            <button className="p-2 rounded p-card hover:p-card-hover" onClick={() => navigator.clipboard.writeText(url)}>
-              <CopyIcon size={12} />
-            </button>
+            <CopyButton value={url} what="the webhook URL" className="p-2 rounded p-card hover:p-card-hover" />
           </div>
         </div>
         {result.secret && (
@@ -341,9 +368,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
             <div className="text-[10px] p-text-3 mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
               <code className="text-xs p-elevated px-2 py-1.5 rounded font-mono flex-1 break-all">{result.secret}</code>
-              <button className="p-2 rounded p-card hover:p-card-hover" onClick={() => navigator.clipboard.writeText(result.secret ?? "")}>
-                <CopyIcon size={12} />
-              </button>
+              <CopyButton value={result.secret} what="the secret" className="p-2 rounded p-card hover:p-card-hover" />
             </div>
           </div>
         )}
@@ -405,6 +430,7 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
       title="Create durable webhook"
       icon={<PlugIcon size={16} className="p-accent" />}
       onClose={onClose}
+      busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
         <Button size="sm" variant="primary" onClick={submit} disabled={submitting || !label.trim()}>
