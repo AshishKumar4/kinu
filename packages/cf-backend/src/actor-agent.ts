@@ -50,6 +50,7 @@ import {
   createWebCodemodeProvider, type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
+  promptModeForTurnEvent,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
@@ -610,6 +611,35 @@ export abstract class ActorAgent extends Think<Env> {
     return this._orch;
   }
   protected get acc(): TurnAccumulator { return this.orch.acc; }
+
+  /** True while a keepAlive heartbeat is holding the DO open for evolution. */
+  private _evolutionSettling = false;
+
+  /**
+   * Hold the Durable Object open until the evolution this turn dispatched has
+   * settled — the cf peer of the CLI's `await orch.settleEvolution()` before
+   * process exit.
+   *
+   * Evolution is deliberately detached so it never blocks Think's TurnQueue,
+   * but its LLM calls (outcome classification, reflection, session reflection)
+   * take 5-30s and outlive the request that woke the DO. A DO with no pending
+   * request and no alarm is evicted, which kills them mid-call — the exact bug
+   * that was fixed for headless CLI runs. keepAlive() (agents-SDK) keeps a
+   * heartbeat alarm armed while the ref is held, so the activation survives.
+   *
+   * Fire-and-forget by construction: awaiting it here would re-block the queue.
+   * One watcher at a time — settleEvolution() drains whatever is in flight when
+   * it runs, so a turn that completes while a watcher is live is already
+   * covered by it.
+   */
+  protected settleEvolutionInBackground(): void {
+    if (this._evolutionSettling) return;
+    this._evolutionSettling = true;
+    void this.keepAliveWhile(() => this.orch.settleEvolution())
+      .catch((err: unknown) =>
+        console.warn('[proteus] evolution settle failed:', err instanceof Error ? err.message : err))
+      .finally(() => { this._evolutionSettling = false; });
+  }
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
   // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
@@ -1739,7 +1769,7 @@ export abstract class ActorAgent extends Think<Env> {
     catch (err) { console.warn('[proteus] buildUserMcpTools failed:', (err as Error).message); }
 
     // Expose MCP tool keys to the active-tools allowlist so Think doesn't
-    // strip them out. Builtin names + MCP `tool_<id>_<name>` keys are
+    // strip them out. Builtin names + MCP `mcp_<server>_<name>` keys are
     // disjoint by construction (assertion above).
     const mcpToolNames = Object.keys(mcpTools);
     const effectiveActiveTools = mcpToolNames.length > 0
@@ -1787,6 +1817,7 @@ export abstract class ActorAgent extends Think<Env> {
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
+      mode: promptModeForTurnEvent(this.turnUserMessageEvent(this._activeProgrammaticUserMessage)),
       model,
       currentDate: currentDateForPrompt(),
     });

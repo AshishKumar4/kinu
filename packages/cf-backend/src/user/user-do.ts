@@ -62,6 +62,7 @@ import {
   decodeCodexAccountId,
   tokensToCredential,
   CODEX_DEVICE_PORTAL,
+  mcpToolKey,
   type DeviceCodeStart,
   type DeviceCheckpointHint,
 } from '@proteus/core';
@@ -87,7 +88,7 @@ import {
   type DeviceConsentScope,
 } from './device-consent.js';
 import {
-  validateMcpServerInput, mcpToolKey, parseAllowedTools, mapConnectionStatus,
+  validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
@@ -1535,6 +1536,7 @@ export class UserDO extends Agent<Env> {
     if (typeof publicOrigin !== 'string' || !/^https?:\/\//.test(publicOrigin)) {
       throw new Error('publicOrigin must be a full https?:// origin.');
     }
+    this.requireFreeMcpServerName(cfg.name, null);
     const id = nanoid(8);
     const now = Date.now();
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
@@ -1604,10 +1606,21 @@ export class UserDO extends Agent<Env> {
     this._userMcpUpdatedAt = Date.now();
   }
 
+  /** Server names address the tools (`mcp_<server>_<tool>`), so two servers
+   *  sharing one name would mint colliding tool keys. The CLI gets this for
+   *  free — its config is an `mcpServers` object — so cf enforces it. */
+  private requireFreeMcpServerName(name: string, exceptId: string | null): void {
+    const taken = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_mcp_servers WHERE lower(name) = lower(?)`, name,
+    ).some((row) => row.id !== exceptId);
+    if (taken) throw new Error(`An MCP server named '${name}' already exists.`);
+  }
+
   /** Patch-update editable fields. `name` and `allowedTools` take effect
-   *  without reconnecting (name is cosmetic; allowedTools is enforced from SQL
-   *  at descriptor/dispatch time). A `headers` change re-registers the live
-   *  connection — the SSE/HTTP transport reads its auth headers at connect
+   *  without reconnecting (a rename re-keys the tools on the next descriptor
+   *  fetch; allowedTools is enforced from SQL at descriptor/dispatch time). A
+   *  `headers` change re-registers the live connection — the SSE/HTTP
+   *  transport reads its auth headers at connect
    *  time, so a rotated bearer only takes effect (and re-persists into the
    *  SDK's snapshot) after a reconnect. `serverUrl` / `transport` changes still
    *  require remove + re-add (the SDK doesn't support live re-targeting). */
@@ -1620,6 +1633,7 @@ export class UserDO extends Agent<Env> {
     const args: unknown[] = [];
     if (typeof p.name === 'string') {
       if (!p.name.trim() || p.name.length > 64) throw new Error('name must be 1..64 chars.');
+      this.requireFreeMcpServerName(p.name.trim(), id);
       sets.push('name = ?'); args.push(p.name.trim());
     }
     if (p.allowedTools !== undefined) {
@@ -1737,7 +1751,7 @@ export class UserDO extends Agent<Env> {
           serverId: id,
           serverName: meta.name,
           name: tool.name,
-          toolKey: mcpToolKey(id, tool.name),
+          toolKey: mcpToolKey(meta.name, tool.name),
           description: tool.description,
           title: (tool as { title?: string }).title
             ?? (tool as { annotations?: { title?: string } }).annotations?.title,

@@ -8,6 +8,7 @@ import {
   BUILTIN_TOOLS,
   EventLog,
   HeadJournal,
+  RunEventRecorder,
   TriggerRegistry,
   createAgentConfigStore,
   initAgentConfigTable,
@@ -20,6 +21,7 @@ import {
   type AlignmentConvergence,
   type EventVariant,
   type ProductChangeBoard,
+  type RunEvent,
   type SearchNode,
   type ReasoningEffort,
   readSoul,
@@ -175,9 +177,42 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
   });
 }
 
+/** Recent runs from the durable run-event log — the local peer of the cloud
+ *  `listRuns` RPC. */
+export function listLocalRuns(name: string, limit = 50): Array<{ runId: string; lastTs: string; eventCount: number }> {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'run_events') ? new RunEventRecorder(makeSql(db)).listRuns(limit) : []
+  ));
+}
+
+/** One run's durable events, oldest first — the local peer of `getRunEvents`.
+ *  `since` is the inclusive lower bound an SSE resume replays from. */
+export function listLocalRunEvents(
+  name: string, runId: string, opts: { since?: number; limit?: number } = {},
+): RunEvent[] {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'run_events') ? new RunEventRecorder(makeSql(db)).read(runId, opts) : []
+  ));
+}
+
 export function listLocalTimeline(name: string, limit = 100): unknown[] {
   return withLocalDb(name, (db) => {
     const rows: unknown[] = [];
+    // The durable run-event log of the most recent run — tool calls, steps and
+    // turn boundaries. The cloud timeline spine leads with the same source.
+    if (tableExists(db, 'run_events')) {
+      const recorder = new RunEventRecorder(makeSql(db));
+      const latest = recorder.listRuns(1)[0];
+      if (latest) {
+        rows.push(...recorder.read(latest.runId, { limit }).map((e) => ({
+          id: `${e.runId}:${e.eventIndex}`,
+          kind: `run:${e.type}`,
+          runId: e.runId,
+          payload: e,
+          ts: Date.parse(e.timestamp) || 0,
+        })));
+      }
+    }
     if (tableExists(db, 'agent_log')) {
       rows.push(...all<{
         id: string; kind: string; turn_id: string | null; step_idx: number | null; payload: string; received_at: number;

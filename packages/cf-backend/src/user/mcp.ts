@@ -17,15 +17,17 @@ export type McpTransport = 'auto' | 'sse' | 'streamable-http';
  *  needs, plus the namespacing context (`serverId`, `name`) so the dispatch
  *  closure can route the eventual `callMcpTool` correctly. */
 export interface SerializableToolDescriptor {
-  /** Hyphenless server id, matches the SDK's tool-name template
-   *  (`tool_<serverIdNoHyphens>_<name>`). Stored alongside the raw id so
-   *  the orchestrator doesn't need to recompute. */
+  /** Registration id — how `userMcp_callTool` routes the call. Never part of
+   *  the tool key: it is a random per-registration nanoid, so keying on it
+   *  gave the same MCP tool a different name for every user. */
   serverId: string;
   serverName: string;
   /** Bare MCP tool name (no namespace prefix). */
   name: string;
-  /** Final tool key the AI SDK / LLM sees. Computed once on UserDO so the
-   *  orchestrator and the model agree byte-for-byte. */
+  /** Final tool key the AI SDK / LLM sees — core's `mcpToolKey(serverName,
+   *  name)`, the same rule the CLI backend uses, so a prompt or skill that
+   *  names an MCP tool resolves identically on both backends. Computed once on
+   *  UserDO so the orchestrator and the model agree byte-for-byte. */
   toolKey: string;
   description?: string;
   title?: string;
@@ -156,12 +158,6 @@ export function validateMcpServerInput(input: unknown): McpServerInput {
   }
 
   return { name: name.trim(), serverUrl, transport, headers, allowedTools };
-}
-
-/** Compute the tool-name the LLM will see. Mirrors the SDK
- *  (`agents/src/mcp/client.ts:1336`) so we don't drift. */
-export function mcpToolKey(serverId: string, toolName: string): string {
-  return `tool_${serverId.replace(/-/g, '')}_${toolName}`;
 }
 
 /** Decode an `allowed_tools` SQL column. Returns null when unset or

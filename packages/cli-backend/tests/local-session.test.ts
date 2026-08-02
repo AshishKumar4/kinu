@@ -1668,3 +1668,72 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
     }
   });
 });
+
+describe('LocalAgentSession — the durable run-event log', () => {
+  test('a turn records a replayable run in run_events', async () => {
+    // Backend parity: the DO persists every run into run_events and can replay
+    // it (list_run_events / SSE Last-Event-ID resume). The CLI recorded nothing
+    // at all, so a local workspace had no run history — despite having the very
+    // same SQLite the cf recorder is written against.
+    const { session } = setup('hello there');
+    await session.send('hi');
+
+    const runs = session.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.eventCount).toBeGreaterThan(0);
+
+    const events = session.getRunEvents(runs[0]!.runId);
+    expect(events.map((e) => e.type)).toEqual([
+      'run_start', 'turn_start', 'step_finish', 'turn_end', 'run_end',
+    ]);
+
+    const start = events[0] as Extract<typeof events[number], { type: 'run_start' }>;
+    expect(start.caused_by).toBe('chat');
+    expect(start.userMessage).toBe('hi');
+
+    const end = events.at(-1) as Extract<typeof events[number], { type: 'run_end' }>;
+    expect(end.reason).toBe('completed');
+    expect(end.error).toBeUndefined();
+
+    // Monotonic indices are what makes a resume possible at all.
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4]);
+    // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
+    expect(session.getRunEvents(runs[0]!.runId, { since: 3 }).map((e) => e.type))
+      .toEqual(['turn_end', 'run_end']);
+
+    await session.end();
+  });
+
+  test('a programmatic turn records its trigger, and each turn is its own run', async () => {
+    const { session } = setup('done');
+    await session.send('first');
+    await session.enqueueTurn({ text: 'job finished', metadata: { proteusEvent: 'background_job' } });
+    await waitFor(() => session.listRuns().length === 2);
+
+    const runs = session.listRuns();
+    expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
+    const causes = runs.map((r) => {
+      const start = session.getRunEvents(r.runId)[0];
+      return start?.type === 'run_start' ? start.caused_by : null;
+    });
+    expect(causes.sort()).toEqual(['background_job', 'chat']);
+
+    await session.end();
+  });
+
+  test('a failed turn seals the run with the provider error text', async () => {
+    const exploding = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+      doStream: async () => { throw new Error('upstream is on fire'); },
+    } as unknown as LanguageModel;
+    const { session } = setup('unused', exploding);
+    await session.send('hi');
+
+    const run = session.listRuns()[0]!;
+    const end = session.getRunEvents(run.runId).at(-1);
+    expect(end?.type).toBe('run_end');
+    expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
+
+    await session.end();
+  });
+});

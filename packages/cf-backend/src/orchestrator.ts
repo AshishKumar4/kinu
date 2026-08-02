@@ -922,8 +922,11 @@ export class OrchestratorAgent extends ActorAgent {
     // the queue is blocked and the next message can't start processing until
     // evolution finishes. The user sees "nothing happens" for the second message.
     //
-    // Fix: fire evolution asynchronously. The DO stays alive via keepAliveWhile
-    // in the outer scope. Errors are caught and logged, never propagated.
+    // Fix: fire evolution asynchronously, then hold the DO open for it with a
+    // keepAlive heartbeat of our own (settleEvolutionInBackground). The outer
+    // keepAliveWhile Think wraps the turn in disposes the moment this hook
+    // returns, so without that the detached work races eviction. Errors are
+    // caught and logged, never propagated.
     //
     // The core AgentOrchestrator owns the shared cadence: advance the
     // session-reflection counter (firing engine.onSessionComplete every N
@@ -933,6 +936,9 @@ export class OrchestratorAgent extends ActorAgent {
     // pattern extraction). Programmatic turns review immediately. All
     // fire-and-forget; never blocks the TurnQueue.
     this.orch.recordTurn(turn);
+    // …and keep the DO alive until that detached evolution settles — the cf
+    // peer of the CLI's pre-exit `await orch.settleEvolution()`.
+    this.settleEvolutionInBackground();
 
     // Auto-judge shadow evaluation. When a pending scaffold exists,
     // sample-and-run (default 25%) the pending against this turn's task,

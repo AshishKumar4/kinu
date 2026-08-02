@@ -212,6 +212,7 @@ export {
   type BuiltinToolName,
   type BuiltinToolSpec,
 } from './tools/registry.js';
+export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming.js';
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type BuiltinToolDeps, type ProductChangeToolDeps,
@@ -245,6 +246,7 @@ export {
 export {
   compilePromptSurface,
   executorIsSelectable,
+  promptModeForTurnEvent,
   selectableRuntimeNames,
   uniqueBuiltinTools,
   uniqueExternalTools,

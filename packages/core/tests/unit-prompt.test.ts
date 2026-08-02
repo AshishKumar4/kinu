@@ -11,6 +11,7 @@ import {
   compilePromptSurface,
   currentDateForPrompt,
   modelSupportsTools,
+  promptModeForTurnEvent,
 } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
 
@@ -323,7 +324,11 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('target-native');
   });
 
-  test('the CLI-local VFS has no remote mounts — no mount doctrine rendered', () => {
+  test('the CLI-local VFS mounts its one remote plane, /pc, and says so', () => {
+    // The local backend used to mount /local alone, so the doctrine was gated
+    // off for cli-local entirely. It now mounts the host filesystem at the same
+    // /pc prefix the cloud backend reaches the user's machine through, so the
+    // doctrine follows the executor list on both backends.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
@@ -332,8 +337,21 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
+    expect(prompt).toContain('mount table');
+    expect(prompt).toContain('/local is the durable base, and /pc is a live window');
+    expect(prompt).not.toContain('/sandbox');
+    expect(prompt).not.toContain('/nimbus');
+  });
+
+  test('a workspace with no execution devices renders no mount doctrine', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cli-local',
+      executors: [
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
     expect(prompt).not.toContain('mount table');
-    expect(prompt).not.toContain('/pc');
   });
 
   test('includes output-format guidance', () => {
@@ -414,6 +432,24 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt, { mode: 'background_resume' })).toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'cron' })).toContain('Scheduled wake mode');
     expect(buildSystemPromptSync(rt, { mode: 'product_change' })).toContain('Never deploy Proteus product changes');
+  });
+
+  test('turn-mode classification is one shared rule for both backends', () => {
+    // Both backends stamp `metadata.proteusEvent` on programmatic turns and
+    // must derive the SAME prompt mode from it — the cf backend used to pass
+    // no mode at all, so a hosted agent woken to collect a background job
+    // never saw the background-resume guidance the CLI agent got.
+    expect(promptModeForTurnEvent('background_job')).toBe('background_resume');
+    expect(promptModeForTurnEvent('timer_cron')).toBe('cron');
+    expect(promptModeForTurnEvent('event_drain')).toBe('chat');
+    expect(promptModeForTurnEvent(null)).toBe('chat');
+    expect(promptModeForTurnEvent(undefined)).toBe('chat');
+
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf', mode: promptModeForTurnEvent('background_job'),
+    });
+    expect(prompt).toContain('Background-resume mode');
   });
 
   test('renders the date-only current date in runtime context', () => {

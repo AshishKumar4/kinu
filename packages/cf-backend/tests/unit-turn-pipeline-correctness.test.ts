@@ -230,6 +230,41 @@ describe('turn-pipeline correctness wiring', () => {
     expect(runEndEmit).toContain('error: errorText');
   });
 
+  test("the per-turn system prompt carries the turn's mode overlay", () => {
+    // The CLI derived a PromptMode from metadata.proteusEvent; cf passed none,
+    // so a hosted agent resumed to collect a background job never saw the
+    // background-resume guidance. Both now share core's promptModeForTurnEvent.
+    const beforeTurn = actor.slice(
+      actor.indexOf('const systemOverride = buildSystemPromptSync(this.rt, {'),
+      actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
+    );
+    expect(beforeTurn).toContain(
+      'mode: promptModeForTurnEvent(this.turnUserMessageEvent(this._activeProgrammaticUserMessage))',
+    );
+  });
+
+  test('the DO holds a keepAlive heartbeat until the turn evolution settles', () => {
+    // Parity with the CLI, which awaits orch.settleEvolution() before the
+    // process exits. Evolution is detached so it never blocks the TurnQueue —
+    // but Think's own keepAliveWhile disposes when onChatResponse returns, so
+    // without a settle heartbeat the detached LLM calls race DO eviction.
+    const settle = actor.slice(
+      actor.indexOf('protected settleEvolutionInBackground(): void'),
+      actor.indexOf('// The BackendHost the core orchestrator runs against'),
+    );
+    expect(settle).toContain('if (this._evolutionSettling) return;');
+    expect(settle).toContain('this.keepAliveWhile(() => this.orch.settleEvolution())');
+    expect(settle).toContain('.finally(() => { this._evolutionSettling = false; });');
+    // Detached — awaiting it in onChatResponse would re-block the TurnQueue.
+    expect(settle).toContain('void this.keepAliveWhile');
+
+    // …and the post-turn hook actually calls it, after recordTurn dispatched.
+    const recordTurn = source.indexOf('this.orch.recordTurn(turn);');
+    const settleCall = source.indexOf('this.settleEvolutionInBackground();');
+    expect(recordTurn).toBeGreaterThan(-1);
+    expect(settleCall).toBeGreaterThan(recordTurn);
+  });
+
   test('pickAlternateTake returns false unless the awaited enqueue actually queues', () => {
     const pick = source.slice(
       source.indexOf('async pickAlternateTake('),

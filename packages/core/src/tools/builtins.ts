@@ -45,6 +45,7 @@ import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { isMcpToolKey } from './mcp-naming.js';
 import type { CraftedToolExecute } from './crafted-executor.js';
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { DEFAULT_CONFIG } from '../config.js';
@@ -1224,13 +1225,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // MCP tools land under the `tool_<serverIdNoHyphens>_<name>` prefix
-  // (Cloudflare Agents SDK convention). Reserve that prefix exclusively for
-  // MCP so a future builtin can't silently collide with a user's MCP server.
+  // MCP tools land under the `mcp_<server>_<name>` prefix (core mcpToolKey,
+  // shared by both backends). Reserve that prefix exclusively for MCP so a
+  // future builtin can't silently collide with a user's MCP server.
   for (const name of Object.keys(tools)) {
-    if (name.startsWith('tool_')) {
+    if (isMcpToolKey(name)) {
       throw new Error(
-        `Builtin tool name '${name}' starts with the reserved 'tool_' prefix. ` +
+        `Builtin tool name '${name}' starts with the reserved 'mcp_' prefix. ` +
         `That prefix is owned by per-user MCP tools — pick a different name.`,
       );
     }

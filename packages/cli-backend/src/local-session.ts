@@ -24,13 +24,15 @@ import type {
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   IngressDescriptor, ProteusEvent, EventVariant,
-  ProductChangeStore, ProductChangeToolDeps, BuiltinToolName, PromptMode,
+  RunEvent, RunEventInput, RunEventQuery,
+  ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, initBackgroundJobsTable, withBackgroundThreshold,
   EventLog, initEventsHubTables,
+  RunEventRecorder, initRunEventTables,
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
   initAgentConfigTable, createAgentConfigStore,
@@ -40,8 +42,9 @@ import {
   HeadController, HeadJournal, initHeadsTables,
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
-  BUILTIN_TOOL_NAMES,
-  buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, createChatModel, runChat, resolveMaxSteps,
+  BUILTIN_TOOL_NAMES, isMcpToolKey,
+  buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
+  createChatModel, runChat, resolveMaxSteps,
   parseModelSpec, agentAffinityKey, contextWindowForModel,
   planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   ExtensionHost, StepInjections,
@@ -189,13 +192,6 @@ interface QueueItem {
   resolve: () => void;
 }
 
-function promptModeForTurn(item: QueueItem): PromptMode {
-  const event = typeof item.metadata?.proteusEvent === 'string' ? item.metadata.proteusEvent : '';
-  if (event === 'background_job') return 'background_resume';
-  if (event.includes('timer') || event.includes('cron')) return 'cron';
-  return 'chat';
-}
-
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
 export class LocalAgentSession implements BackendHost {
@@ -213,6 +209,10 @@ export class LocalAgentSession implements BackendHost {
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
   private readonly eventLog: EventLog;
+  /** Durable per-run event log (run_events) — parity with the DO's recorder. */
+  private readonly eventRecorder: RunEventRecorder;
+  /** The run the in-flight turn belongs to; null between turns. */
+  private currentRunId: string | null = null;
   private readonly triggerRegistry: TriggerRegistry;
   private readonly productChanges: ProductChangeStore;
   private _webSearchProvider: WebSearchProvider | null = null;
@@ -252,8 +252,8 @@ export class LocalAgentSession implements BackendHost {
   private readonly turnInvokedSkills = new Set<string>();
   private skillsVfs: SkillsVfs | null = null;
 
-  /** Tools from connected MCP servers (resolveExtraTools seam), merged into the
-   *  turn surface. Connected lazily via connectMcp; closed on end. */
+  /** Tools from connected MCP servers, merged into the turn surface. Connected
+   *  lazily via connectMcp; closed on end. */
   private extraTools: ToolSet = {};
   private mcpClose: (() => Promise<void>) | null = null;
 
@@ -361,11 +361,23 @@ export class LocalAgentSession implements BackendHost {
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
 
+    // The durable per-run event log (run_events) — the same recorder, table and
+    // RunEvent union the cloud backend records, over local SQLite. Without it a
+    // local workspace had no replayable run history at all.
+    initRunEventTables(this.rt.storage.execRaw);
+    this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
+
     this.orch = new AgentOrchestrator({
       host: this,
       engine: this.engine,
       eventLog: this.eventLog,
       sessionReflectionInterval: opts.sessionReflectionInterval,
+      sinks: {
+        onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
+        onStepEvent: (ev) => this.recordRunEvent({
+          type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason,
+        }),
+      },
     });
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
@@ -689,11 +701,6 @@ export class LocalAgentSession implements BackendHost {
     } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
   }
 
-  /** BackendHost seam — the connected MCP tools, merged into each turn. */
-  resolveExtraTools(): ToolSet {
-    return this.extraTools;
-  }
-
   /** The drain-debounce timer (BackendHost seam) — a plain one-shot timeout.
    *  Skips a window that outlives the session so consumed events are never
    *  bound to a turn a dead pump will not run. */
@@ -909,12 +916,62 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
+  /** Append to the durable run-event log, scoped to the in-flight run. Never
+   *  throws: losing a history row must not fail a turn. */
+  private recordRunEvent(input: RunEventInput): void {
+    if (!this.currentRunId) return;
+    try { this.eventRecorder.emit(this.currentRunId, input); }
+    catch (err) { console.warn('[proteus] run event emit failed:', err); }
+  }
+
+  /** Seal the in-flight run: turn_end (index + token usage) then run_end
+   *  (status + the failure text), mirroring the DO's settle spine. Idempotent
+   *  per run — clearing the id makes a second call a no-op. */
+  private closeRun(error: string | null): void {
+    if (!this.currentRunId) return;
+    const { input, output, cached } = this.orch.acc.usage;
+    this.recordRunEvent({
+      type: 'turn_end',
+      turnIndex: this.orch.sessionTurnIndex,
+      tokenUsage: { input, output, cached },
+    });
+    this.recordRunEvent({
+      type: 'run_end',
+      reason: this.orch.acc.hadError ? 'error' : 'completed',
+      ...(error ? { error } : {}),
+    });
+    this.currentRunId = null;
+  }
+
+  /** A single run's durable events — the local peer of the DO's getRunEvents,
+   *  and what an SSE resume replays from (`since` = last seen index). */
+  getRunEvents(runId: string, opts: RunEventQuery = {}): RunEvent[] {
+    try { return this.eventRecorder.read(runId, opts); }
+    catch { return []; }
+  }
+
+  /** Recent runs, newest first — the local peer of the DO's listRuns. */
+  listRuns(limit = 50): Array<{ runId: string; lastTs: string; eventCount: number }> {
+    try { return this.eventRecorder.listRuns(limit); }
+    catch { return []; }
+  }
+
   private async processTurn(item: QueueItem): Promise<void> {
     const event = typeof item.metadata?.proteusEvent === 'string' ? item.metadata.proteusEvent : undefined;
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
 
     const startedAt = Date.now();
     this.orch.beginTurn(startedAt);
+    // Open this turn's run in the durable event log. Provenance mirrors the
+    // DO's: a real chat turn is 'chat', a programmatic one names its trigger.
+    this.currentRunId = `run-${crypto.randomUUID()}`;
+    this.recordRunEvent({
+      type: 'run_start',
+      agentId: this.agentName(),
+      caused_by: event ?? 'chat',
+      userMessage: item.text.slice(0, 500),
+    });
+    this.recordRunEvent({ type: 'turn_start', turnIndex: this.orch.sessionTurnIndex });
     // Shadow-git checkpoints: arm the per-turn dedup so the first host-FS
     // mutation of this turn snapshots its working directory (invisible /undo
     // substrate — see core checkpoints/types.ts).
@@ -940,7 +997,7 @@ export class LocalAgentSession implements BackendHost {
       BUILTIN_TOOL_NAMES.has(name));
     const externalTools = Object.keys(this.extraTools).map((name) => ({
       name,
-      source: name.startsWith('tool_') ? 'mcp' as const : 'external' as const,
+      source: isMcpToolKey(name) ? 'mcp' as const : 'external' as const,
     }));
     // Nearest-file-wins AGENTS.md chain, re-read each turn so edits land
     // immediately (a handful of stat calls — negligible next to the LLM call).
@@ -953,7 +1010,7 @@ export class LocalAgentSession implements BackendHost {
       availableTools: availableBuiltins,
       externalTools,
       backend: 'cli-local',
-      mode: promptModeForTurn(item),
+      mode: promptModeForTurnEvent(event),
       model: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
@@ -990,6 +1047,9 @@ export class LocalAgentSession implements BackendHost {
 
     const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
     let fullText = '';
+    /** The turn's terminal failure text, persisted on run_end so a post-hoc
+     *  read of the log carries the same evidence the cf run_end does. */
+    let runError: string | null = null;
     const abort = new AbortController();
     this.currentAbort = abort;
 
@@ -1123,6 +1183,7 @@ export class LocalAgentSession implements BackendHost {
       for (const injection of injections.recorded) this.history.push(injection.message);
       this.orch.acc.hadError = true;
       const message = err instanceof Error ? err.message : String(err);
+      runError = message.slice(0, 500);
       this.emit({ type: 'error', message });
       // Overflow recovery (core turn-failure policy, shared with the cf
       // backend): a context_length-class failure arms force-compaction for
@@ -1213,6 +1274,7 @@ export class LocalAgentSession implements BackendHost {
       this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
 
       const turn = snapshotTurn();
+      this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
       await this.orch.completeTurn(turn);
       // Sampled auto-judge shadow rollout. Tracked rather than fire-and-forget:
@@ -1228,6 +1290,7 @@ export class LocalAgentSession implements BackendHost {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.orch.acc.hadError = true;
+      this.closeRun(runError ?? message.slice(0, 500));
       console.error('[proteus] turn finalization failed:', message);
       // Any response messages runChat produced remain in live history as a
       // best-effort recovery for later turns in this process. We do not retry
