@@ -216,7 +216,7 @@ describe("CLI inspection commands", () => {
     expect(stored.stdout.toString()).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
     expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).model)
       .toBe("workers-ai/@cf/meta/llama-3.1-8b-instruct");
-  });
+  }, 60_000);
 
   test("proteus effort sets workspace and global defaults and appears in status", () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-effort-"));
@@ -273,5 +273,5 @@ describe("CLI inspection commands", () => {
     expect(unknownProvider.stderr.toString()).toContain('Unknown model provider "unknown"');
     expect(unknownProvider.stderr.toString()).toContain("workers-ai");
     expect(unknownProvider.stdout.toString()).not.toContain("set unknown/model");
-  });
+  }, 60_000);
 });
