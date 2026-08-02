@@ -59,6 +59,7 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
       title="Add a subordinate"
       icon={<UserPlusIcon size={18} className="p-accent" />}
       onClose={onClose}
+      busy={saving}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button size="sm" variant="primary" type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
@@ -159,7 +160,8 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
         <Modal
           title={`Dismiss ${dismissTarget.displayName}?`}
           icon={<TrashIcon size={18} className="p-danger" />}
-          onClose={() => { if (!dismissing) setDismissTarget(null); }}
+          onClose={() => setDismissTarget(null)}
+          busy={dismissing}
           footer={<>
             <Button size="sm" variant="ghost" disabled={dismissing} onClick={() => setDismissTarget(null)}>Cancel</Button>
             <Button

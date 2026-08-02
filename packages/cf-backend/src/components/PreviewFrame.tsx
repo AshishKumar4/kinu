@@ -8,7 +8,8 @@
  * or a fixed-height wrapper for the inline chat card).
  */
 import { useState } from "react";
-import { ArrowsClockwiseIcon, ArrowSquareOutIcon, CopyIcon } from "@phosphor-icons/react";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { ArrowsClockwiseIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
 
 const IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads";
 
@@ -18,18 +19,13 @@ export function PreviewFrame({ url, label }: {
   label?: string;
 }) {
   const [reloadKey, setReloadKey] = useState(0);
-  const [copied, setCopied] = useState(false);
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-elevated shrink-0">
         <span className="size-1.5 rounded-full p-dot-success shrink-0" />
         {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
         <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
-        <button
-          onClick={() => { navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Copy URL"
-        >{copied ? <span className="text-[10px]">copied</span> : <CopyIcon size={11} />}</button>
+        <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
         <button
           onClick={() => setReloadKey(k => k + 1)}
           className="p-text-3 hover:p-text p-1 shrink-0"

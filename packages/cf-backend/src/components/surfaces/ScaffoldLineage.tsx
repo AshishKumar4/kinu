@@ -7,10 +7,12 @@
  * Binds to wired RPCs: listScaffoldVersions, getScaffoldDiff, getShadowVerdict,
  * applyScaffoldDecision, previewScaffoldLive.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
@@ -71,34 +73,44 @@ export interface ScaffoldLineageProps {
 }
 
 export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
-  const [versions, setVersions] = useState<ScaffoldVersion[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
-  const [diff, setDiff] = useState<ScaffoldDiff | null>(null);
-  const [verdict, setVerdict] = useState<ShadowVerdict | null>(null);
+  const [detail, setDetail] = useState<AsyncResource<{ diff: ScaffoldDiff; verdict: ShadowVerdict | null }>>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [decideErr, setDecideErr] = useState<string | null>(null);
   const [previewTask, setPreviewTask] = useState("");
   const [previewOut, setPreviewOut] = useState<string | null>(null);
 
-  const loadVersions = useCallback(() => {
-    rpc<ScaffoldVersion[]>("listScaffoldVersions", [20]).then(setVersions).catch(() => {});
-  }, [rpc]);
+  // "no rewrites yet" is a claim about the agent's own evolution. It may only
+  // be made about a listing that actually came back.
+  const loadVersions = useCallback(() => rpc<ScaffoldVersion[]>("listScaffoldVersions", [20]), [rpc]);
+  const { resource: lineage, reload } = useAsyncResource(loadVersions);
+  const versions = lastValue(lineage) ?? [];
 
-  useEffect(() => { loadVersions(); }, [loadVersions]);
+  const loadDetail = useCallback((version: number) => {
+    setDetail({ status: "loading" });
+    // The verdict is absent for a version that never shadow-evalled, so its
+    // failure must not withhold the diff; the diff's failure is the surface's.
+    Promise.all([
+      rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
+      rpc<ShadowVerdict>("getShadowVerdict", [version]).catch(() => null),
+    ]).then(
+      ([diff, verdict]) => setDetail(loadSucceeded({ diff, verdict })),
+      (err) => setDetail((prev) => loadFailed(prev, err)),
+    );
+  }, [rpc]);
 
   const select = useCallback((version: number) => {
-    setSelected(version); setDiff(null); setVerdict(null); setPreviewOut(null); setDecideErr(null);
-    rpc<ScaffoldDiff>("getScaffoldDiff", [version]).then(setDiff).catch(() => {});
-    rpc<ShadowVerdict>("getShadowVerdict", [version]).then(setVerdict).catch(() => {});
-  }, [rpc]);
+    setSelected(version); setPreviewOut(null); setDecideErr(null);
+    loadDetail(version);
+  }, [loadDetail]);
 
   const decide = useCallback(async (mode: "promote" | "rollback") => {
     setBusy(mode);
     setDecideErr(null);
-    try { await rpc("applyScaffoldDecision", [mode]); loadVersions(); if (selected != null) select(selected); }
+    try { await rpc("applyScaffoldDecision", [mode]); reload(); if (selected != null) loadDetail(selected); }
     catch (e) { setDecideErr(`${mode} failed: ${e instanceof Error ? e.message : String(e)}`); }
     finally { setBusy(null); }
-  }, [rpc, loadVersions, select, selected]);
+  }, [rpc, reload, loadDetail, selected]);
 
   const runPreview = useCallback(async () => {
     if (selected == null || !previewTask.trim()) return;
@@ -123,7 +135,11 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
         <Badge variant="secondary">v{currentVersion}</Badge>
       </div>
 
-      {versions.length === 0 ? (
+      {lineage.status === "error" && versions.length === 0 ? (
+        <LoadFailure what="the scaffold lineage" message={lineage.message} onRetry={reload} />
+      ) : lineage.status === "loading" ? (
+        <div className="flex justify-center py-4"><Loader size="sm" /></div>
+      ) : versions.length === 0 ? (
         <p className="text-xs p-text-3">Only the bootstrap scaffold (v0) so far — no rewrites yet.</p>
       ) : (
         <div className="space-y-2">
@@ -143,8 +159,16 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           {/* Selected version detail */}
           {selected != null && (
             <div className="space-y-3 pt-1">
-              {verdict && verdict.trials.length > 0 && <VerdictGrid verdict={verdict} />}
-              {diff ? <DiffView diff={diff} /> : <div className="flex justify-center py-4"><Loader size="sm" /></div>}
+              {detail.status === "ready" && detail.value.verdict && detail.value.verdict.trials.length > 0 && (
+                <VerdictGrid verdict={detail.value.verdict} />
+              )}
+              {detail.status === "ready" ? (
+                <DiffView diff={detail.value.diff} />
+              ) : detail.status === "error" ? (
+                <LoadFailure what={`the v${selected} diff`} message={detail.message} onRetry={() => loadDetail(selected)} />
+              ) : (
+                <div className="flex justify-center py-4"><Loader size="sm" /></div>
+              )}
 
               {/* Preview-live a candidate before promoting */}
               <div className="space-y-1.5">

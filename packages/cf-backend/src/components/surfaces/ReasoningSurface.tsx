@@ -11,6 +11,8 @@ import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon
 import { DEFAULT_QUALITY_THRESHOLD, lossInterval, scoreInterval, type AlignmentConvergence, type ScoreInterval } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, EMPTY_HINTS, MarkdownContent } from "./shared";
 
 type SubView = "mcts" | "branches" | "gepa" | "quality";
@@ -574,10 +576,14 @@ function HeadBranchInspector({ selection }: { selection: HeadSelection | null })
 }
 
 function BranchesView({ rpc }: { rpc: Rpc }) {
-  const [runs, setRuns] = useState<HeadRun[] | null>(null);
   const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
-  useEffect(() => { rpc<HeadRun[]>("getHeadRuns", [20]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
-  if (runs === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  const load = useCallback(() => rpc<HeadRun[]>("getHeadRuns", [20]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const runs = lastValue(resource);
+  if (runs === null) {
+    if (resource.status === "error") return <LoadFailure what="the branching-head runs" message={resource.message} onRetry={reload} />;
+    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  }
   if (runs.length === 0) return <EmptyState icon={<GitForkIcon size={28} />} title="No branching-head runs yet" hint="When the agent runs think(strategy:'heads'), the parallel reasoning branches and their merge appear here." />;
   const selections: HeadSelection[] = runs.flatMap((run) => run.heads.map((head) => ({ run, head })));
   const selected = selections.find((s) => s.head.id === selectedHeadId) ?? selections[0] ?? null;
@@ -616,20 +622,29 @@ interface GepaCandidate { id: string; parentId: string | null; aggregateScore: n
 interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
 
 function GepaView({ rpc }: { rpc: Rpc }) {
-  const [runs, setRuns] = useState<GepaRunRow[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
-  const [detail, setDetail] = useState<GepaRunDetail | null>(null);
-  useEffect(() => { rpc<GepaRunRow[]>("getGepaRuns", [20]).then(setRuns).catch(() => setRuns([])); }, [rpc]);
+  const [detail, setDetail] = useState<AsyncResource<GepaRunDetail>>({ status: "loading" });
+  const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
   const open = useCallback((runId: string) => {
-    setSel(runId); setDetail(null);
-    rpc<GepaRunDetail>("getGepaRun", [runId]).then(setDetail).catch(() => {});
+    setSel(runId);
+    setDetail({ status: "loading" });
+    rpc<GepaRunDetail>("getGepaRun", [runId]).then(
+      (d) => setDetail(loadSucceeded(d)),
+      (err) => setDetail((prev) => loadFailed(prev, err)),
+    );
   }, [rpc]);
 
-  if (runs === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  const runs = lastValue(resource);
+  if (runs === null) {
+    if (resource.status === "error") return <LoadFailure what="the self-tuning runs" message={resource.message} onRetry={reload} />;
+    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  }
   if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" hint="Trigger a scaffold self-tuning pass (GEPA) from Settings; its candidates + Pareto front appear here." />;
 
-  const paretoIds = new Set((detail?.pareto ?? []).map((p) => p.candidateId));
-  const maxAgg = Math.max(0.0001, ...(detail?.candidates ?? []).map((c) => c.aggregateScore));
+  const loadedDetail = lastValue(detail);
+  const paretoIds = new Set((loadedDetail?.pareto ?? []).map((p) => p.candidateId));
+  const maxAgg = Math.max(0.0001, ...(loadedDetail?.candidates ?? []).map((c) => c.aggregateScore));
   return (
     <div className="space-y-3 animate-fade-in overflow-y-auto h-full">
       <div className="space-y-1">
@@ -643,16 +658,18 @@ function GepaView({ rpc }: { rpc: Rpc }) {
         ))}
       </div>
 
-      {sel && (detail === null ? (
-        <div className="flex justify-center py-4"><Loader size="sm" /></div>
+      {sel && (loadedDetail === null ? (
+        detail.status === "error"
+          ? <LoadFailure what="this run's candidates" message={detail.message} onRetry={() => open(sel)} />
+          : <div className="flex justify-center py-4"><Loader size="sm" /></div>
       ) : (
         <div className="space-y-2">
-          <div className="text-[11px] p-text-3">{detail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {detail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
+          <div className="text-[11px] p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
           {/* Candidate aggregate-score bars; Pareto-front + winner highlighted. */}
           <div className="space-y-1">
-            {detail.candidates.map((c) => {
+            {loadedDetail.candidates.map((c) => {
               const onPareto = paretoIds.has(c.id);
-              const isWinner = detail.run?.winnerId === c.id;
+              const isWinner = loadedDetail.run?.winnerId === c.id;
               // The aggregate is a mean over a handful of judged instances —
               // shown with its interval so two candidates aren't read apart on
               // a gap the eval set can't resolve.
@@ -702,17 +719,22 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
 // Both quality signals load together so the pane resolves once, rather than
 // flashing an empty state while the second call is still in flight.
 function QualityView({ rpc }: { rpc: Rpc }) {
-  const [data, setData] = useState<{ rows: ReplayEvalRow[]; align: AlignmentConvergence | null } | null>(null);
-  useEffect(() => {
-    void Promise.all([
-      rpc<ReplayEvalRow[]>("getReplayEvals", [50]).catch(() => []),
-      rpc<AlignmentConvergence>("getAlignmentConvergence").catch(() => null),
-    ]).then(([rows, align]) => setData({ rows, align }));
+  const load = useCallback(async () => {
+    const [rows, align] = await Promise.all([
+      rpc<ReplayEvalRow[]>("getReplayEvals", [50]),
+      rpc<AlignmentConvergence>("getAlignmentConvergence"),
+    ]);
+    return { rows, align };
   }, [rpc]);
+  const { resource, reload } = useAsyncResource(load);
 
-  if (data === null) return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  const data = lastValue(resource);
+  if (data === null) {
+    if (resource.status === "error") return <LoadFailure what="the quality history" message={resource.message} onRetry={reload} />;
+    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  }
   const { rows, align } = data;
-  const hasAlignment = align !== null && align.overall.turns > 0;
+  const hasAlignment = align.overall.turns > 0;
   if (rows.length === 0 && !hasAlignment) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
 
   return (

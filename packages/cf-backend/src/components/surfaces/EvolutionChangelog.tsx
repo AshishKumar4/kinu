@@ -16,6 +16,8 @@ import {
 } from "@phosphor-icons/react";
 import type { ChangelogEntry, ChangelogEntryKind } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
 import type { DiffLine } from "@/lib/diff";
 
@@ -46,18 +48,15 @@ export interface EvolutionChangelogProps {
 }
 
 export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
-  const [view, setView] = useState<ChangelogView | null>(null);
   const [kept, setKept] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ id: string; text: string; ok: boolean } | null>(null);
-  const [diffFor, setDiffFor] = useState<{ id: string; diff: ScaffoldDiff | null } | null>(null);
+  const [diffFor, setDiffFor] = useState<{ id: string; diff: AsyncResource<ScaffoldDiff> } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const load = useCallback(() => {
-    rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]).then(setView).catch(() => {});
-  }, [rpc]);
-
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]), [rpc]);
+  const { resource, reload } = useAsyncResource(load);
+  const view = lastValue(resource);
 
   // Seeing the digest IS the acknowledgement — never a blocking modal.
   useEffect(() => {
@@ -71,21 +70,25 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
     try {
       const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
       setNotice({ id: entry.id, text: r.ok ? `Reverted — ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
-      if (r.ok) load();
+      if (r.ok) reload();
     } catch (e) {
       setNotice({ id: entry.id, text: e instanceof Error ? e.message : String(e), ok: false });
     } finally {
       setBusy(null);
     }
-  }, [rpc, load]);
+  }, [rpc, reload]);
 
   const toggleDiff = useCallback((entry: ChangelogEntry) => {
     if (diffFor?.id === entry.id) { setDiffFor(null); return; }
     if (entry.scaffoldVersion == null) return;
-    setDiffFor({ id: entry.id, diff: null });
-    rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion])
-      .then((diff) => setDiffFor((cur) => cur?.id === entry.id ? { id: entry.id, diff } : cur))
-      .catch(() => setDiffFor(null));
+    setDiffFor({ id: entry.id, diff: { status: "loading" } });
+    const settle = (diff: AsyncResource<ScaffoldDiff>) =>
+      setDiffFor((cur) => cur?.id === entry.id ? { id: entry.id, diff } : cur);
+    rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]).then(
+      (diff) => settle(loadSucceeded(diff)),
+      // Collapsing the panel made the click look like it did nothing.
+      (err) => settle(loadFailed({ status: "loading" }, err)),
+    );
   }, [rpc, diffFor]);
 
   const toggleExpanded = useCallback((id: string) => {
@@ -96,8 +99,6 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
       return next;
     });
   }, []);
-
-  if (!view) return null;
 
   const entryActions = (entry: ChangelogEntry) => {
     const isKept = kept.has(entry.id);
@@ -150,10 +151,17 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
       <div className="flex items-center gap-2 mb-2.5">
         <ClockCounterClockwiseIcon size={14} className="p-text-2" />
         <span className="text-sm font-medium p-text">Changelog</span>
-        {view.entries.length > 0 && <Badge variant="secondary">{view.entries.length}</Badge>}
+        {view && view.entries.length > 0 && <Badge variant="secondary">{view.entries.length}</Badge>}
       </div>
 
-      {view.entries.length === 0 ? (
+      {/* The section always renders. Returning null on a failed read made the
+          agent's self-change record indistinguishable from a build that never
+          had one — on the very surface that justifies autonomy-ON defaults. */}
+      {!view ? (
+        resource.status === "error"
+          ? <LoadFailure what="the changelog" message={resource.message} onRetry={reload} />
+          : <div className="flex justify-center py-4"><Loader size="sm" /></div>
+      ) : view.entries.length === 0 ? (
         <p className="text-xs p-text-3">No self-changes recorded yet — they appear here as the agent evolves.</p>
       ) : (
         <div className="space-y-2">
@@ -217,15 +225,18 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
                   </div>
                 )}
                 {diffFor?.id === entry.id && (
-                  diffFor.diff ? (
+                  diffFor.diff.status === "ready" ? (
                     <div className="mt-2 rounded-md border p-border overflow-hidden">
                       <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border text-[11px] p-text-3">
-                        <span>v{diffFor.diff.previousVersion ?? "∅"} → v{diffFor.diff.version}</span>
-                        <span className="p-success">+{diffFor.diff.added}</span>
-                        <span className="p-danger">−{diffFor.diff.removed}</span>
+                        <span>v{diffFor.diff.value.previousVersion ?? "∅"} → v{diffFor.diff.value.version}</span>
+                        <span className="p-success">+{diffFor.diff.value.added}</span>
+                        <span className="p-danger">−{diffFor.diff.value.removed}</span>
                       </div>
-                      <DiffLines lines={diffFor.diff.lines} />
+                      <DiffLines lines={diffFor.diff.value.lines} />
                     </div>
+                  ) : diffFor.diff.status === "error" ? (
+                    <LoadFailure className="mt-2" what="this diff" message={diffFor.diff.message}
+                      onRetry={() => toggleDiff(entry)} />
                   ) : <div className="flex justify-center py-3"><Loader size="sm" /></div>
                 )}
               </div>

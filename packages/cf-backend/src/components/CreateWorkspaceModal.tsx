@@ -33,6 +33,7 @@ export function CreateWorkspaceModal({ onClose, initialMission = "" }: CreateWor
       title="New workspace"
       icon={<PlusIcon size={18} className="p-accent" />}
       onClose={onClose}
+      busy={busy}
       maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>

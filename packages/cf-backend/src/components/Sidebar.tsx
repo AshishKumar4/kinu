@@ -324,7 +324,8 @@ export default function Sidebar() {
         <Modal
           title="Remove workspace"
           icon={<TrashIcon size={18} className="p-danger" />}
-          onClose={() => { if (!deleteBusy) setDeleteTarget(null); }}
+          onClose={() => setDeleteTarget(null)}
+          busy={deleteBusy}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Cancel</Button>
             <Button size="sm" variant="primary" onClick={confirmDelete} disabled={deleteBusy}>

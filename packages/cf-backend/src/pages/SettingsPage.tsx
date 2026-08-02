@@ -9,7 +9,7 @@ import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon, CopyIcon,
+  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
   DesktopTowerIcon,
 } from "@phosphor-icons/react";
 import { formatScoreInterval, type ScoreInterval } from "@proteus/core";
@@ -20,10 +20,80 @@ import {
 } from "../lib/user-api";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { Card, inputCls } from "@/components/ui/form";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
-const DEFAULT_MCTS = { explorationConstant: 1.414, maxIterations: 50, maxDepth: 5, branchBudget: 3 };
+interface MctsConfig {
+  explorationConstant: number;
+  maxIterations: number;
+  maxDepth: number;
+  branchBudget: number;
+}
+
+/**
+ * One settings field: an AsyncResource read from the server with the user's
+ * in-progress edit layered on top, written back only when that edit exists.
+ *
+ * Save used to write every field unconditionally, gated on the socket being
+ * open rather than on the data having arrived — so saving before hydration, or
+ * after a read whose `.catch` substituted a default, wiped SOUL.md and reset
+ * tuned MCTS values to whatever placeholder the form happened to hold. A field
+ * that never loaded has nothing to save, and says so instead of guessing.
+ */
+interface SettingField<T> {
+  resource: AsyncResource<T>;
+  /** What the form shows: the pending edit if there is one, else what loaded. */
+  value: T | null;
+  dirty: boolean;
+  edit: (value: T) => void;
+  hydrate: (value: T) => void;
+  fail: (error: unknown) => void;
+  /** Commit a written value: it is now both the stored value and clean. */
+  markSaved: (value: T) => void;
+}
+
+function useSettingField<T>(): SettingField<T> {
+  const [resource, setResource] = useState<AsyncResource<T>>({ status: "loading" });
+  // Boxed so `null` stays a legal edited value and absence stays distinguishable.
+  const [edited, setEdited] = useState<{ value: T } | null>(null);
+
+  const edit = useCallback((next: T) => setEdited({ value: next }), []);
+  // A later refresh updates the stored value without disturbing the edit in
+  // progress — the form keeps showing what the user typed.
+  const hydrate = useCallback((next: T) => setResource(loadSucceeded(next)), []);
+  const fail = useCallback((error: unknown) => setResource((prev) => loadFailed(prev, error)), []);
+  const markSaved = useCallback((saved: T) => {
+    setResource(loadSucceeded(saved));
+    setEdited(null);
+  }, []);
+
+  return {
+    resource,
+    value: edited ? edited.value : lastValue(resource),
+    dirty: edited !== null,
+    edit, hydrate, fail, markSaved,
+  };
+}
+
+/**
+ * The tri-state around one editable field, so no card renders a placeholder as
+ * if it were the stored setting.
+ */
+function FieldState<T>({ field, what, onRetry, children }: {
+  field: SettingField<T>;
+  what: string;
+  onRetry: () => void;
+  children: (value: T) => React.ReactNode;
+}) {
+  if (field.value !== null) return <>{children(field.value)}</>;
+  if (field.resource.status === "error") {
+    return <LoadFailure what={what} message={field.resource.message} onRetry={onRetry} />;
+  }
+  return <p className="text-xs p-text-3">Loading {what}…</p>;
+}
 
 export default function SettingsPage() {
   const { agentId } = useParams();
@@ -31,48 +101,53 @@ export default function SettingsPage() {
   // Stable pieces only — `state` itself is a fresh object every render, so
   // depending on it from load/save creates a self-sustaining refetch loop
   // that clobbers in-progress edits.
-  const { rpc, connectionStatus, agentStatus, setModel } = state;
+  const { rpc, connectionStatus, agentStatus, setModel, error: snapshotError, retryLoad } = state;
 
-  const [displayName, setDisplayName] = useState("");
-  const [displayNameDirty, setDisplayNameDirty] = useState(false);
-  const [soul, setSoul] = useState("");
+  const displayName = useSettingField<string>();
+  const soul = useSettingField<string>();
+  const spec = useSettingField<string>();
+  const approval = useSettingField<ApprovalMode>();
+  const mcts = useSettingField<MctsConfig>();
+
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [slugCopied, setSlugCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [currentSpec, setCurrentSpec] = useState<string>("");
-  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("strict");
-  const [mcts, setMcts] = useState(DEFAULT_MCTS);
-
-  // Hydrate identity fields once — never re-set form state from the server
-  // afterwards (later snapshot refreshes would overwrite what the user types).
-  const identityHydrated = useRef(false);
+  // Identity rides the workspace snapshot, so it hydrates — or fails — with it.
+  const { hydrate: hydrateDisplayName, fail: failDisplayName } = displayName;
+  const { hydrate: hydrateSoul, fail: failSoul } = soul;
   useEffect(() => {
-    if (!agentStatus || identityHydrated.current) return;
-    identityHydrated.current = true;
-    setSoul(agentStatus.soul || "");
-  }, [agentStatus]);
-
-  useEffect(() => {
-    if (agentStatus && !displayNameDirty) setDisplayName(agentStatus.displayName || "");
-  }, [agentStatus, displayNameDirty]);
-
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const [current, mode, mc] = await Promise.all([
-        rpc<{ spec: string | null }>("getStoredModelSpec", []).catch(() => ({ spec: null })),
-        rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []).catch(() => ({ mode: 'strict' as ApprovalMode })),
-        rpc<typeof DEFAULT_MCTS>("getMctsConfig", []).catch(() => DEFAULT_MCTS),
-      ]);
-      setCurrentSpec(current?.spec ?? "");
-      setApprovalMode(mode?.mode ?? "strict");
-      if (mc) setMcts(mc);
-    } catch (e) {
-      setErr((e as Error).message);
+    if (agentStatus) {
+      hydrateDisplayName(agentStatus.displayName || "");
+      hydrateSoul(agentStatus.soul || "");
+    } else if (snapshotError) {
+      failDisplayName(snapshotError);
+      failSoul(snapshotError);
     }
-  }, [rpc]);
+  }, [agentStatus, snapshotError, hydrateDisplayName, hydrateSoul, failDisplayName, failSoul]);
+
+  const { hydrate: hydrateSpec, fail: failSpec } = spec;
+  const { hydrate: hydrateApproval, fail: failApproval } = approval;
+  const { hydrate: hydrateMcts, fail: failMcts } = mcts;
+  const load = useCallback(async () => {
+    // A read that fails leaves its field unloaded — and so unsaveable — and
+    // says so in place of the editor. It never substitutes a default that Save
+    // would then write over the stored value.
+    const [storedSpec, mode, config] = await Promise.allSettled([
+      rpc<{ spec: string | null }>("getStoredModelSpec", []),
+      rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
+      rpc<MctsConfig>("getMctsConfig", []),
+    ]);
+    if (storedSpec.status === "rejected") failSpec(storedSpec.reason);
+    else hydrateSpec(storedSpec.value?.spec ?? "");
+
+    if (mode.status === "rejected") failApproval(mode.reason);
+    else hydrateApproval(mode.value?.mode ?? "strict");
+
+    if (config.status === "rejected") failMcts(config.reason);
+    else if (config.value) hydrateMcts(config.value);
+    else failMcts("the agent returned no MCTS config");
+  }, [rpc, hydrateSpec, failSpec, hydrateApproval, failApproval, hydrateMcts, failMcts]);
 
   // Fetch once per agent connection — not on every render.
   const loaded = useRef(false);
@@ -82,18 +157,31 @@ export default function SettingsPage() {
     void load();
   }, [connectionStatus, load]);
 
+  const dirty = displayName.dirty || soul.dirty || spec.dirty || approval.dirty || mcts.dirty;
+
   const save = useCallback(async () => {
+    // Only edited fields are written. Everything else is either still loading
+    // or failed to load, and the form has no authority over it.
+    const writes: Array<Promise<unknown>> = [];
+    const commits: Array<() => void> = [];
+    const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<unknown>) => {
+      const { value } = field;
+      if (!field.dirty || value === null) return;
+      writes.push(put(value));
+      commits.push(() => field.markSaved(value));
+    };
+    write(displayName, (v) => rpc("setDisplayName", [v]));
+    write(soul, (v) => rpc("setSoul", [v]));
+    write(spec, (v) => setModel(v));
+    write(approval, (v) => rpc("setShellApprovalMode", [v]));
+    write(mcts, (v) => rpc("setMctsConfig", [v]));
+    if (writes.length === 0) return;
+
     setSaving(true);
     setErr(null);
     try {
-      await Promise.all([
-        displayNameDirty ? rpc("setDisplayName", [displayName]) : Promise.resolve(),
-        rpc("setSoul", [soul]),
-        currentSpec ? setModel(currentSpec) : Promise.resolve(),
-        rpc("setShellApprovalMode", [approvalMode]),
-        rpc("setMctsConfig", [mcts]),
-      ]);
-      setDisplayNameDirty(false);
+      await Promise.all(writes);
+      for (const commit of commits) commit();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -101,21 +189,21 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [rpc, setModel, displayName, displayNameDirty, soul, currentSpec, approvalMode, mcts]);
-
-  const copySlug = useCallback(async () => {
-    if (!agentId) return;
-    try {
-      await navigator.clipboard.writeText(agentId);
-      setSlugCopied(true);
-      setTimeout(() => setSlugCopied(false), 2000);
-    } catch (error) {
-      setErr(error instanceof Error ? error.message : "Could not copy workspace slug");
-    }
-  }, [agentId]);
+  }, [rpc, setModel, displayName, soul, spec, approval, mcts]);
 
   if (connectionStatus !== "connected") {
-    return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm p-text-2">
+        {connectionStatus === "connecting" ? (
+          <><Loader size="base" /><span>Connecting to {agentId}…</span></>
+        ) : (
+          <>
+            <span className="p-danger">Not connected to this workspace — settings can't be read or saved.</span>
+            <Link to={`/workspace/${agentId}`} className="text-xs p-accent underline">Back to chat</Link>
+          </>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -129,14 +217,8 @@ export default function SettingsPage() {
             <h1 className="text-2xl font-semibold">Workspace settings</h1>
             <p className="text-xs p-text-3 mt-1 flex items-center gap-1.5">
               <span className="font-mono">{agentId}</span>
-              <button
-                type="button"
-                onClick={copySlug}
-                className="rounded p-0.5 hover:p-card-hover hover:p-text transition-colors"
-                title="Copy workspace slug"
-                aria-label={slugCopied ? "Workspace slug copied" : "Copy workspace slug"}
-              >{slugCopied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}</button>
-              <span className="sr-only" aria-live="polite">{slugCopied ? "Workspace slug copied" : ""}</span>
+              <CopyButton value={agentId ?? ""} what="the workspace slug" size={11}
+                className="rounded p-0.5 hover:p-card-hover hover:p-text transition-colors" />
               <span>·</span>
               <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
                 <KeyIcon size={11} /> Account settings & credentials
@@ -149,7 +231,8 @@ export default function SettingsPage() {
           </div>
           <button
             onClick={save}
-            disabled={saving}
+            disabled={saving || !dirty}
+            title={dirty ? undefined : "No unsaved changes"}
             className="px-4 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2"
           >
             {saved ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
@@ -163,28 +246,40 @@ export default function SettingsPage() {
         <Card title="Identity" icon={BrainIcon}>
           <div className="space-y-1.5">
             <label className="text-xs p-text-2 font-medium">Display name</label>
-            <input value={displayName} onChange={(e) => { setDisplayName(e.target.value); setDisplayNameDirty(true); }} className={inputCls} />
+            <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
+              {(value) => (
+                <input value={value} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
+              )}
+            </FieldState>
           </div>
           <div className="space-y-1.5">
             <label className="text-xs p-text-2 font-medium">SOUL.md</label>
-            <textarea value={soul} onChange={(e) => setSoul(e.target.value)} rows={8}
-              className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
+            <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
+              {(value) => (
+                <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
+                  className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
+              )}
+            </FieldState>
           </div>
         </Card>
 
         {/* Model */}
         <Card title="Model" icon={GearSixIcon}>
-          <ConnectedModelPicker
-            value={currentSpec}
-            onChange={setCurrentSpec}
-            clearable
-            placeholder="(default)"
-            renderEmpty={() => (
-              <p className="text-xs p-text-3">
-                No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in account settings.
-              </p>
+          <FieldState field={spec} what="the current model" onRetry={() => void load()}>
+            {(value) => (
+              <ConnectedModelPicker
+                value={value}
+                onChange={spec.edit}
+                clearable
+                placeholder="(default)"
+                renderEmpty={() => (
+                  <p className="text-xs p-text-3">
+                    No models available. <Link to="/user/settings" className="p-accent underline">Connect a provider</Link> in account settings.
+                  </p>
+                )}
+              />
             )}
-          />
+          </FieldState>
           <p className="text-[11px] p-text-3">
             Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.
           </p>
@@ -192,25 +287,33 @@ export default function SettingsPage() {
 
         {/* Approval */}
         <Card title="Shell-command approval" icon={ShieldIcon}>
-          <div className="grid grid-cols-3 gap-2">
-            {(['strict', 'allow_all', 'deny_all'] as ApprovalMode[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => setApprovalMode(m)}
-                className={`p-2 rounded-md text-xs ${approvalMode === m ? 'p-accent-bg p-accent' : 'p-card hover:p-card-hover'}`}
-              >{m === 'strict' ? 'Strict (review)' : m === 'allow_all' ? 'Allow all' : 'Deny all'}</button>
-            ))}
-          </div>
+          <FieldState field={approval} what="the approval mode" onRetry={() => void load()}>
+            {(value) => (
+              <div className="grid grid-cols-3 gap-2">
+                {(['strict', 'allow_all', 'deny_all'] as ApprovalMode[]).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => approval.edit(m)}
+                    className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card hover:p-card-hover'}`}
+                  >{m === 'strict' ? 'Strict (review)' : m === 'allow_all' ? 'Allow all' : 'Deny all'}</button>
+                ))}
+              </div>
+            )}
+          </FieldState>
         </Card>
 
         {/* MCTS knobs */}
         <Card title="MCTS tunables" icon={TreeStructureIcon}>
-          <div className="grid grid-cols-2 gap-3">
-            <NumField label="Exploration constant" value={mcts.explorationConstant} step={0.1} onChange={(v) => setMcts({ ...mcts, explorationConstant: v })} />
-            <NumField label="Max iterations" value={mcts.maxIterations} step={1} onChange={(v) => setMcts({ ...mcts, maxIterations: v })} />
-            <NumField label="Max depth" value={mcts.maxDepth} step={1} onChange={(v) => setMcts({ ...mcts, maxDepth: v })} />
-            <NumField label="Branch budget" value={mcts.branchBudget} step={1} onChange={(v) => setMcts({ ...mcts, branchBudget: v })} />
-          </div>
+          <FieldState field={mcts} what="the MCTS tunables" onRetry={() => void load()}>
+            {(value) => (
+              <div className="grid grid-cols-2 gap-3">
+                <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(v) => mcts.edit({ ...value, explorationConstant: v })} />
+                <NumField label="Max iterations" value={value.maxIterations} step={1} onChange={(v) => mcts.edit({ ...value, maxIterations: v })} />
+                <NumField label="Max depth" value={value.maxDepth} step={1} onChange={(v) => mcts.edit({ ...value, maxDepth: v })} />
+                <NumField label="Branch budget" value={value.branchBudget} step={1} onChange={(v) => mcts.edit({ ...value, branchBudget: v })} />
+              </div>
+            )}
+          </FieldState>
         </Card>
 
         {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
@@ -238,40 +341,30 @@ export default function SettingsPage() {
  *  home); this flips THIS agent's tier via setDeviceConsentScope — the same
  *  remembered policy the hub enforces. */
 function DeviceAccessCard({ agentName }: { agentName: string }) {
-  const [device, setDevice] = useState<UserDevice | null | "loading">("loading");
-  const [scope, setScope] = useState<DeviceConsentScope | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const devices = await listDevices();
-        const connected = devices.find((d) => d.connected) ?? null;
-        if (cancelled) return;
-        setDevice(connected);
-        if (!connected) return;
-        const consents = await listDeviceConsents();
-        if (cancelled) return;
-        const row = consents.find((c) => c.agentName === agentName && c.deviceId === connected.id);
-        setScope(row?.scope === "full_filesystem" ? "full_filesystem" : "all_local_actions");
-      } catch {
-        if (!cancelled) setDevice(null); // device/consent listing unavailable
-      }
-    })();
-    return () => { cancelled = true; };
+  // `null` = the listing succeeded and no device is connected. A failed
+  // listing must not render that same "register a device" state — it sends the
+  // user off to re-enrol a device that is already there.
+  const load = useCallback(async (): Promise<{ device: UserDevice; scope: DeviceConsentScope } | null> => {
+    const connected = (await listDevices()).find((d) => d.connected);
+    if (!connected) return null;
+    const consents = await listDeviceConsents();
+    const row = consents.find((c) => c.agentName === agentName && c.deviceId === connected.id);
+    return { device: connected, scope: row?.scope === "full_filesystem" ? "full_filesystem" : "all_local_actions" };
   }, [agentName]);
+  const { resource, reload } = useAsyncResource(load);
+  const current = lastValue(resource);
 
-  const full = scope === "full_filesystem";
+  const full = current?.scope === "full_filesystem";
   const toggle = async () => {
-    if (device === "loading" || !device) return;
-    const next: DeviceConsentScope = full ? "all_local_actions" : "full_filesystem";
+    if (!current) return;
     setBusy(true);
     setErr(null);
     try {
-      await setDeviceConsentScope(device.id, agentName, next);
-      setScope(next);
+      await setDeviceConsentScope(current.device.id, agentName, full ? "all_local_actions" : "full_filesystem");
+      reload();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -285,18 +378,18 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
         How far this workspace's agent may reach on your connected PC (the /pc mount).
         By default it sees only the folder you consented to when connecting.
       </p>
-      {device === "loading" ? (
+      {resource.status === "error" && !current ? (
+        <LoadFailure what="your connected devices" message={resource.message} onRetry={reload} />
+      ) : resource.status === "loading" ? (
         <p className="text-xs p-text-3">Checking connected devices…</p>
-      ) : !device ? (
+      ) : !current ? (
         <p className="text-xs p-text-3">
           No device connected. Register one under{" "}
           <Link to="/user/settings#devices" className="p-accent underline">Account settings → Devices</Link>.
         </p>
-      ) : scope === null ? (
-        <p className="text-xs p-text-3">Loading consent for {device.label}…</p>
       ) : (
         <div className="flex items-center gap-2 text-xs">
-          <span className="p-text-3">File access on {device.label}:</span>
+          <span className="p-text-3">File access on {current.device.label}:</span>
           <span className={`font-medium ${full ? "p-warning" : "p-text-2"}`}>
             {full ? "Full filesystem" : "Consented folder only"}
           </span>

@@ -31,68 +31,89 @@ import {
   type CloudflareGatewayStatus, type UserDevice,
 } from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { CopyButton } from "@/components/ui/CopyButton";
+
+interface Account {
+  profile: UserProfile | null;
+  creds: CredentialSummary[];
+  codex: CodexStatus | null;
+  models: ModelMenuEntry[];
+  catalog: ProviderCatalogEntry[];
+  gateways: CloudflareGatewayStatus | null;
+  defaultModel: string | null;
+}
 
 export default function UserSettingsPage() {
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [creds, setCreds] = useState<CredentialSummary[]>([]);
-  const [codex, setCodex] = useState<CodexStatus | null>(null);
-  const [models, setModels] = useState<ModelMenuEntry[]>([]);
-  const [catalog, setCatalog] = useState<ProviderCatalogEntry[]>([]);
-  const [gateways, setGateways] = useState<CloudflareGatewayStatus | null>(null);
-  const [defaults, setDefaults] = useState<{ model: string | null }>({ model: null });
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      setErr(null);
-      const [p, c, k, m, cat, defaultModel, cli, gw] = await Promise.all([
-        getProfile().catch(() => null),
-        listCredentials().catch(() => []),
-        codexStatus().catch(() => null),
-        listAvailableModels().catch(() => []),
-        listProviderCatalog().catch(() => []),
-        getConfig('default_model').catch(() => ({ key: 'default_model', value: null })),
-        getCliSetup().catch(() => null),
-        listCloudflareGateways().catch(() => null),
-      ]);
-      setProfile(p);
-      setCreds(c ?? []);
-      setCodex(k);
-      setModels(m ?? []);
-      setCatalog(cat ?? []);
-      setDefaults({ model: defaultModel?.value ?? null });
-      setCliSetup(cli);
-      setGateways(gw);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
+  // Every one of these reads describes what the account HAS connected, so none
+  // of them may fail quietly: a swallowed rejection turned into "Connect
+  // ChatGPT", no API keys and a Cloudflare OAuth CTA for an account that is
+  // fully connected, walking the user into a needless re-grant. They load or
+  // the page says it couldn't read them.
+  const load = useCallback(async (): Promise<Account> => {
+    const [profile, creds, codex, models, catalog, config, gateways] = await Promise.all([
+      getProfile(),
+      listCredentials(),
+      codexStatus(),
+      listAvailableModels(),
+      listProviderCatalog(),
+      getConfig('default_model'),
+      listCloudflareGateways(),
+    ]);
+    return { profile, creds, codex, models, catalog, gateways, defaultModel: config?.value ?? null };
   }, []);
+  const { resource, reload } = useAsyncResource(load);
+  const account = lastValue(resource);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  // The install command is derivable from the origin, so its read failing
+  // costs nothing and claims nothing.
+  useEffect(() => { getCliSetup().then(setCliSetup, () => setCliSetup(null)); }, []);
 
-  if (loading) {
-    return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
+  // The picker is optimistic on the user's own pick; the loaded value is the
+  // fallback until it is re-read.
+  const selectedDefaultModel = defaultModel ?? account?.defaultModel ?? '';
+
+  const header = (
+    <header>
+      <Link to="/" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
+        <ArrowLeftIcon size={12} /> Back
+      </Link>
+      <h1 className="text-2xl font-semibold">Account settings</h1>
+      <p className="text-xs p-text-3 mt-1">
+        Account-level: credentials apply to every agent you own.
+      </p>
+    </header>
+  );
+
+  if (!account) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+          {header}
+          {resource.status === "error"
+            ? <LoadFailure what="your account" message={resource.message} onRetry={reload} />
+            : <div className="flex justify-center py-10"><Loader size="base" /></div>}
+        </div>
+      </div>
+    );
   }
+
+  const { profile, creds, codex, models, catalog, gateways } = account;
   const workersAIConnected = models.some((model) => model.provider === 'workers-ai');
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-        <header>
-          <Link to="/" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
-            <ArrowLeftIcon size={12} /> Back
-          </Link>
-          <h1 className="text-2xl font-semibold">Account settings</h1>
-          <p className="text-xs p-text-3 mt-1">
-            Account-level: credentials apply to every agent you own.
-          </p>
-        </header>
+        {header}
 
-        {err && <div className="p-card rounded-lg p-3 text-xs p-danger">{err}</div>}
+        {resource.status === "error" && (
+          <LoadFailure what="the latest account state" message={resource.message} onRetry={reload} />
+        )}
 
         {/* Profile */}
         <Card title="Profile" icon={UserCircleIcon}>
@@ -127,7 +148,7 @@ export default function UserSettingsPage() {
               <div className="flex items-center gap-2 text-xs p-success">
                 <CheckIcon size={13} /> Connected
               </div>
-              <CloudflareGatewaySection status={gateways} onChanged={refresh} />
+              <CloudflareGatewaySection status={gateways} onChanged={reload} />
             </div>
           ) : (
             <CloudflareAIConnectNotice
@@ -139,12 +160,12 @@ export default function UserSettingsPage() {
 
         {/* Codex */}
         <Card title="ChatGPT (Codex)" icon={PlugIcon}>
-          <CodexConnect status={codex} onChanged={refresh} />
+          <CodexConnect status={codex} onChanged={reload} />
         </Card>
 
         {/* BYO API keys */}
         <Card title="API keys" icon={KeyIcon}>
-          <ApiKeyManager creds={creds} catalog={catalog} onChanged={refresh} />
+          <ApiKeyManager creds={creds} catalog={catalog} onChanged={reload} />
         </Card>
 
         {/* MCP servers */}
@@ -168,10 +189,11 @@ export default function UserSettingsPage() {
             <div className="text-xs p-text-2">Default model for new workspaces</div>
             <ModelPicker
               models={models}
-              value={defaults.model ?? ''}
+              value={selectedDefaultModel}
               onChange={async (spec) => {
-                setDefaults({ model: spec });
-                try { await setConfig('default_model', spec); } catch (err) { alert((err as Error).message); }
+                setDefaultModel(spec);
+                try { await setConfig('default_model', spec); }
+                catch (err) { setDefaultModel(null); alert((err as Error).message); }
               }}
               clearable
               placeholder="(use system default)"
@@ -196,12 +218,14 @@ function DevicesCard() {
   const [devices, setDevices] = useState<UserDevice[] | null>(null);
   const [install, setInstall] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { status: copyStatus, copy } = useCopy();
   const [err, setErr] = useState<string | null>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
 
+  // A failed poll leaves the last known roster in place. Blanking it to `[]`
+  // flashed "register a device" over devices that are registered and running.
   const refreshDevices = useCallback(() => {
-    listDevices().then(setDevices).catch(() => setDevices([]));
+    listDevices().then(setDevices, () => {});
   }, []);
   useEffect(() => {
     refreshDevices();
@@ -277,9 +301,9 @@ function DevicesCard() {
             </div>
             <div className="flex items-center gap-2 text-xs">
               <button
-                onClick={() => { navigator.clipboard.writeText(install).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
-                className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 p-text-2"
-              ><CopyIcon size={11} />{copied ? "copied" : "Copy"}</button>
+                onClick={() => copy(install)}
+                className={`px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 ${copyStatus === "failed" ? "p-danger" : "p-text-2"}`}
+              ><CopyIcon size={11} />{copyLabel(copyStatus)}</button>
               <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
             </div>
             <p className="text-[11px] p-text-3 mt-1 flex items-center gap-1.5">
@@ -298,21 +322,16 @@ function DevicesCard() {
 }
 
 function CommandCopy({ label, command }: { label: string; command: string }) {
-  const [copied, setCopied] = useState(false);
+  const { status, copy } = useCopy();
   return (
     <div className="flex items-center gap-2 rounded-md border p-border p-2">
       <div className="w-14 shrink-0 text-[11px] p-text-3">{label}</div>
       <code className="font-mono text-[11px] p-text flex-1 truncate">{command}</code>
       <button
-        onClick={() => {
-          navigator.clipboard.writeText(command).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1000);
-          });
-        }}
-        className="px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 text-xs p-text-2"
+        onClick={() => copy(command)}
+        className={`px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 text-xs ${status === "failed" ? "p-danger" : "p-text-2"}`}
       >
-        <CopyIcon size={11} />{copied ? "copied" : "Copy"}
+        <CopyIcon size={11} />{copyLabel(status)}
       </button>
     </div>
   );
@@ -458,11 +477,8 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
         </p>
         <div className="flex items-center gap-3">
           <code className="text-2xl font-mono tracking-widest p-card rounded-lg px-4 py-2 select-all">{flow.userCode}</code>
-          <button
-            onClick={() => navigator.clipboard.writeText(flow.userCode)}
-            className="p-2 rounded-md p-card hover:p-card-hover"
-            title="Copy"
-          ><CopyIcon size={14} /></button>
+          <CopyButton value={flow.userCode} what="the device code" size={14}
+            className="p-2 rounded-md p-card hover:p-card-hover" />
           <a
             href={flow.portalURL}
             target="_blank" rel="noopener noreferrer"
