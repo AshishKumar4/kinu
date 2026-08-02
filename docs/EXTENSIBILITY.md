@@ -311,7 +311,9 @@ tests under `packages/core/tests/`.
   (`x-api-key` header), default `claude-opus-4-7`, plus Sonnet 4.6 / Haiku 4.5.
 - **Tool Search (Voyager-style)** — `buildBuiltinTools({ toolSurfacing: { mode:
   'relevant', query } })` filters crafted tools by FTS5 relevance + frequency
-  union. Set `agent_config.tool_surfacing_mode = 'relevant'` to opt in.
+  union. Available as a build option only: no backend passes it yet, because a
+  per-turn `query` would change the toolset every turn and break the byte-stable
+  prompt prefix the caches depend on. There is no config switch for it.
 - **MCTS ExplorationStrategy adapter** — `core/strategy/mcts.ts`. Wraps the
   existing `runMCTS` engine behind the strategy interface.
 - **Heads ExplorationStrategy adapter** — `core/strategy/heads.ts`. Wraps

@@ -32,6 +32,9 @@ export interface RecordNodeOpts {
   nodeId: string;
   parentNodeId: string | null;
   parentMsgId: string | null;
+  /** The search run this node belongs to — the root's own id. Every scoped
+   *  query (selection, pruning, convergence) filters on it. */
+  rootId: string;
   task: string;
   action: string;
   observation: string;
@@ -65,9 +68,9 @@ export async function recordNode(
 
   sql`
     INSERT INTO search_nodes
-      (id, parent_id, task, action, observation, code_used, depth, msg_id)
+      (id, parent_id, root_id, task, action, observation, code_used, depth, msg_id)
     VALUES
-      (${opts.nodeId}, ${opts.parentNodeId ?? null},
+      (${opts.nodeId}, ${opts.parentNodeId ?? null}, ${opts.rootId},
        ${opts.task}, ${opts.action}, ${opts.observation},
        ${opts.codeUsed ?? null}, ${opts.depth}, ${msgId})
   `;

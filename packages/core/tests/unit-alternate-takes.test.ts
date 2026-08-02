@@ -34,8 +34,8 @@ function insertNode(
   sql: ReturnType<typeof makeSql>,
   node: { id: string; parentId?: string | null; value: number; depth?: number; status?: string; text?: string; visits?: number },
 ) {
-  sql`INSERT INTO search_nodes (id, parent_id, task, action, observation, value, visits, depth, status)
-      VALUES (${node.id}, ${node.parentId ?? null}, ${'the task'}, ${node.text ?? node.id},
+  sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+      VALUES ('r', ${node.id}, ${node.parentId ?? null}, ${'the task'}, ${node.text ?? node.id},
               ${node.text ?? `proposal ${node.id}`}, ${node.value}, ${node.visits ?? 1},
               ${node.depth ?? 1}, ${node.status ?? 'open'})`;
 }
@@ -45,7 +45,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     const { sql } = setup();
     insertNode(sql, { id: 'win', value: 0.9 });
     insertNode(sql, { id: 'far', value: 0.5 });
-    expect(captureAlternateTakes(sql, { task: 'the task', winnerId: 'win', epsilon: 0.1 })).toBeNull();
+    expect(captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 })).toBeNull();
     expect(listAlternateTakeSets(sql)).toHaveLength(0);
   });
 
@@ -55,7 +55,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     insertNode(sql, { id: 'close1', value: 0.85, text: 'approach B' });
     insertNode(sql, { id: 'close2', value: 0.88, text: 'approach C' });
     insertNode(sql, { id: 'far', value: 0.4, text: 'approach D' });
-    const id = captureAlternateTakes(sql, { task: 'the task', winnerId: 'win', epsilon: 0.1 });
+    const id = captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
     expect(id).toBeTruthy();
     const set = latestAlternateTakeSet(sql)!;
     expect(set.winnerNodeId).toBe('win');
@@ -72,7 +72,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     insertNode(sql, { id: 'win', parentId: 'parent', value: 0.9, depth: 2, text: 'winning leaf' });
     insertNode(sql, { id: 'child', parentId: 'win', value: 0.87, depth: 3, text: 'refinement of winner' });
     insertNode(sql, { id: 'rival', parentId: 'root', value: 0.86, depth: 1, text: 'genuinely different' });
-    captureAlternateTakes(sql, { task: 'the task', winnerId: 'win', epsilon: 0.1 });
+    captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
     const set = latestAlternateTakeSet(sql)!;
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'rival']);
   });
@@ -82,7 +82,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     insertNode(sql, { id: 'win', value: 0.9, text: 'same text' });
     insertNode(sql, { id: 'dup', value: 0.89, text: 'same text' });
     for (let i = 0; i < 6; i++) insertNode(sql, { id: `r${i}`, value: 0.88 - i * 0.001, text: `rival ${i}` });
-    captureAlternateTakes(sql, { task: 'the task', winnerId: 'win', epsilon: 0.1 });
+    captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
     const set = latestAlternateTakeSet(sql)!;
     expect(set.candidates).toHaveLength(4);
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'r0', 'r1', 'r2']);
@@ -94,7 +94,7 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     const { sql } = setup();
     insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
     insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
-    captureAlternateTakes(sql, { task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
     expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
     expect(latestAlternateTakeSet(sql)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
     // A later turn with no new capture claims nothing (no re-claim).
@@ -107,7 +107,7 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
     insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
     // Captured at t=1000 during a turn that aborted before claiming.
-    captureAlternateTakes(sql, { task: 'the doomed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    captureAlternateTakes(sql, { rootId: 'r', task: 'the doomed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
     // The NEXT completed turn started later — it must purge, not adopt.
     expect(claimAlternateTakesForTurn(sql, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
     expect(latestAlternateTakeSet(sql)).toBeNull();
@@ -117,12 +117,12 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     const { sql } = setup();
     insertNode(sql, { id: 'w1', value: 0.9, text: 'a' });
     insertNode(sql, { id: 'r1', value: 0.88, text: 'b' });
-    captureAlternateTakes(sql, { task: 'claimed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+    captureAlternateTakes(sql, { rootId: 'r', task: 'claimed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
     claimAlternateTakesForTurn(sql, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 });
 
     insertNode(sql, { id: 'w2', value: 0.9, text: 'c' });
     insertNode(sql, { id: 'r2', value: 0.88, text: 'd' });
-    captureAlternateTakes(sql, { task: 'aborted task', winnerId: 'w2', epsilon: 0.1, now: 2_000 });
+    captureAlternateTakes(sql, { rootId: 'r', task: 'aborted task', winnerId: 'w2', epsilon: 0.1, now: 2_000 });
 
     purgeUnclaimedAlternateTakes(sql);
     const remaining = listAlternateTakeSets(sql);
@@ -134,7 +134,7 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
 function capturedSet(sql: ReturnType<typeof makeSql>) {
   insertNode(sql, { id: 'win', value: 0.9, text: 'winning approach' });
   insertNode(sql, { id: 'alt', value: 0.85, text: 'alternative approach' });
-  captureAlternateTakes(sql, { task: 'the task', winnerId: 'win', epsilon: 0.1 });
+  captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
   claimAlternateTakesForTurn(sql, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
   sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u-9', 'default', 'user', 'please solve it')`;
   sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;

@@ -17,7 +17,7 @@ import { selectNode } from './uct.js';
 import { siblingAngles } from './diversity.js';
 import { backpropagate } from './backpropagation.js';
 import { recordNode } from './record-node.js';
-import { converge } from './convergence.js';
+import { converge, abandonSearchTree } from './convergence.js';
 import { evaluateWithMultiModelJudging } from './evaluation.js';
 import { pruneLowValueBranches } from './pruning.js';
 import { maybeStoreCraftedTool } from '../craft/discovery.js';
@@ -85,6 +85,7 @@ export async function runMCTS(
       nodeId: rootId,
       parentNodeId: null,
       parentMsgId: null,
+      rootId,
       task,
       action: '',
       observation: task,
@@ -111,7 +112,7 @@ export async function runMCTS(
       // aborts the search — selection skips depth-capped nodes and the budget
       // keeps flowing to the shallower frontier. Break only when nothing is
       // selectable (frontier exhausted or every open node is at the cap).
-      const selected = selectNode(rt.storage.sql, W, maxDepth);
+      const selected = selectNode(rt.storage.sql, rootId, W, maxDepth);
       if (!selected) break;
 
       const iteration = phase.iteration + 1;
@@ -179,6 +180,7 @@ export async function runMCTS(
             nodeId: childId,
             parentNodeId: selected.id,
             parentMsgId: selected.msg_id,
+            rootId,
             task,
             action: exploration.text.slice(0, 300),
             observation: exploration.text,
@@ -283,7 +285,7 @@ export async function runMCTS(
             await rt.memory.index('memory/MEMORY.md');
           }
         }
-        await pruneLowValueBranches(rt, pruneThreshold, minVisitsForPrune);
+        await pruneLowValueBranches(rt, rootId, pruneThreshold, minVisitsForPrune);
         throwIfAborted(config.signal);
 
         // EXTRACT crafted tools from winners
@@ -311,9 +313,25 @@ export async function runMCTS(
       }
     }
 
-    const result = converge(rt, session, minAcceptableScore, takesEpsilon);
-    search?.converge(rootId, searchEpoch, Date.now());
-    return result;
+    // CONVERGE — the durable settle record must never run ahead of the work it
+    // claims. converge() awaits real I/O (a summary call, memory writes) before
+    // it closes the tree, so writing 'converged' first left a search recorded as
+    // settled with its whole tree still open whenever that I/O failed or the
+    // process died mid-flight. Order: close the tree, then record the outcome.
+    // A crash between the two is safe in one direction only — a closed tree with
+    // a still-'running' row is inert (nothing is selectable) and resumable.
+    try {
+      const result = await converge(rt, session, rootId, minAcceptableScore, takesEpsilon);
+      search?.converge(rootId, searchEpoch, Date.now());
+      return result;
+    } catch (err) {
+      // The budget is spent, so a resume would re-enter with nothing left to
+      // explore and fail again. Retire the tree and settle the search as failed
+      // rather than leaving a poison-pill 'running' row for this task.
+      abandonSearchTree(rt.storage.sql, rootId);
+      search?.fail(rootId, searchEpoch, Date.now());
+      throw err;
+    }
   });
 }
 

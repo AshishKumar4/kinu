@@ -9,6 +9,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials.js';
+import { createMockFetch } from '@proteus/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
 import { resolveJudgeModelSelection } from '../src/providers/judge-model.ts';
 
@@ -18,8 +19,15 @@ const KIMI = 'workers-ai/@cf/moonshotai/kimi-k2.6';
 /** A registry whose owner has exactly `keys` connected. `cloudflare.oauth`
  *  needs a baseURL to count as available (that is what workers-ai checks). */
 function registryWith(...keys: string[]) {
+  // The models.dev catalog is fetched to enumerate dynamic providers. Left to
+  // the global fetch this reaches the live service, and the suite fails
+  // whenever it answers slower than the 5s test timeout — which it does.
+  const mock = createMockFetch([
+    { match: 'models.dev/api.json', respond: { status: 200, body: {} } },
+  ]);
   return createAgentProviderRegistry({
     env: {},
+    fetch: mock.fetch,
     userDO: userCredentialSource({
       getAuthHeaders: async (key) => (keys.includes(key) ? { authorization: 'Bearer x' } : null),
       listCredentials: async () => keys.map((key) => ({ key, kind: 'bearer', createdAt: 0, updatedAt: 0 })),

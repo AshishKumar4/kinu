@@ -174,13 +174,40 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShadowSampleRate()).toBe(0.25);
   });
 
-  test('toolSurfacingMode: defaults all, validates input', () => {
+  test('the evolution knobs round-trip through their setters and reject bad input', () => {
     const c = setup();
-    expect(c.getToolSurfacingMode()).toBe('all');
-    c.set(AGENT_CONFIG_KEYS.toolSurfacingMode, 'relevant');
-    expect(c.getToolSurfacingMode()).toBe('relevant');
-    c.set(AGENT_CONFIG_KEYS.toolSurfacingMode, 'bogus');
-    expect(c.getToolSurfacingMode()).toBe('all');
+
+    c.setAutoPromoteScaffold(false);
+    expect(c.getAutoPromoteScaffold()).toBe(false);
+    c.setAutoPromoteScaffold(true);
+    expect(c.getAutoPromoteScaffold()).toBe(true);
+
+    c.setShadowSampleRate(0.5);
+    expect(c.getShadowSampleRate()).toBe(0.5);
+    c.setScaffoldExploreShare(0);
+    expect(c.getScaffoldExploreShare()).toBe(0);
+
+    // A probability given as a percentage is a caller bug, not something to
+    // silently clamp to 1 — otherwise every turn would run in shadow.
+    expect(() => c.setShadowSampleRate(100)).toThrow(/invalid shadow_sample_rate/);
+    expect(() => c.setScaffoldExploreShare(-0.1)).toThrow(/invalid scaffold_explore_share/);
+    expect(() => c.setShadowSampleRate(Number.NaN)).toThrow(/invalid shadow_sample_rate/);
+    expect(c.getShadowSampleRate()).toBe(0.5);
+
+    c.setReviewModel('anthropic/claude-opus-4-7');
+    expect(c.getReviewModel()).toBe('anthropic/claude-opus-4-7');
+    c.setReviewModel('  openai/gpt-5  ');
+    expect(c.getReviewModel()).toBe('openai/gpt-5');
+    c.setReviewModel(null);
+    expect(c.getReviewModel()).toBeNull();   // cleared → cross-family auto-pick
+    c.setReviewModel('   ');
+    expect(c.getReviewModel()).toBeNull();
+
+    // The budget's bounds are a cost policy, so a setter clamps rather than throws.
+    c.setGepaEvalBudget(1000);
+    expect(c.getGepaEvalBudget()).toBe(64);
+    c.setGepaEvalBudget(1);
+    expect(c.getGepaEvalBudget()).toBe(4);
   });
 });
 
@@ -227,5 +254,75 @@ describe('AgentConfigStore — GEPA eval budget', () => {
     expect(c.getGepaEvalBudget()).toBe(4);
     c.set(AGENT_CONFIG_KEYS.gepaEvalBudget, 'many');
     expect(c.getGepaEvalBudget()).toBe(DEFAULT_GEPA_EVAL_BUDGET);
+  });
+});
+
+/**
+ * Every config key must be writable by something.
+ *
+ * Three keys have shipped read-only so far — a getter consulted at runtime with
+ * no setter, no RPC and no command anywhere, so the behaviour it gated could
+ * never actually be turned on. This guard makes that state unshippable: adding a
+ * key to AGENT_CONFIG_KEYS forces you to name the store method that writes it,
+ * and a key nothing writes fails here rather than years later.
+ *
+ * Runtime, not source-scanning: each writer is really invoked against a real
+ * store and the keys it touches are read back out of the table, so the guard
+ * cannot drift from how the store is actually implemented.
+ */
+describe('AgentConfigStore — every key has a write path', () => {
+  /** One call per store method that writes config. Values are arbitrary but
+   *  valid; only which KEYS get written matters. */
+  const WRITERS: ReadonlyArray<(c: ReturnType<typeof setup>) => void> = [
+    (c) => c.setModel('openai/gpt-5'),
+    (c) => c.setReasoningEffort('high'),
+    (c) => c.setDisplayName('Ada'),
+    (c) => c.setNameOrigin('user'),
+    (c) => c.setShellApprovalMode('allow_all'),
+    (c) => c.setSleepTimeComputeEnabled(false),
+    (c) => c.setAutoPromoteScaffold(false),
+    (c) => c.setShadowSampleRate(0.5),
+    (c) => c.setScaffoldExploreShare(0.3),
+    (c) => c.setReviewModel('anthropic/claude-opus-4-7'),
+    (c) => c.setAlwaysActiveSkills(['research']),
+    (c) => c.setLastActiveExecutor('sandbox'),
+    // Stamps workspace_backup_at alongside the handle.
+    (c) => c.setWorkspaceBackup({ id: 'b1', dir: '/workspace' }),
+    (c) => c.setAutoGepaEveryNTurns(10),
+    (c) => c.setChangelogSeenAt(1_750_000_000_000),
+    (c) => c.countClosedSessionWindow(),
+    (c) => c.setGepaEvalBudget(16),
+    (c) => c.setMctsOverrides({
+      explorationWeight: 1.2, budget: 8, maxDepth: 4,
+      branches: 3, judgeSamples: 2, maxEvalLLMCalls: 5,
+    }),
+    (c) => c.setEmailNotificationsEnabled(false),
+  ];
+
+  /** Internal plumbing written through the generic `set` from outside the
+   *  store (memory-sync's lazy Vectorize backfill). Exempt because the write
+   *  path is real, just not a typed method here. */
+  const GENERIC_WRITE_PATH: ReadonlyArray<string> = [
+    AGENT_CONFIG_KEYS.memoryVectorBackfillDone,
+    AGENT_CONFIG_KEYS.memoryVectorBackfillCursor,
+  ];
+
+  test('no key is readable-but-unwritable', () => {
+    const c = setup();
+    for (const write of WRITERS) write(c);
+    const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
+
+    const unwritable = Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k));
+    expect(unwritable).toEqual([]);
+  });
+
+  test('the guard actually catches an unwritten key', () => {
+    // Proves the assertion above is load-bearing: drop one writer and the key
+    // it owns shows up as unwritable.
+    const c = setup();
+    for (const write of WRITERS.slice(1)) write(c);
+    const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
+    expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))
+      .toEqual([AGENT_CONFIG_KEYS.model]);
   });
 });

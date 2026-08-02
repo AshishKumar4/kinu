@@ -135,16 +135,17 @@ export function findNearTiedRivals(
 
 /**
  * Capture the winner's near-tied rivals as an alternate-takes set. Reads the
- * same population converge() decided over (status terminal/open — call BEFORE
- * the tree close prunes the siblings). Returns the new set id, or null when no
- * real choice exists (fewer than 2 candidates).
+ * same population converge() decided over — this search's tree, status
+ * terminal/open, read BEFORE the tree close prunes the siblings. Returns the
+ * new set id, or null when no real choice exists (fewer than 2 candidates).
  */
 export function captureAlternateTakes(
   sql: SqlExecutor,
-  input: { task: string; winnerId: string; epsilon: number; now?: number },
+  input: { rootId: string; task: string; winnerId: string; epsilon: number; now?: number },
 ): string | null {
   const nodes = sql<SearchNode>`
-    SELECT * FROM search_nodes WHERE status IN ('terminal', 'open')`;
+    SELECT * FROM search_nodes
+    WHERE root_id = ${input.rootId} AND status IN ('terminal', 'open')`;
   const winner = nodes.find((n) => n.id === input.winnerId);
   if (!winner) return null;
 

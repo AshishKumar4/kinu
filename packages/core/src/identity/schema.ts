@@ -31,6 +31,7 @@ const ACTOR_DDL = [
   `CREATE TABLE IF NOT EXISTS search_nodes (
     id               TEXT PRIMARY KEY,
     parent_id        TEXT REFERENCES search_nodes(id) ON DELETE CASCADE,
+    root_id          TEXT,
     task             TEXT NOT NULL,
     action           TEXT NOT NULL DEFAULT '',
     observation      TEXT NOT NULL DEFAULT '',
@@ -46,6 +47,7 @@ const ACTOR_DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sn_parent ON search_nodes(parent_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(status, value DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(root_id, status)`,
 
   // ── Scaffold management ────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS scaffold_versions (

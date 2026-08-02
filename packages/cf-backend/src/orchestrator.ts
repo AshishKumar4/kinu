@@ -1316,11 +1316,15 @@ export class OrchestratorAgent extends ActorAgent {
         execRaw("DROP TABLE IF EXISTS memory_chunks_fts");
         console.log("[proteus] Migrated memory_chunks to FTS5 schema");
       }
-      // search_nodes: add code_used column if missing (new in this version)
+      // search_nodes: add code_used / root_id columns if missing.
       const snCols = this.sql<{ name: string }>`PRAGMA table_info(search_nodes)`;
       if (snCols.length > 0 && !snCols.some(c => c.name === "code_used")) {
         execRaw("ALTER TABLE search_nodes ADD COLUMN code_used TEXT");
         console.log("[proteus] Added code_used column to search_nodes");
+      }
+      if (snCols.length > 0 && !snCols.some(c => c.name === "root_id")) {
+        execRaw("ALTER TABLE search_nodes ADD COLUMN root_id TEXT");
+        console.log("[proteus] Added root_id column to search_nodes");
       }
     } catch { /* tables don't exist yet — fine */ }
 
@@ -3279,6 +3283,35 @@ export class OrchestratorAgent extends ActorAgent {
       branches: config.branchBudget,
     });
     return config;
+  }
+
+  /** The self-evolution knobs: who judges the agent, whether a proven scaffold
+   *  promotes itself, and how much each loop is allowed to spend. */
+  @callable() async getEvolutionConfig() {
+    return {
+      reviewModel: this.config.getReviewModel(),
+      autoPromoteScaffold: this.config.getAutoPromoteScaffold(),
+      gepaEvalBudget: this.config.getGepaEvalBudget(),
+      shadowSampleRate: this.config.getShadowSampleRate(),
+      scaffoldExploreShare: this.config.getScaffoldExploreShare(),
+    };
+  }
+
+  /** Set any subset of the evolution knobs. Returns the effective config, so a
+   *  caller sees what a clamped value actually became. */
+  @callable() async setEvolutionConfig(config: {
+    reviewModel?: string | null;
+    autoPromoteScaffold?: boolean;
+    gepaEvalBudget?: number;
+    shadowSampleRate?: number;
+    scaffoldExploreShare?: number;
+  }) {
+    if (config.reviewModel !== undefined) this.config.setReviewModel(config.reviewModel);
+    if (config.autoPromoteScaffold !== undefined) this.config.setAutoPromoteScaffold(config.autoPromoteScaffold);
+    if (config.gepaEvalBudget !== undefined) this.config.setGepaEvalBudget(config.gepaEvalBudget);
+    if (config.shadowSampleRate !== undefined) this.config.setShadowSampleRate(config.shadowSampleRate);
+    if (config.scaffoldExploreShare !== undefined) this.config.setScaffoldExploreShare(config.scaffoldExploreShare);
+    return this.getEvolutionConfig();
   }
 
   /**

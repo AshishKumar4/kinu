@@ -22,12 +22,13 @@ import { isoDate } from '../utils/date.js';
 export async function converge(
   rt: AgentRuntime,
   session: SessionWriter,
+  rootId: string,
   minAcceptable: number = DEFAULT_CONFIG.mcts.minAcceptableScore,
   takesEpsilon: number = DEFAULT_CONFIG.mcts.takesEpsilon,
 ): Promise<ConvergenceResult> {
   const population = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
-    WHERE status IN ('terminal', 'open')
+    WHERE root_id = ${rootId} AND status IN ('terminal', 'open')
     ORDER BY value DESC, depth DESC`;
   const argmaxWinner = population[0];
 
@@ -55,10 +56,7 @@ export async function converge(
       `Task: ${winner.task.slice(0, 200)}\nAll approaches scored below ${minAcceptable}.\n`,
     );
     await rt.memory.index('memory/MEMORY.md');
-    // Close every remaining open node so the next runMCTS starts from its own
-    // fresh root: global-argmax UCT only considers status='open', and leaving
-    // these open let a later task expand under this task's nodes.
-    rt.storage.sql`UPDATE search_nodes SET status = 'failed' WHERE status = 'open'`;
+    abandonSearchTree(rt.storage.sql, rootId);
     await recordTaskOutcome(rt, winner.task, 'error', winner.value);
     return {
       winnerId: winner.id,
@@ -100,18 +98,17 @@ export async function converge(
   // prunes. The host claims the set for the turn at turn end; the user's pick
   // becomes the explicit preference signal in turn_outcomes.
   try {
-    captureAlternateTakes(rt.storage.sql, { task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
+    captureAlternateTakes(rt.storage.sql, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
   } catch {
     // alternate_takes may not exist in minimal test runtimes — non-fatal.
   }
 
-  // Close the tree: the winner becomes terminal and every other open node is
-  // pruned. Nothing stays 'open' across tasks — otherwise global-argmax UCT
-  // would prefer this task's high-value winner over the next task's fresh root.
+  // Close the tree: the winner becomes terminal and every other open node in
+  // this search is pruned, so a settled tree can never be re-entered.
   rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
-    WHERE status = 'open' AND id != ${winner.id}
+    WHERE root_id = ${rootId} AND status = 'open' AND id != ${winner.id}
   `;
   rt.storage.sql`
     UPDATE search_nodes SET status = 'terminal' WHERE id = ${winner.id}
@@ -124,6 +121,17 @@ export async function converge(
     converged: true,
     trajectory,
   };
+}
+
+/**
+ * Retire every still-open node of a search that produced no winner — the
+ * below-threshold path here, and the engine's handler for a convergence that
+ * threw. A search is settled exactly when its tree has no open nodes left, so
+ * this is what makes the durable 'failed' record honest.
+ */
+export function abandonSearchTree(sql: SqlExecutor, rootId: string): void {
+  sql`UPDATE search_nodes SET status = 'failed'
+      WHERE root_id = ${rootId} AND status = 'open'`;
 }
 
 /** Record the task outcome into task_history — the per-task ledger behind the
