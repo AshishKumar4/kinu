@@ -1325,15 +1325,15 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
   function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
-        VALUES ('win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
-    rt.storage.sql`INSERT INTO search_nodes (id, task, action, observation, value, visits, depth, status)
-        VALUES ('alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES ('win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
+    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES ('win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
     // In production the capture happens MID-turn (inside think-mcts), so its
     // timestamp falls inside the claiming turn's window. This seed runs
     // before send() — stamp it just ahead so the scoped claim sees it as a
     // mid-turn capture rather than a stale leftover.
-    captureAlternateTakes(rt.storage.sql, { task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
+    captureAlternateTakes(rt.storage.sql, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
     // Mirror converge()'s close: winner terminal, the near-tied rival pruned.
     rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
     rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
