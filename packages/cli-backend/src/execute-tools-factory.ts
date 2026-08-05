@@ -1,8 +1,8 @@
 /**
- * Node-side createExecuteTool factory. Compatible shape with
- * @cloudflare/think/tools/execute's createExecuteTool, so the CLI can pass
- * this as deps.createExecuteTool to buildBuiltinTools and get a working
- * `execute_tools` without a workerd loader.
+ * Node-side createExecuteTool factory — the CLI's answer to the CF backend's
+ * codemode-backed `execute_tools`. Passed as deps.createExecuteTool to
+ * buildBuiltinTools, it gives the CLI a working `execute_tools` without a
+ * workerd loader.
  *
  * The returned tool's execute compiles the LLM's code via `new Function()`
  * and runs it in-process with the execution router's provider namespaces

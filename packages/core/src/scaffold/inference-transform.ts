@@ -1,7 +1,7 @@
 /**
  * Scaffold-as-inference-loop on the LIVE inference seam.
  *
- * Think 0.8's `_runInferenceLoop` is private and always calls the AI SDK's
+ * Think's `_runInferenceLoop` is private and always calls the AI SDK's
  * `streamText` itself (the old `runStreamText` subclass override this
  * replaces had ZERO callers on 0.8.2 — the mutable scaffold was silently
  * dead). The seam Think does expose is the protected

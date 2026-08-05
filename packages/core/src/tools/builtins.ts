@@ -66,8 +66,9 @@ import {
 } from '../product-change/index.js';
 
 /**
- * Narrow local shape of @cloudflare/think/tools/execute#createExecuteTool.
- * Duck-typed so core has no peer dep on @cloudflare/think or @cloudflare/codemode.
+ * Narrow local shape of the CLI's codemode tool factory
+ * (@proteus/cli-backend/execute-tools-factory). Duck-typed so core has no peer
+ * dep on a codemode implementation.
  */
 export type CreateExecuteToolFactory = (opts: {
   tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
@@ -78,15 +79,17 @@ export type CreateExecuteToolFactory = (opts: {
 export interface BuiltinToolDeps {
   rt: AgentRuntime;
   /**
-   * Optional loader identifier forwarded into the createExecuteTool factory.
-   * On CF this is env.LOADER (WorkerLoader); on CLI it's an opaque sentinel
-   * to keep the factory branch active. Core does not inspect it.
+   * Optional loader identifier forwarded into the createExecuteTool factory —
+   * an opaque sentinel that keeps the factory branch active. Core does not
+   * inspect it. Unused on CF, which supplies `preBuiltExecuteTool` instead.
    */
   codemodeLoader?: unknown;
   /**
-   * Optional factory for createExecuteTool, injected by the CF adapter to
-   * avoid pulling @cloudflare/think into core. Called only when
-   * codemodeLoader is set.
+   * Optional factory that BUILDS the execute_tools tool from the crafted-tool
+   * set and the runtime's execution providers. The CLI wires it; CF hands a
+   * ready-made tool through `preBuiltExecuteTool` instead, because its codemode
+   * tool needs a construction shape this factory does not express. Called only
+   * when codemodeLoader is set.
    */
   createExecuteTool?: CreateExecuteToolFactory;
   /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
@@ -423,9 +426,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }
   }
 
-  // no core-level fallback. Callers MUST supply createExecuteTool
-  // (CF passes @cloudflare/think's real one; CLI passes a Node adapter
-  // from @proteus/cli-backend/execute-tools-factory). If neither is wired,
+  // no core-level fallback. Callers MUST supply the tool one way or the other
+  // (CF: preBuiltExecuteTool, built from @cloudflare/codemode in
+  // cf-backend/execute-tools.ts; CLI: a Node adapter from
+  // @proteus/cli-backend/execute-tools-factory). If neither is wired,
   // execute_tools returns a sharp error — a silent in-process compile
   // would break in any V8 isolate.
   if (!tools.execute_tools) {
@@ -442,7 +446,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         result: undefined,
         error:
           'execute_tools is not configured on this runtime. The backend must supply ' +
-          'deps.createExecuteTool to buildBuiltinTools (CF: @cloudflare/think; CLI: ' +
+          'deps.preBuiltExecuteTool or deps.createExecuteTool to buildBuiltinTools ' +
+          '(CF: cf-backend/createExecuteToolsTool; CLI: ' +
           '@proteus/cli-backend/createNodeExecuteToolFactory).',
       }),
     });

@@ -3339,7 +3339,7 @@ export class OrchestratorAgent extends ActorAgent {
    * Called after each MCTS iteration so the UI updates in real-time.
    */
   /**
-   * Inference seam override — THE single production chat path on Think 0.8.
+   * Inference seam override — THE single production chat path on Think.
    *
    * Think's `_runInferenceLoop` is private and calls the AI SDK `streamText`
    * itself; this protected transform is the one seam a subclass gets that can

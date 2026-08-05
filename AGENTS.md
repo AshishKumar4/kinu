@@ -106,8 +106,11 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 
 ## CF Backend Specifics
 
-- OrchestratorAgent extends `Think<Env>` from `@cloudflare/think`
-- Think wraps AIChatAgent and provides tool lifecycle, sessions, fibers
+- OrchestratorAgent extends `ActorAgent`, which extends `Think<Env>` from `@cloudflare/think`
+- Think extends the SDK's `Agent` directly and adds the agentic loop, the turn
+  lifecycle hooks, sessions and fibers. Proteus overrides the loop's inputs
+  (`getModel` / `getSystemPrompt` / `getTools` / `beforeTurn`) and leaves Think's
+  own workspace, skills, actions, channels and scheduled tasks unused
 - `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.6` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
 - `getTools()` builds the 9-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `skills`, `think`, `memory`, `fact`, `web_search`, `web_fetch`, `product_change`; results are cached per CraftStore version
 - `getSystemPrompt()` reads `SOUL.md` from VFS
