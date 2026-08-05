@@ -13,7 +13,9 @@
  * ExplorationAgent is a bare `Agent`, deliberately not an ActorAgent, so a head
  * can never acquire the think/team/peers surface and open an unbounded spawn
  * tree (unit-exploration-containment.test.ts). Routing every spawn of it
- * through this module keeps that one class the only thing a head can start.
+ * through this module keeps that one class the only thing a head can start —
+ * a head forks its parent's RESOURCES (heads/head-tools.ts), never its
+ * authority to create actors.
  *
  * Subordinates are not spawned here on purpose: SubordinateAgent drags in the
  * orchestrator/runtime graph, which imports this module back — their facet
@@ -37,10 +39,11 @@ export interface ExplorationFacetIdentity {
    *  the owner's credentials as its workspace and is attenuated with it. Null
    *  while the workspace is unclaimed. */
   readonly capabilityToken: string | null;
-  /** The ROOT orchestrator's workspace name — the shared findings scratch every
-   *  head in a tree writes to, propagated UNCHANGED through recursive splits so
-   *  an intermediate head never becomes the tree's scratch. Absent for MCTS
-   *  branches, which have no shared scratch. */
+  /** The ROOT orchestrator's workspace name — the workspace a head forks: its
+   *  exec planes, its files, and the findings space the whole tree shares.
+   *  Propagated UNCHANGED through recursive splits so an intermediate head never
+   *  becomes the tree's workspace. Absent for MCTS branches, which fork nothing:
+   *  a branch has no runtime at all. */
   readonly sharedParent?: string | null;
 }
 

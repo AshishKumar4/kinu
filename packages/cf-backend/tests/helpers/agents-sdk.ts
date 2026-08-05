@@ -40,4 +40,12 @@ export function mockAgentsSdk(): void {
   mock.module('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class { serverId = ''; },
   }));
+  // The DO layer reaches the runtime + codemode module graph (a head builds a
+  // CF runtime and an execute_tools tool), both of which import this
+  // workerd-only module at load.
+  mock.module('cloudflare:workers', () => ({
+    RpcTarget: class {},
+    WorkerEntrypoint: class {},
+    DurableObject: class {},
+  }));
 }

@@ -275,7 +275,8 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
 /**
  * The members every actor exposes to a stub-holder — the workspace-capability
  * handshake, the credential-change fan-out, and the workspace filesystem a
- * subordinate reaches on its parent. Concrete actors add their own on top.
+ * forked facet (a subordinate, or a head) reaches on its parent. Concrete actors
+ * add their own on top.
  *
  * Everything else this class declares — including every `protected` member a
  * subclass relies on — stays an ordinary method and stays unreachable, because
@@ -303,9 +304,9 @@ const ACTOR_AGENT_RPC_SURFACE = [
  * Object when a workspace is deleted.
  *
  * The names below are the rest: the worker routes (email, webhooks, runs, MCP),
- * the UserDO handshake, and the calls siblings make — a subordinate reaching
- * its parent, an exploration facet reaching shared scratch, one workspace
- * delivering a peer message or a fork copy to another.
+ * the UserDO handshake, and the calls siblings make — a subordinate or a head
+ * reaching its parent workspace, one workspace delivering a peer message or a
+ * fork copy to another.
  */
 const ORCHESTRATOR_METHODS = [
   'acceptEmailDelivery',
@@ -332,9 +333,6 @@ const ORCHESTRATOR_METHODS = [
   'setEmailAllowlist',
   'setEmailNotifications',
   'setProvisionalDisplayName',
-  'sharedScratchList',
-  'sharedScratchRead',
-  'sharedScratchWrite',
   'transitionProductChange',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
@@ -367,8 +365,9 @@ export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
 
 /**
  * What a spawner may call on an exploration facet: seed it, then run it. Its
- * reach back into the workspace goes the other way — it holds an orchestrator
- * stub — so nothing else here needs to be reachable.
+ * reach back into the workspace goes the other way — a head holds an
+ * orchestrator stub and mounts its file plane over ACTOR_AGENT_RPC_SURFACE — so
+ * nothing else here needs to be reachable.
  */
 const EXPLORATION_METHODS = [
   'abortHead',

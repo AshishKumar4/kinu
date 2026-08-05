@@ -194,8 +194,10 @@ export class HeadJournal {
       id: h.id, task: h.task, rationale: h.rationale ?? '', status: h.status,
       summary: h.summary, errorMessage: h.error_message,
       tokenInput: h.token_input, tokenOutput: h.token_output, wallClockMs: h.wall_clock_ms,
-      toolCalls: parseArray<{ name?: unknown; status?: unknown }>(h.tool_calls_json)
-        .map((t) => ({ name: String(t?.name ?? '?'), status: String(t?.status ?? '') })),
+      // ToolCallRecord carries { name, args, result }; the view surfaces the
+      // short outcome the head tools record ('ok', 'error: …', 'exit=0').
+      toolCalls: parseArray<{ name?: unknown; result?: unknown }>(h.tool_calls_json)
+        .map((t) => ({ name: String(t?.name ?? '?'), status: String(t?.result ?? '') })),
       decisions: parseArray<{ question?: unknown; choice?: unknown; rationale?: unknown }>(h.decisions_json)
         .map((d) => ({ question: String(d?.question ?? ''), choice: String(d?.choice ?? ''), rationale: String(d?.rationale ?? '') })),
       steps: this.readSteps(h.id),

@@ -1,27 +1,30 @@
 /**
  * ExplorationAgent — the parallel sub-agent Facet.
  *
- * One class, two modes:
+ * One class, two modes — and the difference between them is the whole point:
  *
- *   MCTS mode  (existing) — short-form one-shot rollouts used by the MCTS
- *                           engine. @callable explore() returns a single
- *                           text + optional code; generateReflection
- *                           produces a failure post-mortem. Scoring lives in
- *                           core (mcts/evaluation.ts via the engine seam) —
- *                           branches do not rate themselves.
+ *   MCTS mode — short-form one-shot rollouts for the MCTS engine. @callable
+ *               explore() is a single bare generateText with NO ToolSet and NO
+ *               runtime, so a branch has no filesystem to isolate and storage
+ *               isolation (lean/Proteus/MCTS/StorageIsolation.lean) holds by DO
+ *               identity alone. generateReflection() produces a failure
+ *               post-mortem. Scoring lives in core (mcts/evaluation.ts via the
+ *               engine seam) — branches do not rate themselves.
+ *               A branch must NEVER acquire the head runtime below.
  *
- *   HEAD mode         — long-form multi-step inference used by the
- *                           branching-heads primitive (think strategy=heads).
- *                           @callable init() / runAsHead() / abort() drive
- *                           an agentic loop with a restricted tool surface
- *                           (record_evidence, record_decision, sandbox_*).
- *                           Each head gets its own ephemeral SqliteFS +
- *                           virtual-bash for scratch work; siblings can't
- *                           see each other.
+ *   HEAD mode — long-form multi-step inference for the branching-heads
+ *               primitive (think strategy=heads). initHead() / runAsHead() /
+ *               abortHead() drive an agentic loop over a FORK of the parent
+ *               workspace: the parent's sandbox container, Nimbus session and
+ *               device consent, with the parent's workspace files mounted at
+ *               /workspace (see headRuntime()). Its tool surface — and the
+ *               containment that keeps think/team/peers off it — is declared in
+ *               heads/head-tools.ts.
  *
  * Both modes share: Facet class, composed owner/model services, lifecycle,
  * and parallel-spawn infrastructure. Heads are a mode of this Facet, not a
- * separate agent class.
+ * separate agent class. ExplorationAgent extends the bare `Agent`, never
+ * `ActorAgent`, so no head can inherit the full actor tool surface.
  *
  * Constraints (Agent SDK facets, verified against agents 0.14.1 dist):
  *   • schedule()/keepAlive()/runFiber() WORK in facets — each delegates to
@@ -49,7 +52,9 @@ import {
   type MergeStrategy,
   type HeadBudget,
   type MergeResult,
-  budgetExhausted,
+  type ParentRpcFileHandle,
+  type SqlExecutor,
+  createParentRpcMountVFS,
   initHeadsTables,
   HeadController,
   HeadJournal,
@@ -57,15 +62,12 @@ import {
   type MergeOutput,
   HeadCapture,
   runHeadInference,
-  buildHeadAccumulatorTools,
-  buildHeadSandboxTools,
-  buildHeadWebTools,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services.js";
 import { spawnHeadFacet } from "./facet-spawn.js";
-import { SqliteFS } from "@proteus/agent-utils/vfs";
-import { createShell, type ShellResult } from "@proteus/agent-utils/shell";
-import type { SqlExecutor } from "@proteus/agent-utils";
+import { createCFRuntime, type CFRuntime } from "./runtime.js";
+import { createExecuteToolsTool } from "./execute-tools.js";
+import { buildHeadToolSet } from "./heads/head-tools.js";
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -73,12 +75,10 @@ export class ExplorationAgent extends Agent<Env> {
     sealRpcSurface(this, EXPLORATION_RPC_SURFACE);
   }
 
-  // ── MCTS-mode state (pre-existing) ──────────────────────────────
-
-  // ── Head-mode state  ────────────────────────────────────────
+  // ── Head-mode state (MCTS mode is stateless beyond the traces table) ──
   private headInput: HeadInput | null = null;
   // Per-head findings accumulator — built fresh in runAsHead, mutated by the
-  // head's scratch tools, read into the HeadReport by core runHeadInference.
+  // head's tools, read into the HeadReport by core runHeadInference.
   private headCapture: HeadCapture | null = null;
   private headAborted = false;
   private headAbortReason: string | null = null;
@@ -105,20 +105,57 @@ export class ExplorationAgent extends Agent<Env> {
     };
   }
 
-  // Lazy per-facet VFS + shell — only built when head mode runs.
-  private _vfs: SqliteFS | null = null;
-  private _shell: { exec(input: string, stdin?: string): Promise<ShellResult> } | null = null;
-  private getHeadVfs(): SqliteFS {
-    if (this._vfs) return this._vfs;
-    const sql = this.sql.bind(this) as unknown as SqlExecutor;
-    this._vfs = new SqliteFS(sql);
-    this._vfs.init();
-    return this._vfs;
+  private get boundSql(): SqlExecutor {
+    return this.sql.bind(this) as unknown as SqlExecutor;
   }
-  private getHeadShell() {
-    if (this._shell) return this._shell;
-    this._shell = createShell(this.getHeadVfs());
-    return this._shell;
+
+  /**
+   * The head's runtime — a FORK of the parent workspace's, built lazily because
+   * only head mode has one (see the class docstring for why MCTS mode must not).
+   *
+   * Forked, not fresh: `workspaceName` is the PARENT's, so every exec plane the
+   * runtime keys off it — the `proteus-<workspace>` sandbox container, the
+   * Nimbus session, the /pc device consent, the Vectorize namespace — resolves
+   * to the same plane the parent agent works in. This is exactly how a
+   * SubordinateAgent rides its parent (subordinate-agent.ts workspaceName), and
+   * the reason ActorRuntimeIdentity separates "who I am" from "whose exec planes
+   * I ride" at all.
+   *
+   * Storage stays this facet's own, so `/local` is a private scratch siblings
+   * can't see; the parent's durable workspace files arrive as the `/workspace`
+   * mount over the same parent RPC handle subordinates use.
+   */
+  private _headRt: CFRuntime | null = null;
+  private headRuntime(): CFRuntime {
+    if (this._headRt) return this._headRt;
+    const parent = this.getSharedParentStub();
+    const workspaceName = this.getSharedParent();
+    if (!parent || !workspaceName) {
+      throw new Error('This head was spawned without a parent workspace; setSharedParent must run before runAsHead.');
+    }
+    const rt = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0], {
+      ownerUserId: () => this.getOwnerUserId(),
+      workspaceName,
+      capabilityToken: async () => this.getCapabilityToken(),
+    });
+    const handle: ParentRpcFileHandle = {
+      read: (path) => parent.readWorkspaceFile(path),
+      write: (input) => parent.writeWorkspaceFile(input),
+      list: (path) => parent.listWorkspaceFiles(path),
+      stat: (path) => parent.statWorkspaceFile(path),
+      delete: (path) => parent.deleteWorkspaceFile(path),
+    };
+    rt.compositeVfs.mount('workspace', {
+      vfs: createParentRpcMountVFS(handle),
+      policy: {
+        readOnly: false,
+        rootPath: '',
+        consistency: 'durable',
+        credentialsStayInHost: true,
+      },
+    });
+    this._headRt = rt;
+    return rt;
   }
 
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
@@ -176,10 +213,11 @@ export class ExplorationAgent extends Agent<Env> {
     return this.facetOwnerRow()?.capability_token ?? null;
   }
 
-  /** The ROOT orchestrator agent name — the shared point every head in a split
-   *  writes findings to (shared/findings/ in its workspace VFS). Set by the
-   *  spawner right after subAgent(); propagated unchanged to recursive sub-heads
-   *  so the whole tree shares ONE common scratch. Persisted for hibernation. */
+  /** The ROOT workspace this head forks: whose exec planes it rides, whose files
+   *  it mounts at /workspace, and where the whole split's findings accumulate.
+   *  Set by the spawner right after subAgent() and propagated UNCHANGED to
+   *  recursive sub-heads, so an intermediate head never becomes the tree's
+   *  workspace. Persisted for hibernation. */
   @callable()
   async setSharedParent(agentName: string): Promise<{ ok: true }> {
     if (!agentName) throw new Error('agentName required');
@@ -202,7 +240,8 @@ export class ExplorationAgent extends Agent<Env> {
     } catch { return null; }
   }
 
-  /** Stub to the root orchestrator for shared-scratch RPCs, or null if unset. */
+  /** Stub to the root workspace orchestrator — the head's parent — or null if
+   *  unset (an MCTS branch never has one). */
   private getSharedParentStub(): DurableObjectStub<OrchestratorAgent> | null {
     const name = this.getSharedParent();
     if (!name) return null;
@@ -222,7 +261,9 @@ export class ExplorationAgent extends Agent<Env> {
     `);
   }
 
-  // ── MCTS mode @callables (unchanged) ────────────────────────────
+  // ── MCTS mode @callables ────────────────────────────────────────
+  // Deliberately toolless and runtime-free: a branch reasons, it does not act.
+  // Nothing here may reach headRuntime().
 
   @callable()
   async explore(
@@ -285,14 +326,9 @@ export class ExplorationAgent extends Agent<Env> {
     return { ok: true };
   }
 
-  /**
-   * Run the head's inference loop. Returns the final HeadReport.
-   *
-   * Restricted ToolSet:
-   *   record_evidence / record_decision  — accumulate findings
-   *   sandbox_exec / read / write / list — own ephemeral VFS+shell
-   *   split_subheads                     — recursive split (depth-budgeted)
-   */
+  /** Run the head's inference loop over the forked runtime and return its
+   *  HeadReport. The ToolSet — and what is deliberately absent from it — is
+   *  declared in heads/head-tools.ts. */
   @callable()
   async runAsHead(): Promise<HeadReport> {
     if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
@@ -300,8 +336,8 @@ export class ExplorationAgent extends Agent<Env> {
     const capture = new HeadCapture();
     this.headCapture = capture;
     // The loop + report assembly live in core (runHeadInference); the Facet
-    // supplies its model + scratch tools (sandbox/shared/recursive-split). Abort
-    // is driven by abortHead() flipping this.headAborted.
+    // supplies its model + the forked tool surface. Abort is driven by
+    // abortHead() flipping this.headAborted.
     return runHeadInference(input, {
       model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
@@ -314,134 +350,22 @@ export class ExplorationAgent extends Agent<Env> {
   // ── Head-mode tool builders ─────────────────────────────────────
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture) {
-    const allowedToolNames = new Set(input.allowedTools ?? []);
-    const isAllowed = (name: string) => input.allowedTools === undefined || allowedToolNames.has(name);
-
-    const facet = this;
-    const shell = this.getHeadShell();
-    const vfs = this.getHeadVfs();
-
-    const all = {
-      // record_evidence / record_decision — shared core accumulator tools.
-      ...buildHeadAccumulatorTools(capture),
-
-      // sandbox_exec / read / write / list — shared core sandbox tools over this
-      // Facet's own ephemeral SqliteFS + virtual shell.
-      ...buildHeadSandboxTools(shell, vfs, capture),
-
-      // web_search / web_fetch — live research over the shared provider seam.
-      ...buildHeadWebTools(this.ownedModelServices.getWebSearchProvider(), capture),
-
-      shared_write: tool({
-        description:
-          "Write a finding to the SHARED agent-level scratch (visible to sibling heads AND the main agent at `shared/findings/`). Use for results worth sharing across heads — your sandbox_* files stay private to you. Your writes are namespaced by head, so siblings can't clobber them.",
-        inputSchema: jsonSchema<{ path: string; content: string }>({
-          type: "object", required: ["path", "content"],
-          properties: { path: { type: "string" }, content: { type: "string" } },
-        }),
-        execute: async ({ path, content }) => {
-          const stub = facet.getSharedParentStub();
-          if (!stub) { capture.recordToolCall("shared_write", { path }, "no-parent"); return "shared scratch unavailable (no parent agent set)"; }
-          try {
-            const r = await stub.sharedScratchWrite(input.id, path, content);
-            capture.recordArtifact({ kind: "file", ref: r.path, description: `shared finding (${content.length}b)` });
-            capture.recordToolCall("shared_write", { path, contentLen: content.length }, "ok");
-            return `wrote shared finding → ${r.path}`;
-          } catch (err) {
-            capture.recordToolCall("shared_write", { path }, "error");
-            return `shared write error: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
+    const rt = this.headRuntime();
+    return buildHeadToolSet({
+      input,
+      capture,
+      rt,
+      executeTool: createExecuteToolsTool({
+        loader: (this.env as Env & Record<string, unknown>).LOADER,
+        rt,
+        sql: this.boundSql,
+        registry: this.ownedModelServices.providerRegistry(),
+        modelSpec: () => input.model ?? null,
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
       }),
-
-      shared_read: tool({
-        description: "Read a finding from the shared agent-level scratch (path relative to `shared/findings/`, e.g. another head's `<headId>/notes.md`). Use shared_list to discover paths.",
-        inputSchema: jsonSchema<{ path: string }>({
-          type: "object", required: ["path"], properties: { path: { type: "string" } },
-        }),
-        execute: async ({ path }) => {
-          const stub = facet.getSharedParentStub();
-          if (!stub) return "shared scratch unavailable (no parent agent set)";
-          try {
-            const c = await stub.sharedScratchRead(path);
-            capture.recordToolCall("shared_read", { path }, c == null ? "missing" : "ok");
-            return c ?? `(no shared finding at ${path})`;
-          } catch (err) {
-            capture.recordToolCall("shared_read", { path }, "error");
-            return `shared read error: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
-      }),
-
-      shared_list: tool({
-        description: "List all findings currently in the shared agent-level scratch (paths relative to `shared/findings/`, across every head).",
-        inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
-        execute: async () => {
-          const stub = facet.getSharedParentStub();
-          if (!stub) return "shared scratch unavailable (no parent agent set)";
-          try {
-            const paths = await stub.sharedScratchList();
-            capture.recordToolCall("shared_list", {}, `${paths.length} files`);
-            return paths.length ? paths.join("\n") : "(shared scratch is empty)";
-          } catch (err) {
-            capture.recordToolCall("shared_list", {}, "error");
-            return `shared list error: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
-      }),
-
-      split_subheads: tool({
-        description:
-          "Spawn 2-4 child heads recursively to explore narrower sub-questions. " +
-          "Children's findings merge into a single narrative. May fail if depth exhausted.",
-        inputSchema: jsonSchema<{
-          rationale: string;
-          heads: Array<{ task: string; rationale: string }>;
-          merge_strategy?: MergeStrategy;
-        }>({
-          type: "object", required: ["rationale", "heads"],
-          properties: {
-            rationale: { type: "string" },
-            heads: {
-              type: "array", minItems: 2, maxItems: 4,
-              items: {
-                type: "object", required: ["task", "rationale"],
-                properties: { task: { type: "string" }, rationale: { type: "string" } },
-              },
-            },
-            merge_strategy: { type: "string", enum: ["synthesize", "best_of", "consensus"] },
-          },
-        }),
-        execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
-          const bExh = budgetExhausted(input.budget, capture.tokenUsage.input + capture.tokenUsage.output);
-          if (bExh.exhausted) return `Cannot split: budget exhausted (${bExh.reason}).`;
-          if (input.budget.maxDepth <= 0) return "Cannot split: maxDepth budget reached.";
-          try {
-            const result = await facet.runRecursiveSplit(
-              { rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy },
-              input.budget, input,
-            );
-            for (const cid of result.childHeadIds) capture.childHeadIds.push(cid);
-            capture.recordToolCall("split_subheads", { rationale, heads }, `merged ${result.headCount}`);
-            const lines: string[] = [result.narrative];
-            if (result.decisions.length) {
-              lines.push("", "Children's selected decisions:");
-              for (const d of result.decisions) lines.push(`- ${d.question}: ${d.choice}`);
-            }
-            if (result.unresolvedQuestions.length) {
-              lines.push("", "Open questions:");
-              for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
-            }
-            return lines.join("\n");
-          } catch (err) {
-            capture.recordToolCall("split_subheads", { rationale, heads }, "error");
-            return `split_subheads failed: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
-      }),
-    };
-
-    return Object.fromEntries(Object.entries(all).filter(([name]) => isAllowed(name)));
+      webSearch: this.ownedModelServices.getWebSearchProvider(),
+      split: (request) => this.runRecursiveSplit(request, input.budget, input),
+    });
   }
 
   // ── Recursive split — head spawns more heads (itself ExplorationAgent facets)
@@ -461,7 +385,7 @@ export class ExplorationAgent extends Agent<Env> {
     // source of truth — same schema the orchestrator initializes.
     initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); });
 
-    const journal = new HeadJournal(this.sql.bind(this) as unknown as SqlExecutor);
+    const journal = new HeadJournal(this.boundSql);
     const facet = this;
     const runtime: HeadRuntime = {
       spawnHead(childInput: HeadInput) {
@@ -503,7 +427,8 @@ export class ExplorationAgent extends Agent<Env> {
     };
   }
 
-  // The head loop, system prompt, inherited-context messages, accumulator tools,
-  // and report assembly now live in core (runHeadInference + buildHead*); this
-  // Facet only supplies the model + scratch tools (sandbox/shared/recursive-split).
+  // The head loop, system prompt, inherited context and report assembly live in
+  // core (runHeadInference); the tool surface lives in heads/head-tools.ts. This
+  // Facet supplies the three things only it can: the model, the forked runtime,
+  // and the facet-spawn substrate behind split_subheads.
 }

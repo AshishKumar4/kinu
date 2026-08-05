@@ -25,12 +25,6 @@ import {
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@proteus/compaction";
 import { Think, Session } from "@cloudflare/think";
-// preamble-injection pattern: we construct the codemode tool
-// directly via createCodeTool + PreambleCraftedExecutor. The executor reads
-// craftStore.list() on every call and splices a `const tools = {...}`
-// preamble into the LLM's sandbox arrow, so mid-turn additions are visible
-// on the next execute_tools call and tool bodies share lexical scope with
-// workspace.*/codemode.* (see docs/CRAFT-ARCHITECTURE.md).
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
@@ -47,7 +41,7 @@ import {
   resolveMaxSteps,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
-  createWebCodemodeProvider, type WebSearchProvider,
+  type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
   promptModeForTurnEvent,
@@ -103,9 +97,8 @@ import {
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
 } from "@proteus/core";
 import { combineAbortSignals } from "@proteus/agent-utils";
-import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
-import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
+import { createExecuteToolsTool } from "./execute-tools.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
 import type { AgentProviderRegistry } from "./providers/agent-registry.js";
 import { OwnedModelServices } from "./owned-model-services.js";
@@ -114,7 +107,7 @@ import {
   resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
   hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
 } from "@proteus/core";
-import { createRLMProvider, type CodemodeProvider } from "./rlm.js";
+import type { CodemodeProvider } from "./rlm.js";
 import type { UserDO } from "./user/user-do.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { sha256Hex } from "./lib/crypto.js";
@@ -1010,83 +1003,27 @@ export abstract class ActorAgent extends Think<Env> {
    * and must not re-enter `this.rt`. */
   protected configureRuntime(_runtime: CFRuntime): void {}
 
-  /**
-   * Build (or return cached) the execute_tools AI tool for this DO.
-   *
-   * Construction (once per DO lifetime):
-   *   - Build the list of codemode providers: a `codemode` provider seeded
-   *     with the pre-existing crafted tools at CONSTRUCTION time (for
-   *     type-generation in the description string), plus every registered
-   *     executor provider (workspace / nimbus / sandbox / laptop).
-   *   - Wire a `PreambleCraftedExecutor` as the executor. It wraps
-   *     upstream `DynamicWorkerExecutor` and injects a `const tools = {...}`
-   *     preamble per execute, reading craftStore.list() fresh — so tools
-   *     saved mid-turn are callable on the next execute_tools step and
-   *     crafted-tool bodies inherit lexical scope with `workspace.*` and
-   *     `codemode.*` (Phase A + C of CRAFT-ARCHITECTURE.md).
-   *
-   * Newly-named crafted tools (saved after this tool is constructed) are
-   * NOT reflected in the LLM-visible description string, but codemode's
-   * sandbox Proxy forwards any property access to the dispatcher — so
-   * `codemode.<new_name>(args)` still dispatches into the preamble's
-   * `tools.<new_name>` via regular lexical lookup.
-   */
+  /** Build (or return cached) this DO's execute_tools tool. Construction (see
+   *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
+   *  still become callable because the executor re-reads craftStore per call. */
   private getExecuteToolsTool(): unknown {
     if (!this._craftExecTool) {
-      const env = this.env as Env & Record<string, unknown>;
-      if (!env.LOADER) throw new Error("CF runtime missing LOADER binding");
-
-      const executor = new PreambleCraftedExecutor(env.LOADER, this.rt.craftStore, this.boundSql);
-
-      // Seed the `codemode` provider with the INJECTABLE crafted tools at
-      // construction time so the LLM's initial description string lists them
-      // — the same selection the preamble makes, so the advertised set can't
-      // disagree with the callable set. No-op bodies suffice.
-      const seededCraftedTools: Record<string, { description: string; execute: (arg: unknown) => Promise<unknown> }> = {};
-      for (const t of selectInjectableCraftedTools(this.rt.craftStore, this.boundSql)) {
-        seededCraftedTools[t.name] = {
-          description: t.description || `Crafted tool: ${t.name}`,
-          // This execute is never invoked — the preamble injects the real
-          // body as a `tools.<name>` literal in-sandbox. The dispatcher
-          // miss that would otherwise occur is irrelevant because the
-          // sandbox's `codemode.<name>(args)` goes to the local `tools`
-          // object, not through the dispatcher. We provide an execute
-          // stub only because createCodeTool's ToolProvider shape requires it.
-          execute: async () => ({ error: 'crafted tools run through the preamble, not the dispatcher' }),
-        };
-      }
-
-      const executionRouter = this.rt.executionRouter;
-      const executorProviders = executionRouter?.getProviders() ?? [];
-      const craftedProvider = { name: 'codemode', tools: seededCraftedTools };
-      // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
-      // Sub-call has no llm.query in scope, so depth is bounded at 1.
-      const rlmProvider = createRLMProvider(
-        this.providerRegistry(),
-        () => this.providerRegistry().normalizeSpecSync(this.getStoredModelId()),
-      );
-      // `web.*` — same web search/fetch provider that backs the web_* tools.
-      const webProvider = createWebCodemodeProvider(this.getWebSearchProvider());
-      // Record which executor the agent actually works in, so the UI (diff /
-      // file manager) defaults to where work happened. One upsert per executor
-      // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
-      const recordExecutor = (name: string) => {
-        if (this._executorsUsedThisTurn.has(name)) return;
-        this._executorsUsedThisTurn.add(name);
-        try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
-      };
-      const allProviders = [craftedProvider, rlmProvider, ...this.extraCodemodeProviders(), webProvider, ...executorProviders.map(p => {
-        const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-        const wrapped: typeof tools = {};
-        for (const [k, tool] of Object.entries(tools)) {
-          wrapped[k] = { ...tool, execute: async (...args) => { const r = await tool.execute(...args); recordExecutor(p.name); return r; } };
-        }
-        return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
-      })];
-
-      this._craftExecTool = createCodeTool({
-        tools: allProviders as Parameters<typeof createCodeTool>[0]["tools"],
-        executor: executor as unknown as Parameters<typeof createCodeTool>[0]["executor"],
+      this._craftExecTool = createExecuteToolsTool({
+        loader: (this.env as Env & Record<string, unknown>).LOADER,
+        rt: this.rt,
+        sql: this.boundSql as unknown as SqlExecutor,
+        registry: this.providerRegistry(),
+        modelSpec: () => this.getStoredModelId(),
+        webSearch: this.getWebSearchProvider(),
+        extraProviders: () => this.extraCodemodeProviders(),
+        // Record which executor the agent actually works in, so the UI (diff /
+        // file manager) defaults to where work happened. One upsert per executor
+        // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
+        onExecutorUsed: (name) => {
+          if (this._executorsUsedThisTurn.has(name)) return;
+          this._executorsUsedThisTurn.add(name);
+          try { this.config.setLastActiveExecutor(name); } catch { /* best-effort capture */ }
+        },
       });
     }
     return this._craftExecTool;

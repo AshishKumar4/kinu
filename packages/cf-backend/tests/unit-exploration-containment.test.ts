@@ -1,17 +1,32 @@
+// Head containment — asserted against the ToolSet a head is actually handed.
+//
+// A head is a FORK of its parent workspace: it rides the parent's exec planes
+// and reads the parent's files. What it must never gain is the parent's
+// AUTHORITY to create actors — `think`, `team` and `peers` open unbounded spawn
+// trees, and `split_subheads` (depth-budgeted) must stay the only spawn route.
+//
+// These assertions run against buildHeadToolSet's real output rather than the
+// text of exploration.ts, so they keep holding when the surface is refactored
+// and they catch a tool that appears through a dependency instead of a literal.
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createTestRuntime } from '@proteus/test-utils';
 import {
+  HeadCapture,
   HeadController,
   HeadJournal,
+  buildHeadSystemPrompt,
   initHeadsTables,
   type HeadInput,
   type HeadReport,
   type HeadRuntime,
   type MergeOutput,
   type SqlExecutor,
+  type WebSearchProvider,
 } from '@proteus/core';
+import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest } from '../src/heads/head-tools.js';
 
 function makeSql(db: Database): SqlExecutor {
   return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {
@@ -46,25 +61,159 @@ const mergeOutput: MergeOutput = {
   recommendations: [],
 };
 
-describe('ExplorationAgent containment', () => {
-  test('heads remain bare Agents with no ActorAgent tool surface', () => {
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
-    expect(source).toContain('export class ExplorationAgent extends Agent<Env>');
-    expect(source).not.toContain('class ExplorationAgent extends ActorAgent');
-    expect(source).not.toContain('this.rt');
+const noopWebSearch: WebSearchProvider = {
+  search: async (query) => ({ query, results: [], source: 'test' }),
+  fetch: async (url) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
+} as unknown as WebSearchProvider;
 
-    const toolBuilder = source.slice(
-      source.indexOf('  private buildHeadTools('),
-      source.indexOf('  // ── Recursive split'),
-    );
-    expect(toolBuilder).toContain('split_subheads: tool({');
-    expect(toolBuilder).not.toMatch(/\bthink\s*:/);
-    expect(toolBuilder).not.toMatch(/\bteam\s*:/);
-    expect(toolBuilder).not.toMatch(/\bpeers\s*:/);
-    expect(toolBuilder).toContain('facet.runRecursiveSplit(');
+function headInput(overrides?: Partial<HeadInput>): HeadInput {
+  return {
+    id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
+    task: 'study the cloned repo', rationale: 'the parser angle',
+    inheritedContext: [],
+    budget: { maxDepth: 2, maxTokens: 20_000, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    mergeStrategy: 'synthesize',
+    ...overrides,
+  };
+}
+
+function buildSurface(opts?: {
+  input?: HeadInput;
+  split?: (request: HeadSplitRequest) => Promise<{
+    narrative: string; decisions: []; unresolvedQuestions: []; childHeadIds: string[]; headCount: number;
+  }>;
+}) {
+  const { rt } = createTestRuntime();
+  const capture = new HeadCapture();
+  const executeTool = { description: 'execute_tools', execute: async () => 'ran' };
+  const tools = buildHeadToolSet({
+    input: opts?.input ?? headInput(),
+    capture,
+    rt,
+    executeTool,
+    webSearch: noopWebSearch,
+    split: opts?.split ?? (async () => ({
+      narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0,
+    })),
+  });
+  return { tools, capture };
+}
+
+describe('head tool surface — containment', () => {
+  test('a head has no think / team / peers / report / product_change tool', () => {
+    const { tools } = buildSurface();
+    for (const forbidden of ['think', 'team', 'peers', 'report', 'product_change']) {
+      expect(Object.keys(tools)).not.toContain(forbidden);
+    }
   });
 
-  test('the recursive split controller decrements maxDepth for spawned subheads', async () => {
+  test('split_subheads is the only tool that can start anything', () => {
+    const { tools } = buildSurface();
+    expect(tools.split_subheads).toBeDefined();
+    const spawnCapable = Object.keys(tools).filter((name) => /split|spawn|subordinate|delegate/i.test(name));
+    expect(spawnCapable).toEqual(['split_subheads']);
+  });
+
+  test('the surface is exactly the declared allow-list plus the head-only tools', () => {
+    const { tools } = buildSurface();
+    expect(Object.keys(tools).sort()).toEqual([
+      ...HEAD_BUILTIN_TOOLS,
+      'record_evidence', 'record_decision', 'split_subheads',
+    ].sort());
+  });
+
+  test('a head reaches the real workspace: execute_tools and run are present', () => {
+    const { tools } = buildSurface();
+    expect(tools.execute_tools).toBeDefined();
+    expect(tools.run).toBeDefined();
+    // The tools that lied about being a sandbox are gone — the real planes
+    // are reached through execute_tools/run instead.
+    for (const gone of ['sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list']) {
+      expect(Object.keys(tools)).not.toContain(gone);
+    }
+  });
+
+  test('split_subheads refuses once the depth budget is spent', async () => {
+    let splits = 0;
+    const { tools } = buildSurface({
+      input: headInput({ budget: { maxDepth: 0, maxTokens: 20_000, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
+    });
+    const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
+      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
+    expect(result).toContain('budget exhausted (max-depth)');
+    expect(splits).toBe(0);
+  });
+
+  test('split_subheads refuses once the token budget is spent', async () => {
+    let splits = 0;
+    const { tools, capture } = buildSurface({
+      input: headInput({ budget: { maxDepth: 3, maxTokens: 100, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
+    });
+    capture.tokenUsage.input = 500;
+    const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
+      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
+    expect(result).toContain('budget exhausted');
+    expect(splits).toBe(0);
+  });
+
+  test('allowedTools narrows the surface further, never widens it', () => {
+    const { tools } = buildSurface({ input: headInput({ allowedTools: ['run', 'record_evidence', 'think'] }) });
+    expect(Object.keys(tools).sort()).toEqual(['record_evidence', 'run']);
+  });
+
+  test('builtin tool calls land in the HeadCapture so the report keeps them', async () => {
+    const { tools, capture } = buildSurface();
+    await (tools.execute_tools as { execute: (args: unknown, opts: unknown) => Promise<unknown> })
+      .execute({ code: 'return 1' }, {});
+    expect(capture.toolCalls.map((c) => c.name)).toEqual(['execute_tools']);
+  });
+
+  test('the head prompt describes the real workspace it was given', () => {
+    const { tools } = buildSurface();
+    const prompt = buildHeadSystemPrompt(headInput(), Object.keys(tools));
+    expect(prompt).toContain('/workspace/');
+    expect(prompt).toContain('/local/');
+    expect(prompt).not.toContain('sandbox_exec');
+  });
+});
+
+describe('MCTS branch mode stays isolated', () => {
+  // ExplorationAgent is dual-purpose: explore() is an MCTS scoring branch,
+  // runAsHead() is a research head. Only the head forks the parent's resources;
+  // a branch is a bare generateText with no ToolSet and no runtime, which is why
+  // StorageIsolation holds for branches by DO identity alone.
+  //
+  // This is the one assertion here that reads source instead of behaviour: the
+  // DO classes import `agents`, which needs the workers runtime, so they cannot
+  // be instantiated in this runner. Everything about the HEAD surface above is
+  // asserted against the real ToolSet.
+  const source = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+
+  test('MCTS-mode callables acquire neither a runtime nor a ToolSet', () => {
+    const mctsMode = source.slice(
+      source.indexOf('  // ── MCTS mode @callables'),
+      source.indexOf('  // ── Head mode @callables'),
+    );
+    expect(mctsMode).toContain('async explore(');
+    expect(mctsMode).toContain('async generateReflection(');
+    expect(mctsMode).not.toContain('this.headRuntime');
+    expect(mctsMode).not.toContain('tools:');
+  });
+
+  test('the forked runtime is constructed in exactly one place', () => {
+    expect(source.match(/createCFRuntime\(/g)).toHaveLength(1);
+  });
+
+  test('heads stay bare Agents — no ActorAgent tool surface by inheritance', () => {
+    expect(source).toContain('export class ExplorationAgent extends Agent<Env>');
+    expect(source).not.toContain('class ExplorationAgent extends ActorAgent');
+  });
+});
+
+describe('recursive split budget', () => {
+  test('the controller decrements maxDepth for spawned subheads', async () => {
     const db = new Database(':memory:');
     initHeadsTables((ddl) => db.exec(ddl));
     const spawned: HeadInput[] = [];
