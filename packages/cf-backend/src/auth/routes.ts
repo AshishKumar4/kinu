@@ -13,6 +13,8 @@ import {
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareTokenToCredential,
+  isCloudflareCredentialUsable,
+  type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth.js';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access.js';
@@ -159,21 +161,10 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     const tokens = await processOAuthTokenResponse(provider, as, client, tokenResponse, savedState.nonce ?? null);
     stage = 'profile';
     const profile = await fetchOAuthProfile(provider, as, client, tokens);
-    let cloudflareCredential: Awaited<ReturnType<typeof cloudflareTokenToCredential>> | null = null;
-    if (provider.id === 'cloudflare') {
-      stage = 'cloudflare_credential';
-      cloudflareCredential = await cloudflareTokenToCredential(tokens);
-    }
     stage = 'session';
     const session = await createSession(env, profile);
-    if (cloudflareCredential) {
-      stage = 'cloudflare_credential';
-      const userDO = env.UserDO.get(env.UserDO.idFromName(session.identity.userId));
-      await userDO.setCredential(OWNER_SESSION, CLOUDFLARE_OAUTH_CRED_KEY, cloudflareCredential);
-      if (!await userDO.getConfig(OWNER_SESSION, 'default_model')) {
-        await userDO.setConfig(OWNER_SESSION, 'default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
-      }
-      notifyWorkspacesCredentialsChanged(env, userDO, ctx);
+    if (provider.id === 'cloudflare') {
+      await attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens);
     }
     ctx?.waitUntil(cleanupExpiredAuthRows(env.AUTH_DB));
     const destination = new URL(savedState.returnTo, url.origin).toString();
@@ -193,6 +184,36 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
       <p class="muted">Reason: <code>${escapeHtml(failure.reason)}</code></p>
       <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
     `, { status: 400 });
+  }
+}
+
+/**
+ * Attach the Workers AI credential to a Cloudflare sign-in.
+ *
+ * Runs after the session exists, and never throws: the operator is already
+ * signed in by this point, and a billing lookup must not be able to undo that.
+ * A token that sees no account — or a Cloudflare API that is down — leaves the
+ * credential unusable, which the "Connect Cloudflare Workers AI" notice
+ * already reports on its own.
+ */
+async function attachCloudflareWorkersAI(
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  userId: string,
+  tokens: CloudflareTokenPayload,
+): Promise<void> {
+  try {
+    const credential = await cloudflareTokenToCredential(tokens);
+    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+    await userDO.setCredential(OWNER_SESSION, CLOUDFLARE_OAUTH_CRED_KEY, credential);
+    // Only default to Workers AI when the credential can actually serve it;
+    // otherwise the operator lands on a model they cannot call.
+    if (isCloudflareCredentialUsable(credential) && !await userDO.getConfig(OWNER_SESSION, 'default_model')) {
+      await userDO.setConfig(OWNER_SESSION, 'default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
+    }
+    notifyWorkspacesCredentialsChanged(env, userDO, ctx);
+  } catch (e) {
+    console.warn(`[auth] Workers AI credential unavailable: ${summarizeOAuthFailure(e).log}`);
   }
 }
 

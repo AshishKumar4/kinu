@@ -97,8 +97,13 @@ describe('auth and desktop security invariants', () => {
     expect(provider.scopes).toContain('offline_access');
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
-    expect(routes).toContain('cloudflare_credential');
+    expect(routes).toContain('attachCloudflareWorkersAI');
     expect(routes).toContain('DEFAULT_WORKERS_AI_MODEL_SPEC');
+    // Identity must not depend on billing: the session is created before the
+    // Workers AI credential is fetched, so a missing account or a Cloudflare
+    // API outage cannot turn a valid sign-in into a 400.
+    expect(routes.indexOf('const session = await createSession'))
+      .toBeLessThan(routes.indexOf('await attachCloudflareWorkersAI'));
     expect(routes).not.toContain('Cloudflare credential attachment skipped');
     expect(userDO).toContain("'cf-aig-gateway-id'");
   });
@@ -149,6 +154,30 @@ describe('auth and desktop security invariants', () => {
       expect(credential.accessToken).toBe('cf-access');
       expect(credential.refreshToken).toBeUndefined();
       expect(credential.metadata?.accountId).toBe('abc123abc123abc123abc123abc123ab');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('a token that sees no Cloudflare account still yields a credential, just an unusable one', async () => {
+    // Signing in must not depend on Workers AI billing: a user with no
+    // Cloudflare account gets an identity and the "connect Workers AI" notice,
+    // not a 400 that locks them out of the product.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ success: true, result: [] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+    try {
+      const credential = await cloudflareTokenToCredential({
+        access_token: 'cf-access',
+        token_type: 'bearer',
+        expires_in: 3600,
+        scope: CLOUDFLARE_WORKERS_AI_SCOPES,
+      });
+      expect(credential.accessToken).toBe('cf-access');
+      expect(credential.metadata?.accountId).toBeUndefined();
+      expect(isCloudflareCredentialUsable(credential)).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }
