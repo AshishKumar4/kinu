@@ -141,6 +141,17 @@ import { EmailOutbox } from "./email/outbox.js";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
+/** The one agents-SDK schedule row that carries every Proteus-owned wake
+ *  (triggers, peer outbox, email outbox). Public because `Agent.schedule()`
+ *  types the callback as `keyof this`, which excludes private members. */
+const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
+
+/** How overdue a one-shot schedule row must be before it is unrunnable rather
+ *  than late. Mirrors the SDK's `fiberRecoveryMaxAgeMs` default: past it the
+ *  framework stops recovering the fiber a continuation callback would resume,
+ *  so dispatching the row can only replay dead work. */
+const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
+
 // Inbound-email budget per agent (all senders combined). Email is a wake
 // channel, not a data plane — mail beyond this is dropped at the gate.
 const EMAIL_INBOUND_RATE_PER_MIN = 30;
@@ -308,7 +319,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  replies and owner notifications (SPEC §7.4). */
   private get emailOutbox(): EmailOutbox {
     if (!this._emailOutbox) {
-      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql);
+      this._emailOutbox = new EmailOutbox(this.ctx.storage.sql, (at) => this.scheduleTimerAt(at));
       this._emailOutbox.ensureSchema();
     }
     return this._emailOutbox;
@@ -366,7 +377,7 @@ export class OrchestratorAgent extends ActorAgent {
       const orchestrator = this;
       const alarmScheduler: AlarmScheduler = {
         // Idempotent: pick the soonest of (existing alarm, new ts).
-        scheduleAt(ts: number) { orchestrator.scheduleAlarmAt(ts); },
+        scheduleAt(ts: number) { orchestrator.scheduleTimerAt(ts); },
         currentAlarm(): number | null { return null; },
       };
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
@@ -465,21 +476,67 @@ export class OrchestratorAgent extends ActorAgent {
             return false;   // default deny on lookup failure
           }
         },
-        scheduleDispatch: (at) => orchestrator.scheduleAlarmAt(at),
+        scheduleDispatch: (at) => orchestrator.scheduleTimerAt(at),
         onAdmitted: () => { orchestrator.orch.scheduleDrain(); },
       });
     }
     return this._peerHub;
   }
 
-  /** Idempotent soonest-wins alarm arm (shared shape with the TriggerRegistry
-   *  scheduler above). */
-  private scheduleAlarmAt(ts: number): void {
-    void Promise.resolve(this.ctx.storage.getAlarm()).then((current) => {
-      if (current === null || ts < current) {
-        this.ctx.storage.setAlarm(ts);
-      }
-    }).catch(() => this.ctx.storage.setAlarm(ts));
+  /** Idempotent soonest-wins arm of Proteus's own wake-up, expressed as the
+   *  agents-SDK schedule row `PROTEUS_TIMER_CALLBACK`. A Durable Object has a
+   *  single alarm slot and the SDK owns it (`_scheduleNextAlarm` deletes any
+   *  alarm it does not recognise), so this must never call `setAlarm` itself.
+   *  Fire-and-forget by interface (`AlarmScheduler.scheduleAt`); the storage
+   *  write is held open with `waitUntil` so it lands even if the caller's
+   *  invocation ends first. */
+  private scheduleTimerAt(ts: number): void {
+    this.ctx.waitUntil(this.armTimer(ts).catch((err: unknown) => {
+      console.error('[proteus] timer arm failed:', (err as Error).message);
+    }));
+  }
+
+  /** Reconcile the timer row to fire at or before `atMs`, collapsing onto
+   *  exactly one pending row. Rows already due are excluded: they belong to
+   *  the tick that is running (or about to), which re-arms from
+   *  `nextAlarmTime` when it finishes — counting them as "armed" would make
+   *  that final re-arm a no-op and stop the chain. */
+  private async armTimer(atMs: number): Promise<void> {
+    const nowSec = Math.floor(Date.now() / 1000);
+    // Round UP: the SDK stores schedule times in whole seconds, and waking
+    // before `next_fire_at` leaves the trigger not-yet-due, which would re-arm
+    // for the same second and busy-spin the alarm until the millisecond passed.
+    const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec);
+    const armed = (await this.listSchedules())
+      .filter((row) => row.callback === PROTEUS_TIMER_CALLBACK && row.time > nowSec);
+    const desired = Math.min(targetSec, ...armed.map((row) => row.time));
+    if (armed.length === 1 && armed[0].time === desired) return;
+    for (const row of armed) await this.cancelSchedule(row.id);
+    await this.schedule(new Date(desired * 1000), PROTEUS_TIMER_CALLBACK);
+  }
+
+  /** Drop schedule rows that came due so long ago that nothing downstream can
+   *  still act on them — a chat-recovery continuation is only meaningful while
+   *  its fiber is recoverable, and the SDK stops recovering fibers past
+   *  `fiberRecoveryMaxAgeMs`. Dropping is safe rather than lossy because the
+   *  continuation is DERIVED state: `_checkRunFibers`/`_checkFacetRunFibers`
+   *  re-register it from the fiber snapshot on the same wake, after this runs.
+   *  Recurring rows are left alone — `cron`/`interval` re-date themselves to
+   *  the next fire after one catch-up run, so they cannot pile up. Running on
+   *  every wake (rather than as a one-shot migration) keeps this a standing
+   *  invariant: normally it matches nothing, and it stops any future backlog
+   *  from stampeding one alarm cycle. */
+  private sweepUnrunnableSchedules(): void {
+    const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
+    const dropped = this.ctx.storage.sql.exec(
+      `DELETE FROM cf_agents_schedules
+        WHERE type IN ('delayed', 'scheduled') AND time <= ?
+        RETURNING id`,
+      cutoffSec,
+    ).toArray().length;
+    if (dropped > 0) {
+      console.warn(`[proteus] dropped ${dropped} unrunnable schedule row(s) overdue by more than ${STALE_SCHEDULE_HORIZON_MS}ms`);
+    }
   }
 
   protected get engine(): EvolutionEngine {
@@ -1406,6 +1463,13 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart() {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
     this.ensureSchema();
+    // Runs inside `Agent.alarm()`'s initialization, i.e. before the SDK reads
+    // the due rows — so a backlog is pruned rather than dispatched in one go.
+    try {
+      this.sweepUnrunnableSchedules();
+    } catch (err) {
+      console.warn('[proteus] stale schedule sweep failed:', (err as Error).message);
+    }
     let reconciledEventIds: string[] = [];
     try {
       reconciledEventIds = this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS);
@@ -1469,15 +1533,20 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  // ── DO alarm → Timer ingress ───────────────────────────────────
+  // ── Timer ingress ──────────────────────────────────────────────
   //
-  // The TriggerRegistry schedules alarms; this handler fires for every
-  // due trigger (cron + one-shot), publishes Timer events via the hub,
-  // re-arms cron, revokes one-shot, and schedules the next alarm.
+  // Proteus's own wake-up, dispatched by `Agent.alarm()` from the SDK's
+  // `cf_agents_schedules` table (see `armTimer`). NOT an `alarm()` override:
+  // the DO's single alarm slot belongs to the SDK, which also drives fiber
+  // recovery, facet schedules and the keepAlive heartbeat off the same wake.
+  //
+  // The TriggerRegistry arms this timer; the tick fires every due trigger
+  // (cron + one-shot), publishes Timer events via the hub, re-arms cron,
+  // revokes one-shot, and re-arms itself for the next-soonest wake.
   //
   // Crash-safe: dedupe via `(trigger_id, scheduled_fire_at)` means a
   // re-fire after DO eviction is a no-op publish.
-  async alarm() {
+  async _proteusTimerTick(): Promise<void> {
     const now = Date.now();
     try {
       const due = this.triggerRegistry.due(now);
@@ -1537,10 +1606,11 @@ export class OrchestratorAgent extends ActorAgent {
       console.warn('[proteus] email outbox reconcile failed:', (err as Error).message);
     }
 
-    // Reschedule the next-soonest alarm (triggers ∪ peer-outbox ∪ email-outbox
+    // Re-arm for the next-soonest wake (triggers ∪ peer-outbox ∪ email-outbox
     // retries). A due/past-due retry is clamped to `now` (see nextAlarmTime),
-    // and the arm is soonest-wins so this reschedule never clobbers a sooner
-    // retry alarm armed during dispatch.
+    // and the arm is soonest-wins so this never clobbers a sooner wake armed
+    // during dispatch. Awaited, not fire-and-forget: this is the link that
+    // keeps the timer chain alive.
     try {
       const next = nextAlarmTime(
         now,
@@ -1548,9 +1618,9 @@ export class OrchestratorAgent extends ActorAgent {
         this.peerHub.nextRetryAt(),
         this.emailOutbox.nextRetryAt(),
       );
-      if (next !== null) this.scheduleAlarmAt(next);
+      if (next !== null) await this.armTimer(next);
     } catch (err) {
-      console.warn('[proteus] alarm reschedule failed:', (err as Error).message);
+      console.warn('[proteus] timer re-arm failed:', (err as Error).message);
     }
   }
 

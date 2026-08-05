@@ -72,7 +72,13 @@ interface OutboxDbRow {
 }
 
 export class EmailOutbox {
-  constructor(private readonly sql: SqlExec) {}
+  /** `scheduleRetry` arms the host's timer for a backed-off re-drive. Without
+   *  it the outbox has no scheduler of its own and a failed send only retries
+   *  if some unrelated timer happens to wake the agent. */
+  constructor(
+    private readonly sql: SqlExec,
+    private readonly scheduleRetry: (at: number) => void = () => {},
+  ) {}
 
   ensureSchema(): void {
     this.sql.exec(EMAIL_OUTBOX_DDL);
@@ -172,6 +178,7 @@ export class EmailOutbox {
       `UPDATE email_outbox SET attempt_count = ?, next_attempt_at = ?, last_error = ? WHERE idempotency_key = ?`,
       attempts, next, error, key,
     );
+    this.scheduleRetry(next);
   }
 
   private row(key: string): OutboxDbRow | null {
