@@ -35,8 +35,8 @@ explore problems. This skill runs that audit.
 1. Restate what you implemented in two or three sentences: the change,
    the user-facing effect, the files touched.
 
-2. Call \`think({ strategy: "heads", task: <audit task>, budget: 3-4 })\`
-   with three or four heads, each scoped to a distinct angle:
+2. Call \`think({ task: <audit task>, budget: 3-4 })\` with three or four
+   forks, each scoped to a distinct angle:
 
    - **correctness** — does the implementation match the stated
      intent? Bugs, missing edge cases, unhandled errors, broken
@@ -54,7 +54,7 @@ explore problems. This skill runs that audit.
      deletion test: would removing this and inlining the callsites
      produce clearer code?
 
-3. Each head reports as evidence + a graded finding (P0–P3 or
+3. Each fork reports as evidence + a graded finding (P0–P3 or
    none-found). The merge step synthesises into:
 
    - the top three findings ranked by severity
