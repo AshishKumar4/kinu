@@ -430,9 +430,9 @@ describe('CLI TUI layout', () => {
       }));
       const script = `
         import { readFileSync } from 'node:fs';
-        import { createElement } from './packages/cli/node_modules/react/index.js';
-        import { createTestRenderer } from './packages/cli/node_modules/@opentui/core/testing.js';
-        import { createRoot } from './packages/cli/node_modules/@opentui/react/index.js';
+        import { createElement } from 'react';
+        import { createTestRenderer } from '@opentui/core/testing.js';
+        import { createRoot } from '@opentui/react';
         import { CONFIG_PATH } from './packages/cli/src/config.ts';
         import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
 
