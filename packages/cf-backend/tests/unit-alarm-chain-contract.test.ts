@@ -42,13 +42,24 @@ function alarmMethods(source: string): string[] {
   return bodies;
 }
 
+/** Comments and string literals must not satisfy the guard — a body whose only
+ *  mention of the call is `// no super.alarm() here` is still a shadow. */
+function stripCommentsAndStrings(body: string): string {
+  return body
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/`(?:\\.|[^`\\])*`/g, ' ')
+    .replace(/'(?:\\.|[^'\\])*'/g, ' ')
+    .replace(/"(?:\\.|[^"\\])*"/g, ' ');
+}
+
 const sources = tsSources(SRC).map((path) => ({ path, text: readFileSync(path, 'utf8') }));
 
 describe('DO alarm chain', () => {
   test('no Agent subclass defines alarm() without calling super.alarm()', () => {
     const broken = sources.flatMap(({ path, text }) =>
       alarmMethods(text)
-        .filter((body) => !/\bsuper\s*\.\s*alarm\s*\(/.test(body))
+        .filter((body) => !/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body)))
         .map(() => path),
     );
     expect(broken).toEqual([]);
@@ -125,5 +136,21 @@ describe('the Proteus timer rides the SDK scheduler', () => {
     );
     expect(sweep).toContain("type IN ('delayed', 'scheduled')");
     expect(sweep).toContain('STALE_SCHEDULE_HORIZON_MS');
+  });
+
+  // The first sabotage attempt on this guard passed only because the injected
+  // body carried the comment `// deliberately no super.alarm()`. A mention is
+  // not a call.
+  test('a comment or string mentioning super.alarm() does not satisfy the guard', () => {
+    const commented = `class Bad extends Agent<Env> {\n  async alarm() {\n    // deliberately no super.alarm()\n    doWork();\n  }\n}`;
+    const stringy = `class Bad2 extends Agent<Env> {\n  async alarm() {\n    log("call super.alarm() next time");\n  }\n}`;
+    for (const source of [commented, stringy]) {
+      const [body] = alarmMethods(source);
+      expect(body).toBeDefined();
+      expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body!))).toBe(false);
+    }
+    const real = `class Good extends Agent<Env> {\n  async alarm() {\n    await super.alarm(); // chained\n  }\n}`;
+    const [goodBody] = alarmMethods(real);
+    expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(goodBody!))).toBe(true);
   });
 });
