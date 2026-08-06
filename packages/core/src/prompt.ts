@@ -293,7 +293,13 @@ function renderAgentStateSection(surface: PromptSurface): string {
     const lines = ['## Delegation'];
     if (actions.length > 0) {
       lines.push(
-        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.',
+        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.'
+        // The zeroth rung is not an agent at all: flat map-reduce sub-calls.
+        // Weight-ordered, it sits between doing it yourself and forking, and
+        // it renders only where the llm provider is actually wired.
+        + (surface.rlmAvailable
+          ? ' The cheapest helper is not an agent: for bulk text that needs no tools, slice it and `llm.query` each slice inside execute_tools — reach for the ladder only when the work needs tool loops.'
+          : ''),
         '- Do it yourself — a single short coherent change.',
       );
     }
