@@ -5,16 +5,22 @@ import { join } from 'node:path';
 import {
   buildDrainBatch,
   EventLog,
+  eventContentPath,
   initEventsHubTables,
+  renderForLLM,
+  spillEventContent,
   type SerializedMessage,
+  type SubordinateReportPayload,
   type SubordinateRosterEntry,
 } from '@proteus/core';
+import { createMemoryVfs } from '@proteus/test-utils';
 import {
   SubordinateIdentityStore,
   SubordinateRosterStore,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
+  normalizeReportContent,
   readSubordinateLiveStatus,
   type SubordinateRuntime,
 } from '../src/subordinate-support.js';
@@ -553,5 +559,69 @@ describe('subordinate event admission', () => {
       fromSubordinate: 'researcher', status: 'progress', content: ' ', now: 1,
     })).toThrow('content');
     expect(log.pending()).toEqual([]);
+  });
+});
+
+describe('oversize subordinate reports stay reachable', () => {
+  /** The parent's ingress, in the order orchestrator.receiveSubordinateEvent
+   *  runs it: normalize → spill (async, outside the storage transaction) →
+   *  admit with the citation. */
+  async function admitFromSubordinate(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
+    const content = normalizeReportContent(raw);
+    const contentPath = await spillEventContent(vfs, content);
+    return admitSubordinateReport(log, {
+      fromSubordinate: 'researcher', status: 'completed', content,
+      task: 'Survey auth', ...(contentPath ? { contentPath } : {}), now: 11,
+    });
+  }
+
+  function freshLog(): EventLog {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    return new EventLog(sql);
+  }
+
+  test('a report past the brief budget spills whole and the parent brief cites it', async () => {
+    const log = freshLog();
+    const { vfs } = createMemoryVfs();
+    const content = 'seam found in the auth module; '.repeat(60).trim();
+
+    // The wire text carries the trailing newline a model's report usually has.
+    expect((await admitFromSubordinate(log, vfs, `${content}\n`)).admitted).toBe(true);
+
+    const event = log.pending({ variant: 'subordinate_report' })[0];
+    const path = (event.payload as SubordinateReportPayload).content_path;
+    // Normalized before spilling: the cited file is byte-for-byte the content
+    // the brief truncates, never the untrimmed wire text.
+    expect(path).toBe(eventContentPath(content));
+    expect(await vfs.readFile(path!)).toBe(content);
+
+    expect(renderForLLM(event).brief).toEndWith(` — full report: ${path}`);
+    expect(buildDrainBatch([event])!.text).toContain(path!);
+  });
+
+  test('a report within the brief budget writes nothing and renders exactly as before', async () => {
+    const log = freshLog();
+    const { vfs, files } = createMemoryVfs();
+
+    await admitFromSubordinate(log, vfs, 'Survey done — three seams found; note written.');
+
+    const event = log.pending({ variant: 'subordinate_report' })[0];
+    expect((event.payload as SubordinateReportPayload).content_path).toBeUndefined();
+    expect(files.size).toBe(0);
+    expect(renderForLLM(event).brief)
+      .toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
+  });
+
+  test('the parent ingress spills before opening its storage transaction', () => {
+    const orchestrator = source('orchestrator.ts');
+    const ingress = orchestrator.slice(
+      orchestrator.indexOf('async receiveSubordinateEvent('),
+      orchestrator.indexOf('// ── Mission Inbox'),
+    );
+    expect(ingress.indexOf('await spillEventContent(this.rt.storage.vfs, content)'))
+      .toBeLessThan(ingress.indexOf('transactionSync'));
+    expect(ingress).toContain('const content = normalizeReportContent(input.content);');
+    expect(ingress).toContain('...(contentPath ? { contentPath } : {}),');
   });
 });

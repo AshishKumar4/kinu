@@ -110,6 +110,7 @@ import {
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
   snapshotCompletedTurn,
+  spillEventContent,
 } from "@proteus/core";
 import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
@@ -117,6 +118,7 @@ import {
   SubordinateRosterStore,
   admitSubordinateReport,
   createTeamToolDeps,
+  normalizeReportContent,
   type SubordinatesChangedEvent,
 } from "./subordinate-support.js";
 import type { CodemodeProvider } from "@proteus/core";
@@ -452,6 +454,7 @@ export class OrchestratorAgent extends ActorAgent {
         sql: this.ctx.storage.sql,
         log: this.eventLog,
         replyChannels: this.replyChannels,
+        vfs: () => orchestrator.rt.storage.vfs,
         selfAgentName: () => orchestrator.name,
         selfUserId: () => {
           const userId = orchestrator.getOwnerUserId();
@@ -3737,12 +3740,19 @@ export class OrchestratorAgent extends ActorAgent {
       throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
     }
     const receivedAt = Date.now();
+    // A report longer than the brief budget is spilled to this workspace's own
+    // file plane first, so the drained turn gets a readable path alongside the
+    // brief's head instead of an unreachable tail. Before the transaction: the
+    // VFS write is async, admission is not.
+    const content = normalizeReportContent(input.content);
+    const contentPath = await spillEventContent(this.rt.storage.vfs, content);
     const result = this.ctx.storage.transactionSync(() => {
       const published = admitSubordinateReport(this.eventLog, {
         fromSubordinate: input.fromSubordinate,
         status: input.status,
-        content: input.content,
+        content,
         ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+        ...(contentPath ? { contentPath } : {}),
         now: receivedAt,
       });
       if (published.admitted) {

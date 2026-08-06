@@ -169,6 +169,10 @@ export interface PeerAgentPayload {
   /** True when the sender opened an ask (send-and-await) and holds a
    *  reply waiter — the receiver should answer via its peer-back channel. */
   reply_expected?: boolean;
+  /** Workspace path holding the fully serialized `body`, set at ingress when
+   *  the body outgrows the brief budget. The brief's slice plus this path is
+   *  the reference-plus-digest pair the receiving turn reads back. */
+  body_path?: string;
 }
 
 export interface FileChangedPayload {
@@ -198,6 +202,10 @@ export interface SubordinateReportPayload {
   content: string;
   /** The assignment this report answers, when one is active. */
   task?: string;
+  /** Workspace path holding the full `content`, set at admission when the
+   *  report outgrows the brief budget — without it the parent's turn would
+   *  see only the brief's slice and the rest would be unreachable. */
+  content_path?: string;
 }
 
 export interface EmailAttachmentMeta {

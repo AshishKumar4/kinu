@@ -1,6 +1,10 @@
 // Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
-import { applyVisibilityForStorage, renderForLLM } from '../src/events/hub/index.ts';
+import { createMemoryVfs } from '@proteus/test-utils';
+import {
+  EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
+  renderForLLM, spillEventContent,
+} from '../src/events/hub/index.ts';
 import type { ProteusEvent } from '../src/events/hub/index.ts';
 
 describe('applyVisibilityForStorage — full', () => {
@@ -75,5 +79,79 @@ describe('renderForLLM', () => {
     e.ingress = 'self_emit';
     const r = renderForLLM(e);
     expect(r.is_self_caused).toBe(true);
+  });
+
+  // Reference plus digest: a brief may truncate, but never without saying
+  // where the rest lives. Small payloads keep their exact pre-reference
+  // rendering — the prompt-cache prefix depends on those bytes.
+  describe('bulk payloads carry a resolvable reference', () => {
+    const longReport = 'seam found in the auth module; '.repeat(40);
+    const shortReport = 'Survey done — three seams found; note written.';
+
+    test('an oversize subordinate report cites the spill that holds it whole', async () => {
+      const { vfs } = createMemoryVfs();
+      const content_path = await spillEventContent(vfs, longReport);
+      expect(content_path).toBe(eventContentPath(longReport));
+
+      const r = renderForLLM(eventFor('subordinate_report', {
+        from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
+      }));
+      expect(r.brief).toBe(
+        `completed: ${longReport.slice(0, EVENT_BRIEF_MAX_CHARS)} — full report: ${content_path}`,
+      );
+      expect(await vfs.readFile(content_path!)).toBe(longReport);
+    });
+
+    test('a report within the brief budget spills nothing and renders unreferenced', async () => {
+      const { vfs, files } = createMemoryVfs();
+      expect(await spillEventContent(vfs, shortReport)).toBeNull();
+      expect(files.size).toBe(0);
+
+      const r = renderForLLM(eventFor('subordinate_report', {
+        from_subordinate: 'researcher', status: 'completed', content: shortReport, task: 'Survey auth',
+      }));
+      expect(r.brief).toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
+    });
+
+    test('an oversize peer body cites the spill holding its full serialization', async () => {
+      const { vfs } = createMemoryVfs();
+      const body = { question: 'x'.repeat(900) };
+      const serialized = JSON.stringify(body);
+      const body_path = await spillEventContent(vfs, serialized);
+
+      const r = renderForLLM(eventFor('peer_agent', {
+        from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
+        body, sender_event_id: 'se1', body_path,
+      }));
+      expect(r.brief).toBe(
+        `research: ${serialized.slice(0, EVENT_BRIEF_MAX_CHARS)} — full message: ${body_path}`,
+      );
+      expect(await vfs.readFile(body_path!)).toBe(serialized);
+    });
+
+    test('a peer body within the brief budget spills nothing and renders unreferenced', async () => {
+      const { vfs, files } = createMemoryVfs();
+      expect(await spillEventContent(vfs, JSON.stringify('shipping today'))).toBeNull();
+      expect(files.size).toBe(0);
+
+      const r = renderForLLM(eventFor('peer_agent', {
+        from_agent_name: 'scout', from_user_id: 'u1', topic: 'status',
+        body: 'shipping today', sender_event_id: 'se1',
+      }));
+      expect(r.brief).toBe('status: "shipping today"');
+    });
+
+    test('the budget boundary is exact, and identical content re-addresses one path', async () => {
+      const { vfs, files } = createMemoryVfs();
+      const atBudget = 'a'.repeat(EVENT_BRIEF_MAX_CHARS);
+      expect(await spillEventContent(vfs, atBudget)).toBeNull();
+
+      const overBudget = `${atBudget}b`;
+      const first = await spillEventContent(vfs, overBudget);
+      const second = await spillEventContent(vfs, overBudget);
+      expect(second).toBe(first!);
+      expect([...files.keys()]).toEqual([first!]);
+      expect(first!.startsWith('/local/.proteus/event-content/')).toBe(true);
+    });
   });
 });

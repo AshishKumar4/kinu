@@ -132,6 +132,12 @@ function detectContentType(payload: unknown): string {
 
 // ── LLM rendering ────────────────────────────────────────────────
 
+/** Chat-scale brief budget for the variants whose payload IS the receiving
+ *  turn's input (peer messages, subordinate assignments and reports) — not
+ *  the 150-char telemetry brief. Content beyond it is only reachable through
+ *  the spilled reference (`events/hub/content-spill.ts`). */
+export const EVENT_BRIEF_MAX_CHARS = 600;
+
 /** Compact, human-readable representation of an event for injection into
  *  the LLM context. Never includes raw payload bytes for non-`full`
  *  visibility events. */
@@ -211,10 +217,11 @@ function briefForVariant(event: ProteusEvent): string {
       return p.label ?? JSON.stringify(p.user_payload).slice(0, 100);
     }
     case 'peer_agent': {
-      // Peer messages are delegated tasks/answers — a chat-scale budget, not
-      // the 150-char telemetry brief, so the receiving turn sees the request.
-      const p = event.payload as { topic: string; body: unknown };
-      return `${p.topic}: ${JSON.stringify(p.body).slice(0, 600)}`;
+      // Peer messages are delegated tasks/answers — the whole delivery, so an
+      // oversize body names where its full text was spilled.
+      const p = event.payload as { topic: string; body: unknown; body_path?: string };
+      const full = p.body_path ? ` — full message: ${p.body_path}` : '';
+      return `${p.topic}: ${JSON.stringify(p.body).slice(0, EVENT_BRIEF_MAX_CHARS)}${full}`;
     }
     case 'subordinate_task': {
       // Assignments are the subordinate's whole turn input — chat-scale
@@ -227,12 +234,15 @@ function briefForVariant(event: ProteusEvent): string {
       };
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
       const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
-      return `${inheritedContext}${p.kind}: ${p.body.slice(0, 600)}${deliverable}`;
+      return `${inheritedContext}${p.kind}: ${p.body.slice(0, EVENT_BRIEF_MAX_CHARS)}${deliverable}`;
     }
     case 'subordinate_report': {
-      const p = event.payload as { status: string; content: string; task?: string };
+      const p = event.payload as {
+        status: string; content: string; task?: string; content_path?: string;
+      };
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
-      return `${p.status}${task}: ${p.content.slice(0, 600)}`;
+      const full = p.content_path ? ` — full report: ${p.content_path}` : '';
+      return `${p.status}${task}: ${p.content.slice(0, EVENT_BRIEF_MAX_CHARS)}${full}`;
     }
     case 'file_changed':
       return `${(event.payload as { change: string; path: string }).change} ${

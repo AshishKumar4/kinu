@@ -29,10 +29,10 @@
  */
 
 import {
-  PEER_REPLY_TOPIC, ulid,
+  PEER_REPLY_TOPIC, spillEventContent, ulid,
   type EventLog, type PeerAgentPayload,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
-  type ReplyChannelRow, type ReplyChannelStore,
+  type ReplyChannelRow, type ReplyChannelStore, type VFS,
 } from '@proteus/core';
 
 interface SqlExec {
@@ -109,6 +109,9 @@ export function enqueueOutboundPeer(
 
 export interface ReceiverDeps {
   log: EventLog;
+  /** The receiver's own file plane — an oversize body is spilled here so the
+   *  event brief can name where the rest of it lives. */
+  vfs: VFS;
   /** Whether the sender is the same owner as this receiver (UserDO lookup). */
   isSameOwner(sender_user_id: string): Promise<boolean>;
   /** Whether the receiver has explicitly granted this sender access. */
@@ -132,6 +135,9 @@ export async function receivePeerMessage(
     return { admitted: false, reason: 'no grant from receiver for cross-owner sender' };
   }
 
+  // Spilled after the grant check so a refused message never writes a file.
+  const bodyPath = await spillEventContent(deps.vfs, JSON.stringify(msg.body));
+
   const payload: PeerAgentPayload = {
     from_agent_name: msg.sender_agent_name,
     from_user_id: msg.sender_user_id,
@@ -139,6 +145,7 @@ export async function receivePeerMessage(
     body: msg.body,
     sender_event_id: msg.sender_event_id,
     reply_expected: msg.reply_expected ?? false,
+    ...(bodyPath ? { body_path: bodyPath } : {}),
   };
 
   try {
@@ -187,6 +194,9 @@ export interface PeerHubDeps {
   sql: SqlExec;
   log: EventLog;
   replyChannels: ReplyChannelStore;
+  /** Thunk: the runtime's file plane is built lazily, so it is dereferenced
+   *  per received message, never at hub construction. */
+  vfs(): VFS;
   selfAgentName(): string;
   /** The owning user id. Throw when the agent is unclaimed. */
   selfUserId(): string;
@@ -225,6 +235,7 @@ export class PeerHub {
     const now = this.now();
     const result = await receivePeerMessage({
       log: this.deps.log,
+      vfs: this.deps.vfs(),
       isSameOwner: (uid) => this.deps.isSameOwner(uid),
       // A reply correlated to an ask THIS agent delivered to THAT sender is
       // implicitly accepted — asking is consenting to the answer. Without

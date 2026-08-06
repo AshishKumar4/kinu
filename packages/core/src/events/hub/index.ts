@@ -16,6 +16,7 @@ export * from './ulid.js';
 export * from './dedupe.js';
 export * from './trust.js';
 export * from './visibility.js';
+export * from './content-spill.js';
 export * from './drain.js';
 export * from './cron.js';
 export { initEventsHubTables } from './schema.js';

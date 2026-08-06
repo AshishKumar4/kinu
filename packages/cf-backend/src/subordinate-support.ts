@@ -459,15 +459,28 @@ export function admitSubordinateTask(log: EventLog, input: {
   });
 }
 
+/** The exact report text admission stores. Producers normalize with this
+ *  before spilling, so a cited spill file can never disagree with the brief
+ *  it completes. */
+export function normalizeReportContent(content: string): string {
+  return requiredText(content, 'content');
+}
+
+/** `contentPath` addresses the spill the caller already wrote for this exact
+ *  content (`spillEventContent`), letting the parent's brief cite a report
+ *  longer than the brief budget instead of dropping its tail. Producers spill
+ *  BEFORE admission: the VFS write is async and admission runs inside the DO's
+ *  synchronous storage transaction. */
 export function admitSubordinateReport(log: EventLog, input: {
   fromSubordinate: string;
   status: SubordinateReportStatus;
   content: string;
   task?: string;
+  contentPath?: string;
   now: number;
 }): PublishResult {
   const fromSubordinate = requiredText(input.fromSubordinate, 'fromSubordinate');
-  const content = requiredText(input.content, 'content');
+  const content = normalizeReportContent(input.content);
   const task = optionalText(input.task);
   return log.publish({
     descriptor: {
@@ -478,6 +491,7 @@ export function admitSubordinateReport(log: EventLog, input: {
         status: input.status,
         content,
         ...(task ? { task } : {}),
+        ...(input.contentPath ? { content_path: input.contentPath } : {}),
       },
     },
     now: input.now,
