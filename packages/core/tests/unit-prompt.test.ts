@@ -23,71 +23,95 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/self-evolving/i);          // general-purpose, not code-centric
   });
 
-  test('renders the research fan-out doctrine: names heads AND mcts with triggers, escalation, web loop', () => {
-    // The "research doesn't use the machinery" gap: mcts was named NOWHERE in
-    // the prompt body and the doctrine was a hardcoded heads-only blurb. The
-    // Research section now renders both strategy triggers from the registry
-    // (single source) plus the always-on fan-out workflow.
+  test('renders ONE delegation ladder keyed on lifetime — exactly two rungs', () => {
+    // The two-ladder gap: `think` was keyed by strategy (heads vs mcts) and
+    // `team` by lifetime, on incompatible axes, so the model saw `team` and
+    // never considered forking. One ladder now asks one question — how long
+    // does the helper need to live — with both rung triggers rendered from the
+    // registry specs (single source).
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/## Research and experimentation/);
-    // Both strategies named with their triggers.
-    expect(prompt).toMatch(/heads = /);
-    expect(prompt).toMatch(/mcts = /);
-    // The escalation ladder and the live-info loop are the load-bearing workflow.
-    expect(prompt).toMatch(/answer directly → heads → mcts/);
+    expect(prompt).toMatch(/## Delegation/);
+    expect(prompt).toMatch(/how long does the helper need to live/);
+    // The two rungs, plus "do it yourself" as the zero rung.
+    expect(prompt).toMatch(/- Do it yourself — a single short coherent change\./);
+    expect(prompt).toMatch(/- Ephemeral fork \(`think`\) — /);
+    expect(prompt).toMatch(/- Persistent subordinate \(`team`\) — /);
+    // The old split surface is gone: no separate research ladder, no separate
+    // team ladder, no strategy-keyed escalation.
+    expect(prompt).not.toContain('## Research and experimentation');
+    expect(prompt).not.toContain('## Team');
+    expect(prompt).not.toMatch(/answer directly → heads → mcts/);
+    // The live-info loop and the forks' durable artifact trail survive.
     expect(prompt).toMatch(/loop web_search then web_fetch/);
-    // Heads' durable artifact trail + recursive depth survive the rewrite.
     expect(prompt).toMatch(/split depth 3/);
     expect(prompt).toContain('shared/findings/');
     expect(prompt).toMatch(/NOT stateless between turns/);
   });
 
-  test('renders one imperative delegation ladder when team staffing is available', () => {
+  test('mcts is a scoring policy inside the fork rung, never a third rung', () => {
+    // Preservation contract: mcts stays fully named and reachable in the
+    // doctrine the model reads — but as how branches are SETTLED, not as a
+    // co-equal delegation choice.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, {
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/set strategy=mcts/);
+    expect(prompt).toMatch(/scored against each other by execution/);
+    // It is never introduced as a ladder rung of its own.
+    expect(prompt).not.toMatch(/^- .*\bmcts\b.*\) — /m);
+    // The mcts rung text lives inside the fork bullet, after it starts.
+    const forkRung = prompt.indexOf('- Ephemeral fork (`think`) — ');
+    expect(forkRung).toBeGreaterThan(-1);
+    expect(prompt.indexOf('set strategy=mcts')).toBeGreaterThan(forkRung);
+  });
+
+  test('each rung renders only when its tool is wired', () => {
+    const { rt } = createTestRuntime();
+    const both = buildSystemPromptSync(rt, {
       availableTools: ['think', 'team'],
       registeredExecutors: [],
     });
+    expect(both).toContain('## Delegation');
+    expect(both).toMatch(/- Ephemeral fork \(`think`\)/);
+    expect(both).toMatch(/- Persistent subordinate \(`team`\)/);
+    expect(both).toMatch(/spawn.*assign.*poll.*status.*await reports.*integrate/i);
+    expect(both.indexOf('delegation ladder')).toBeLessThan(both.indexOf('## Tools available this turn'));
 
-    expect(prompt).toContain('## Team');
-    expect(prompt).toMatch(/single short coherent change/);
-    expect(prompt).toMatch(/think\(heads\).*ephemeral breadth-first/);
-    expect(prompt).toMatch(/team subordinate.*durable.*own turn loop/i);
-    expect(prompt).toMatch(/2\+ independent parts/);
-    expect(prompt).toMatch(/Decompose and STAFF it/);
-    expect(prompt).toMatch(/spawn.*assign.*poll.*status.*await reports.*integrate/i);
-    expect(prompt).toMatch(/staffing subordinates for multi-part or long-running work/);
-    expect(prompt.indexOf('delegation ladder')).toBeLessThan(prompt.indexOf('## Tools available this turn'));
-
-    const withoutTeam = buildSystemPromptSync(rt, {
+    // A subordinate gets `think` but never `team`: one rung, no staffing loop.
+    const forkOnly = buildSystemPromptSync(rt, {
       availableTools: ['think'],
       registeredExecutors: [],
     });
-    expect(withoutTeam).not.toContain('Decompose and STAFF it');
-    expect(withoutTeam).not.toContain('delegation ladder');
+    expect(forkOnly).toContain('## Delegation');
+    expect(forkOnly).toMatch(/- Ephemeral fork \(`think`\)/);
+    expect(forkOnly).not.toMatch(/- Persistent subordinate/);
+    expect(forkOnly).not.toMatch(/await reports/);
+    // The ladder pointer is not team-gated — one rung is still a ladder.
+    expect(forkOnly).toContain('delegation ladder');
   });
 
   test('team and peers schema descriptions lead with positive delegation triggers', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.team).toMatch(
-      /Use when: Use whenever the user asks for several fixes or features at once, or a long-running effort/,
+      /Use when: Staff subordinates whenever the work must outlive this turn/,
     );
-    expect(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('create one subordinate per independent workstream'))
+    expect(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('one subordinate per independent workstream'))
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.team.indexOf('full agent turn'));
     expect(BUILTIN_TOOL_DESCRIPTIONS.peers).toMatch(/Use when: Use for cross-workspace collaboration or handoff/);
     expect(BUILTIN_TOOL_DESCRIPTIONS.peers.indexOf('cross-workspace collaboration'))
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.peers.indexOf('full agent turn'));
   });
 
-  test('the research doctrine is single-sourced: the registry think spec is the only doctrine string', () => {
-    // The prompt renders the registry's whenToUse verbatim — no parallel
-    // hardcoded strategy doctrine. Editing registry.ts is the only place that
-    // changes what the model is told about heads vs mcts.
+  test('the ladder is single-sourced: both rungs render the registry specs verbatim', () => {
+    // The prompt renders the registry's whenToUse verbatim for BOTH rungs — no
+    // parallel hardcoded delegation doctrine. Editing registry.ts is the only
+    // place that changes what the model is told about forks vs subordinates.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toContain(BUILTIN_TOOL_SPECS.think.whenToUse);
-    // And the schema description carries the same doctrine (also single-sourced).
+    expect(prompt).toContain(BUILTIN_TOOL_SPECS.team.whenToUse);
+    // And the schema descriptions carry the same doctrine (also single-sourced).
     expect(BUILTIN_TOOL_DESCRIPTIONS.think).toContain(BUILTIN_TOOL_SPECS.think.whenToUse);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.team).toContain(BUILTIN_TOOL_SPECS.team.whenToUse);
   });
 
   test('teaches the honest strategy doctrine: mcts branches do not run the tool loop, code runs at scoring', () => {
@@ -110,10 +134,12 @@ describe('buildSystemPromptSync', () => {
       expect(description).toContain(`Avoid when: ${spec.whenNotToUse}`);
       expect(description).toContain(`Returns: ${spec.result}`);
       // Prompt prose carries ONLY the summary — no duplicated doctrine. The
-      // SOLE exception is `think`: its whenToUse IS the research-doctrine the
-      // prompt deliberately renders from the registry (single source), so the
-      // trigger text appears in both surfaces by design.
-      if (name !== 'think') expect(prompt).not.toContain(spec.whenToUse);
+      // SOLE exceptions are the two delegation rungs, `think` and `team`:
+      // their whenToUse IS the ladder the prompt deliberately renders from the
+      // registry (single source), so those triggers appear in both surfaces by
+      // design — and must, since a bare tool-name index (kimi family) would
+      // otherwise leave the model with no ladder at all.
+      if (name !== 'think' && name !== 'team') expect(prompt).not.toContain(spec.whenToUse);
       expect(prompt).not.toContain(spec.whenNotToUse);
     }
     // The `Use when:` / `Avoid when:` schema prefixes never leak into prose.
@@ -371,8 +397,8 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('**fact**');
     expect(prompt).not.toContain('**execute_tools**');
     expect(prompt).not.toContain('agent.schedule');
-    // `think` is gated out → no Research/fan-out doctrine.
-    expect(prompt).not.toContain('Research and experimentation');
+    // No delegation tool wired → no ladder at all.
+    expect(prompt).not.toContain('## Delegation');
   });
 
   test('renders external tools separately from built-in tools', () => {
@@ -483,6 +509,7 @@ describe('buildSystemPromptSync', () => {
       // +2 summary lines for the team/peers split + the subordinate report
       // tool (2026-07, Subordinates A2). Real actors advertise a
       // deps-filtered subset; this representative surface carries all three.
+      // 2026-08: think/team summaries now name the lifetime rung they are.
       'Tools available this turn': 1800,
       // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
       // /pc file plane; exec stays target-native) — deliberate (2026-07).
@@ -490,16 +517,13 @@ describe('buildSystemPromptSync', () => {
       'Persistence': 700,
       'Memory and facts': 560,
       'Code execution and learned capabilities': 1530,
-      // Research doctrine now renders both strategy triggers from the registry
-      // (single source) plus the always-on fan-out workflow — a deliberate,
-      // load-bearing growth over the old heads-only blurb.
-      // 2026-07-15: +positive fan-out triggers (parallel review/verification,
-      // pre-implementation investigation) — owner-directed delegation steering.
-      'Research and experimentation': 1080,
+      // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
+      // ONE lifetime-keyed ladder. It carries both rung triggers verbatim from
+      // the registry, so a bare tool-name index (kimi) still gets the whole
+      // decision — deliberate, and the load-bearing fix for "the agent never
+      // reached for think".
+      'Delegation': 2800,
       'Background work': 260,
-      // Team doctrine now adds the direct → heads → subordinate ladder and
-      // coordination loop alongside the three gated team roles (2026-07).
-      'Team': 1500,
       'Proteus product changes': 290,
       'Output format': 180,
     };
@@ -526,28 +550,29 @@ describe('buildSystemPromptSync', () => {
 
   test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: the `think` tool description previously claimed support for
-    // strategies that don't exist. Build the prompt and check it advertises
-    // exactly the two USEFUL ones — single-shot stays registered for eval
-    // harnesses but is pure overhead for a chat model, so it's not advertised.
+    // strategies that don't exist. The prompt names only `mcts`, the one
+    // strategy id a caller ever has to type — forking is the default, so the
+    // ladder does not make the model pick a strategy to delegate at all.
+    // single-shot stays registered for eval harnesses but is pure overhead for
+    // a chat model, so it is never advertised.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/mcts/);
-    expect(prompt).toMatch(/heads/);
+    expect(prompt).toMatch(/strategy=mcts/);
     expect(prompt).not.toMatch(/single-shot/);
   });
 
-  test('names mcts AND heads + the research workflow for BOTH a Kimi and a non-Kimi agent', () => {
-    // The core gap: for Kimi (bare tool-name index) `mcts` appeared NOWHERE.
-    // The Research section is workflow doctrine in the agent-state block, not
-    // the per-tool index, so it renders identically regardless of family — and
-    // it names BOTH strategies with their triggers from the registry.
+  test('the ladder renders identically for BOTH a Kimi and a non-Kimi agent', () => {
+    // Kimi gets a bare tool-name index with no per-tool prose, so anything
+    // carried only by the schema is invisible to it. The Delegation section is
+    // workflow doctrine in the agent-state block, not the per-tool index, so
+    // both rungs and the mcts scoring policy reach every family.
     const { rt } = createTestRuntime();
     for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
       const prompt = buildSystemPromptSync(rt, { model: { id } });
-      expect(prompt).toMatch(/## Research and experimentation/);
-      expect(prompt).toMatch(/heads = /);   // heads trigger
-      expect(prompt).toMatch(/mcts = /);    // mcts trigger — the gap this fix closes
-      expect(prompt).toMatch(/answer directly → heads → mcts/);
+      expect(prompt).toMatch(/## Delegation/);
+      expect(prompt).toMatch(/- Ephemeral fork \(`think`\) — /);
+      expect(prompt).toMatch(/- Persistent subordinate \(`team`\) — /);
+      expect(prompt).toMatch(/set strategy=mcts/);
       expect(prompt).toMatch(/loop web_search then web_fetch/);
     }
   });

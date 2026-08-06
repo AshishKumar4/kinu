@@ -64,7 +64,7 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
   test("opening a legacy workspace titles it from SOUL.md without blocking boot", () => {
     const onStart = orchestrator.slice(
       orchestrator.indexOf("async onStart()"),
-      orchestrator.indexOf("async alarm()"),
+      orchestrator.indexOf("async _proteusTimerTick()"),
     );
     expect(onStart).toContain("if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
     expect(onStart).toContain("void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''))");

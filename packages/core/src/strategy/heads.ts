@@ -32,9 +32,13 @@ interface HeadsStrategyOptions {
   onComplete?: (merge: MergeResult, task: string) => void;
 }
 
+/** The ephemeral-fork rung of the delegation ladder — `think`'s default
+ *  strategy when the caller names none. */
+export const FORK_STRATEGY_ID = 'heads';
+
 export function createHeadsStrategy(): ExplorationStrategy {
   return {
-    id: 'heads',
+    id: FORK_STRATEGY_ID,
     label: 'Branching heads (parallel reasoning + merge)',
     description:
       'Spawn 2–6 parallel reasoning heads, each exploring a distinct angle of the task. ' +

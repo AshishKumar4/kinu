@@ -30,6 +30,13 @@ import {
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
+import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+
+// These suites prove behaviour against a real model. Without a token they
+// cannot run, so they skip loudly instead of failing — see liveModelAuth.
+const LIVE_MODEL = liveModelAuth();
+if (!LIVE_MODEL) announceLiveModelSkip('E2E Full Lifecycle');
+const liveTest = test.skipIf(!LIVE_MODEL);
 
 // ── Config ───────────────────────────────────────────────────────
 
@@ -176,16 +183,24 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 2: Verify tools ─────────────────────────────────────
 
-  test('2. buildBuiltinTools returns the 5 canonical tools', () => {
+  // buildBuiltinTools is dep-gated: a tool appears only when the backend
+  // supplied what it needs (skills store, facts store, think tool, team
+  // roster...). This runtime wires only `rt` + `engine`, so the assertion is
+  // that the surface is exactly what those deps earn — never a stray name,
+  // and never a tool whose backend is absent.
+  test('2. buildBuiltinTools returns the dep-gated subset, all of it canonical', () => {
     const names = Object.keys(tools);
-    for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
-    expect(names.length).toBe(5);
+    for (const name of names) expect(BUILTIN_TOOLS).toContain(name);
+    for (const core of ['execute_tools', 'run', 'memory']) expect(names).toContain(core);
+    for (const ungated of ['skills', 'think', 'team', 'peers', 'product_change']) {
+      expect(names).not.toContain(ungated);
+    }
     console.log(`  Tools: ${names.join(', ')}`);
   });
 
   // ── Step 3: Chat turn 1 — simple, no tools ──────────────────
 
-  test('3. chat turn 1: simple math question', async () => {
+  liveTest('3. chat turn 1: simple math question', async () => {
     const turn = await chatTurn(model, rt, tools, 'What is 2+2? Answer briefly.');
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 120)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
@@ -195,7 +210,7 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 4: Chat turn 2 — should use execute_tools ──────────
 
-  test('4. chat turn 2: code execution', async () => {
+  liveTest('4. chat turn 2: code execution', async () => {
     const turn = await chatTurn(
       model, rt, tools,
       'Write a JS function to check if a number is prime, then test it with 7, 10, and 13. Use the execute_tools tool.',
@@ -216,7 +231,7 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 5: Chat turn 3 — should use save_note ──────────────
 
-  test('5. chat turn 3: save note to memory', async () => {
+  liveTest('5. chat turn 3: save note to memory', async () => {
     const turn = await chatTurn(
       model, rt, tools,
       'Remember this important fact: the project uses bun:sqlite for its database layer. Use the save_note tool.',
@@ -235,7 +250,7 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 6: Close and reopen with openWorkspace ──────────────────
 
-  test('6. close and reopen agent — verify persistence', () => {
+  liveTest('6. close and reopen agent — verify persistence', () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
@@ -276,7 +291,7 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 7: Print full DB state summary ──────────────────────
 
-  test('7. full database state summary', () => {
+  liveTest('7. full database state summary', () => {
     const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[])
       .map(t => t.name);
 

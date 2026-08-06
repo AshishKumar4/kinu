@@ -159,6 +159,35 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     expect(next!).toBeGreaterThan(1_000);
   });
 
+  test('a failed send arms the host timer for its own backoff', async () => {
+    // Without this the outbox has no scheduler: a retry only ever happened if
+    // some unrelated timer woke the agent and the sweep noticed the row.
+    const { sql } = makeSql();
+    const armed: number[] = [];
+    const box = new EmailOutbox(sql, (at) => { armed.push(at); });
+    box.ensureSchema();
+    const failing = fakeBinding(() => { throw new Error('down'); });
+
+    await box.send(failing.binding, 'arm', message(), 1_000);
+
+    expect(armed).toEqual([box.nextRetryAt()!]);
+  });
+
+  test('a dead-lettered intent arms nothing — there is no next attempt', async () => {
+    const { sql } = makeSql();
+    const armed: number[] = [];
+    const box = new EmailOutbox(sql, (at) => { armed.push(at); });
+    box.ensureSchema();
+    const failing = fakeBinding(() => { throw new Error('permanent'); });
+    await box.send(failing.binding, 'dead', message(), 0);
+    for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
+
+    expect(box.nextRetryAt()).toBeNull();
+    const settled = armed.length;
+    await box.reconcile(failing.binding, 20_000_000_000);
+    expect(armed).toHaveLength(settled);   // dead-lettered: nothing left to wake for
+  });
+
   test('a permanently failing intent dead-letters after the attempt budget', async () => {
     const { box, sql } = outbox();
     const failing = fakeBinding(() => { throw new Error('permanent'); });

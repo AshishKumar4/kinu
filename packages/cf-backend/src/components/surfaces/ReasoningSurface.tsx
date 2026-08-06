@@ -8,21 +8,27 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon, ArrowsOutIcon } from "@phosphor-icons/react";
-import { DEFAULT_QUALITY_THRESHOLD, lossInterval, scoreInterval, type AlignmentConvergence, type ScoreInterval } from "@proteus/core";
+import {
+  DEFAULT_QUALITY_THRESHOLD, lossInterval, scoreInterval,
+  type AlignmentConvergence, type HeadRunHeadView, type HeadRunView, type HeadStep, type ScoreInterval,
+} from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, EMPTY_HINTS, MarkdownContent } from "./shared";
+import { branchesRevalidateMs } from "./head-runs";
 
 type SubView = "mcts" | "branches" | "gepa" | "quality";
 
 export interface ReasoningSurfaceProps {
   mctsTree: MCTSNode | null;
+  /** A turn is in flight — new head runs and steps land while it is. */
+  isStreaming: boolean;
   rpc: Rpc;
 }
 
-export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
+export function ReasoningSurface({ mctsTree, isStreaming, rpc }: ReasoningSurfaceProps) {
   const { agentId } = useParams();
   const [view, setView] = useState<SubView>("mcts");
   const tabs: Array<{ id: SubView; label: string; icon: React.ComponentType<{ size?: number }> }> = [
@@ -51,7 +57,7 @@ export function ReasoningSurface({ mctsTree, rpc }: ReasoningSurfaceProps) {
       </div>
       <div className="flex-1 min-h-0">
         {view === "mcts" && <MctsView mctsTree={mctsTree} rpc={rpc} />}
-        {view === "branches" && <BranchesView rpc={rpc} />}
+        {view === "branches" && <BranchesView rpc={rpc} isStreaming={isStreaming} />}
         {view === "gepa" && <GepaView rpc={rpc} />}
         {view === "quality" && <QualityView rpc={rpc} />}
       </div>
@@ -383,21 +389,6 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
 
 /* ── Branching heads ───────────────────────────────────────────── */
 
-interface HeadStepToolCall { name: string; input?: unknown; output?: unknown }
-interface HeadStep { text: string; reasoning?: string; toolCalls: HeadStepToolCall[] }
-interface HeadEntry {
-  id: string; task: string; rationale: string; status: string; summary: string | null;
-  errorMessage: string | null; tokenInput: number; tokenOutput: number; wallClockMs: number;
-  toolCalls: Array<{ name: string; status: string }>;
-  decisions: Array<{ question: string; choice: string; rationale: string }>;
-  steps: HeadStep[];
-}
-interface HeadRun {
-  rootId: string; task: string; rationale: string; status: string; spawnedAt: number;
-  heads: HeadEntry[];
-  merge: { narrative: string; headCount: number; totalTokens: number } | null;
-}
-
 function statusDot(status: string): string {
   if (status === "completed") return "p-dot-success";
   if (status === "errored" || status === "failed") return "p-dot-danger";
@@ -446,14 +437,14 @@ function StepRow({ step, n }: { step: HeadStep; n: number }) {
   );
 }
 
-interface HeadSelection { run: HeadRun; head: HeadEntry }
+interface HeadSelection { run: HeadRunView; head: HeadRunHeadView }
 
 function HeadListButton({
   h,
   selected,
   onSelect,
 }: {
-  h: HeadEntry;
+  h: HeadRunHeadView;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -575,10 +566,14 @@ function HeadBranchInspector({ selection }: { selection: HeadSelection | null })
   );
 }
 
-function BranchesView({ rpc }: { rpc: Rpc }) {
+function BranchesView({ rpc, isStreaming }: { rpc: Rpc; isStreaming: boolean }) {
   const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
-  const load = useCallback(() => rpc<HeadRun[]>("getHeadRuns", [20]), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
+  const load = useCallback(() => rpc<HeadRunView[]>("getHeadRuns", [20]), [rpc]);
+  const revalidate = useCallback(
+    (runs: HeadRunView[] | null) => branchesRevalidateMs(runs, isStreaming),
+    [isStreaming],
+  );
+  const { resource, reload } = useAsyncResource(load, revalidate);
   const runs = lastValue(resource);
   if (runs === null) {
     if (resource.status === "error") return <LoadFailure what="the branching-head runs" message={resource.message} onRetry={reload} />;

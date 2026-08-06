@@ -8,10 +8,10 @@
 //     it cannot read the defect patch or any held-out task.
 //   - The solver never scores itself (guarded paths are restored from the
 //     pristine tree between the attempt and the checks).
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { attemptPassed } from '../packages/core/src/index.js';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index.js';
 
@@ -29,6 +29,9 @@ const SANDBOX_EXCLUDES = ['.git', 'node_modules', '.claude', join('tests', 'benc
  *  packages/<pkg>/node_modules holds the relative workspace links that let a
  *  solver's cross-package edits be seen, so those must be copied. */
 const SANDBOX_EXCLUDED_NAMES = new Set(['.git']);
+
+/** Workspace scope whose links must be re-pointed into the sandbox copy. */
+const WORKSPACE_SCOPE = '@proteus';
 const NESTED_CHECKOUT_DIRS = ['.claude', 'external'] as const;
 
 const OUTPUT_TAIL_BYTES = 4000;
@@ -64,6 +67,42 @@ export interface CreateSandboxOptions {
   defect: string;
 }
 
+/**
+ * Give the sandbox a node_modules whose third-party deps are shared read-only
+ * but whose workspace packages resolve into THIS copy.
+ *
+ * Symlinking the whole directory would be cheaper and is what this used to do,
+ * but bun hoists the workspace links to the root, so `@proteus/core` ->
+ * `../../packages/core` then resolved relative to the REAL repo's node_modules
+ * — every workspace import inside a sandbox read pristine code, and a solver's
+ * cross-package edits were graded as if they had never been made.
+ */
+function linkNodeModules(repo: string, dir: string): void {
+  const nodeModules = join(repo, 'node_modules');
+  if (!existsSync(nodeModules)) return;
+
+  const target = join(dir, 'node_modules');
+  mkdirSync(target, { recursive: true });
+  for (const entry of readdirSync(nodeModules)) {
+    if (entry === WORKSPACE_SCOPE) continue;
+    symlinkSync(join(nodeModules, entry), join(target, entry));
+  }
+
+  const scope = join(nodeModules, WORKSPACE_SCOPE);
+  if (!existsSync(scope)) return;
+  const scopeDir = join(target, WORKSPACE_SCOPE);
+  mkdirSync(scopeDir, { recursive: true });
+  for (const pkg of readdirSync(scope)) {
+    // Reuse bun's own relative target so it resolves inside the sandbox. An
+    // absolute one would point back at the real repo, which is the whole bug.
+    const linked = readlinkSync(join(scope, pkg));
+    const relativeTarget = isAbsolute(linked)
+      ? join('..', '..', relative(repo, linked))
+      : linked;
+    symlinkSync(relativeTarget, join(scopeDir, pkg));
+  }
+}
+
 export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox {
   assertScratchRoot(opts.runRoot, opts.repoRoot);
   const base = join(opts.runRoot, 'attempts', opts.attemptId);
@@ -88,11 +127,7 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
     filter: (src) => !excluded.has(src) && !SANDBOX_EXCLUDED_NAMES.has(basename(src)),
   });
 
-  // Third-party deps are shared read-only; the workspace links inside
-  // packages/*/node_modules are relative, so they resolve into THIS copy and
-  // cross-package imports see the solver's edits.
-  const nodeModules = join(repo, 'node_modules');
-  if (existsSync(nodeModules)) symlinkSync(nodeModules, join(dir, 'node_modules'), 'dir');
+  linkNodeModules(repo, dir);
 
   applyPatch(dir, opts.defect, { reverse: false });
 

@@ -645,7 +645,8 @@ export {
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
   extractHeadSteps, extractFinalText, synthesizeHeadSummary,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, MAX_HEAD_STEPS,
+  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  MAX_HEAD_STEPS,
   type HeadInferenceDeps, type HeadSandboxVfs,
 } from './heads/index.js';
 

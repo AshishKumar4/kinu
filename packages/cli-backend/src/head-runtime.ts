@@ -168,9 +168,9 @@ function buildSplitSubheadsTool(input: HeadInput, deps: CLIHeadRuntimeDeps, capt
         },
       }),
       execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
+        // budgetExhausted covers max-depth, tokens and wall-clock in one gate.
         const exh = budgetExhausted(input.budget, capture.tokenUsage.input + capture.tokenUsage.output);
         if (exh.exhausted) return `Cannot split: budget exhausted (${exh.reason}).`;
-        if (input.budget.maxDepth <= 0) return 'Cannot split: maxDepth budget reached.';
         const db = new Database(':memory:');
         try {
           initHeadsTables(makeExecRaw(db));

@@ -119,10 +119,15 @@ describe('createAttemptSandbox', () => {
     sandbox.dispose();
   });
 
-  test('node_modules is a symlink, and .git is not copied', () => {
+  // node_modules is mirrored, not symlinked wholesale: third-party deps stay
+  // shared read-only (never copied — that is what keeps a sandbox off the
+  // multi-gigabyte path), while the workspace scope is re-pointed at the copy.
+  test('third-party deps are shared, and .git is not copied', () => {
     const runRoot = tempDir('bench-nm-');
     const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a3', defect });
-    expect(lstatSync(join(sandbox.dir, 'node_modules')).isSymbolicLink()).toBe(true);
+    const shared = join(sandbox.dir, 'node_modules', 'ai');
+    expect(lstatSync(shared).isSymbolicLink()).toBe(true);
+    expect(realpathSync(shared).startsWith(realpathSync(sandbox.dir))).toBe(false);
     expect(existsSync(join(sandbox.dir, '.git'))).toBe(false);
     sandbox.dispose();
   });
@@ -135,7 +140,10 @@ describe('createAttemptSandbox', () => {
   test('workspace links resolve inside the copy, not back into the real repo', () => {
     const runRoot = tempDir('bench-ws-');
     const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', defect });
-    for (const link of ['packages/core/node_modules/@proteus/test-utils', 'packages/test-utils/node_modules/@proteus/core']) {
+    // Bun hoists workspace links to the ROOT node_modules — the per-package
+    // paths this used to check have not existed for some time, so it ENOENTed
+    // instead of catching the leak it was written to catch.
+    for (const link of ['node_modules/@proteus/core', 'node_modules/@proteus/test-utils']) {
       const resolved = realpathSync(join(sandbox.dir, link));
       expect(resolved.startsWith(realpathSync(sandbox.dir))).toBe(true);
     }

@@ -51,3 +51,23 @@ export function bearerAuth(token: string, extra: Record<string, string> = {}): A
 export function anthropicAuth(key: string): AuthResolution {
   return { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } };
 }
+
+/**
+ * The AI Gateway token the end-to-end suites need to reach a real model,
+ * or null when the environment has none.
+ *
+ * Those suites call a live model by design — that is what makes them proof
+ * rather than simulation — so without a token they cannot run at all. They
+ * skip instead of failing: a permanently red suite teaches everyone to
+ * ignore red, and a real regression then hides in the noise.
+ */
+export function liveModelAuth(): string | null {
+  return process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || null;
+}
+
+/** Say out loud that a live suite was skipped — a silent skip reads as a pass. */
+export function announceLiveModelSkip(suite: string): void {
+  console.warn(
+    `[skip] ${suite} — needs a live model. Set PROTEUS_AUTH (or AI_GATEWAY_AUTH) to run it.`,
+  );
+}

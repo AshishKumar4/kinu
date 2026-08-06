@@ -47,11 +47,19 @@ export function describeError(error: unknown): string {
 }
 
 /**
- * Fetch `load` on mount and whenever its identity changes, exposing the
- * tri-state plus the retry every failed fetch needs. `load` must be stable
- * (useCallback) — it is the effect key.
+ * How long to wait before reloading, given what last loaded — or null when
+ * there is nothing left to watch. A view backed by data the server writes but
+ * never pushes goes stale silently; this is how it stays live without polling
+ * forever once the work it was watching has settled.
  */
-export function useAsyncResource<T>(load: () => Promise<T>): {
+export type Revalidate<T> = (value: T | null) => number | null;
+
+/**
+ * Fetch `load` on mount and whenever its identity changes, exposing the
+ * tri-state plus the retry every failed fetch needs. `load` and `revalidate`
+ * must be stable (useCallback) — they are the effect keys.
+ */
+export function useAsyncResource<T>(load: () => Promise<T>, revalidate?: Revalidate<T>): {
   resource: AsyncResource<T>;
   reload: () => void;
 } {
@@ -70,6 +78,17 @@ export function useAsyncResource<T>(load: () => Promise<T>): {
   }, [load]);
 
   useEffect(() => { run(); }, [run]);
+
+  // Re-arms off each settled load: revalidating a ready resource leaves its
+  // identity untouched (beginLoad returns it), so this schedules one timer per
+  // load rather than one per render.
+  useEffect(() => {
+    if (!revalidate || resource.status === "loading") return;
+    const delay = revalidate(lastValue(resource));
+    if (delay === null) return;
+    const timer = setTimeout(run, delay);
+    return () => clearTimeout(timer);
+  }, [resource, revalidate, run]);
 
   return { resource, reload: run };
 }

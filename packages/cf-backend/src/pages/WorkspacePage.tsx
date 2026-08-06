@@ -7,7 +7,7 @@ import {
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, GearSixIcon, TimerIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
-  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon,
+  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon, LightningIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -24,6 +24,10 @@ import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
+import { summarizeToolCall } from "@/components/tool-call-summary";
+import {
+  classifyProgrammaticTurn, eventVariantLabel, parseDrainedEvents, type DrainedEvent,
+} from "@/components/background-event";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
@@ -242,21 +246,31 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
     ? (typeof input?.runtime === 'string' ? input.runtime : 'workspace')
     : null;
   const provisionErr = parseProvisionError(output);
+  // What this call is actually about, from its own arguments — without it a
+  // row of `team` chips is six identical rows for six different calls.
+  const summary = summarizeToolCall(toolName, input);
 
   return (
     <div className="my-1.5">
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs p-text-2 hover:p-text transition-colors">
-        {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="p-danger" /> : <CheckCircleIcon size={12} className="p-success" />}
-        <span className="font-mono">{toolName}</span>
+      <button onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-2 text-left text-xs p-text-2 hover:p-text transition-colors">
+        <span className="shrink-0 flex items-center">
+          {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="p-danger" /> : <CheckCircleIcon size={12} className="p-success" />}
+        </span>
+        <span className="font-mono shrink-0">{toolName}</span>
+        {summary && (
+          <span className="min-w-0 truncate p-text-3" title={summary}>
+            <span aria-hidden>· </span>{summary}
+          </span>
+        )}
         {runtime && (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'p-badge-neutral'}`}
+          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'p-badge-neutral'}`}
                 title={`Runtime: ${runtime}`}>
             {runtime}
           </span>
         )}
-        {isRunning && <span className="p-warning text-[11px]">running...</span>}
-        {durationLabel && !isRunning && <span className="p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
-        {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
+        {isRunning && <span className="shrink-0 p-warning text-[11px]">running...</span>}
+        {durationLabel && !isRunning && <span className="shrink-0 p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
+        <span className="shrink-0">{expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}</span>
       </button>
       {provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
@@ -367,6 +381,61 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
   );
 }
 
+/** One hub event inside a drain card: what it was and where it came from, with
+ *  the body the agent read on demand. */
+function DrainedEventRow({ event }: { event: DrainedEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setExpanded(!expanded)}
+      className="w-full text-left rounded-lg p-card hover:p-card-hover transition-colors px-2 py-1.5"
+    >
+      <div className="flex items-center gap-1.5 text-[10px]">
+        <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
+        <span className="min-w-0 truncate p-text-3">{event.source}</span>
+        {event.replyExpected && (
+          <span className="shrink-0 rounded px-1 py-0.5 p-badge-warning" title="The sender is waiting on the agent's reply">
+            reply expected
+          </span>
+        )}
+        <span className="ml-auto shrink-0 p-text-3">
+          {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
+        </span>
+      </div>
+      <div className={`mt-0.5 text-[11px] p-text-2 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+        {event.brief}
+      </div>
+    </button>
+  );
+}
+
+/** The reactor's drain turn: events that arrived while the operator was idle,
+ *  handed to the agent as its turn input. The operator did not type this, so it
+ *  never wears their bubble — it is a captioned, quieter event card. */
+function DrainedEventsCard({ text }: { text: string }) {
+  const events = parseDrainedEvents(text);
+  return (
+    <div className="flex justify-center animate-fade-in">
+      <div className="w-full max-w-[85%] rounded-xl border p-border p-elevated px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[10px] p-text-3">
+          <LightningIcon size={11} className="p-warning shrink-0" weight="fill" />
+          <span className="font-medium">Background event</span>
+          <span aria-hidden>·</span>
+          <span>shown to the agent</span>
+          {events.length > 1 && <span className="ml-auto shrink-0 tabular-nums">{events.length} events</span>}
+        </div>
+        <div className="mt-1.5 space-y-1">
+          {events.length > 0
+            ? events.map((event, i) => <DrainedEventRow key={i} event={event} />)
+            /* Format drift: show what the agent was given rather than nothing. */
+            : <div className="text-[11px] p-text-2 whitespace-pre-wrap break-words">{text}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** A subordinate's task assignment or progress report, mirrored into the main
  *  chat as a centered marker that links to that subordinate's tab. */
 function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
@@ -420,12 +489,15 @@ const MessageView = memo(function MessageView({
   // isn't durably persisted yet.
   const canFork = !isLive && !!onFork && !!message.id;
 
-  // System-injected background-job wake — render as a distinct event card, not
-  // a user bubble (the agent reads its text as a synthesis prompt; the operator
-  // sees a marker that work returned from the background).
-  const bgEvent = (message as { metadata?: { proteusEvent?: string; kind?: string; status?: string } }).metadata;
-  if (bgEvent?.proteusEvent === "background_job") {
-    return <BackgroundEventCard kind={bgEvent.kind ?? "task"} status={bgEvent.status ?? "completed"} />;
+  // Turns the backend enqueued on the agent's behalf are stored as `user`
+  // messages so the model reads them as its input — but the operator did not
+  // type them, so they get their own presentation instead of a user bubble.
+  const programmatic = classifyProgrammaticTurn((message as { metadata?: unknown }).metadata);
+  if (programmatic?.kind === "background_job") {
+    return <BackgroundEventCard kind={programmatic.jobKind} status={programmatic.status} />;
+  }
+  if (programmatic?.kind === "event_drain") {
+    return <DrainedEventsCard text={getMessageText(message)} />;
   }
 
   if (isUser) {
@@ -1312,6 +1384,7 @@ export default function WorkspacePage() {
             memoryContent={state.memoryContent}
             onSearchMemory={state.searchMemory}
             mctsTree={state.mctsTree}
+            isStreaming={state.isStreaming}
             executors={state.executors}
             executorOutputs={state.executorOutputs}
             lastActiveExecutor={state.lastActiveExecutor}

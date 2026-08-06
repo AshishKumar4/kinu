@@ -76,9 +76,9 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
 
-    const shadowJudge = source.slice(
-      source.indexOf('private async runShadowEvalSampled'),
-      source.indexOf('private async maybeAutoTitleWorkspace'),
+    const shadowJudge = actor.slice(
+      actor.indexOf('protected async runShadowEvalSampled'),
+      actor.indexOf('/** Build a streaming LLM callback'),
     );
     expect(shadowJudge).not.toContain('maxOutputTokens');
     expect(shadowJudge).toContain("reasoningEffortOptions('low', this.effectiveModelProviderFamily())");
@@ -250,7 +250,7 @@ describe('turn-pipeline correctness wiring', () => {
     // without a settle heartbeat the detached LLM calls race DO eviction.
     const settle = actor.slice(
       actor.indexOf('protected settleEvolutionInBackground(): void'),
-      actor.indexOf('// The BackendHost the core orchestrator runs against'),
+      actor.indexOf("   * The completed turn's evolution spine"),
     );
     expect(settle).toContain('if (this._evolutionSettling) return;');
     expect(settle).toContain('this.keepAliveWhile(() => this.orch.settleEvolution())');
@@ -258,9 +258,14 @@ describe('turn-pipeline correctness wiring', () => {
     // Detached — awaiting it in onChatResponse would re-block the TurnQueue.
     expect(settle).toContain('void this.keepAliveWhile');
 
-    // …and the post-turn hook actually calls it, after recordTurn dispatched.
-    const recordTurn = source.indexOf('this.orch.recordTurn(turn);');
-    const settleCall = source.indexOf('this.settleEvolutionInBackground();');
+    // …and the shared post-turn spine actually calls it, after recordTurn
+    // dispatched — for EVERY actor, not just the orchestrator.
+    const spine = actor.slice(
+      actor.indexOf('protected settleCompletedTurn('),
+      actor.indexOf('protected async runShadowEvalSampled'),
+    );
+    const recordTurn = spine.indexOf('this.orch.recordTurn(turn);');
+    const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
     expect(recordTurn).toBeGreaterThan(-1);
     expect(settleCall).toBeGreaterThan(recordTurn);
   });

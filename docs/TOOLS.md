@@ -19,24 +19,42 @@ flagged, and it is how a subordinate gets `report` and never gets `team`.
 | `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
 | `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
-| `think` | Deeper reasoning strategy — `heads` (parallel sub-agents) or `mcts` (approach search) |
+| `think` | Fork into 2–6 parallel copies that share the workspace, run their own tool loops, and merge back into the turn |
 | `memory` | Save/search durable prose memory; recall past session transcripts (`action=sessions`) |
 | `fact` | Remember/recall/forget typed keyed facts (preferences, project state, URLs) |
 | `web_search` | Search the live web; ranked results (title, url, snippet, date). Key-less via DuckDuckGo; a stored `tavily` credential upgrades to ranked Tavily results |
 | `web_fetch` | Fetch one URL as clean, citation-ready markdown (Cloudflare markdown service, with a local HTML→markdown fallback) |
-| `team` | Staff this workspace with durable subordinate agents — `list \| spawn \| assign \| status \| message \| dismiss` |
+| `team` | Staff this workspace with persistent subordinate agents — `list \| spawn \| assign \| status \| message \| dismiss` |
 | `peers` | Reach the owner's *other* workspaces — `list \| ask \| send \| reply \| spawn_workspace` |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
 | `product_change` | Governed lane for changing the Proteus product/UI itself |
 
-## team, peers, report — the delegation surface
+## think, team, peers, report — the delegation surface
 
-These three are one mechanism seen from three sides, and the system prompt
-(`packages/core/src/prompt.ts`) carries the ladder that tells the agent which to
-reach for: do it yourself for a single short coherent change, `think(heads)` for
-ephemeral breadth-first research that merges back inside the turn, and a `team`
-subordinate for a durable, long-running, independent workstream with its own
-turn loop.
+Delegation is **one ladder keyed on lifetime**, because lifetime is the only
+axis the model actually has to decide on. The system prompt's `## Delegation`
+section (`packages/core/src/prompt.ts`) renders it, with both rung triggers
+pulled verbatim from `BUILTIN_TOOL_SPECS` so `registry.ts` stays the single
+source:
+
+1. **Do it yourself** — a single short coherent change.
+2. **Ephemeral fork** (`think`) — spawns 2–6 copies of you on the same
+   workspace, sandbox and files; each runs its own multi-step tool loop
+   concurrently; findings merge back into this turn and the forks disappear.
+3. **Persistent subordinate** (`team`) — long-lived, keeps its own context
+   across turns, stays in the roster.
+
+`mcts` is **not** a rung. It is a scoring policy over the same fork primitive:
+`think`'s `strategy` defaults to forking (branches merge), and `strategy=mcts`
+switches how branches are settled — scored against each other by execution
+instead of merged. Everything about the search (UCT selection, backprop,
+pruning, convergence, search-store resume, sibling diversity,
+execution-grounded rewards) is unchanged and fully reachable; it is simply no
+longer advertised as a co-equal first choice, which is what kept the model from
+ever reaching for `think` at all.
+
+`peers` is the one axis that is genuinely not lifetime — it crosses *workspace*
+boundaries, which is why it sits outside the ladder.
 
 - **`team`** spawns a `SubordinateAgent` — a Durable Object facet of the same
   workspace that runs the *full* turn loop on its own workstream. It shares the
@@ -160,12 +178,14 @@ unless the workspace's shell approval mode is `allow_all`.
 (`node`, `npm`, `git`, `python`, `docker`, …) exit 127 with a message pointing at
 a real runtime instead.
 
-## think — deeper reasoning strategies
+## think — the ephemeral-fork rung
 
-`think` dispatches through the strategy registry (`core/src/strategy/`) to
-either `heads` (independent sub-agents each running their own multi-step tool
-loop, merged back into the turn) or `mcts` (approach search, branches scored by
-execution). See [MCTS.md](./MCTS.md) for the search algorithm.
+`think` dispatches through the strategy registry (`core/src/strategy/`). With
+`strategy` omitted it runs `FORK_STRATEGY_ID` (`heads`): independent forks of
+the agent, each running its own multi-step tool loop over a fork of the parent
+workspace, merged back into the turn. `strategy=mcts` keeps the same fork
+primitive but settles branches by scoring them against each other by execution.
+See [MCTS.md](./MCTS.md) for the search algorithm.
 
 ## CraftStore Lifecycle
 

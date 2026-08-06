@@ -4,7 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   createStrategyRegistry, createSingleShotStrategy, createThinkTool,
-  BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_DESCRIPTIONS, FORK_STRATEGY_ID,
   type StrategyContext,
 } from '../src/index.ts';
 import { createTestRuntime, createTestStrategy } from '@proteus/test-utils';
@@ -24,6 +24,31 @@ describe('createThinkTool — strategy dispatch', () => {
     ) as { strategy: string; text: string };
     expect(result.strategy).toBe('beta');
     expect(result.text).toBe('from beta');
+  });
+
+  test('omitting strategy forks — the ladder rung, not a strategy choice', async () => {
+    // The delegation ladder is keyed on lifetime, so calling `think` IS the
+    // fork decision: the caller never has to name a strategy to delegate.
+    const reg = createStrategyRegistry();
+    reg.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
+    reg.register(createTestStrategy({ id: 'mcts', answer: 'searched' }));
+    const { rt } = createTestRuntime();
+    const tool = createThinkTool({ registry: reg, rt, model: rt.llm as never });
+
+    const forked = await tool.execute({ task: 'x' }, {} as never) as { strategy: string; text: string };
+    expect(forked.strategy).toBe(FORK_STRATEGY_ID);
+    expect(forked.text).toBe('forked');
+
+    // `strategy` is a scoring policy: naming mcts still routes there.
+    const scored = await tool.execute({ strategy: 'mcts', task: 'x' }, {} as never) as { strategy: string; text: string };
+    expect(scored.strategy).toBe('mcts');
+    expect(scored.text).toBe('searched');
+
+    // Only `task` is required — strategy is optional on the schema too.
+    const schema = tool.inputSchema as { jsonSchema: { required: string[]; properties: { strategy: { enum: string[] } } } };
+    expect(schema.jsonSchema.required).toEqual(['task']);
+    // mcts stays fully reachable through the enum the model reads.
+    expect(schema.jsonSchema.properties.strategy.enum).toContain('mcts');
   });
 
   test('returns structured error for unknown strategy id', async () => {

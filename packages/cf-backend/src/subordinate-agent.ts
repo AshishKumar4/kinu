@@ -338,7 +338,7 @@ export class SubordinateAgent extends ActorAgent {
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
       ...(turnUsage ? { usage: turnUsage } : {}),
     };
-    this.orch.recordTurn(turn);
+    this.settleCompletedTurn(turn, { userText, assistantText });
 
     if (!this.reportedThisTurn && assistantText.trim()) {
       void this.sendReport('progress', assistantText).catch((error: unknown) => {

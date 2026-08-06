@@ -4,8 +4,9 @@
 // this loop lived only inside the cf Facet; hoisting it here keeps ONE tested
 // implementation so a CLI head behaves identically to a DO head.
 //
-// The backend provides the model + a HeadCapture + its own scratch tools
-// (sandbox/shared/recursive-split). This module owns the record_evidence /
+// The backend provides the model + a HeadCapture + its own tool surface (the cf
+// head forks its parent workspace's; the CLI head runs in-process over an
+// ephemeral scratch). This module owns the record_evidence /
 // record_decision accumulator tools, the head system prompt + inherited-context
 // messages, the generateText loop (with the abort/step/budget stop condition),
 // and the HeadReport assembly (via the shared head-summary helpers).
@@ -99,6 +100,42 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
       },
     }),
   };
+}
+
+/**
+ * Decorate a ToolSet so every call lands in the head's HeadCapture.
+ *
+ * The head tool builders in this module record themselves (they also record
+ * artifacts, which only they can classify, and per-tool outcomes only they can
+ * name). This wrapper is for the SHARED builtin surface a backend hands a head —
+ * `run`, `execute_tools`, `web_*` know nothing about heads, and without it
+ * `HeadReport.toolCalls` (which the journal persists and the no-prose fallback
+ * summary reads) would be empty for exactly the tools a head does its real work
+ * with. It records the one outcome a generic wrapper honestly knows — resolved
+ * or threw — and leaves the full result to `HeadReport.steps`. Do not apply it
+ * to a self-recording builder: the call would be recorded twice.
+ */
+export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): ToolSet {
+  const out: ToolSet = {};
+  for (const [name, entry] of Object.entries(tools)) {
+    const execute = entry.execute;
+    if (!execute) { out[name] = entry; continue; }
+    out[name] = {
+      ...entry,
+      execute: async (input: unknown, options: never) => {
+        const args = (input && typeof input === 'object' ? input : { input }) as Record<string, unknown>;
+        try {
+          const result = await execute(input as never, options);
+          capture.recordToolCall(name, args, 'ok');
+          return result;
+        } catch (err) {
+          capture.recordToolCall(name, args, `error: ${err instanceof Error ? err.message : String(err)}`);
+          throw err;
+        }
+      },
+    } as ToolSet[string];
+  }
+  return out;
 }
 
 /** A head's private ephemeral sandbox — sandbox_exec/read/write/list over a Shell
@@ -248,6 +285,8 @@ function headWebError(err: unknown): string {
 const HEAD_PROMPT_TOOL_NAMES = [
   'record_evidence',
   'record_decision',
+  'execute_tools',
+  'run',
   'sandbox_exec',
   'sandbox_read',
   'sandbox_write',
@@ -258,6 +297,13 @@ const HEAD_PROMPT_TOOL_NAMES = [
   'shared_read',
   'shared_list',
   'split_subheads',
+] as const;
+
+/** Every tool through which a head can reach a filesystem or run a command. If
+ *  it holds none of them, the prompt says so instead of implying it can look
+ *  things up. */
+const HEAD_WORK_TOOLS = [
+  'execute_tools', 'run', 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list',
 ] as const;
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
@@ -272,6 +318,21 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   }
   if (hasHeadTool(tools, 'record_decision')) {
     lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
+  }
+  if (hasHeadTool(tools, 'execute_tools')) {
+    lines.push(
+      '- execute_tools runs JavaScript against the SAME resources your parent agent has. `workspace.*` file ops address a mount table: '
+      + '`/workspace/…` is the parent agent\'s durable workspace (start here — the code and data you were spawned to study usually live there), '
+      + '`/sandbox/…` and `/nimbus/…` are live windows into its containers, `/pc/…` is the user\'s machine, and `/local/…` is YOUR private scratch. '
+      + 'Mounts are the FILE plane only: run commands through the environment\'s own namespace (`sandbox.*`, `nimbus.*`, `laptop.*`), which takes '
+      + 'that environment\'s NATIVE paths, not mount paths. `web.*` and `llm.query` are also in scope.',
+    );
+  }
+  if (hasHeadTool(tools, 'run')) {
+    lines.push(
+      '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments; '
+      + 'the default `workspace` runtime is only YOUR private scratch shell.',
+    );
   }
   if (hasHeadTool(tools, 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list')) {
     lines.push('- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can\'t see it).');
@@ -292,8 +353,8 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   if (!hasHeadTool(tools, 'shared_write', 'shared_read', 'shared_list')) {
     lines.push('- If you need to share findings but no shared scratch tool exists, put the finding in your final response and record_evidence if available.');
   }
-  if (!hasHeadTool(tools, 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list')) {
-    lines.push('- If no sandbox tools exist, reason from inherited context and available accumulator/shared tools only.');
+  if (!hasHeadTool(tools, ...HEAD_WORK_TOOLS)) {
+    lines.push('- You have no filesystem or command tool in this run: reason from inherited context and the available accumulator/shared tools only.');
   }
   if (!hasHeadTool(tools, 'split_subheads')) {
     lines.push('- Do not propose recursive subheads; split_subheads is not available in this run.');
@@ -301,7 +362,7 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   return [
     ...lines,
     '',
-    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path or use shared_write when available. Read-only inspection of shared resources is always fine.`,
+    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace) or use shared_write when available. Read-only inspection of shared resources is always fine.`,
   ];
 }
 

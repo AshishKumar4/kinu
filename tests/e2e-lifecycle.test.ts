@@ -29,6 +29,13 @@ import {
   runMCTS,
   readSoul,
 } from '../packages/core/src/index.js';
+import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+
+// These suites prove behaviour against a real model. Without a token they
+// cannot run, so they skip loudly instead of failing — see liveModelAuth.
+const LIVE_MODEL = liveModelAuth();
+if (!LIVE_MODEL) announceLiveModelSkip('E2E Lifecycle');
+const liveTest = test.skipIf(!LIVE_MODEL);
 
 const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
@@ -143,7 +150,7 @@ describe('E2E Lifecycle', () => {
     expect(soul).toContain('TypeScript');
   });
 
-  test('5-turn conversation with native tool calling', async () => {
+  liveTest('5-turn conversation with native tool calling', async () => {
     const messages = [
       'Write a TypeScript function to sort an array of numbers.',
       'Now add error handling for non-array inputs.',
@@ -165,19 +172,19 @@ describe('E2E Lifecycle', () => {
     expect(count).toBeGreaterThanOrEqual(10);
   }, 600_000);
 
-  test('evolution events fired', () => {
+  liveTest('evolution events fired', () => {
     console.log(`  Events: ${events.length}`);
     for (const e of events) console.log(`    [${e.type}] ${e.message.slice(0, 70)}`);
     expect(events.length).toBeGreaterThan(0);
   });
 
-  test('memory has content', async () => {
+  liveTest('memory has content', async () => {
     const mem = await rt.memory.read('memory/MEMORY.md');
     expect(mem).toBeTruthy();
     console.log(`  Memory: ${mem!.length} chars`);
   });
 
-  test('MCTS evolution', async () => {
+  liveTest('MCTS evolution', async () => {
     const session = makeSessionWriter();
     const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', { budget: 1, branches: 2, maxCostUSD: 5 });
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
@@ -186,7 +193,7 @@ describe('E2E Lifecycle', () => {
     expect(result.converged || !result.converged).toBe(true);
   }, 300_000);
 
-  test('persistence', () => {
+  liveTest('persistence', () => {
     const msgsBefore = (db.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
     db.close();
     const db2 = new Database(DB_PATH, { readonly: true });

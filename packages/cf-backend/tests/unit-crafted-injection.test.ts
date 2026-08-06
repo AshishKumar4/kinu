@@ -12,7 +12,7 @@ import type { CraftStore, SqlExecutor, SqlValue } from "@proteus/core";
 import { initCraftScoreTables } from "@proteus/core";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
-mock.module("cloudflare:workers", () => ({ RpcTarget: class {} }));
+mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
 const { selectInjectableCraftedTools, buildToolsPreamble } = await import("../src/crafted-tool-registry.js");
 
 function makeSql(db: Database): SqlExecutor {

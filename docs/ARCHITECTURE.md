@@ -59,7 +59,7 @@ model, not an implementation detail:
 ```mermaid
 graph TB
     A["Agent&lt;Env&gt; — agents SDK"]
-    T["Think — @cloudflare/think 0.8"]
+    T["Think — @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
     O["OrchestratorAgent<br/>deps: team · peers · productChanges"]
     S["SubordinateAgent<br/>deps: report"]
@@ -144,7 +144,7 @@ everything inline.
 
 Every turn — cloud or local — flows through the same `ExtensionHost`
 (`core/src/extension.ts`), the one small, stable seam both backends fire. On the
-cloud the `OrchestratorAgent` bridges Think 0.8's subclass hooks onto that host;
+cloud the `OrchestratorAgent` bridges Think's subclass hooks onto that host;
 on the CLI, `LocalAgentSession` (`cli-backend/src/local-session.ts`) drives
 `runChat` with the same host. There is deliberately no private callback path
 running parallel to the plugin API.
@@ -153,7 +153,7 @@ running parallel to the plugin API.
 flowchart TB
     In["Turn trigger — chat send · programmatic drain · retry"]
 
-    subgraph Bridge["Think 0.8 hook bridge (orchestrator.ts)"]
+    subgraph Bridge["Think hook bridge (orchestrator.ts)"]
         BT["beforeTurn — emitTurnStart + await transformContext"]
         BS["beforeStep — composePrepareStep"]
         TC["beforeToolCall / afterToolCall — record for evolution"]
@@ -177,7 +177,7 @@ flowchart TB
 
 What the boxes are:
 
-| Think 0.8 hook | Proteus binding | Module |
+| Think hook | Proteus binding | Module |
 |---|---|---|
 | `beforeTurn` | `emitTurnStart`, then the awaited `transformContext` chain; the ephemeral ledger + turn-local tail are woven **after** the transform; tools folded into `activeTools` | `orchestrator.ts`, `core/src/extension.ts` |
 | `beforeStep` | `composePrepareStep` — the extension chain runs first, cache-breakpoint markers land last | `core/src/prompting/prepare-step.ts` |
@@ -360,7 +360,7 @@ graph TB
     CLIB --> Compact
 
     subgraph ext["External"]
-        Think["@cloudflare/think 0.8.2 (^0.8.0)"]
+        Think["@cloudflare/think 0.15.1 (^0.15.1)"]
         Agents["agents (Agents SDK)"]
         AISDK["ai (Vercel AI SDK v6)"]
     end

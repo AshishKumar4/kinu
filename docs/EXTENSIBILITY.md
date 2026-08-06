@@ -193,7 +193,7 @@ task, budget)` tool dispatches to the registered strategy by id.
 
 ## Replacing the inference loop
 
-There is no `InferenceLoop` registry. Think 0.8's `_runInferenceLoop` is
+There is no `InferenceLoop` registry. Think's `_runInferenceLoop` is
 private, so the seam is `_transformInferenceResult`
 (`core/src/scaffold/inference-transform.ts`): when the workspace has an evolved
 `scaffold/agent.js` (version > 0), that generator becomes the turn's inference

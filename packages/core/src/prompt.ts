@@ -82,8 +82,8 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
   ];
 
-  if (hasTool(surface.builtinTools, 'team')) {
-    lines.push('- For multi-part or long-running work, use the delegation ladder below to decompose and staff independent workstreams.');
+  if (hasTool(surface.builtinTools, 'think') || hasTool(surface.builtinTools, 'team')) {
+    lines.push('- For multi-part or long-running work, pick a rung of the delegation ladder below instead of grinding through it inline.');
   }
 
   if (family === 'kimi') {
@@ -281,32 +281,32 @@ function renderAgentStateSection(surface: PromptSurface): string {
     ].join('\n'));
   }
 
-  if (hasTool(tools, 'think')) {
-    // Strategy triggers render from the registry think spec (single source);
-    // the fan-out workflow and the heads' durable artifact trail are the
-    // prompt-only operational doctrine the per-tool schema can't carry.
-    parts.push([
-      '## Research and experimentation',
-      'When a task needs breadth-first investigation, comparing competing approaches, or independent review/verification passes over separate components, do not work through it inline — fan out, escalating (answer directly → heads → mcts) as uncertainty rises:',
-      `- ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
-      'Heads recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.',
-    ].join('\n'));
-  }
-
-  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'think')) {
-    parts.push([
-      '## Background work',
-      'Long `think`, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
-    ].join('\n'));
-  }
-
-  if (hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
-    const lines = ['## Team'];
+  if (hasTool(tools, 'think') || hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
+    // ONE ladder, keyed on lifetime — the only axis the model has to decide on.
+    // Both rung triggers render from the registry specs (single source); the
+    // frame, the fork artifact trail and the coordination loop are the
+    // prompt-only operational doctrine no per-tool schema can carry.
+    const lines = [
+      '## Delegation',
+      'Delegation is one ladder with one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.',
+      '- Do it yourself — a single short coherent change.',
+    ];
+    if (hasTool(tools, 'think')) {
+      lines.push(
+        `- Ephemeral fork (\`think\`) — ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
+      );
+    }
     if (hasTool(tools, 'team')) {
       lines.push(
-        'Delegation ladder: do it yourself = a single short coherent change; think(heads) = ephemeral breadth-first research or comparison that merges back this turn; team subordinate = a durable, long-running, independent workstream with its own turn loop.',
-        "For work with 2+ independent parts, or work that will span many turns or hours, don't execute it all inline. Decompose and STAFF it: spawn one subordinate per independent workstream with `team`, assign each its task, and keep the coordination + integration turn for yourself. A subordinate is cheap to create and dismiss — prefer delegating an independent multi-step workstream over grinding through everything yourself in one long turn.",
-        'Run the coordination loop: spawn the needed roles → assign several independent workstreams → poll team status / await reports → integrate the results yourself.',
+        `- Persistent subordinate (\`team\`) — ${BUILTIN_TOOL_SPECS.team.whenToUse}`,
+      );
+    }
+    if (hasTool(tools, 'think')) {
+      lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.');
+    }
+    if (hasTool(tools, 'team')) {
+      lines.push(
+        'Run the coordination loop: spawn the needed roles → assign several independent workstreams → poll team status / await reports → integrate the results yourself. A subordinate is cheap to create and dismiss.',
         "Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.",
       );
     }
@@ -317,6 +317,13 @@ function renderAgentStateSection(surface: PromptSurface): string {
       lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` sends it progress/completed/blocked updates at meaningful milestones. Your turn-end answer to an assigned task is relayed automatically.');
     }
     parts.push(lines.join('\n'));
+  }
+
+  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'think')) {
+    parts.push([
+      '## Background work',
+      'Long `think`, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
+    ].join('\n'));
   }
 
   if (hasTool(tools, 'product_change')) {

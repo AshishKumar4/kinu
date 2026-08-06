@@ -1,0 +1,156 @@
+// The Durable Object alarm chain is a single-slot resource the agents SDK
+// owns, and breaking it fails silently — no error, no log, just scheduled
+// callbacks, fiber recovery and the keepAlive heartbeat quietly never running.
+// That is exactly how OrchestratorAgent.alarm() sat shadowing Agent.alarm()
+// for two months. These are source-shaped guards because the failure lives in
+// the shape of the code, not in any value a behaviour test could observe:
+// a subclass that simply *omits* super.alarm() is a well-formed program.
+import { describe, expect, test } from 'bun:test';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+const SRC = join(import.meta.dir, '..', 'src');
+
+function tsSources(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...tsSources(path));
+    else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) out.push(path);
+  }
+  return out;
+}
+
+/** Declarations named `alarm`, with their bodies — both the method form and
+ *  the class-field arrow form, which shadows just as effectively. Matches the
+ *  declaration position only, so `this.alarm.scheduleAt(...)` and
+ *  `storage.setAlarm(...)` are not mistaken for one. */
+function alarmMethods(source: string): string[] {
+  const declaration = /^[ \t]*(?:(?:public|protected|private|override|static|readonly|async)[ \t]+)*alarm[ \t]*(?:\([^)]*\)[^{;]*|=[^;{]*)\{/gm;
+  const bodies: string[] = [];
+  for (const match of source.matchAll(declaration)) {
+    let depth = 0;
+    const start = match.index + match[0].length - 1;
+    for (let i = start; i < source.length; i++) {
+      if (source[i] === '{') depth++;
+      else if (source[i] === '}' && --depth === 0) {
+        bodies.push(source.slice(start, i + 1));
+        break;
+      }
+    }
+  }
+  return bodies;
+}
+
+/** Comments and string literals must not satisfy the guard — a body whose only
+ *  mention of the call is `// no super.alarm() here` is still a shadow. */
+function stripCommentsAndStrings(body: string): string {
+  return body
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/`(?:\\.|[^`\\])*`/g, ' ')
+    .replace(/'(?:\\.|[^'\\])*'/g, ' ')
+    .replace(/"(?:\\.|[^"\\])*"/g, ' ');
+}
+
+const sources = tsSources(SRC).map((path) => ({ path, text: readFileSync(path, 'utf8') }));
+
+describe('DO alarm chain', () => {
+  test('no Agent subclass defines alarm() without calling super.alarm()', () => {
+    const broken = sources.flatMap(({ path, text }) =>
+      alarmMethods(text)
+        .filter((body) => !/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body)))
+        .map(() => path),
+    );
+    expect(broken).toEqual([]);
+  });
+
+  test('the guard actually catches a shadowed alarm()', () => {
+    const shadowed = `class Bad extends Agent<Env> {\n  async alarm() {\n    doWork();\n  }\n}`;
+    const chained = `class Good extends Agent<Env> {\n  async alarm(): Promise<void> {\n    await super.alarm();\n    doWork();\n  }\n}`;
+    expect(alarmMethods(shadowed)).toHaveLength(1);
+    expect(alarmMethods(shadowed)[0]).not.toContain('super.alarm(');
+    expect(alarmMethods(chained)[0]).toContain('super.alarm(');
+    // The class-field arrow form shadows just as well, so it counts too.
+    const field = `class Bad extends Agent<Env> {\n  alarm = async (): Promise<void> => {\n    doWork();\n  };\n}`;
+    expect(alarmMethods(field)).toHaveLength(1);
+    expect(alarmMethods(field)[0]).not.toContain('super.alarm(');
+    // Call sites that merely mention "alarm" are not declarations.
+    expect(alarmMethods(`this.ctx.storage.setAlarm(ts);\nthis.alarm.scheduleAt(ts);`)).toEqual([]);
+  });
+
+  test('nothing writes the DO alarm slot behind the SDK', () => {
+    // A DO has one alarm slot and _scheduleNextAlarm() deletes any alarm it
+    // does not recognise, so a direct write and the SDK scheduler silently
+    // destroy each other. All Proteus wakes go through cf_agents_schedules.
+    const direct = sources
+      .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/.test(text))
+      .map(({ path }) => path);
+    expect(direct).toEqual([]);
+  });
+});
+
+describe('the Proteus timer rides the SDK scheduler', () => {
+  const orchestrator = readFileSync(join(SRC, 'orchestrator.ts'), 'utf8');
+  const armTimer = orchestrator.slice(
+    orchestrator.indexOf('private async armTimer('),
+    orchestrator.indexOf('private sweepUnrunnableSchedules('),
+  );
+
+  test('trigger, peer-outbox and email-outbox wakes all arm the one timer row', () => {
+    expect(orchestrator).toContain("scheduleAt(ts: number) { orchestrator.scheduleTimerAt(ts); }");
+    expect(orchestrator).toContain('scheduleDispatch: (at) => orchestrator.scheduleTimerAt(at)');
+    expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.scheduleTimerAt(at))');
+    expect(orchestrator).toContain('await this.schedule(new Date(desired * 1000), PROTEUS_TIMER_CALLBACK)');
+    expect(orchestrator).toContain("const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick'");
+    expect(orchestrator).toContain('async _proteusTimerTick(): Promise<void>');
+  });
+
+  test('the tick closes the chain by re-arming, awaited', () => {
+    const tick = orchestrator.slice(
+      orchestrator.indexOf('async _proteusTimerTick(): Promise<void>'),
+      orchestrator.indexOf('/** Compute the next firing time for a cron expression'),
+    );
+    expect(tick).toContain('if (next !== null) await this.armTimer(next)');
+  });
+
+  test('arming rounds up and ignores already-due rows', () => {
+    // Rounding down wakes before next_fire_at, so the trigger is not yet due
+    // and the tick re-arms for the same second — a busy-spin. Counting the
+    // currently-firing row as "armed" would make the tick's closing re-arm a
+    // no-op against itself, which stops the chain.
+    expect(armTimer).toContain('Math.max(Math.ceil(atMs / 1000), nowSec)');
+    expect(armTimer).toContain('row.callback === PROTEUS_TIMER_CALLBACK && row.time > nowSec');
+    expect(armTimer).toContain('Math.min(targetSec, ...armed.map((row) => row.time))');
+  });
+
+  test('the stale sweep runs before the SDK reads due rows, and spares recurring rows', () => {
+    const onStart = orchestrator.slice(
+      orchestrator.indexOf('async onStart()'),
+      orchestrator.indexOf('async _proteusTimerTick()'),
+    );
+    expect(onStart).toContain('this.sweepUnrunnableSchedules()');
+    const sweep = orchestrator.slice(
+      orchestrator.indexOf('private sweepUnrunnableSchedules('),
+      orchestrator.indexOf('protected get engine()'),
+    );
+    expect(sweep).toContain("type IN ('delayed', 'scheduled')");
+    expect(sweep).toContain('STALE_SCHEDULE_HORIZON_MS');
+  });
+
+  // The first sabotage attempt on this guard passed only because the injected
+  // body carried the comment `// deliberately no super.alarm()`. A mention is
+  // not a call.
+  test('a comment or string mentioning super.alarm() does not satisfy the guard', () => {
+    const commented = `class Bad extends Agent<Env> {\n  async alarm() {\n    // deliberately no super.alarm()\n    doWork();\n  }\n}`;
+    const stringy = `class Bad2 extends Agent<Env> {\n  async alarm() {\n    log("call super.alarm() next time");\n  }\n}`;
+    for (const source of [commented, stringy]) {
+      const [body] = alarmMethods(source);
+      expect(body).toBeDefined();
+      expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body!))).toBe(false);
+    }
+    const real = `class Good extends Agent<Env> {\n  async alarm() {\n    await super.alarm(); // chained\n  }\n}`;
+    const [goodBody] = alarmMethods(real);
+    expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(goodBody!))).toBe(true);
+  });
+});

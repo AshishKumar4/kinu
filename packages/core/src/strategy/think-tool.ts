@@ -1,6 +1,11 @@
-// `think(strategy, task, budget?)` — single tool the LLM calls to dispatch
-// to a registered ExplorationStrategy. Replaces the previous "1 named tool
-// per strategy" surface (explore, split_heads, …) with one stable surface.
+// `think(task, heads?, strategy?)` — the ephemeral-fork rung of the delegation
+// ladder, and the single tool the LLM calls to dispatch to a registered
+// ExplorationStrategy. Replaces the previous "1 named tool per strategy"
+// surface (explore, split_heads, …) with one stable surface.
+//
+// `strategy` is a scoring policy, not a second delegation choice: omitted it
+// forks (FORK_STRATEGY_ID) and merges the branches back; `mcts` keeps the same
+// fork primitive but settles branches by scoring them against each other.
 //
 // Strategies plug into the StrategyRegistry; adding a new one = registering
 // it, no tool/UI changes.
@@ -14,6 +19,7 @@
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry.js';
+import { FORK_STRATEGY_ID } from './heads.js';
 import type { StrategyRegistry, StrategyContext } from './types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LanguageModel } from 'ai';
@@ -30,30 +36,32 @@ export interface ThinkToolDeps {
   defaultOptions?: () => Record<string, unknown>;
 }
 
-/** A single reasoning head spec for the `heads` strategy. Mirrors
- *  SplitRequest['heads'][number] minus the infra the host injects. */
+/** A single fork spec. Mirrors SplitRequest['heads'][number] minus the infra
+ *  the host injects. */
 interface ThinkHeadSpec {
   task: string;
   rationale: string;
-  /** Per-head model spec (e.g. `codex/gpt-5.5`). Omit to inherit the agent's. */
+  /** Per-fork model spec (e.g. `codex/gpt-5.5`). Omit to inherit the agent's. */
   model?: string;
   allowedSandboxes?: string[];
   allowedTools?: string[];
 }
 
 interface ThinkInput {
-  strategy: string;
+  /** Omit to fork (FORK_STRATEGY_ID). Named only to change how branches are
+   *  settled — e.g. `mcts` scores them by execution instead of merging. */
+  strategy?: string;
   task: string;
   /** Max iterations / branches / sub-calls. Unset = the strategy's own
    *  default (which the host may override from stored agent config). */
   budget?: number;
   /** Wall-clock budget in ms. Default 60s. */
   wall_clock_ms?: number;
-  /** strategy=heads: the parallel reasoning heads to spawn (2–6). */
+  /** The parallel forks to spawn (2–6). */
   heads?: ThinkHeadSpec[];
-  /** strategy=heads: how to combine head findings. Default 'synthesize'. */
+  /** How to combine fork findings. Default 'synthesize'. */
   merge_strategy?: MergeStrategy;
-  /** strategy=heads: model spec for the merge LLM. Omit to inherit the agent's. */
+  /** Model spec for the merge LLM. Omit to inherit the agent's. */
   merge_model?: string;
   /** Advanced per-strategy tuning (e.g. mcts branches/maxDepth). Deep-merged
    *  under injected infra. Most callers never set this. */
@@ -79,9 +87,13 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
       (strategies.length > 0 ? `\nStrategies available this turn: ${strategies.join(', ')}.` : ''),
     inputSchema: jsonSchema<ThinkInput>({
       type: 'object',
-      required: ['strategy', 'task'],
+      required: ['task'],
       properties: {
-        strategy: { type: 'string', enum: strategies, description: 'Strategy id.' },
+        strategy: {
+          type: 'string',
+          enum: strategies,
+          description: `How branches are settled. Defaults to ${FORK_STRATEGY_ID} — ephemeral forks that merge back into this turn.`,
+        },
         task: { type: 'string', description: 'Concrete task to explore.' },
         budget: { type: 'integer', minimum: 1, maximum: 200, description: 'Max iterations.' },
         wall_clock_ms: { type: 'integer', minimum: 1000, description: 'Wall-clock cap in ms.' },
@@ -89,35 +101,36 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
           type: 'array',
           minItems: 2,
           maxItems: 6,
-          description: 'strategy=heads only: the parallel reasoning heads to spawn.',
+          description: 'The parallel forks to spawn. Required when forking.',
           items: {
             type: 'object',
             required: ['task', 'rationale'],
             properties: {
-              task: { type: 'string', description: 'What this head explores. Be concrete.' },
+              task: { type: 'string', description: 'What this fork explores. Be concrete.' },
               rationale: { type: 'string', description: 'Why this angle matters.' },
-              model: { type: 'string', description: "Per-head model spec (e.g. 'codex/gpt-5.5'). Omit to inherit." },
-              allowedSandboxes: { type: 'array', items: { type: 'string' }, description: 'Sandbox namespaces this head may use.' },
-              allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this head may invoke.' },
+              model: { type: 'string', description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit." },
+              allowedSandboxes: { type: 'array', items: { type: 'string' }, description: 'Sandbox namespaces this fork may use.' },
+              allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this fork may invoke.' },
             },
           },
         },
         merge_strategy: {
           type: 'string',
           enum: ['synthesize', 'best_of', 'consensus'],
-          description: 'strategy=heads only: how to combine head findings. Default synthesize.',
+          description: 'How to combine fork findings. Default synthesize.',
         },
         merge_model: {
           type: 'string',
-          description: 'strategy=heads only: model spec for the merge LLM. Omit to inherit.',
+          description: 'Model spec for the merge LLM. Omit to inherit.',
         },
         options: { type: 'object', description: 'Advanced per-strategy tuning. Most callers leave unset.' },
       },
     }),
     execute: async (input: ThinkInput, toolOptions?: unknown) => {
-      const strat = deps.registry.get(input.strategy);
+      const strategyId = input.strategy ?? FORK_STRATEGY_ID;
+      const strat = deps.registry.get(strategyId);
       if (!strat) {
-        return { error: `Unknown strategy "${input.strategy}". Available: ${strategies.join(', ')}` };
+        return { error: `Unknown strategy "${strategyId}". Available: ${strategies.join(', ')}` };
       }
 
       // One-level deep merge: caller tuning sits alongside injected infra
@@ -168,7 +181,7 @@ export function createThinkTool(deps: ThinkToolDeps): ToolSet[string] {
           cost: result.cost,
         };
       } catch (err) {
-        return { error: `Strategy ${input.strategy} failed: ${(err as Error).message}` };
+        return { error: `Strategy ${strategyId} failed: ${(err as Error).message}` };
       }
     },
   });

@@ -44,6 +44,8 @@ export interface WorkSurfaceProps {
   onSearchMemory: (q: string) => void;
   // Reasoning
   mctsTree: MCTSNode | null;
+  /** A turn is in flight — the live surfaces revalidate while it is. */
+  isStreaming: boolean;
   // Environment (mounts + terminals)
   executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
@@ -99,7 +101,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onChangelogSeen={props.onChangelogSeen}
             />
           )}
-          {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} rpc={props.rpc} />}
+          {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
           {surface === "Product" && <ProductChangesSurface rpc={props.rpc} />}
           {surface === "Tasks" && <TasksSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshTasks} rpc={props.rpc} />}
           {surface === "Environment" && (

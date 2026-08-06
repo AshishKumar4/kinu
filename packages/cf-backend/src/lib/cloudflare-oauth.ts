@@ -114,19 +114,19 @@ export async function cloudflareTokenToCredential(
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
   const refreshToken = stringValue(token.refresh_token);
-  const accounts = await fetchCloudflareAccounts(accessToken);
-  const account = accounts[0] ?? null;
-  if (!account) {
-    throw new Error('Cloudflare OAuth did not expose an account for Workers AI billing.');
-  }
+  // An account the token cannot see is not an authentication failure — Workers
+  // AI billing is a separate concern from who signed in. The credential is
+  // stored without an accountId, which isCloudflareCredentialUsable already
+  // reports as unusable, so the operator gets the "Connect Cloudflare Workers
+  // AI" notice instead of being locked out of the product entirely.
+  const account = (await fetchCloudflareAccounts(accessToken))[0] ?? null;
 
   const credential: OAuthCredential = {
     kind: 'oauth',
     accessToken,
     expiresAt: expiresAtFromToken(token),
     metadata: {
-      accountId: account.id,
-      accountName: account.name,
+      ...(account ? { accountId: account.id, accountName: account.name } : {}),
       scopes: scopeList(token.scope),
       tokenType: stringValue(token.token_type) ?? 'bearer',
     },

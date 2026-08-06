@@ -24,6 +24,14 @@ export function mockAgentsSdk(): void {
     },
     /** The real decorator only attaches RPC metadata. */
     callable: () => (method: unknown) => method,
+    // Named imports @cloudflare/think binds at module load. bun resolves the
+    // whole import list eagerly, so a missing name is a load-time SyntaxError
+    // for any test that reaches an ActorAgent subclass.
+    getCurrentAgent: () => ({ agent: undefined, connection: undefined, request: undefined }),
+    __DO_NOT_USE_WILL_BREAK__agentContext: { getStore: () => undefined, run: (_store: unknown, fn: () => unknown) => fn() },
+    __DO_NOT_USE_WILL_BREAK__withInvocationScope: (_scope: unknown, fn: () => unknown) => fn(),
+    isDurableObjectMemoryLimitReset: () => false,
+    isPlatformTransientError: () => false,
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
   }));
@@ -39,5 +47,13 @@ export function mockAgentsSdk(): void {
   }));
   mock.module('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class { serverId = ''; },
+  }));
+  // The DO layer reaches the runtime + codemode module graph (a head builds a
+  // CF runtime and an execute_tools tool), both of which import this
+  // workerd-only module at load.
+  mock.module('cloudflare:workers', () => ({
+    RpcTarget: class {},
+    WorkerEntrypoint: class {},
+    DurableObject: class {},
   }));
 }

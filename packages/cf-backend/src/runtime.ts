@@ -41,7 +41,7 @@ import { createShell } from "@proteus/agent-utils/shell";
 import type { SqlExecutor } from "@proteus/agent-utils";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
-import type { Think } from "@cloudflare/think";
+import type { Agent } from "agents";
 import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
 import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
@@ -58,13 +58,18 @@ import {
 } from "./nimbus-route.js";
 
 /**
- * The agent surface these runtime builders need. `env`/`ctx` are `protected`
- * on the DurableObject base (not reachable by these free functions), but the
- * runtime is conceptually an extension of the agent and legitimately needs
- * them. The orchestrator (a subclass that DOES have access) passes `this`
+ * The agent surface these runtime builders need — the bare agents-SDK `Agent`
+ * members, nothing from Think. Narrow on purpose: `ExplorationAgent` extends
+ * `Agent<Env>` (never `ActorAgent`, so a head can't acquire the think/team/peers
+ * surface) and still has to be able to build a runtime, so requiring `Think`
+ * here would have made the fork impossible.
+ *
+ * `env`/`ctx` are `protected` on the DurableObject base (not reachable by these
+ * free functions), but the runtime is conceptually an extension of the agent and
+ * legitimately needs them. A subclass (which DOES have access) passes `this`
  * cast to this view — so the access is sound, just opened to these helpers.
  */
-type AgentHost = Think<Env> & {
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'> & {
   readonly env: Env;
   readonly ctx: DurableObjectState;
 };
