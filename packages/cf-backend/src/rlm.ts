@@ -11,7 +11,8 @@
 // `llm.query(...)` joins that surface as one more provider — the LLM can
 // write code like:
 //
-//   const chunks = await workspace.readChunks('huge.log', { tokens: 4000 });
+//   const log = await workspace.readFile('huge.log');
+//   const chunks = log.match(/[\s\S]{1,16000}/g) ?? [];
 //   const summaries = await Promise.all(chunks.map(c => llm.query(`Summarize: ${c}`)));
 //   const final = await llm.query(`Synthesize: ${summaries.join('\n\n')}`);
 //
