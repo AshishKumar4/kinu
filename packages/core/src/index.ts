@@ -677,6 +677,31 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
 export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
+export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context.js';
+export {
+  openTurnRun, closeTurnRun, snapshotCompletedTurn,
+  persistMeasuredPromptTokens, applyOverflowRecovery,
+  type CompactionTriggerState,
+} from './orchestrator/turn-lifecycle.js';
+export {
+  createScaffoldLLMStream, createScaffoldCallTool, type ScaffoldBridgeOpts,
+} from './orchestrator/scaffold-host.js';
+export { runSampledShadowEval, type ShadowEvalConfig } from './orchestrator/shadow-eval.js';
+export {
+  BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeForkBackgroundJob,
+} from './orchestrator/background-tools.js';
+export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-deps.js';
+export { createDurableMctsSession } from './orchestrator/mcts-session.js';
+export {
+  skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
+  renderFactsForTurn, type TurnSkillsConfig,
+} from './orchestrator/turn-surface.js';
+export { ModelCatalogSession } from './orchestrator/model-catalog.js';
+export {
+  serializeContentForHeads, narrowInheritedRole,
+  inheritedContextFromHistory, INHERITED_CONTEXT_CAP,
+} from './orchestrator/heads-support.js';
+export { recordGroundedHeadsTake } from './mcts/takes.js';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow

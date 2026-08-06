@@ -28,7 +28,6 @@ import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
-import { contextWindowForModel } from "./lib/context-window.js";
 import { generateJson } from "./lib/generate-json.js";
 import type {
   TurnContext, TurnConfig,
@@ -44,7 +43,8 @@ import {
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
-  runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
+  createScaffoldLLMStream, createScaffoldCallTool, runSampledShadowEval,
+  JudgeOutputSchema,
   type StructuredJudgeFn, effortFor, type CompletedTurn,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
@@ -56,7 +56,9 @@ import {
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
-  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  OVERFLOW_RETRY_EVENT,
+  // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
+  openTurnRun, closeTurnRun, persistMeasuredPromptTokens, applyOverflowRecovery,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   EventInjectionBuffer, type MidTurnEventBatch,
@@ -73,24 +75,25 @@ import {
   // Durable run-event log
   RunEventRecorder,
   // agent_facts world model
-  createFactsStore, renderFactsBlock, type FactsStore,
+  createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
   observeDevicePresence,
   // Typed agent_config store
   createAgentConfigStore,
-  type SessionWriter, type SessionMessage, type SqlExecutor,
-  // Unified strategy dispatch
-  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
-  createHeadsStrategy, agentsActionsFor, resumableForkInput,
+  type SessionWriter, type SqlExecutor,
+  // The agents tool's fork substrate (shared factory) + durable MCTS session
+  buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
   // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, BackgroundJobRunner, withBackgroundThreshold, JobNotResumable,
+  BackgroundJobStore, BackgroundJobRunner,
+  wrapToolsForBackground, resumeForkBackgroundJob,
   MctsSearchStore,
   // EventsHub primitives (spec §1)
   EventLog,
-  // Skills (Claude-Code / Hermes SKILL.md spec, VFS-backed)
-  discoverSkills, resolveActiveSkills, extractExplicitInvocations,
-  unionAllowedTools, toolAllowedBySkills, BUILTIN_SKILLS,
-  type ActiveSkillSet, type SkillsVfs, recordHeadsTakeSet,
+  // Skills + per-turn surface (core turn-surface)
+  resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver, renderFactsForTurn,
+  type ActiveSkillSet, type SkillsVfs,
+  // Heads support (takes capture + inherited-context digest)
+  recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP,
   type ProductChangeToolDeps,
   isVfsError,
   type ParentRpcResult,
@@ -100,12 +103,15 @@ import {
   readSoul,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
-  acceptedMediaForModel, sanitizeAttachmentsForModel, type MediaModality, type ModelInfo,
+  type MediaModality,
+  // Shared catalog view of the resolved model
+  ModelCatalogSession,
+  // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
+  assembleTurnMessages,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
 } from "@proteus/core";
-import { combineAbortSignals } from "@proteus/agent-utils";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
 import { createCFHeadRuntime } from "./heads/head-runtime.js";
@@ -476,53 +482,33 @@ export abstract class ActorAgent extends Think<Env> {
     programmaticUserMessage: UIMessage | null;
   }): void {
     const { errorText, completed, programmaticUserMessage } = turn;
-    // Persist the turn's final provider-priced prompt size — the NEXT turn's
-    // measured compaction trigger. Recorded even on aborted/errored turns:
-    // any step that reported was a real priced request. Bound to the turn's
-    // durable-history length so a later shrink voids it.
-    if (this.acc.lastPromptTokens > 0) {
-      this.compactionState.savePromptTokens(this.name, this.acc.lastPromptTokens, this._turnDurableLength);
-    }
-    // Overflow recovery (core turn-failure policy, shared with the CLI): a
-    // context_length-class provider failure arms force-compaction for the
-    // next assembly and enqueues ONE retry turn — a failed retry never
-    // enqueues another. Rate limits never force-compact (throughput is not
-    // size) unless the measured PER-REQUEST prompt crossed half the window.
+    // The NEXT turn's measured compaction trigger (core turn-lifecycle).
+    persistMeasuredPromptTokens(this.compactionState, this.name, this.acc.lastPromptTokens, this._turnDurableLength);
+    // Overflow recovery — the shared core policy, APPLIED by the shared core
+    // helper (arm force-compaction + at most one retry enqueue).
     if (!completed && result.error) {
-      const recovery = planOverflowRecovery({
+      const recovery = applyOverflowRecovery({
         error: result.error,
         lastPromptTokens: this.acc.lastPromptTokens,
         contextWindow: this._turnContextWindow > 0 ? this._turnContextWindow : this.sessionContextWindow(),
         turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
+        state: this.compactionState,
+        sessionKey: this.name,
+        enqueueTurn: (t) => this.host.enqueueTurn(t),
       });
       if (recovery.forceCompaction) {
-        this.compactionState.armForceCompaction(this.name);
         this.logActivity('overflow_detected',
           `${recovery.failureClass} — force compaction armed${recovery.enqueueRetry ? ', retry enqueued' : ''}`);
-        if (recovery.enqueueRetry) {
-          void this.host.enqueueTurn({
-            text: OVERFLOW_RETRY_TEXT,
-            metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
-          }).catch((err: unknown) => console.warn('[proteus] overflow retry enqueue failed:', err));
-        }
       }
     }
-    // Emit turn_end + run_end into the durable event log.
-    try {
-      if (this._currentRunId) {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'turn_end',
-          turnIndex: this.orch.sessionTurnIndex,
-          tokenUsage: { input: this.acc.usage.input, output: this.acc.usage.output, cached: this.acc.usage.cached },
-        });
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'run_end',
-          reason: result.status,
-          ...(errorText ? { error: errorText } : {}),
-        });
-      }
-    } catch (err) {
-      console.warn('[proteus] event emit failed at onChatResponse:', err);
+    // Seal the durable run: turn_end + run_end (core turn-lifecycle).
+    if (this._currentRunId) {
+      closeTurnRun(this.eventRecorder, this._currentRunId, {
+        turnIndex: this.orch.sessionTurnIndex,
+        usage: this.acc.usage,
+        reason: result.status,
+        error: errorText,
+      });
     }
   }
 
@@ -688,119 +674,75 @@ export abstract class ActorAgent extends Think<Env> {
     // Captured synchronously (before any await) so a later turn's stash can
     // never bleed into this turn's shadow run.
     const liveOpts = this._lastTurnOpts;
-    try {
-      const sampleRate = this.config.getShadowSampleRate();
-      const autoApply = this.config.getAutoPromoteScaffold();
-      if (sampleRate <= 0) return;
-
-      const judge: StructuredJudgeFn = async (prompt) =>
-        generateJson({
-          model: await this.getModelForReview(),
-          schema: JudgeOutputSchema,
-          prompt,
-          providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
-        });
-
-      const judgeTask = task.slice(0, 2000);
-      const result = await runAutoShadowEval({
-        rt: this.rt,
-        task: judgeTask,
-        currentOutput: currentOutput.slice(0, 4000),
-        judge,
-        llmStream: this.makeScaffoldLLMStream(),
-        // Pass the same tool dispatcher the production chat path uses, so the
-        // pending scaffold runs with the real tool surface, not the disabled
-        // tool-call fallback that would penalize any tool-using pending.
-        callTool: this.makeScaffoldCallTool(),
-        // host.defaultInference for the pending: replay the EXACT streamText
-        // opts the live answer ran with (full conversational context, system
-        // prompt, tool surface) so a pending that delegates to the default
-        // loop is judged on the scaffold delta alone. Costs one extra
-        // full-context inference — that IS the shadow run, already sampled.
-        // Fallback (DO restarted between the live turn and this eval): the
-        // old task-only reconstruction.
-        defaultInference: () => streamText(liveOpts ?? {
-          model: this.getModel(),
-          messages: [{ role: 'user', content: judgeTask }],
-          tools: this.getRawTools(),
-          stopWhen: stepCountIs(50),
-          ...effortFor('scaffold_mutation'),
-        }).toUIMessageStream(),
-        config: {
-          ...DEFAULT_AUTO_JUDGE_CONFIG,
-          sampleRate,
-          autoApply,
-        },
+    const judge: StructuredJudgeFn = async (prompt) =>
+      generateJson({
+        model: await this.getModelForReview(),
+        schema: JudgeOutputSchema,
+        prompt,
+        providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
       });
+    const judgeTask = task.slice(0, 2000);
+    const result = await runSampledShadowEval({
+      rt: this.rt,
+      config: this.config,
+      task,
+      currentOutput,
+      judge,
+      llmStream: this.makeScaffoldLLMStream(),
+      // Pass the same tool dispatcher the production chat path uses, so the
+      // pending scaffold runs with the real tool surface, not the disabled
+      // tool-call fallback that would penalize any tool-using pending.
+      callTool: this.makeScaffoldCallTool(),
+      // host.defaultInference for the pending: replay the EXACT streamText
+      // opts the live answer ran with (full conversational context, system
+      // prompt, tool surface) so a pending that delegates to the default
+      // loop is judged on the scaffold delta alone. Costs one extra
+      // full-context inference — that IS the shadow run, already sampled.
+      // Fallback (DO restarted between the live turn and this eval): the
+      // old task-only reconstruction.
+      defaultInference: () => streamText(liveOpts ?? {
+        model: this.getModel(),
+        messages: [{ role: 'user', content: judgeTask }],
+        tools: this.getRawTools(),
+        stopWhen: stepCountIs(50),
+        ...effortFor('scaffold_mutation'),
+      }).toUIMessageStream(),
+    });
+    if (!result) return;
 
-      if (!result.skipped && result.evaluation) {
-        // Emit a structured note to the event log for visibility.
-        try {
-          if (this._currentRunId) {
-            this.eventRecorder.emit(this._currentRunId, {
-              type: 'memory_write',
-              path: 'shadow-eval',
-              bytes: result.evaluation.rationale.length,
-            });
-          }
-        } catch { /* nop */ }
-      }
-      if (result.applied) {
-        console.log(`[proteus] auto-judge applied: ${result.applied}`);
-      }
-    } catch (err) {
-      console.warn('[proteus] runShadowEvalSampled failed:', err instanceof Error ? err.message : err);
+    if (!result.skipped && result.evaluation) {
+      // Emit a structured note to the event log for visibility.
+      try {
+        if (this._currentRunId) {
+          this.eventRecorder.emit(this._currentRunId, {
+            type: 'memory_write',
+            path: 'shadow-eval',
+            bytes: result.evaluation.rationale.length,
+          });
+        }
+      } catch { /* nop */ }
+    }
+    if (result.applied) {
+      console.log(`[proteus] auto-judge applied: ${result.applied}`);
     }
   }
 
-  /** Build a streaming LLM callback the scaffold executor calls via
-   *  `host.llmStream(opts)` — text chunks come back as 'text_delta' events.
-   *  `tools` is a list of tool names from the agent's surface; we resolve them
-   *  to the real executables and run a multi-step loop bounded by `maxSteps`,
-   *  so a scaffold's model call has genuine tool access (not a one-shot). */
+  /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
+   *  resolve against the RAW surface per call, multi-step, scaffold-stage
+   *  reasoning effort. */
   protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
-    const agent = this;
-    const model = this.getModel();
-    return async function* (opts) {
-      const all = agent.getRawTools();
-      const toolSet: ToolSet = (opts.tools && opts.tools.length > 0)
-        ? Object.fromEntries(opts.tools.filter(n => all[n]).map(n => [n, all[n]]))
-        : all;
-      const result = streamText({
-        model,
-        system: opts.system,
-        messages: opts.messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-        tools: toolSet,
-        stopWhen: stepCountIs(opts.maxSteps ?? 50),
-        ...effortFor('scaffold_mutation'),
-      });
-      for await (const chunk of result.textStream) yield chunk;
-    };
+    return createScaffoldLLMStream({
+      model: this.getModel(),
+      tools: () => this.getRawTools(),
+      defaultMaxSteps: 50,
+      streamOptions: effortFor('scaffold_mutation'),
+    });
   }
 
-  /** Build a callTool callback that dispatches to this actor's ToolSet. Used
-   *  by the scaffold to invoke any tool the agent has (e.g. memory, fact, run). */
+  /** The scaffold's host.callTool bridge (core scaffold-host) over this
+   *  actor's RAW ToolSet. */
   protected makeScaffoldCallTool(): NonNullable<ScaffoldRunOptions['callTool']> {
-    const agent = this;
-    return async (name: string, args: Record<string, unknown>): Promise<unknown> => {
-      const tools = agent.getRawTools();
-      const t = tools[name];
-      if (!t || typeof t.execute !== 'function') {
-        return { error: `tool not found: ${name}` };
-      }
-      try {
-        // `args as never` is the legitimate dynamic-dispatch escape: the tool
-        // is selected by string name at runtime, so its input type is unknown
-        // here. The options object IS statically known — type it precisely so
-        // a future required ToolCallOptions field can't silently slip through.
-        const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-          messages: [], toolCallId: `scaffold-${Date.now()}`,
-        };
-        return await t.execute(args as never, options);
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    };
+    return createScaffoldCallTool(() => this.getRawTools());
   }
 
   /**
@@ -1042,46 +984,30 @@ export abstract class ActorAgent extends Think<Env> {
     return this._config;
   }
 
-  // StrategyRegistry — single-shot + MCTS + Heads adapters. Powers the
-  // unified `think(strategy, task, budget)` tool.
-  private _strategyRegistry: import('@proteus/core').StrategyRegistry | null = null;
-  private get strategyRegistry(): import('@proteus/core').StrategyRegistry {
-    if (this._strategyRegistry) return this._strategyRegistry;
-    const reg = createStrategyRegistry();
-    reg.register(createSingleShotStrategy());
-    reg.register(createMCTSStrategy());
-    reg.register(createHeadsStrategy());
-    this._strategyRegistry = reg;
-    return reg;
-  }
-
   /** The unified `agents` tool's deps: the fork substrate is universal on cf
-   *  actors; the staffing/peer halves ride this actor's profile
-   *  (actorToolDeps). Rebuilt with the toolset (getRawTools), so the fork
-   *  model refreshes exactly when the toolset does. */
+   *  actors — the SAME shared factory the CLI wires (core fork-deps), with
+   *  the host-injected infrastructure recomputed per fork call; the
+   *  staffing/peer halves ride this actor's profile (actorToolDeps). Rebuilt
+   *  with the toolset (getRawTools), so the fork model refreshes exactly
+   *  when the toolset does. */
   private getAgentsToolDeps(): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
     return {
-      fork: {
-        registry: this.strategyRegistry,
+      fork: buildStrategyForkDeps({
         rt: this.rt,
         model: this.getModel(),
-        // Host-injected infrastructure the LLM must not set. Recomputed per
-        // fork call: MCTS gets a fresh SessionWriter + the operator's stored
-        // overrides (mcts_c/iterations/depth/branches — an explicit LLM budget
-        // still wins); heads get the shared controller, the live conversation
-        // as inheritedContext, and an onPhase sink that streams head_split /
-        // head_merge into the durable event log.
-        defaultOptions: () => ({
-          mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
-          heads: {
-            controller: this.getHeadController(),
-            inheritedContext: this.readInheritedContext(),
-            onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
-            onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
-          },
-        }),
-      },
+        mcts: {
+          session: () => this.createMCTSSession(),
+          search: this.mctsSearchStore,
+          overrides: () => this.config.getMctsOverrides(),
+        },
+        heads: {
+          controller: () => this.getHeadController(),
+          inheritedContext: () => this.readInheritedContext(),
+          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
+        },
+      }),
       ...(actorDeps.team ? { team: actorDeps.team } : {}),
       ...(actorDeps.peers ? { peers: actorDeps.peers } : {}),
     };
@@ -1100,16 +1026,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
   private _skillsVfs: SkillsVfs | null = null;
   private getSkillsVfs(): SkillsVfs {
-    if (this._skillsVfs) return this._skillsVfs;
-    const vfs = this.rt.storage.vfs;
-    this._skillsVfs = {
-      exists: (p) => vfs.exists(p),
-      readFile: (p, opts) => vfs.readFile(p, opts),
-      writeFile: (p, data) => vfs.writeFile(p, data),
-      readdir: (p) => vfs.readdir(p),
-      unlink: (p) => vfs.unlink(p),
-      mkdir: (p, opts) => vfs.mkdir(p, opts),
-    };
+    if (!this._skillsVfs) this._skillsVfs = skillsVfsOver(this.rt.storage.vfs);
     return this._skillsVfs;
   }
 
@@ -1429,13 +1346,10 @@ export abstract class ActorAgent extends Think<Env> {
     return base;
   }
 
-  /** The recent-facts block for the volatile turn-context message — rendered
-   *  fresh each turn (facts change), so it stays out of the cacheable system
-   *  prefix. Undefined when there are no facts yet. */
+  /** The recent-facts block for the volatile turn-context message (core
+   *  turn-surface) — rendered fresh each turn, never in the cacheable prefix. */
   private renderFactsForTurn(): string | undefined {
-    try {
-      return renderFactsBlock(this.facts.recentTopK(20), { maxChars: 2000 }) || undefined;
-    } catch { return undefined; /* facts table not yet initialized */ }
+    return renderFactsForTurn(this.facts);
   }
 
   /**
@@ -1556,18 +1470,10 @@ export abstract class ActorAgent extends Think<Env> {
     return this._headController;
   }
 
-  /** Record the comparable heads of a completed agents fork (merge settle) run as
-   *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
-   *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only grounded
-   *  scores are a real preference signal, so emit nothing when ungrounded. */
+  /** Alternate-Takes capture of a completed agents fork (merge settle) run
+   *  (core recordGroundedHeadsTake). */
   private recordHeadsTake(merge: MergeResult, task: string): void {
-    if (!merge.grounded) return;
-    const heads = merge.headScores
-      .filter((s) => s.status === 'completed')
-      .map((s) => ({ id: s.id, text: s.text, score: s.score }));
-    try {
-      recordHeadsTakeSet(this.boundSql, { task, heads });
-    } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
+    recordGroundedHeadsTake(this.boundSql, merge, task);
   }
 
   /** Build the CF HeadRuntime (Facet spawner + merge LLM) once per DO lifetime,
@@ -1599,7 +1505,6 @@ export abstract class ActorAgent extends Think<Env> {
    * orchestrator level; this is a second safety net for head spawns).
    */
   protected readInheritedContext(): SerializedMessage[] {
-    const INHERITED_CONTEXT_CAP = 50;
     try {
       type Row = { id: string; role: string; content: string; created_at: string };
       const rows = this.sql<Row>`
@@ -1613,9 +1518,7 @@ export abstract class ActorAgent extends Think<Env> {
         ORDER BY created_at ASC`;
       return rows.map((r) => ({
         id: r.id,
-        role: (r.role === 'system' || r.role === 'user' || r.role === 'assistant' || r.role === 'tool')
-          ? r.role
-          : 'assistant',
+        role: narrowInheritedRole(r.role),
         content: uiMessageText(r.content),
         createdAt: Date.parse(r.created_at) || 0,
       }));
@@ -1769,51 +1672,29 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /** Catalog ModelInfo for the resolved spec, cached per spec. Arms an async
-   *  catalog lookup on first sight of a spec; until (and unless) it lands,
-   *  static fallbacks answer (window table / conservative media policy). */
-  private _catalogModel: { spec: string; info: ModelInfo | null } | null = null;
-  private catalogInfoForSession(): ModelInfo | null {
-    const spec = this.effectiveModelSpec();
-    if (this._catalogModel?.spec !== spec) {
-      this._catalogModel = { spec, info: null };
-      void this.lookupCatalogModel(spec);
-    }
-    return this._catalogModel.info;
-  }
+  /** The shared catalog view of the resolved model (core model-catalog):
+   *  one cached, non-blocking lookup per spec; static fallbacks (window
+   *  table / conservative media policy) answer until it lands. */
+  private readonly modelCatalog = new ModelCatalogSession({
+    effectiveSpec: () => this.effectiveModelSpec(),
+    lookup: async (spec) => {
+      if (!spec) return null;
+      const { provider, modelId } = parseModelSpec(spec);
+      const reg = this.providerRegistry();
+      return catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
+    },
+  });
 
-  /** The resolved model's context window: catalog-reported when the async
-   *  lookup has landed, else the static fallback table. Feeds the compaction
-   *  extension through the transformContext seam. */
+  /** The resolved model's context window — feeds the compaction extension
+   *  through the transformContext seam. */
   protected sessionContextWindow(): number {
-    return this.catalogInfoForSession()?.contextWindow ?? contextWindowForModel(this.effectiveModelSpec());
+    return this.modelCatalog.contextWindow();
   }
 
   /** Media kinds the next turn's model request can carry — the attachment
-   *  sanitizer's policy input. Provider class caps the wire format (the
-   *  openai-compatible chat schema is text+image ONLY — the proven Workers AI
-   *  PDF 400); the catalog's input modalities narrow it per model once the
-   *  async lookup lands. Until then the conservative default answers, which
-   *  only errs toward sanitizing (never toward a rejected request). */
+   *  sanitizer's policy input (the proven Workers AI PDF-400 fix). */
   private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
-    const info = this.catalogInfoForSession();
-    const spec = this.effectiveModelSpec();
-    let provider: string | undefined;
-    try { provider = parseModelSpec(spec).provider; } catch { /* pre-claim empty spec */ }
-    return acceptedMediaForModel({
-      ...(provider !== undefined ? { provider } : {}),
-      ...(info?.inputModalities ? { catalogInputModalities: info.inputModalities } : {}),
-    });
-  }
-
-  private async lookupCatalogModel(spec: string): Promise<void> {
-    if (!spec) return;
-    try {
-      const { provider, modelId } = parseModelSpec(spec);
-      const reg = this.providerRegistry();
-      const info = await catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
-      if (info && this._catalogModel?.spec === spec) this._catalogModel.info = info;
-    } catch { /* catalog unavailable — static fallbacks stay authoritative */ }
+    return this.modelCatalog.acceptedMedia();
   }
 
   // ── Think lifecycle hooks ──────────────────────────────────────
@@ -1853,78 +1734,36 @@ export abstract class ActorAgent extends Think<Env> {
       const lastUserId = userMessages[userMessages.length - 1]?.id;
       this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
     }
-    try {
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'run_start',
-        agentId: this.name,
-        caused_by: 'chat',
-        userMessage: extractLastUserText(ctx.messages)?.slice(0, 500),
-      });
-      this.eventRecorder.emit(this._currentRunId, {
-        type: 'turn_start',
-        turnIndex: this.orch.sessionTurnIndex,
-      });
-    } catch (err) {
-      console.warn('[proteus] event emit failed at beforeTurn:', err);
-    }
+    openTurnRun(this.eventRecorder, this._currentRunId, {
+      agentId: this.name,
+      causedBy: 'chat',
+      userMessage: extractLastUserText(ctx.messages),
+      turnIndex: this.orch.sessionTurnIndex,
+    });
 
-    // ── Skills resolution for this turn ──────────────────────────
+    // ── Skills resolution for this turn (core turn-surface) ──────────────
     // Reset per-turn invocation set (don't reassign — closures from the
     // skills tool hold a stable reference).
     this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
     // The actor's REAL tool surface: deps-gated builtins (report/
     // product_change) are advertised only when this actor class wires them,
-    // and the agents ladder renders only the actions this profile supports.
+    // and the agents ladder renders only the actions this profile supports —
+    // then restricted to the active skills' allowed union (skills tool kept,
+    // core turn-surface).
     const turnActorDeps = this.actorToolDeps();
-    const activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
-    let activeSetForPrompt: ActiveSkillSet | undefined;
-    try {
-      const lastUserText = extractLastUserText(ctx.messages);
-      const explicit = extractExplicitInvocations(lastUserText);
-      const alwaysActive = this.config.getAlwaysActiveSkills();
-
-      // Only do the (async) VFS scan when there's a real chance a skill
-      // activates — explicit invocation, always_active config, OR any
-      // built-in that auto_activates on keywords. Avoids a per-turn
-      // filesystem walk for vanilla turns.
-      const anyAutoActivate = BUILTIN_SKILLS.some(s => s.auto_activate);
-      const mightActivate = explicit.length > 0 || alwaysActive.length > 0 || anyAutoActivate;
-
-      if (mightActivate) {
-        const available = await discoverSkills(this.getSkillsVfs());
-        const activeSet = resolveActiveSkills({
-          available, explicit, userMessage: lastUserText, alwaysActive,
-        });
-        if (activeSet.active.length > 0) {
-          this._turnActiveSkills = activeSet;
-          activeSetForPrompt = activeSet;
-          // Mirror the resolved explicit set onto the turn-invoked tracker so
-          // skills.list reflects what's active right now.
-          for (const r of activeSet.reasons) this._turnInvokedSkills.add(r.name);
-
-          // Intersect activeTools with the union of allowed_tools across the
-          // active skills. Empty union (skills don't restrict) = leave the
-          // base set untouched. Glob-suffix matching is owned by
-          // `toolAllowedBySkills` — orchestrator + render share the same impl.
-          const allowedUnion = unionAllowedTools(activeSet.active);
-          if (allowedUnion.length > 0) {
-            const filtered = activeTools.filter(t => toolAllowedBySkills(t, allowedUnion));
-            // Always keep the skills tool itself reachable so the LLM can
-            // list / read / invoke more skills mid-turn. Filtering it out
-            // would lock the agent into the first activation.
-            if (!filtered.includes('skills')) filtered.push('skills');
-            activeTools.length = 0;
-            activeTools.push(...(filtered as BuiltinToolName[]));
-          }
-
-          this.logActivity('skills_active',
-            activeSet.active.map(s => s.name).join(',') || '(none)');
-        }
-      }
-    } catch (err) {
-      console.warn('[proteus] skills resolution failed:', (err as Error).message);
-      // Don't fail the turn — vanilla path is fine.
+    let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
+    const activeSetForPrompt = await resolveTurnSkills({
+      vfs: this.getSkillsVfs(),
+      config: this.config,
+      userText: extractLastUserText(ctx.messages),
+      invoked: this._turnInvokedSkills,
+    });
+    if (activeSetForPrompt) {
+      this._turnActiveSkills = activeSetForPrompt;
+      activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
+      this.logActivity('skills_active',
+        activeSetForPrompt.active.map(s => s.name).join(',') || '(none)');
     }
 
     // Per-user MCP tools — fetched from UserDO, dispatched back via RPC.
@@ -1992,61 +1831,52 @@ export abstract class ActorAgent extends Think<Env> {
 
     const cfg: TurnConfig = { system: systemOverride };
 
-    // Model-capability attachment sanitization — the WHOLE model-visible
-    // history, every turn: file/media parts the resolved model cannot accept
-    // become content-addressed VFS references (core attachment-sanitizer).
-    // Deterministic and byte-stable, it heals already-poisoned transcripts
-    // without ever touching the persisted messages. It runs BEFORE the
-    // extension transform so compaction sees sanitized history, and BEFORE
-    // the ledger weave so the frozen blocks freeze over sanitized messages —
-    // the ordering keeps ledger indices stable because sanitization is
-    // per-part in-place replacement: the message COUNT never changes.
-    const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
-    const baseMessages = await sanitizeAttachmentsForModel(rawMessages, {
-      accepts: this.sessionAcceptedMedia(),
-      vfs: this.rt.storage.vfs,
-    });
-
-    // ── Extension seam: turn start + the awaited context transform ─────
-    // The same ExtensionHost contract runChat fires on the CLI. The
-    // transform sees ONLY the durable history — the ephemeral ledger blocks
-    // and the turn-local tail are woven/spliced after it, so a compaction
-    // plugin can never see (or persist) either.
-    await this.extensions.emitTurnStart({ system: systemOverride, history: baseMessages });
     // The measured trigger: the previous turn's final request as the provider
     // actually priced it, persisted at turn end (onChatResponse). Null until
     // the session's first turn completes — the engine's char estimate gates
     // alone until then — and voided by the length guard when the durable
-    // history shrank (undo/restore) since the measurement.
-    this._turnDurableLength = baseMessages.length;
-    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, baseMessages.length);
+    // history shrank (undo/restore) since the measurement. Attachment
+    // sanitization is per-part in-place replacement, so the raw count IS the
+    // sanitized durable length.
+    const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+    this._turnDurableLength = rawMessages.length;
+    const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, rawMessages.length);
     this._turnContextWindow = this.sessionContextWindow();
     // Overflow recovery (onChatResponse arms the flag on a context_length
     // failure): consume it — at most one forced rebuild per arm, never a loop.
     const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
     if (trigger === 'force') this.logActivity('compaction_forced', 'overflow recovery — forced context rebuild');
-    const transformed = await this.extensions.runTransformContext({
-      sessionKey: this.name,
-      messages: baseMessages,
-      system: systemOverride,
-      contextWindow: this._turnContextWindow,
-      ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
-      trigger,
-    });
     // The newest MEMORY.md lessons/reflections ride the ephemeral block too
     // (the same bounded tail the CLI weave supplies) — the reflection loop
     // assumes the model sees its latest lessons in-turn.
     const memoryTail = await readMemoryTail(this.rt.memory);
-    const woven = this.ephemeralLedger.weave(transformed ?? baseMessages, {
-      factsBlock: this.renderFactsForTurn(),
-      ...(memoryTail ? { memoryTail } : {}),
-      executors: execs,
-    });
     const turnLocal = turnLocalContextMessage({
       deviceNotice,
       ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
     });
-    cfg.messages = turnLocal ? [...woven, turnLocal] : woven;
+    // The shared turn-context assembly (core orchestrator/turn-context.ts) —
+    // the SAME ordering runChat runs on the CLI: attachment sanitize →
+    // extension onTurnStart → awaited transformContext (compaction, over the
+    // DURABLE history only) → ephemeral ledger weave → turn-local tail.
+    cfg.messages = await assembleTurnMessages({
+      system: systemOverride,
+      history: rawMessages,
+      attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
+      extensions: this.extensions,
+      systemState: {
+        ledger: this.ephemeralLedger,
+        context: {
+          factsBlock: this.renderFactsForTurn(),
+          ...(memoryTail ? { memoryTail } : {}),
+          executors: execs,
+        },
+      },
+      turnLocal: turnLocal ? [turnLocal] : [],
+      sessionKey: this.name,
+      contextWindow: this._turnContextWindow,
+      ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
+      trigger,
+    });
 
     // Extension-contributed tools join the turn's ToolSet without ever
     // shadowing a built-in or MCP tool (runChat's merge order, mirrored:
@@ -2178,41 +2008,19 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.recordStep(ctx as unknown as StepLike);
   }
 
-  /** Tools whose work can be long enough to auto-detach to the background,
-   *  with a per-call gate: `agents` detaches only its fork action — the
-   *  converse actions (ask/send/staff/…) keep their old inline semantics. */
-  private static readonly BACKGROUNDABLE_TOOLS: ReadonlyMap<string, (input: unknown) => boolean> = new Map([
-    ['agents', (input) => (input as { action?: unknown } | null)?.action === 'fork'],
-    ['execute_tools', () => true],
-    ['run', () => true],
-  ]);
-
-  /** Return a SHALLOW CLONE of the raw toolset with the long-running tools'
-   *  execute wrapped in the 30s background threshold. Never mutates the cached
-   *  raw toolset — so getRawTools() stays unwrapped for the eval side-streams. */
+  /** The shared background wrap (core background-tools): shallow clone, 30s
+   *  threshold on the backgroundable map (with its per-call gate — `agents`
+   *  detaches only action=fork), per-call AbortController merged with the
+   *  turn's signal. The tracking hook keeps foreground cancellation working
+   *  until a call settles or detaches. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    const wrapped: ToolSet = { ...raw };
-    for (const [key, detachable] of ActorAgent.BACKGROUNDABLE_TOOLS) {
-      const orig = wrapped[key];
-      const exec = orig?.execute;
-      if (!orig || typeof exec !== 'function') continue;
-      wrapped[key] = {
-        ...orig,
-        execute: (input, options) => {
-          if (!detachable(input)) return exec(input, options);
-          // Per-call AbortController so a hard-cancel aborts the underlying work.
-          // Merge it with the turn's own signal so a turn abort still propagates.
-          const controller = new AbortController();
-          const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
-          const deps = this.jobRunner.thresholdDeps(key, input, controller);
-          this._activeToolControllers.add(controller);
-          return withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), deps)
-            .finally(() => this._activeToolControllers.delete(controller));
-        },
-      };
-    }
-    return wrapped;
+    return wrapToolsForBackground(raw, {
+      jobRunner: this.jobRunner,
+      trackController: (controller) => {
+        this._activeToolControllers.add(controller);
+        return () => this._activeToolControllers.delete(controller);
+      },
+    });
   }
 
   /** Model for review/judge tasks: the operator's `review_model`, else a
@@ -2305,58 +2113,16 @@ export abstract class ActorAgent extends Think<Env> {
   // ── Internal: MCTS session writer ──────────────────────────────
 
   private createMCTSSession(): SessionWriter {
-    // Source of truth is the durable `messages` table (session_id='mcts'), NOT an
-    // in-memory array: after a DO eviction, a resumed search re-enters with a
-    // fresh session, and getHistory(leafId) must still reconstruct a branch's
-    // ancestry from the persisted rows so resumed branches keep their context (B6).
-    const sql = this.boundSql;
-
-    return {
-      async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
-        const content = msg.parts.map(p => p.text).join("");
-        sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-          VALUES (${msg.id}, ${"mcts"}, ${parentId ?? null}, ${msg.role}, ${content})`;
-      },
-      getHistory(leafId?: string | null): Array<{ role: string; content: string }> {
-        if (!leafId) {
-          return sql<{ role: string; content: string }>`
-            SELECT role, content FROM messages WHERE session_id='mcts' ORDER BY created_at ASC`
-            .map(r => ({ role: r.role, content: r.content }));
-        }
-        // Walk ancestry by parent_id from the durable table (cycle-guarded).
-        type MsgRow = { parent_id: string | null; role: string; content: string };
-        const result: Array<{ role: string; content: string }> = [];
-        const seen = new Set<string>();
-        let currentId: string | null = leafId;
-        while (currentId && !seen.has(currentId)) {
-          seen.add(currentId);
-          const row: MsgRow | undefined = sql<MsgRow>`
-            SELECT parent_id, role, content FROM messages WHERE id=${currentId} LIMIT 1`[0];
-          if (!row) break;
-          result.unshift({ role: row.role, content: row.content });
-          currentId = row.parent_id;
-        }
-        return result;
-      },
-    };
+    // The shared durable writer (core mcts-session): the messages table is
+    // the source of truth so a resumed search reconstructs ancestry (B6).
+    return createDurableMctsSession(this.boundSql);
   }
 
-  /** Re-drive an evicted background job from its durable checkpoint (B6).
-   *  Only a fork is resumable: re-running the RAW agents tool (no 30s
-   *  re-detach) continues an evicted MCTS from its search checkpoint —
-   *  runMCTS.findResumable matches the unfinished run by task — and re-runs
-   *  heads. Jobs stored before the agents unification carry kind 'think';
-   *  resumableForkInput translates them onto the same path. The runner
-   *  settles the returned result onto the job under a fresh lease epoch.
-   *  Side-effecting kinds (execute_tools / run) can't be safely re-executed,
-   *  so they decline. */
-  protected async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
-    const forkInput = resumableForkInput(kind, input);
-    if (!forkInput) throw new JobNotResumable(kind);
-    const exec = this.getRawTools().agents?.execute;
-    if (typeof exec !== 'function') throw new JobNotResumable(kind);
-    return (exec as (i: unknown, o: unknown) => unknown)(forkInput, {
-      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
-    });
+  /** Re-drive an evicted background job from its durable checkpoint (B6) —
+   *  the shared fork-only resume gate (core background-tools) over the RAW
+   *  surface, so a re-drive can't detach a second job. Legacy 'think' jobs
+   *  translate onto the same fork path. */
+  protected resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
+    return resumeForkBackgroundJob(() => this.getRawTools(), kind, input, signal);
   }
 }

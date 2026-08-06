@@ -25,3 +25,10 @@ export {
   type CompactionStateStore,
 } from './stores.js';
 export { createModelSummarizer, SUMMARIZER_TIMEOUT_MS } from './summarizer.js';
+// The compaction-ladder layer-gate slice (core declares the layer; this
+// package measures it — see scripts/layergate.ts for the merged report).
+export {
+  COMPACTION_LAYERS, COMPACTION_FAULTS, createCompactionLadderSubjects,
+  type CompactionLadderSubjects,
+} from './layergate.js';
+export { COMPACTION_LOCKED_BASELINE } from './layergate-baseline.js';

@@ -17,6 +17,7 @@
 
 import type { ModelMessage } from 'ai';
 import { ExtensionHost } from '../extension.js';
+import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
@@ -26,24 +27,26 @@ import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import type { ParsedSkill } from '../skills/types.js';
 import type { PipelineSubjects, SubjectName } from './subjects.js';
 
-/** A single deterministic observation of the pipeline. */
-export interface Probe {
+/** A single deterministic observation of the pipeline. Generic over the
+ *  subjects record so a dependent package (e.g. @proteus/compaction) can
+ *  define its own slice against the same gate machinery. */
+export interface Probe<S = PipelineSubjects> {
   /** `<layer>/<name>` — the baseline key. Stable across runs and machines. */
   readonly id: string;
   /** What behaviour this pins, in one line. Surfaces in drift reports. */
   readonly asserts: string;
   /** Must be a pure function of `subjects`: JSON-serializable, no clock, no RNG. */
-  readonly observe: (subjects: PipelineSubjects) => unknown;
+  readonly observe: (subjects: S) => unknown;
 }
 
-export interface Layer {
+export interface Layer<S = PipelineSubjects> {
   readonly id: string;
   /** What this layer owns in the turn pipeline. */
   readonly owns: string;
   /** Subjects this layer is the sole owner of. Faults target these. */
-  readonly subjects: readonly SubjectName[];
+  readonly subjects: readonly (keyof S & string)[];
   /** Empty ⇒ the layer is DECLARED BUT NOT MEASURED and scores `null`. */
-  readonly probes: readonly Probe[];
+  readonly probes: readonly Probe<S>[];
   /** For unmeasured layers: why no deterministic slice exists (yet). */
   readonly unmeasuredBecause?: string;
 }
@@ -530,13 +533,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'context-budget',
-    owns: 'the token budget: model window sizing, at-source tool-result clamping, and overflow classification/recovery',
+    owns: 'the token budget: model window sizing and at-source tool-result clamping',
     subjects: [
       'contextWindowForModel',
       'clampToolResult',
       'clampSerializedToolResult',
-      'classifyTurnFailure',
-      'planOverflowRecovery',
     ],
     probes: [
       {
@@ -568,24 +569,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           small: await s.clampSerializedToolResult({ ok: true }, { maxChars: 100 }),
           big: await s.clampSerializedToolResult({ rows: Array.from({ length: 40 }, (_, i) => `row-${i}`) }, { maxChars: 120 }),
         }),
-      },
-      {
-        id: 'context-budget/failure-classification',
-        asserts: 'provider errors classify, and an oversized rate-limit is treated as a context failure',
-        observe: (s) => FAILURES.flatMap((error) => [
-          { error, signals: 'none', cls: s.classifyTurnFailure(error) },
-          { error, signals: 'oversized', cls: s.classifyTurnFailure(error, { lastPromptTokens: 150_000, contextWindow: 200_000 }) },
-        ]),
-      },
-      {
-        id: 'context-budget/overflow-recovery-plan',
-        asserts: 'a context overflow arms force-compaction and exactly one retry — never a second',
-        observe: (s) => [
-          s.planOverflowRecovery({ error: undefined, turnWasOverflowRetry: false }),
-          s.planOverflowRecovery({ error: 'prompt is too long', turnWasOverflowRetry: false }),
-          s.planOverflowRecovery({ error: 'prompt is too long', turnWasOverflowRetry: true }),
-          s.planOverflowRecovery({ error: 'Error 429: too many requests', turnWasOverflowRetry: false }),
-        ],
       },
     ],
   },
@@ -1065,26 +1048,171 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     subjects: [],
     probes: [],
     unmeasuredBecause:
-      '@proteus/compaction depends on @proteus/core, so core cannot import it without a cycle. Its slice belongs ' +
-      'in that package, driven by the same Layer contract.',
+      '@proteus/compaction depends on @proteus/core, so core cannot import it without a cycle. Its slice lives IN ' +
+      'that package (src/layergate.ts, same Layer contract, own locked baseline); scripts/layergate.ts merges it ' +
+      'into the report, replacing this placeholder row.',
   },
   {
     id: 'backend-turn-driver',
-    owns: 'the backend halves of the turn: cf beforeTurn/beforeStep/onChatResponse and the CLI processTurn loop',
-    subjects: [],
-    probes: [],
-    unmeasuredBecause:
-      'Both drivers live in packages that depend on core (cf-backend, cli-backend); core cannot reach them. Known ' +
-      'divergences they carry — the CF-only null prune budget and the CLI-only injectIntoActiveTurn=false — are ' +
-      'therefore invisible to this gate.',
+    owns: 'the shared turn spine both drivers delegate to: the run-event bracket, the CompletedTurn snapshot, ' +
+      'the measured prompt-token trigger, and failure classification + applied overflow recovery ' +
+      '(core orchestrator/turn-lifecycle.ts + turn-failure.ts — hoisted from the two inline drivers)',
+    subjects: [
+      'classifyTurnFailure',
+      'planOverflowRecovery',
+      'openTurnRun',
+      'closeTurnRun',
+      'snapshotCompletedTurn',
+      'persistMeasuredPromptTokens',
+      'applyOverflowRecovery',
+    ],
+    probes: [
+      {
+        id: 'backend-turn-driver/run-bracket',
+        asserts: 'run_start+turn_start then turn_end+run_end, with bounded userMessage, usage totals, and the error text',
+        observe: (s) => {
+          const emitted: Array<{ runId: string; input: unknown }> = [];
+          const recorder = { emit: (runId: string, input: unknown) => { emitted.push({ runId, input }); } };
+          s.openTurnRun(recorder, 'run-1', {
+            agentId: 'ws', causedBy: 'chat', userMessage: 'X'.repeat(600), turnIndex: 3,
+          });
+          s.closeTurnRun(recorder, 'run-1', {
+            turnIndex: 3, usage: { input: 10, output: 5, cached: 2 }, reason: 'error', error: 'boom',
+          });
+          return emitted;
+        },
+      },
+      {
+        id: 'backend-turn-driver/run-bracket-never-throws',
+        asserts: 'a broken recorder is swallowed — losing a history row must not fail a turn',
+        observe: (s) => {
+          const broken = { emit: () => { throw new Error('db locked'); } };
+          s.openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 });
+          s.closeTurnRun(broken, 'r', { turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed' });
+          return 'survived';
+        },
+      },
+      {
+        id: 'backend-turn-driver/turn-snapshot',
+        asserts: 'the graded CompletedTurn: hadError from a failed tool, origin, no fabricated usage, conditional turnId',
+        observe: (s) => {
+          const clean = new TurnAccumulator();
+          clean.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
+          clean.recordStep({ usage: { inputTokens: 7, outputTokens: 3 } });
+          const failed = new TurnAccumulator();
+          failed.recordToolCall({ toolName: 'run', success: false, error: 'exit 1' });
+          failed.recordStep({});
+          return {
+            clean: s.snapshotCompletedTurn(clean, {
+              userMessage: 'do it', assistantResponse: 'done', turnId: 't1', sessionId: 'default', origin: 'user',
+            }),
+            failed: s.snapshotCompletedTurn(failed, {
+              userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',
+            }),
+          };
+        },
+      },
+      {
+        id: 'backend-turn-driver/prompt-token-trigger',
+        asserts: 'only a real measurement persists, bound to the durable history length',
+        observe: (s) => {
+          const saved: unknown[] = [];
+          const state = {
+            savePromptTokens: (key: string, tokens: number, len: number) => { saved.push([key, tokens, len]); },
+            armForceCompaction: () => {},
+          };
+          s.persistMeasuredPromptTokens(state, 'k', 0, 12);
+          s.persistMeasuredPromptTokens(state, 'k', 4321, 12);
+          return saved;
+        },
+      },
+      {
+        id: 'backend-turn-driver/overflow-applied',
+        asserts: 'a context overflow arms force-compaction and enqueues exactly one retry; a failed retry and a rate limit never do',
+        observe: async (s) => {
+          const armed: string[] = [];
+          const enqueued: unknown[] = [];
+          const state = { savePromptTokens: () => {}, armForceCompaction: (key: string) => { armed.push(key); } };
+          const enqueueTurn = (turn: unknown) => { enqueued.push(turn); return Promise.resolve({ status: 'queued' as const }); };
+          const decisions = [
+            s.applyOverflowRecovery({
+              error: 'prompt is too long: 210000 tokens > 200000 maximum',
+              lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
+              state, sessionKey: 'k', enqueueTurn,
+            }),
+            s.applyOverflowRecovery({
+              error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
+              turnWasOverflowRetry: true, state, sessionKey: 'k', enqueueTurn,
+            }),
+            s.applyOverflowRecovery({
+              error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
+              turnWasOverflowRetry: false, state, sessionKey: 'k', enqueueTurn,
+            }),
+          ];
+          await Promise.resolve();
+          return { decisions, armed, enqueued };
+        },
+      },
+      {
+        id: 'backend-turn-driver/failure-classification',
+        asserts: 'provider errors classify, and an oversized rate-limit is treated as a context failure',
+        observe: (s) => FAILURES.flatMap((error) => [
+          { error, signals: 'none', cls: s.classifyTurnFailure(error) },
+          { error, signals: 'oversized', cls: s.classifyTurnFailure(error, { lastPromptTokens: 150_000, contextWindow: 200_000 }) },
+        ]),
+      },
+      {
+        id: 'backend-turn-driver/overflow-recovery-plan',
+        asserts: 'a context overflow plans force-compaction and exactly one retry — never a second',
+        observe: (s) => [
+          s.planOverflowRecovery({ error: undefined, turnWasOverflowRetry: false }),
+          s.planOverflowRecovery({ error: 'prompt is too long', turnWasOverflowRetry: false }),
+          s.planOverflowRecovery({ error: 'prompt is too long', turnWasOverflowRetry: true }),
+          s.planOverflowRecovery({ error: 'Error 429: too many requests', turnWasOverflowRetry: false }),
+        ],
+      },
+    ],
   },
+
   {
     id: 'subordinate-runtime',
-    owns: 'subordinate spawn/assign/dismiss ordering, inherited-context digest, facet lifecycle',
-    subjects: [],
-    probes: [],
-    unmeasuredBecause:
-      'The delegation RUNTIME lives in cf-backend (subordinate-support, facet-spawn); core owns only the process ' +
-      'evidence, which the `delegation` layer measures.',
+    owns: 'the facet inherited-context digest — what a spawned head/subordinate sees of its parent conversation ' +
+      '(core orchestrator/heads-support.ts); spawn/assign/dismiss ordering stays in cf-backend behind this digest',
+    subjects: [
+      'serializeContentForHeads',
+      'inheritedContextFromHistory',
+      'narrowInheritedRole',
+    ],
+    probes: [
+      {
+        id: 'subordinate-runtime/inherited-context-digest',
+        asserts: 'the digest caps the parent history, narrows roles, and keeps ids index-stable',
+        observe: (s) => {
+          const history: ModelMessage[] = [
+            ...Array.from({ length: 60 }, (_, i): ModelMessage =>
+              ({ role: i % 2 === 0 ? 'user' : 'assistant', content: `m${i}` })),
+          ];
+          return s.inheritedContextFromHistory(history, 50);
+        },
+      },
+      {
+        id: 'subordinate-runtime/file-parts-never-inherit-payloads',
+        asserts: 'attachment data URLs reduce to filename/mediaType references — heads never inherit base64 payloads',
+        observe: (s) => ({
+          plain: s.serializeContentForHeads('plain text'),
+          withFile: s.serializeContentForHeads([
+            { type: 'file', data: 'data:application/pdf;base64,AAAA', mediaType: 'application/pdf', filename: 'a.pdf' },
+            { type: 'text', text: 'read this' },
+          ]),
+          structured: s.serializeContentForHeads([{ type: 'text', text: 'hi' }]),
+        }),
+      },
+      {
+        id: 'subordinate-runtime/role-narrowing',
+        asserts: 'unknown stored roles read as assistant output; the four real roles pass through',
+        observe: (s) => ['system', 'user', 'assistant', 'tool', 'developer', ''].map((role) =>
+          [role, s.narrowInheritedRole(role)]),
+      },
+    ],
   },
 ]);

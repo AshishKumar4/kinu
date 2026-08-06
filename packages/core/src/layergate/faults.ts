@@ -23,15 +23,15 @@ import { LAYERS, type Layer } from './layers.js';
 import { observePipeline, scoreAgainstBaseline } from './gate.js';
 import type { PipelineSubjects, SubjectName } from './subjects.js';
 
-export interface Fault {
+export interface Fault<S = PipelineSubjects> {
   readonly id: string;
   /** The layer whose code this regression lives in. */
   readonly layer: string;
   /** Subjects it patches — all owned by `layer` (asserted in tests). */
-  readonly patches: readonly SubjectName[];
+  readonly patches: readonly (keyof S & string)[];
   /** The real-world regression class it models. */
   readonly models: string;
-  readonly inject: (subjects: PipelineSubjects) => PipelineSubjects;
+  readonly inject: (subjects: S) => S;
 }
 
 /** The faulted layer must lose at least this many percentage points. */
@@ -136,8 +136,8 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'context-budget/policy-regresses',
     layer: 'context-budget',
-    patches: ['contextWindowForModel', 'clampToolResult', 'classifyTurnFailure'],
-    models: 'the window table rots back to the default, the clamp head/tail split shifts, and an oversized rate-limit stops counting as an overflow',
+    patches: ['contextWindowForModel', 'clampToolResult'],
+    models: 'the window table rots back to the default and the clamp head/tail split shifts',
     inject: (s) => ({
       ...s,
       contextWindowForModel: () => 128_000,
@@ -147,7 +147,32 @@ export const FAULTS: readonly Fault[] = Object.freeze([
         const headLen = Math.floor(maxChars * 0.5);
         return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(maxChars - headLen))}`;
       },
+    }),
+  },
+  {
+    id: 'backend-turn-driver/settle-spine-regresses',
+    layer: 'backend-turn-driver',
+    patches: ['closeTurnRun', 'snapshotCompletedTurn', 'classifyTurnFailure'],
+    models: 'run_end loses the error evidence, a failed tool stops flagging the turn, and an oversized rate-limit stops counting as an overflow',
+    inject: (s) => ({
+      ...s,
+      closeTurnRun: (recorder, runId, opts) => {
+        const { error: _dropped, ...rest } = opts;
+        s.closeTurnRun(recorder, runId, rest);
+      },
+      snapshotCompletedTurn: (acc, opts) => ({ ...s.snapshotCompletedTurn(acc, opts), hadError: false }),
       classifyTurnFailure: (error) => s.classifyTurnFailure(error),
+    }),
+  },
+  {
+    id: 'subordinate-runtime/digest-leaks-payloads',
+    layer: 'subordinate-runtime',
+    patches: ['serializeContentForHeads', 'inheritedContextFromHistory'],
+    models: 'file payloads stop being reduced to references and the parent-history cap stops applying',
+    inject: (s) => ({
+      ...s,
+      serializeContentForHeads: (content) => JSON.stringify(content),
+      inheritedContextFromHistory: (history) => s.inheritedContextFromHistory(history, Number.MAX_SAFE_INTEGER),
     }),
   },
   {
@@ -254,10 +279,10 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   },
 ]);
 
-export async function runFaultMatrix(
-  subjects: PipelineSubjects,
-  faults: readonly Fault[] = FAULTS,
-  layers: readonly Layer[] = LAYERS,
+export async function runFaultMatrix<S = PipelineSubjects>(
+  subjects: S,
+  faults: readonly Fault<S>[] = FAULTS as unknown as readonly Fault<S>[],
+  layers: readonly Layer<S>[] = LAYERS as unknown as readonly Layer<S>[],
 ): Promise<FaultImpact[]> {
   const clean = await observePipeline(subjects, layers);
   const reference = Object.fromEntries(clean);

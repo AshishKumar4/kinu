@@ -11,6 +11,7 @@
  */
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { MergeResult } from '../heads/types.js';
 import type { SearchNode } from '../types/mcts.js';
 import { recordTurnOutcome } from '../evolution/outcomes.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -421,4 +422,18 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
     `${chosen.text.slice(0, 2000)}\n\n` +
     `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
   );
+}
+
+/** Record the comparable heads of a completed think({strategy:'heads'}) run as
+ *  an unclaimed Alternate-Takes set — claimed against the turn at turn end,
+ *  exactly like an MCTS capture. Only grounded scores are a real preference
+ *  signal, so emit nothing when ungrounded. Shared by both backends. */
+export function recordGroundedHeadsTake(sql: SqlExecutor, merge: MergeResult, task: string): void {
+  if (!merge.grounded) return;
+  const heads = merge.headScores
+    .filter((s) => s.status === 'completed')
+    .map((s) => ({ id: s.id, text: s.text, score: s.score }));
+  try {
+    recordHeadsTakeSet(sql, { task, heads });
+  } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
 }

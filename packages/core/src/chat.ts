@@ -15,7 +15,8 @@ import {
 } from './prompting/model-profile.js';
 import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
 import { composePrepareStep } from './prompting/prepare-step.js';
-import { sanitizeAttachmentsForModel, type AttachmentPolicy } from './prompting/attachment-sanitizer.js';
+import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
+import { assembleTurnMessages } from './orchestrator/turn-context.js';
 import { contextWindowForModel } from './context-window.js';
 import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
@@ -113,37 +114,26 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }> = [];
   let stepCount = 0;
 
-  // Model-capability attachment sanitization runs FIRST, on the whole
-  // model-visible history — the same ordering the cf backend's beforeTurn
-  // applies — so the transform seam (compaction) and the ledger weave both
-  // operate over sanitized messages. Never mutates the caller's history.
-  const history = opts.attachments
-    ? await sanitizeAttachmentsForModel(opts.history, opts.attachments)
-    : opts.history;
-
-  await extensions?.emitTurnStart({ system: opts.system, history });
-
-  // Awaited context-transform seam (the compaction-plugin hook): fires once
-  // per turn assembly, on the DURABLE history only — the ephemeral ledger
-  // blocks and the turn-local tail are woven/spliced after, so a transform
-  // never sees or persists them.
+  // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
+  // sanitize → extension onTurnStart → awaited transformContext (compaction) →
+  // ledger weave → turn-local tail. The cf backend's beforeTurn runs the SAME
+  // function, so the ordering cannot drift per backend.
   const contextWindow = opts.modelContext?.contextWindow
     ?? contextWindowForModel(opts.modelContext?.id ?? '');
-  const transformed = await extensions?.runTransformContext({
-    sessionKey: opts.cache?.sessionKey ?? '',
-    messages: history,
+  const turnMessages = await assembleTurnMessages({
     system: opts.system,
+    history: opts.history,
+    ...(opts.attachments ? { attachments: opts.attachments } : {}),
+    ...(extensions ? { extensions } : {}),
+    ...(opts.systemState ? { systemState: opts.systemState } : {}),
+    ...(opts.turnLocal ? { turnLocal: opts.turnLocal } : {}),
+    sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
     ...(opts.providerReportedTokens !== undefined
       ? { providerReportedTokens: opts.providerReportedTokens }
       : {}),
     trigger: opts.transformTrigger ?? 'auto',
   });
-  const durable = transformed ?? history;
-  const woven = opts.systemState
-    ? opts.systemState.ledger.weave(durable, opts.systemState.context)
-    : durable;
-  const turnMessages = [...woven, ...(opts.turnLocal ?? [])];
 
   // Provider prompt-cache plan: cache-eligible system + request-level cache
   // routing at turn assembly; marker strategies additionally re-roll the tail

@@ -62,6 +62,13 @@ import {
   devicePresence,
   parseDevicePresence,
 } from '../execution/device-status.js';
+import {
+  openTurnRun, closeTurnRun, snapshotCompletedTurn,
+  persistMeasuredPromptTokens, applyOverflowRecovery,
+} from '../orchestrator/turn-lifecycle.js';
+import {
+  serializeContentForHeads, inheritedContextFromHistory, narrowInheritedRole,
+} from '../orchestrator/heads-support.js';
 
 export interface PipelineSubjects {
   // ── context assembly ──
@@ -93,8 +100,20 @@ export interface PipelineSubjects {
   readonly contextWindowForModel: typeof contextWindowForModel;
   readonly clampToolResult: typeof clampToolResult;
   readonly clampSerializedToolResult: typeof clampSerializedToolResult;
+
+  // ── backend turn driver (the hoisted shared spine) ──
   readonly classifyTurnFailure: typeof classifyTurnFailure;
   readonly planOverflowRecovery: typeof planOverflowRecovery;
+  readonly openTurnRun: typeof openTurnRun;
+  readonly closeTurnRun: typeof closeTurnRun;
+  readonly snapshotCompletedTurn: typeof snapshotCompletedTurn;
+  readonly persistMeasuredPromptTokens: typeof persistMeasuredPromptTokens;
+  readonly applyOverflowRecovery: typeof applyOverflowRecovery;
+
+  // ── subordinate runtime (the facet inherited-context digest) ──
+  readonly serializeContentForHeads: typeof serializeContentForHeads;
+  readonly inheritedContextFromHistory: typeof inheritedContextFromHistory;
+  readonly narrowInheritedRole: typeof narrowInheritedRole;
 
   // ── compaction ──
   readonly buildCompactionSummaryPrompt: typeof buildCompactionSummaryPrompt;
@@ -163,8 +182,18 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   contextWindowForModel: 'context-window.ts',
   clampToolResult: 'tools/clamp.ts',
   clampSerializedToolResult: 'tools/clamp.ts',
+
   classifyTurnFailure: 'turn-failure.ts',
   planOverflowRecovery: 'turn-failure.ts',
+  openTurnRun: 'orchestrator/turn-lifecycle.ts',
+  closeTurnRun: 'orchestrator/turn-lifecycle.ts',
+  snapshotCompletedTurn: 'orchestrator/turn-lifecycle.ts',
+  persistMeasuredPromptTokens: 'orchestrator/turn-lifecycle.ts',
+  applyOverflowRecovery: 'orchestrator/turn-lifecycle.ts',
+
+  serializeContentForHeads: 'orchestrator/heads-support.ts',
+  inheritedContextFromHistory: 'orchestrator/heads-support.ts',
+  narrowInheritedRole: 'orchestrator/heads-support.ts',
 
   buildCompactionSummaryPrompt: 'compaction.ts',
   wrapCompactionSummary: 'compaction.ts',
@@ -227,8 +256,18 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     contextWindowForModel,
     clampToolResult,
     clampSerializedToolResult,
+
     classifyTurnFailure,
     planOverflowRecovery,
+    openTurnRun,
+    closeTurnRun,
+    snapshotCompletedTurn,
+    persistMeasuredPromptTokens,
+    applyOverflowRecovery,
+
+    serializeContentForHeads,
+    inheritedContextFromHistory,
+    narrowInheritedRole,
 
     buildCompactionSummaryPrompt,
     wrapCompactionSummary,

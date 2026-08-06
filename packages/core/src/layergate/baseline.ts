@@ -2,6 +2,13 @@
 import type { Baseline } from './gate.js';
 
 export const LOCKED_BASELINE: Baseline = {
+  'backend-turn-driver/failure-classification': 'ff4bd2a7b65227c5',
+  'backend-turn-driver/overflow-applied': '18851a2e00f07f86',
+  'backend-turn-driver/overflow-recovery-plan': 'c12c8ada517dfde3',
+  'backend-turn-driver/prompt-token-trigger': '1f11659c0558bb43',
+  'backend-turn-driver/run-bracket': '1caee029fffee764',
+  'backend-turn-driver/run-bracket-never-throws': 'e8218e7869269183',
+  'backend-turn-driver/turn-snapshot': '82d14b3f3bb67e35',
   'compaction/checkpoint-roundtrip': 'f77478a37e711993',
   'compaction/first-pass-prompt': 'b9b3d9b8e7e82e07',
   'compaction/iterative-prompt': '520c887b8dfc267c',
@@ -17,8 +24,6 @@ export const LOCKED_BASELINE: Baseline = {
   'context-budget/clamp-oversize-marker': '0701fcb89dd5b1b7',
   'context-budget/clamp-serialized': '473dded3ed3f9fe5',
   'context-budget/clamp-under-budget-passthrough': 'd280decb04d8ed39',
-  'context-budget/failure-classification': 'ff4bd2a7b65227c5',
-  'context-budget/overflow-recovery-plan': 'c12c8ada517dfde3',
   'context-budget/window-table': '069ce9617bf4f7ba',
   'delegation/no-delegation-is-zero-not-absent': '0cbc79a1a34127df',
   'delegation/render-duration-units': 'e79a0e24544db762',
@@ -59,6 +64,9 @@ export const LOCKED_BASELINE: Baseline = {
   'step-pipeline/request-cache-routing': '34297ddf286ecb56',
   'step-pipeline/tail-markers-bounded': '28736f2849d646c8',
   'step-pipeline/turn-cache-plan': '8de065f417f6333d',
+  'subordinate-runtime/file-parts-never-inherit-payloads': '3de7f9d34c2adc39',
+  'subordinate-runtime/inherited-context-digest': 'd4aa50edf425084d',
+  'subordinate-runtime/role-narrowing': 'eace2134ab6dd091',
   'tool-contract/description-shape': '2f79f93a85f92092',
   'tool-contract/every-builtin-renders': '9a3a54fe9cec2b99',
   'volatile-context/empty-state-is-null': '64249bf0d2275a24',

@@ -108,6 +108,8 @@ import {
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
+  // Shared turn lifecycle
+  snapshotCompletedTurn,
 } from "@proteus/core";
 import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
@@ -952,22 +954,15 @@ export class OrchestratorAgent extends ActorAgent {
       void this.completeEventBatch(injected.turnId, assistantText);
     }
 
-    const turnUsage = this.acc.reportedUsage();
-    const turn: CompletedTurn = {
+    // status is "completed" here (the !== "completed" early-return above), so
+    // turn errors are tracked via the accumulator's per-step hadError flag.
+    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
       userMessage: userText,
       assistantResponse: assistantText,
-      toolCalls: this.acc.toolCalls,
-      steps: this.acc.stepCount,
-      durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
-      feedback: null,
-      // status is "completed" here (the !== "completed" early-return above),
-      // so turn errors are tracked via the accumulator's per-step hadError flag.
-      hadError: this.acc.hadError,
       turnId: msgId,
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
-      ...(turnUsage ? { usage: turnUsage } : {}),
-    };
+    });
 
     // The shared evolution spine (ActorAgent.settleCompletedTurn): the core
     // AgentOrchestrator's cadence — session-reflection counter (firing

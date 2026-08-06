@@ -40,21 +40,22 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('beforeTurn weaves the bounded MEMORY.md tail into the ephemeral system-state block', () => {
     // Parity with the CLI weave: the reflection loop assumes the model sees its
-    // newest lessons in-turn. cf previously passed only {factsBlock,executors},
-    // so hosted agents never saw their latest MEMORY.md lessons. The tail is
-    // sourced through the shared readMemoryTail helper (single source of truth
-    // for the path + bound) and rides the ephemeral block, never the prefix.
+    // newest lessons in-turn. The tail is sourced through the shared
+    // readMemoryTail helper and rides the shared turn-context assembly's
+    // systemState (ephemeral block), never the prefix.
     expect(actor).toContain('readMemoryTail');
-    const weaveIdx = actor.indexOf('this.ephemeralLedger.weave(transformed ?? baseMessages');
-    expect(weaveIdx).toBeGreaterThan(-1);
+    const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages({');
+    expect(assembleIdx).toBeGreaterThan(-1);
     const sourceIdx = actor.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
     expect(sourceIdx).toBeGreaterThan(-1);
-    // Sourced BEFORE the weave, and passed into it alongside facts + executors.
-    expect(sourceIdx).toBeLessThan(weaveIdx);
-    const weaveArgs = actor.slice(weaveIdx, actor.indexOf('const turnLocal = turnLocalContextMessage', weaveIdx));
-    expect(weaveArgs).toContain('factsBlock: this.renderFactsForTurn()');
-    expect(weaveArgs).toContain('...(memoryTail ? { memoryTail } : {})');
-    expect(weaveArgs).toContain('executors: execs');
+    // Sourced BEFORE the assembly, and passed into its ledger weave context
+    // alongside facts + executors.
+    expect(sourceIdx).toBeLessThan(assembleIdx);
+    const assembleArgs = actor.slice(assembleIdx, actor.indexOf('});', assembleIdx));
+    expect(assembleArgs).toContain('ledger: this.ephemeralLedger');
+    expect(assembleArgs).toContain('factsBlock: this.renderFactsForTurn()');
+    expect(assembleArgs).toContain('...(memoryTail ? { memoryTail } : {})');
+    expect(assembleArgs).toContain('executors: execs');
   });
 
   test('beforeTurn merges user reasoning effort with cache provider options', () => {
@@ -199,35 +200,43 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('attachment sanitization runs on the whole history BEFORE the extension transform and the ledger weave', () => {
+    // The ordering (sanitize → onTurnStart → transformContext → weave →
+    // turn-local) is owned by core assembleTurnMessages — behaviorally pinned
+    // in core's unit-turn-context-assembly.test.ts. What THIS backend must do
+    // is delegate to it with the sanitizer policy, the extension host, and the
+    // ledger, instead of re-implementing the ordering inline.
     const beforeTurn = actor.slice(
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
-    const sanitize = beforeTurn.indexOf('await sanitizeAttachmentsForModel(rawMessages');
-    const turnStart = beforeTurn.indexOf('await this.extensions.emitTurnStart');
-    const transform = beforeTurn.indexOf('await this.extensions.runTransformContext');
-    const weave = beforeTurn.indexOf('this.ephemeralLedger.weave');
-    expect(sanitize).toBeGreaterThan(-1);
-    expect(turnStart).toBeGreaterThan(sanitize);
-    expect(transform).toBeGreaterThan(turnStart);
-    expect(weave).toBeGreaterThan(transform);
-    // The transform and the weave both read the SANITIZED baseMessages.
-    expect(beforeTurn).toContain('messages: baseMessages');
-    expect(beforeTurn).toContain('weave(transformed ?? baseMessages');
-    expect(beforeTurn).toContain('accepts: this.sessionAcceptedMedia()');
+    const assemble = beforeTurn.indexOf('cfg.messages = await assembleTurnMessages({');
+    expect(assemble).toBeGreaterThan(-1);
+    const args = beforeTurn.slice(assemble);
+    expect(args).toContain('history: rawMessages');
+    expect(args).toContain('accepts: this.sessionAcceptedMedia()');
+    expect(args).toContain('vfs: this.rt.storage.vfs');
+    expect(args).toContain('extensions: this.extensions');
+    expect(args).toContain('ledger: this.ephemeralLedger');
+    // No parallel inline copy of the ordering survives here.
+    expect(beforeTurn).not.toContain('sanitizeAttachmentsForModel(');
+    expect(beforeTurn).not.toContain('runTransformContext(');
+    expect(beforeTurn).not.toContain('.weave(');
   });
 
   test('the settle spine persists the provider error text into the activity log and the run_end event', () => {
     const spine = actor.slice(actor.indexOf('protected settleTurnEvents(result: ChatResponseResult)'));
     const errorCapture = spine.indexOf('const errorText = result.error?.slice(0, 500)');
     const logRow = spine.indexOf('this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status)');
-    const runEnd = spine.indexOf("...(errorText ? { error: errorText } : {})");
+    // The run bracket is the shared core closeTurnRun (turn_end + run_end);
+    // the error text must flow into it. The payload shape is pinned in core's
+    // unit-turn-lifecycle tests.
+    const runEnd = spine.indexOf('closeTurnRun(this.eventRecorder, this._currentRunId, {');
     expect(errorCapture).toBeGreaterThan(-1);
     expect(logRow).toBeGreaterThan(errorCapture);
     expect(runEnd).toBeGreaterThan(logRow);
-    // The run_end emit itself carries the error.
-    const runEndEmit = spine.slice(spine.indexOf("type: 'run_end'"), spine.indexOf("console.warn('[proteus] event emit failed at onChatResponse"));
-    expect(runEndEmit).toContain('error: errorText');
+    const closeArgs = spine.slice(runEnd, spine.indexOf('});', runEnd));
+    expect(closeArgs).toContain('error: errorText');
+    expect(closeArgs).toContain('reason: result.status');
   });
 
   test("the per-turn system prompt carries the turn's mode overlay", () => {
