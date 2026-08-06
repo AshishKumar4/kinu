@@ -21,7 +21,7 @@
  *
  * Send-and-await (`ask`): the sender enqueues with `reply_expected`, the
  * receiver opens a `peer_back` reply channel keyed on the admitted event, and
- * the receiving agent answers with the `team` tool's reply action. The answer
+ * the receiving agent answers with the agents tool's reply action. The answer
  * rides the same outbox transport back (topic `peer_reply`, body
  * `{ in_reply_to, content }`); the sender's in-memory ask waiter consumes it
  * inline — a late answer past the timeout arrives as a normal peer event that
@@ -202,7 +202,7 @@ export interface PeerHubDeps {
 }
 
 /**
- * One agent's peer endpoint: the `team` tool's ask/send/reply ride it, the
+ * One agent's peer endpoint: the agents tool's ask/send/reply ride it, the
  * orchestrator's `receivePeerMessage` @callable and alarm handler drive it.
  */
 export class PeerHub {

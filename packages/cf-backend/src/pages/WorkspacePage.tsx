@@ -247,7 +247,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
     : null;
   const provisionErr = parseProvisionError(output);
   // What this call is actually about, from its own arguments — without it a
-  // row of `team` chips is six identical rows for six different calls.
+  // row of `agents` chips is six identical rows for six different calls.
   const summary = summarizeToolCall(toolName, input);
 
   return (

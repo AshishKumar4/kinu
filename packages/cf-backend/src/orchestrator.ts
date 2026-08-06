@@ -97,7 +97,7 @@ import {
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
-  // Peer-agent teams (the `team` tool contract)
+  // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
@@ -440,7 +440,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── Peer transport endpoint (agent teams) ────────────────────────────────
   // Sender: peer_outbox rows dispatched via DO RPC (inline + alarm retry).
-  // Receiver: the receivePeerMessage cross-DO RPC below. The `team` tool's
+  // Receiver: the receivePeerMessage cross-DO RPC below. The agents tool's
   // ask/send/reply actions ride this hub; spawn adds the create-agent path.
   private _peerHub: PeerHub | null = null;
   protected get peerHub(): PeerHub {
@@ -593,7 +593,7 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
-  /** The `peers` tool over the cross-workspace peer transport. Owner
+  /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
    *  turns — including a pre-claim build — so deps must not capture owner
    *  state at construction). */
@@ -1325,7 +1325,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Background-job registry — work auto-detached past the 30s threshold.
     initBackgroundJobsTable(execRaw);
-    // Durable MCTS search checkpoints — an evicted think(mcts) resumes from here.
+    // Durable MCTS search checkpoints — an evicted fork(settle=mcts) resumes from here.
     initMctsSearchTable(execRaw);
 
     // Compaction: the replayable plan snapshot + the measured prompt-token
@@ -2755,7 +2755,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
-   *  agents over the exact `peers` tool transport (owner + same-owner roster
+   *  agents over the exact peer-deps transport (owner + same-owner roster
    *  gate enforced inside getPeersToolDeps). */
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
     if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
@@ -2870,7 +2870,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Browser-only subordinate controls. These delegate to the exact same
-   * orchestration policy as the model's team tool, including rollback and the
+   * orchestration policy as the model's agents tool, including rollback and the
    * authoritative roster broadcast. */
   @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
     return this.getTeamToolDeps().list();

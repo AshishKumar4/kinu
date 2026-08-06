@@ -575,7 +575,7 @@ async function statusView(
   }
 }
 
-/** The one orchestration policy behind both the LLM team tool and the future
+/** The one orchestration policy behind both the LLM agents tool and the future
  * user RPCs. Roster transitions happen before facet admission and are restored
  * exactly if admission fails. Broadcasts happen only after both sides settle. */
 export function createTeamToolDeps(deps: {
@@ -682,7 +682,10 @@ export function createTeamToolDeps(deps: {
 
     dismiss: async (input) => {
       const before = deps.roster.requireExisting(input.name);
-      const keepHistory = input.keepHistory ?? false;
+      // Archive by default: the facet and its context are kept (merely no
+      // longer addressed), so a dismissal is never silent data loss. Wiping
+      // the subordinate's storage requires an explicit keepHistory=false.
+      const keepHistory = input.keepHistory ?? true;
       deps.roster.dismiss(input.name, deps.now());
       try {
         await deps.runtime.dismiss(input.name, keepHistory);

@@ -245,7 +245,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/surface-compilation',
         asserts: 'duplicate tools collapse, executors sort into doctrine order, model profile resolves',
         observe: (s) => s.compilePromptSurface({
-          availableTools: ['run', 'think', 'run', 'memory'],
+          availableTools: ['run', 'agents', 'run', 'memory'],
           externalTools: [{ name: 'jira', source: 'mcp' }, 'linear'],
           executors: EXECUTORS,
           backend: 'cf',
@@ -304,14 +304,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const prompt = s.buildSystemPromptSync({
             soulOverride: 'You are Proteus.',
-            availableTools: ['run', 'think', 'memory'],
+            availableTools: ['run', 'agents', 'memory'],
             backend: 'cf',
             model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
             currentDate: '2026-01-01',
           });
           return {
             hasSummaries: prompt.includes(BUILTIN_TOOL_SPECS.run.summary),
-            toolLines: prompt.split('\n').filter((line) => /^- (run|think|memory)$/.test(line)),
+            toolLines: prompt.split('\n').filter((line) => /^- (run|agents|memory)$/.test(line)),
           };
         },
       },
@@ -959,15 +959,15 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'delegation/tool-call-counts',
-        asserts: 'team / think / peers / execute_tools calls are counted separately from total steps',
+        asserts: 'staffing / fork / messaging / execute_tools calls are counted by agents action — and legacy tool names — separately from total steps',
         observe: (s) => s.delegationFeatures({
           steps: 7,
           durationMs: 95_000,
           toolCalls: [
+            { name: 'agents', args: { action: 'staff' }, result: null },
             { name: 'team', args: {}, result: null },
-            { name: 'team', args: {}, result: null },
-            { name: 'think', args: {}, result: null },
-            { name: 'peers', args: {}, result: null },
+            { name: 'agents', args: { action: 'fork' }, result: null },
+            { name: 'agents', args: { action: 'ask' }, result: null },
             { name: 'execute_tools', args: {}, result: null },
             { name: 'run', args: {}, result: null },
           ],
@@ -998,7 +998,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       {
         id: 'tool-contract/description-shape',
         asserts: 'a spec renders summary, use-when, avoid-when and returns as labelled lines',
-        observe: (s) => s.renderToolSchemaDescription(BUILTIN_TOOL_SPECS.think),
+        observe: (s) => s.renderToolSchemaDescription(BUILTIN_TOOL_SPECS.agents),
       },
       {
         id: 'tool-contract/every-builtin-renders',

@@ -23,6 +23,7 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
+  AgentsForkDeps,
   IngressDescriptor, ProteusEvent, EventVariant,
   RunEvent, RunEventInput, RunEventQuery,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
@@ -39,7 +40,8 @@ import {
   initAgentConfigTable, createAgentConfigStore,
   initFactsTable, createFactsStore, renderFactsBlock, readMemoryTail,
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
-  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
+  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy,
+  agentsActionsFor, resumableForkInput,
   HeadController, HeadJournal, initHeadsTables,
   discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
   unionAllowedTools, toolAllowedBySkills,
@@ -104,8 +106,13 @@ function providerFamilyForSpec(spec: string): string | undefined {
 const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Tools whose calls auto-detach to the background past the 30s threshold —
- *  the same set the cf-backend wraps. */
-const BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
+ *  the same set the cf-backend wraps, with the same per-call gate: `agents`
+ *  detaches only its fork action. */
+const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, (input: unknown) => boolean> = new Map([
+  ['agents', (input: unknown) => (input as { action?: unknown } | null)?.action === 'fork'],
+  ['execute_tools', () => true],
+  ['run', () => true],
+]);
 
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export interface LocalSessionDb {
@@ -903,18 +910,21 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Re-drive a background job interrupted by a previous process exit. Only
-   *  `think` is resumable: re-running the RAW strategy tool continues an
+  /** Re-drive a background job interrupted by a previous process exit. Only a
+   *  fork is resumable: re-running the RAW agents tool continues an
    *  interrupted MCTS from its durable search checkpoint (runMCTS.findResumable
-   *  matches the unfinished run by task) and re-runs heads. Side-effecting kinds
-   *  (execute_tools / run) can't be blindly re-executed, so they decline and the
-   *  runner falls back to failing the job. */
+   *  matches the unfinished run by task) and re-runs heads. Jobs stored before
+   *  the agents unification carry kind 'think'; resumableForkInput translates
+   *  them onto the same path. Side-effecting kinds (execute_tools / run) can't
+   *  be blindly re-executed, so they decline and the runner falls back to
+   *  failing the job. */
   private async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
-    if (kind !== 'think') throw new JobNotResumable(kind);
+    const forkInput = resumableForkInput(kind, input);
+    if (!forkInput) throw new JobNotResumable(kind);
     this.ensureModelState();
-    const exec = this.rawTools[kind]?.execute;
+    const exec = this.rawTools.agents?.execute;
     if (typeof exec !== 'function') throw new JobNotResumable(kind);
-    return (exec as (i: unknown, o: unknown) => unknown)(input, {
+    return (exec as (i: unknown, o: unknown) => unknown)(forkInput, {
       abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
     });
   }
@@ -1076,6 +1086,7 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, {
       executors,
       availableTools: availableBuiltins,
+      agentsActions: agentsActionsFor({ fork: true }),
       externalTools,
       backend: 'cli-local',
       mode: promptModeForTurnEvent(event),
@@ -1683,16 +1694,17 @@ export class LocalAgentSession implements BackendHost {
     this.lastSystemPromptHash = hash;
   }
 
-  /** The unified `think` tool — single-shot + MCTS + heads. MCTS explores over
-   *  rt.spawnBranch; heads run in-process via the CLI HeadRuntime. Mirrors the
-   *  DO's getThinkTool defaultOptions (mcts session + heads controller/context/
-   *  onPhase). */
-  private buildThinkTool(): ToolSet[string] {
+  /** The `agents` tool's fork substrate — single-shot + MCTS + heads. MCTS
+   *  explores over rt.spawnBranch; heads run in-process via the CLI
+   *  HeadRuntime. Mirrors the DO's getAgentsToolDeps fork defaults (mcts
+   *  session + heads controller/context/onPhase). The CLI wires no team or
+   *  peer transport, so fork is the tool's only action here. */
+  private buildAgentsForkDeps(): AgentsForkDeps {
     const registry = createStrategyRegistry();
     registry.register(createSingleShotStrategy());
     registry.register(createMCTSStrategy());
     registry.register(createHeadsStrategy());
-    return createThinkTool({
+    return {
       registry,
       rt: this.rt,
       model: this.cachedModel ?? this.fallbackModel,
@@ -1708,7 +1720,7 @@ export class LocalAgentSession implements BackendHost {
           onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
         },
       }),
-    });
+    };
   }
 
   /** The recent conversation handed to each spawned head as inherited context
@@ -1759,13 +1771,14 @@ export class LocalAgentSession implements BackendHost {
    *  wrap the long-running tools' execute in the 30s threshold. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
     const wrapped: ToolSet = { ...raw };
-    for (const key of BACKGROUNDABLE_TOOLS) {
+    for (const [key, detachable] of BACKGROUNDABLE_TOOLS) {
       const orig = wrapped[key];
       const exec = orig?.execute;
       if (!orig || typeof exec !== 'function') continue;
       wrapped[key] = {
         ...orig,
         execute: (input: unknown, options: unknown) => {
+          if (!detachable(input)) return exec(input as never, options as never);
           const controller = new AbortController();
           const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
           const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
@@ -1917,7 +1930,7 @@ export class LocalAgentSession implements BackendHost {
         extraProviders: [createLocalAgentSelfProvider(this), createWebCodemodeProvider(this.getWebSearchProvider())],
       }),
       codemodeLoader: { __cli: true },
-      thinkTool: this.buildThinkTool(),
+      agents: { fork: this.buildAgentsForkDeps() },
       facts: this.factsStore,
       skills: {
         vfs: this.getSkillsVfs(),
@@ -1925,11 +1938,12 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
-      // deps.team is deliberately NOT wired: the `team` peer-messaging tool
-      // needs a cross-agent transport, and local agents are one-per-process
-      // SQLite sessions with no daemon to route between them. Absent deps →
-      // the tool is not registered and the prompt (derived from the built
-      // toolset) never advertises it. Hosted agents get the full team surface.
+      // agents.team / agents.peers are deliberately NOT wired: staffing and
+      // peer messaging need a cross-agent transport, and local agents are
+      // one-per-process SQLite sessions with no daemon to route between them.
+      // Absent deps → those ACTIONS are structurally missing from the agents
+      // tool and the prompt ladder never advertises them. Hosted agents get
+      // the full surface.
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;

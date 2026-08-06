@@ -11,13 +11,15 @@ const write = (path: string): ToolCallRecord =>
   call('execute_tools', { code: `await workspace.writeFile("${path}", body);` });
 
 describe('delegationFeatures', () => {
-  test('counts process tools from a completed turn record', () => {
+  test('counts agents actions — and legacy tool names — from a completed turn record', () => {
+    // Live turns call the unified `agents` tool; stored turns from before the
+    // unification carry think/team/peers. Both count into the same buckets.
     const toolCalls: ToolCallRecord[] = [
       call('execute_tools', { code: 'a()' }),
-      call('team', { action: 'spawn' }),
-      call('think', { strategy: 'heads' }),
+      call('agents', { action: 'staff', role: 'r' }),
+      call('agents', { action: 'fork', task: 't' }),
       call('team', { action: 'status' }),
-      call('peers', { action: 'ask' }),
+      call('agents', { action: 'ask', agent: 'a' }),
       call('run', { command: 'ls' }),
     ];
 
@@ -39,7 +41,7 @@ describe('delegationFeatures', () => {
       toolCalls: [], steps: 41, durationMs: 372_000,
     }));
     expect(line).toBe(
-      'Turn process: 41 sequential steps, 0 team, 0 think, 0 peers, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 staffing, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
   });
 

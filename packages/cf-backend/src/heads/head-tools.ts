@@ -11,10 +11,10 @@
  *
  * Containment is two independent mechanisms, both structural:
  *
- *   1. Absent deps. `think` / `team` / `peers` / `report` / `product_change`
- *      exist only when `buildBuiltinTools` is handed the deps that implement
- *      them. A head is handed none, so those tools cannot be built — the same
- *      mechanism that confines subordinates.
+ *   1. Absent deps. `agents` / `report` / `product_change` exist only when
+ *      `buildBuiltinTools` is handed the deps that implement them. A head is
+ *      handed none, so those tools cannot be built — the same mechanism that
+ *      confines subordinates.
  *   2. `HEAD_BUILTIN_TOOLS`. Of what the builtin surface CAN produce, a head
  *      keeps only these. A builtin added upstream tomorrow does not silently
  *      appear on heads.

@@ -208,13 +208,23 @@ export {
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
+  AGENTS_TOOL_ACTIONS,
+  DELEGATION_FRAME,
+  DELEGATION_RUNGS,
+  DELEGATION_CONVERSE,
   renderToolSchemaDescription,
+  type AgentsToolAction,
   type BuiltinToolName,
   type BuiltinToolSpec,
 } from './tools/registry.js';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming.js';
 export {
+  createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableForkInput,
+  type AgentsToolInput,
+} from './tools/agents-tool.js';
+export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
+  type AgentsToolDeps, type AgentsForkDeps,
   type BuiltinToolDeps, type ProductChangeToolDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type PeersToolDeps, type ReportToolDeps,

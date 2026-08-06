@@ -456,7 +456,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
 
   test('toolAllowedBySkills: exact match', () => {
     expect(toolAllowedBySkills('run', ['run', 'memory'])).toBe(true);
-    expect(toolAllowedBySkills('think', ['run'])).toBe(false);
+    expect(toolAllowedBySkills('agents', ['run'])).toBe(false);
   });
 
   test('toolAllowedBySkills: glob-suffix `workspace.*` matches namespace', () => {
@@ -513,8 +513,8 @@ describe('renderActiveSkillsSection + tool gating', () => {
 describe('unionAllowedTools', () => {
   test('dedupes and sorts', () => {
     const a = fakeSkill('a', { allowed_tools: ['run', 'memory'] });
-    const b = fakeSkill('b', { allowed_tools: ['run', 'think'] });
-    expect(unionAllowedTools([a, b])).toEqual(['memory', 'run', 'think']);
+    const b = fakeSkill('b', { allowed_tools: ['run', 'agents'] });
+    expect(unionAllowedTools([a, b])).toEqual(['agents', 'memory', 'run']);
   });
 });
 

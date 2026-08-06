@@ -5,7 +5,7 @@
 //   { controller: HeadController, heads: SplitRequest['heads'],
 //     mergeStrategy?, mergeModel?, maxDepth?, inheritedContext?, onPhase? }
 // `controller`, `inheritedContext` and `onPhase` are host-injected (via the
-// think tool's defaultOptions); `heads` / `mergeStrategy` come from the LLM.
+// agents tool's fork defaultOptions); `heads` / `mergeStrategy` come from the LLM.
 import type { HeadController, SplitPhaseEvent } from '../heads/controller.js';
 import type {
   HeadBudget, SerializedMessage, SplitRequest, MergeStrategy, MergeResult,
@@ -28,12 +28,12 @@ interface HeadsStrategyOptions {
   /** Host hook fired once the merge completes, carrying the full MergeResult
    *  (per-head grounded scores + texts) and the split task. The host records an
    *  Alternate-Takes set from the comparable heads so the pick lands in the
-   *  preference ledger — injected by the think tool's defaultOptions, like onPhase. */
+   *  preference ledger — injected by the agents tool's fork defaultOptions, like onPhase. */
   onComplete?: (merge: MergeResult, task: string) => void;
 }
 
-/** The ephemeral-fork rung of the delegation ladder — `think`'s default
- *  strategy when the caller names none. */
+/** The ephemeral-fork rung of the delegation ladder — the strategy an
+ *  `agents` fork settles by when the caller names none (settle=merge). */
 export const FORK_STRATEGY_ID = 'heads';
 
 export function createHeadsStrategy(): ExplorationStrategy {

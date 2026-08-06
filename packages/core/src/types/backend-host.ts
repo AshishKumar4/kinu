@@ -103,7 +103,7 @@ export interface BackendHost {
 
   /** Head spawner + merge LLM (HeadController's existing seam). CF:
    *  createCFHeadRuntime (Facet sub-agents). CLI: subprocess-backed. Required
-   *  for full think({strategy:'heads'}) parity. */
+   *  for full agents-fork parity. */
   readonly headRuntime?: HeadRuntime;
 
 }

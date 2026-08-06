@@ -7,7 +7,7 @@
  * top-level builtins, so it respects the 6-tool surface.
  *
  * Deliberately NOT here: fork (forkAgent rejects while a turn is in flight, so
- * it can't run mid-codemode) and spawn/join (think({strategy:'heads'}) already
+ * it can't run mid-codemode) and spawn/join (the agents fork already
  * is the imperative parallel spawn+join facade over the sole sub-agent path —
  * a second one would be a drift-prone shadow system).
  */

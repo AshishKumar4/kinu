@@ -22,7 +22,7 @@ const MAX_TAKE_CANDIDATES = 4;
 
 /** Where a take set came from: near-tied MCTS convergence rivals, a mid-turn
  *  Steer-as-Branch redirect run as a parallel head, or the comparable reports of
- *  a think({strategy:'heads'}) fan-out. ONE pipeline — the comparison +
+ *  an agents-fork fan-out. ONE pipeline — the comparison +
  *  pick→ledger flow is identical for all three (synthetic-id sources skip the
  *  search_nodes re-point; only 'mcts' has real nodes to move). */
 export type AlternateTakeSource = 'mcts' | 'branch' | 'heads';
@@ -213,7 +213,7 @@ export interface HeadTakeCandidate {
 }
 
 /**
- * Persist a think({strategy:'heads'}) fan-out as an alternate-takes set: each
+ * Persist an agents-fork fan-out as an alternate-takes set: each
  * comparable head answer is a candidate, ranked by its grounded score (highest =
  * the answer the merge favored). Like MCTS, heads run MID-TURN (before the
  * assistant message id exists), so the set is written UNCLAIMED (turn_id NULL)

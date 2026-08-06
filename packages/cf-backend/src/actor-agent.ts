@@ -13,7 +13,7 @@
  * beforeStep / tool hooks) — lives here, once.
  *
  * Tool gating is structural: an actor whose profile wires no `team` deps has
- * no team tool. No flags.
+ * no staffing actions on its `agents` tool. No flags.
  */
 
 import { type AgentContext, type Connection, type ConnectionContext } from "agents";
@@ -60,6 +60,8 @@ import {
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
   EventInjectionBuffer, type MidTurnEventBatch,
+  type AgentsToolAction,
+  type AgentsToolDeps,
   type BuiltinToolName,
   ACTIVE_TOOLS,
   nanoid,
@@ -79,7 +81,7 @@ import {
   type SessionWriter, type SessionMessage, type SqlExecutor,
   // Unified strategy dispatch
   createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy,
-  createHeadsStrategy, createThinkTool,
+  createHeadsStrategy, agentsActionsFor, resumableForkInput,
   // Background-job system (#173 — auto-background >30s tool calls)
   BackgroundJobStore, BackgroundJobRunner, withBackgroundThreshold, JobNotResumable,
   MctsSearchStore,
@@ -228,21 +230,29 @@ export interface ActorToolDeps {
 }
 
 /** The deps-gated builtins: names dropped from the advertised tool surface
- *  when the actor profile wires no deps for them. */
-const DEPS_GATED_TOOLS = ['team', 'peers', 'report', 'product_change'] as const;
+ *  when the actor profile wires no deps for them. The `agents` tool is never
+ *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
+ *  on the same profile (see actorAgentsActions). */
+const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
  *  tools. */
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
-    team: !!deps.team,
-    peers: !!deps.peers,
     report: !!deps.report,
     product_change: !!deps.productChanges,
   };
   return ACTIVE_TOOLS.filter((name) =>
     !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
+}
+
+/** The `agents` actions this actor profile supports, for the prompt's
+ *  Delegation ladder — the same gating rule the tool's enum uses. Fork is
+ *  universal on cf (every ActorAgent owns the strategy registry + facet
+ *  substrate); staffing and peer converse ride the actor profile. */
+export function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
+  return agentsActionsFor({ fork: true, team: deps.team, peers: deps.peers });
 }
 
 export abstract class ActorAgent extends Think<Env> {
@@ -306,8 +316,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Tool deps only this actor class wires. Structural absence is the gating
-   *  mechanism (the same way `team` is absent on the CLI backend): an actor
-   *  that returns {} simply has no team / product-change tools. */
+   *  mechanism (the same way staffing is absent on the CLI backend): an actor
+   *  that returns {} has no staffing/peer actions and no product-change tool. */
   protected abstract actorToolDeps(): ActorToolDeps;
 
   /** Codemode providers beyond the shared set. Spliced between `rlm` and
@@ -928,9 +938,9 @@ export abstract class ActorAgent extends Think<Env> {
   private _craftExecTool: unknown = null;
 
   // Branching-heads controller — lazily built once per DO lifetime. Wraps a
-  // HeadJournal + HeadRuntime (Facet spawner + merge LLM). The `think` tool's
-  // heads strategy drives it, injecting inheritedContext + an onPhase event
-  // sink via defaultOptions().
+  // HeadJournal + HeadRuntime (Facet spawner + merge LLM). The `agents` fork
+  // drives it, injecting inheritedContext + an onPhase event sink via
+  // defaultOptions().
   private _headController: HeadController | null = null;
 
   // The orchestrator's view of head activity (journal + runs + steps). Shared by
@@ -982,8 +992,8 @@ export abstract class ActorAgent extends Think<Env> {
     return this._jobs;
   }
 
-  // Durable MCTS search checkpoints — the resume record a think(mcts) evicted
-  // mid-search continues from (B6). One per DO; keyed by search root id.
+  // Durable MCTS search checkpoints — the resume record a fork(settle=mcts)
+  // evicted mid-search continues from (B6). One per DO; keyed by search root id.
   private _mctsSearchStore: MctsSearchStore | null = null;
   protected get mctsSearchStore(): MctsSearchStore {
     if (!this._mctsSearchStore) this._mctsSearchStore = new MctsSearchStore(this.boundSql);
@@ -1011,7 +1021,7 @@ export abstract class ActorAgent extends Think<Env> {
             : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
         ),
         // Evict-resume (B6): re-drive an interrupted job from its durable
-        // checkpoint. `think` re-runs the raw strategy tool — MCTS continues its
+        // checkpoint. A fork re-runs the raw agents tool — MCTS continues its
         // remaining search budget via the search store; heads re-run from input.
         // Side-effecting kinds (execute_tools / run) are not safe to blindly
         // re-execute, so they decline and fall back to the eviction failure.
@@ -1045,30 +1055,36 @@ export abstract class ActorAgent extends Think<Env> {
     return reg;
   }
 
-  private _thinkTool: ToolSet[string] | null = null;
-  private getThinkTool(): ToolSet[string] {
-    if (this._thinkTool) return this._thinkTool;
-    this._thinkTool = createThinkTool({
-      registry: this.strategyRegistry,
-      rt: this.rt,
-      model: this.getModel(),
-      // Host-injected infrastructure the LLM must not set. Recomputed per
-      // think() call: MCTS gets a fresh SessionWriter + the operator's stored
-      // overrides (mcts_c/iterations/depth/branches — an explicit LLM budget
-      // still wins); heads get the shared controller, the live conversation as
-      // inheritedContext, and an onPhase sink that streams head_split /
-      // head_merge into the durable event log.
-      defaultOptions: () => ({
-        mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
-        heads: {
-          controller: this.getHeadController(),
-          inheritedContext: this.readInheritedContext(),
-          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
-          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
-        },
-      }),
-    });
-    return this._thinkTool;
+  /** The unified `agents` tool's deps: the fork substrate is universal on cf
+   *  actors; the staffing/peer halves ride this actor's profile
+   *  (actorToolDeps). Rebuilt with the toolset (getRawTools), so the fork
+   *  model refreshes exactly when the toolset does. */
+  private getAgentsToolDeps(): AgentsToolDeps {
+    const actorDeps = this.actorToolDeps();
+    return {
+      fork: {
+        registry: this.strategyRegistry,
+        rt: this.rt,
+        model: this.getModel(),
+        // Host-injected infrastructure the LLM must not set. Recomputed per
+        // fork call: MCTS gets a fresh SessionWriter + the operator's stored
+        // overrides (mcts_c/iterations/depth/branches — an explicit LLM budget
+        // still wins); heads get the shared controller, the live conversation
+        // as inheritedContext, and an onPhase sink that streams head_split /
+        // head_merge into the durable event log.
+        defaultOptions: () => ({
+          mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
+          heads: {
+            controller: this.getHeadController(),
+            inheritedContext: this.readInheritedContext(),
+            onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+            onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
+          },
+        }),
+      },
+      ...(actorDeps.team ? { team: actorDeps.team } : {}),
+      ...(actorDeps.peers ? { peers: actorDeps.peers } : {}),
+    };
   }
 
   /** Convenience: current runId for event emission. One run per turn. */
@@ -1381,8 +1397,10 @@ export abstract class ActorAgent extends Think<Env> {
       `${e.name}:${e.available ? 1 : 0}:${e.configured ? 1 : 0}:${e.active ? 1 : 0}:${e.status}`,
     ).join(",");
     const model = this.promptModelContext();
-    const availableTools = actorActiveTools(this.actorToolDeps());
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}`;
+    const actorDeps = this.actorToolDeps();
+    const availableTools = actorActiveTools(actorDeps);
+    const agentsActions = actorAgentsActions(actorDeps);
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}\u0000${agentsActions.join(',')}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -1397,6 +1415,7 @@ export abstract class ActorAgent extends Think<Env> {
       base = buildSystemPromptSync(this.rt, {
         executors: execs,
         availableTools,
+        agentsActions,
         backend: 'cf',
         model,
       });
@@ -1472,13 +1491,16 @@ export abstract class ActorAgent extends Think<Env> {
 
       const shellApprovalMode = this.config.getShellApprovalMode();
 
+      const actorDeps = this.actorToolDeps();
       const tools = buildBuiltinTools({
         rt: this.rt,
         preBuiltExecuteTool: this.getExecuteToolsTool(),
-        // Unified strategy dispatcher (single-shot / mcts / heads). Internally
-        // owns the HeadController + MCTS session — the bare `explore` /
-        // `split_heads` tools were folded into this single entry point.
-        thinkTool: this.getThinkTool(),
+        // The unified `agents` delegation tool — fork substrate (heads / mcts
+        // settle) is universal; staff/ask/send actions appear only when this
+        // actor's profile wires the team/peers transports. Owner resolution
+        // stays lazy per action, so the cached toolset stays valid across
+        // claimOwner.
+        agents: this.getAgentsToolDeps(),
         // Vectorize-backed semantic memory. memory.search auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
@@ -1495,10 +1517,10 @@ export abstract class ActorAgent extends Think<Env> {
           recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
-        // Per-actor-class deps (peer teams, product changes) — the owner is
-        // resolved lazily per action, so the cached toolset stays valid
-        // across claimOwner; actors without these deps have no such tools.
-        ...this.actorToolDeps(),
+        // The remaining actor-profile deps (subordinate report spine,
+        // product-change lane).
+        ...(actorDeps.report ? { report: actorDeps.report } : {}),
+        ...(actorDeps.productChanges ? { productChanges: actorDeps.productChanges } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       });
@@ -1520,9 +1542,9 @@ export abstract class ActorAgent extends Think<Env> {
 
   /**
    * Lazily build the HeadController that spawns ExplorationAgent Facets in
-   * head mode (initHead / runAsHead / abortHead). Driven by the `think` tool's
-   * heads strategy; inheritedContext + the onPhase event sink are injected
-   * per call via readInheritedContext() / emitHeadPhase().
+   * head mode (initHead / runAsHead / abortHead). Driven by the `agents`
+   * tool's fork action; inheritedContext + the onPhase event sink are
+   * injected per call via readInheritedContext() / emitHeadPhase().
    */
   private getHeadController(): HeadController {
     if (this._headController) return this._headController;
@@ -1534,7 +1556,7 @@ export abstract class ActorAgent extends Think<Env> {
     return this._headController;
   }
 
-  /** Record the comparable heads of a completed think({strategy:'heads'}) run as
+  /** Record the comparable heads of a completed agents fork (merge settle) run as
    *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
    *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only grounded
    *  scores are a real preference signal, so emit nothing when ungrounded. */
@@ -1851,9 +1873,11 @@ export abstract class ActorAgent extends Think<Env> {
     // skills tool hold a stable reference).
     this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
-    // The actor's REAL tool surface: deps-gated builtins (team/peers/report/
-    // product_change) are advertised only when this actor class wires them.
-    const activeTools: BuiltinToolName[] = actorActiveTools(this.actorToolDeps());
+    // The actor's REAL tool surface: deps-gated builtins (report/
+    // product_change) are advertised only when this actor class wires them,
+    // and the agents ladder renders only the actions this profile supports.
+    const turnActorDeps = this.actorToolDeps();
+    const activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
     let activeSetForPrompt: ActiveSkillSet | undefined;
     try {
       const lastUserText = extractLastUserText(ctx.messages);
@@ -1955,6 +1979,7 @@ export abstract class ActorAgent extends Think<Env> {
     const systemOverride = buildSystemPromptSync(this.rt, {
       executors: execs,
       availableTools: activeTools,
+      agentsActions: actorAgentsActions(turnActorDeps),
       ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
@@ -2153,21 +2178,28 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.recordStep(ctx as unknown as StepLike);
   }
 
-  /** Tools whose work can be long enough to auto-detach to the background. */
-  private static readonly BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
+  /** Tools whose work can be long enough to auto-detach to the background,
+   *  with a per-call gate: `agents` detaches only its fork action — the
+   *  converse actions (ask/send/staff/…) keep their old inline semantics. */
+  private static readonly BACKGROUNDABLE_TOOLS: ReadonlyMap<string, (input: unknown) => boolean> = new Map([
+    ['agents', (input) => (input as { action?: unknown } | null)?.action === 'fork'],
+    ['execute_tools', () => true],
+    ['run', () => true],
+  ]);
 
   /** Return a SHALLOW CLONE of the raw toolset with the long-running tools'
    *  execute wrapped in the 30s background threshold. Never mutates the cached
    *  raw toolset — so getRawTools() stays unwrapped for the eval side-streams. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
     const wrapped: ToolSet = { ...raw };
-    for (const key of ActorAgent.BACKGROUNDABLE_TOOLS) {
+    for (const [key, detachable] of ActorAgent.BACKGROUNDABLE_TOOLS) {
       const orig = wrapped[key];
       const exec = orig?.execute;
       if (!orig || typeof exec !== 'function') continue;
       wrapped[key] = {
         ...orig,
         execute: (input, options) => {
+          if (!detachable(input)) return exec(input, options);
           // Per-call AbortController so a hard-cancel aborts the underlying work.
           // Merge it with the turn's own signal so a turn abort still propagates.
           const controller = new AbortController();
@@ -2245,11 +2277,10 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Invalidate every cache that depends on the resolved model so the next
-   *  getModel() / getThinkTool() / providerRegistry() call rebuilds. */
+   *  getModel() / providerRegistry() call rebuilds. */
   protected invalidateModelCaches(): void {
     this._cachedModel = null;
     this._cachedModelSpec = null;
-    this._thinkTool = null;
     // Provider registry caches per-agent OAuth refreshers; rebuild so a
     // disconnected provider stops being marked available.
     this.ownedModelServices.invalidate();
@@ -2311,17 +2342,20 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Re-drive an evicted background job from its durable checkpoint (B6).
-   *  Only `think` is resumable: re-running the RAW strategy tool (no 30s re-detach)
-   *  continues an evicted MCTS from its search checkpoint — runMCTS.findResumable
-   *  matches the unfinished run by task — and re-runs heads. The runner settles the
-   *  returned result onto the job under a fresh lease epoch. Side-effecting kinds
-   *  (execute_tools / run) can't be safely re-executed, so they decline. */
+   *  Only a fork is resumable: re-running the RAW agents tool (no 30s
+   *  re-detach) continues an evicted MCTS from its search checkpoint —
+   *  runMCTS.findResumable matches the unfinished run by task — and re-runs
+   *  heads. Jobs stored before the agents unification carry kind 'think';
+   *  resumableForkInput translates them onto the same path. The runner
+   *  settles the returned result onto the job under a fresh lease epoch.
+   *  Side-effecting kinds (execute_tools / run) can't be safely re-executed,
+   *  so they decline. */
   protected async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
-    if (kind !== 'think') throw new JobNotResumable(kind);
-    const tool = this.getRawTools()[kind];
-    const exec = tool?.execute;
+    const forkInput = resumableForkInput(kind, input);
+    if (!forkInput) throw new JobNotResumable(kind);
+    const exec = this.getRawTools().agents?.execute;
     if (typeof exec !== 'function') throw new JobNotResumable(kind);
-    return (exec as (i: unknown, o: unknown) => unknown)(input, {
+    return (exec as (i: unknown, o: unknown) => unknown)(forkInput, {
       abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
     });
   }

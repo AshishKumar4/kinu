@@ -67,12 +67,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(await rt.memory.read('memory/MEMORY.md')).toContain('Lesson');
     const reflectionPrompt = prompts.find((prompt) => prompt.includes('In one sentence')) ?? '';
     expect(reflectionPrompt).toContain(
-      'Turn process: 41 sequential steps, 0 team, 0 think, 0 peers, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 staffing, 0 fork, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
     expect(reflectionPrompt).toContain(
-      'On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero team/think',
+      'On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation',
     );
-    expect(reflectionPrompt).toContain('credit effective team/think on accepted turns');
+    expect(reflectionPrompt).toContain('credit effective staffing/forking on accepted turns');
     expect(reflectionPrompt).toContain('flag delegation overhead when spawned subordinates contributed nothing');
   });
 

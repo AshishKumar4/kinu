@@ -4,6 +4,33 @@
 import { describe, test, expect } from 'bun:test';
 import { clip, summarizeToolCall } from '../src/components/tool-call-summary.ts';
 
+describe('tool call summaries — the unified agents tool', () => {
+  test('agents calls are told apart by action and target', () => {
+    expect(summarizeToolCall('agents', {
+      action: 'fork', task: 'compare X vs Y',
+      forks: [{ task: 'a' }, { task: 'b' }, { task: 'c' }, { task: 'd' }],
+    })).toBe('4 forks: "compare X vs Y"');
+    expect(summarizeToolCall('agents', { action: 'fork', task: 'find the fix', settle: 'mcts' }))
+      .toBe('fork settle=mcts: "find the fix"');
+    expect(summarizeToolCall('agents', { action: 'staff', agent: 'scout', role: 'researcher — landscape' }))
+      .toBe('staff scout — "researcher — landscape"');
+    expect(summarizeToolCall('agents', { action: 'staff', role: 'researcher' })).toBe('staff researcher');
+    expect(summarizeToolCall('agents', { action: 'staff', scope: 'workspace', mission: 'summarize papers' }))
+      .toBe('staff workspace — "summarize papers"');
+    expect(summarizeToolCall('agents', { action: 'ask', agent: 'scout', message: 'Audit the CLI surface' }))
+      .toBe('ask scout — "Audit the CLI surface"');
+    expect(summarizeToolCall('agents', { action: 'send', agent: 'scout', topic: 'fyi' }))
+      .toBe('send scout — "fyi"');
+    expect(summarizeToolCall('agents', { action: 'reply', message: 'here you go' }))
+      .toBe('reply — "here you go"');
+    expect(summarizeToolCall('agents', { action: 'dismiss', agent: 'arch-auditor' })).toBe('dismiss arch-auditor');
+    expect(summarizeToolCall('agents', { action: 'list' })).toBe('list');
+  });
+});
+
+// NOTE: the think/team/peers cases below pin HISTORICAL renderers — those
+// tools were unified into `agents`, but stored transcripts still carry their
+// names and must keep rendering.
 describe('tool call summaries — builtins', () => {
   test('team calls are told apart by their target, not just their name', () => {
     expect(summarizeToolCall('team', { action: 'dismiss', name: 'arch-auditor' })).toBe('dismiss arch-auditor');

@@ -1,6 +1,8 @@
 import {
+  AGENTS_TOOL_ACTIONS,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
+  type AgentsToolAction,
   type BuiltinToolName,
 } from '../tools/registry.js';
 import { isMcpToolKey } from '../tools/mcp-naming.js';
@@ -51,6 +53,10 @@ export interface PromptSurfaceOptions {
   registeredExecutors?: string[];
   executors?: readonly PromptExecutorInfo[];
   availableTools?: readonly BuiltinToolName[];
+  /** Which `agents` actions this actor's deps actually wire (see
+   *  agentsActionsFor). Defaults to ALL actions when the `agents` tool is on
+   *  the surface — the representative full surface — and to none otherwise. */
+  agentsActions?: readonly AgentsToolAction[];
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
   mode?: PromptMode;
@@ -59,6 +65,7 @@ export interface PromptSurfaceOptions {
 
 export interface PromptSurface {
   builtinTools: BuiltinToolName[];
+  agentsActions: AgentsToolAction[];
   externalTools: PromptExternalToolInfo[];
   executors: PromptExecutorInfo[];
   selectableExecutors: PromptExecutorInfo[];
@@ -145,10 +152,21 @@ export function uniqueExternalTools(tools: readonly (PromptExternalToolInfo | st
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function uniqueAgentsActions(
+  actions: readonly AgentsToolAction[] | undefined,
+  builtinTools: readonly BuiltinToolName[],
+): AgentsToolAction[] {
+  if (!builtinTools.includes('agents')) return [];
+  const source = actions ?? AGENTS_TOOL_ACTIONS;
+  return AGENTS_TOOL_ACTIONS.filter((action) => source.includes(action));
+}
+
 export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface {
   const executors = uniquePromptExecutors(opts);
+  const builtinTools = uniqueBuiltinTools(opts.availableTools);
   return {
-    builtinTools: uniqueBuiltinTools(opts.availableTools),
+    builtinTools,
+    agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
     externalTools: uniqueExternalTools(opts.externalTools),
     executors,
     selectableExecutors: executors.filter(executorIsSelectable),

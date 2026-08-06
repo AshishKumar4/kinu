@@ -7,6 +7,7 @@
 import type { AgentRuntime } from './types/agent-runtime.js';
 import {
   BUILTIN_TOOL_SPECS,
+  DELEGATION_RUNGS,
   type BuiltinToolName,
 } from './tools/registry.js';
 import { renderActiveSkillsSection } from './skills/render.js';
@@ -82,7 +83,7 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
   ];
 
-  if (hasTool(surface.builtinTools, 'think') || hasTool(surface.builtinTools, 'team')) {
+  if (hasTool(surface.builtinTools, 'agents')) {
     lines.push('- For multi-part or long-running work, pick a rung of the delegation ladder below instead of grinding through it inline.');
   }
 
@@ -281,37 +282,39 @@ function renderAgentStateSection(surface: PromptSurface): string {
     ].join('\n'));
   }
 
-  if (hasTool(tools, 'think') || hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
-    // ONE ladder, keyed on lifetime — the only axis the model has to decide on.
-    // Both rung triggers render from the registry specs (single source); the
-    // frame, the fork artifact trail and the coordination loop are the
-    // prompt-only operational doctrine no per-tool schema can carry.
-    const lines = [
-      '## Delegation',
-      'Delegation is one ladder with one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.',
-      '- Do it yourself — a single short coherent change.',
-    ];
-    if (hasTool(tools, 'think')) {
+  if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
+    // ONE ladder, keyed on lifetime, behind ONE tool — the only axis the
+    // model has to decide on. Both rung triggers render from the registry's
+    // DELEGATION_RUNGS (single source); the frame, the fork artifact trail
+    // and the coordination loop are the prompt-only operational doctrine no
+    // tool schema can carry. Rungs gate on the actions this actor's deps
+    // actually wire (surface.agentsActions), exactly like the tool's enum.
+    const actions = surface.agentsActions;
+    const has = (action: (typeof actions)[number]) => actions.includes(action);
+    const lines = ['## Delegation'];
+    if (actions.length > 0) {
       lines.push(
-        `- Ephemeral fork (\`think\`) — ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
+        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.',
+        '- Do it yourself — a single short coherent change.',
       );
     }
-    if (hasTool(tools, 'team')) {
-      lines.push(
-        `- Persistent subordinate (\`team\`) — ${BUILTIN_TOOL_SPECS.team.whenToUse}`,
-      );
+    if (has('fork')) {
+      lines.push(`- Ephemeral fork — ${DELEGATION_RUNGS.fork}`);
     }
-    if (hasTool(tools, 'think')) {
+    if (has('staff')) {
+      lines.push(`- Persistent subordinate — ${DELEGATION_RUNGS.staff}`);
+    }
+    if (has('fork')) {
       lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.');
     }
-    if (hasTool(tools, 'team')) {
+    if (has('staff')) {
       lines.push(
-        'Run the coordination loop: spawn the needed roles → assign several independent workstreams → poll team status / await reports → integrate the results yourself. A subordinate is cheap to create and dismiss.',
-        "Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.",
+        'Run the coordination loop: staff the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you. A finished subordinate stays in your roster with its context — re-engage it with ask/send; dismiss only when its role is permanently over.',
+        "Subordinates share this workspace's files and sandbox.",
       );
     }
-    if (hasTool(tools, 'peers')) {
-      lines.push("Beyond this workspace, `peers` reaches the owner's other agents: delegate a subtask (ask waits for the answer, send does not), spawn a specialist workspace, or answer a peer message event via reply with its event_id.");
+    if (has('reply')) {
+      lines.push("The same ask/send reach the owner's OTHER workspace agents by name (a peer ask waits for the reply, send does not); staff scope=workspace creates a specialist workspace; reply answers an agent message event via its event_id.");
     }
     if (hasTool(tools, 'report')) {
       lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` sends it progress/completed/blocked updates at meaningful milestones. Your turn-end answer to an assigned task is relayed automatically.');
@@ -319,10 +322,10 @@ function renderAgentStateSection(surface: PromptSurface): string {
     parts.push(lines.join('\n'));
   }
 
-  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'think')) {
+  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
     parts.push([
       '## Background work',
-      'Long `think`, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
+      'Long fork, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
     ].join('\n'));
   }
 

@@ -67,6 +67,31 @@ function summarizeThink(input: Record<string, unknown>): string {
   return [label, task].filter(Boolean).join(": ");
 }
 
+/** The unified delegation tool — one line per action, shaped like the
+ *  summaries its three predecessors produced. */
+function summarizeAgents(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  const agent = str(input, "agent");
+  switch (action) {
+    case "fork": {
+      const forks = Array.isArray(input.forks) ? input.forks.length : 0;
+      const settle = str(input, "settle");
+      const label = [forks > 0 ? `${forks} forks` : "fork", settle && settle !== "merge" ? `settle=${settle}` : ""]
+        .filter(Boolean).join(" ");
+      const task = quoted(str(input, "task"), 56);
+      return task ? `${label}: ${task}` : label;
+    }
+    case "staff":
+      return str(input, "scope") === "workspace"
+        ? actionOn("staff workspace", agent, str(input, "mission"))
+        : actionOn(action, agent || str(input, "role"), agent ? str(input, "role") : "");
+    case "ask":
+    case "send":  return actionOn(action, agent, str(input, "topic") || str(input, "message"));
+    case "reply": return actionOn(action, undefined, str(input, "message"));
+    default:      return actionOn(action, agent);
+  }
+}
+
 function summarizeMemory(input: Record<string, unknown>): string {
   const action = str(input, "action");
   if (action === "save") return actionOn(action, undefined, str(input, "content"));
@@ -142,11 +167,14 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
-  think: summarizeThink,
+  agents: summarizeAgents,
   memory: summarizeMemory,
   fact: (input) => actionOn(str(input, "action"), str(input, "key")),
   web_search: (input) => quoted(str(input, "query")),
   web_fetch: (input) => clip(str(input, "url")),
+  // think/team/peers were unified into `agents`; their summarizers remain so
+  // tool calls in STORED transcripts keep rendering.
+  think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),

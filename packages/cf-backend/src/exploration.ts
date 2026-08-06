@@ -13,13 +13,13 @@
  *               A branch must NEVER acquire the head runtime below.
  *
  *   HEAD mode — long-form multi-step inference for the branching-heads
- *               primitive (think strategy=heads). initHead() / runAsHead() /
- *               abortHead() drive an agentic loop over a FORK of the parent
- *               workspace: the parent's sandbox container, Nimbus session and
- *               device consent, with the parent's workspace files mounted at
- *               /workspace (see headRuntime()). Its tool surface — and the
- *               containment that keeps think/team/peers off it — is declared in
- *               heads/head-tools.ts.
+ *               primitive (the `agents` tool's fork action). initHead() /
+ *               runAsHead() / abortHead() drive an agentic loop over a FORK of
+ *               the parent workspace: the parent's sandbox container, Nimbus
+ *               session and device consent, with the parent's workspace files
+ *               mounted at /workspace (see headRuntime()). Its tool surface —
+ *               and the containment that keeps the delegation surface off it —
+ *               is declared in heads/head-tools.ts.
  *
  * Both modes share: Facet class, composed owner/model services, lifecycle,
  * and parallel-spawn infrastructure. Heads are a mode of this Facet, not a

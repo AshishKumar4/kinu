@@ -469,6 +469,42 @@ describe('team action routing', () => {
       liveError: 'status failed',
     }]);
   });
+
+  test('EVICTION FIX: a completed subordinate stays in the roster and answers a follow-up task', async () => {
+    // The reported bug: subordinates disappeared after completing their task.
+    // Completion must land the subordinate at idle — still listed, still
+    // addressable — and a follow-up assignment must run on the SAME facet
+    // with its context intact (no respawn, no deletion anywhere).
+    const h = makeTeamHarness();
+    await h.team.spawn({ role: 'researcher', mission: 'Map the market.' });
+
+    h.roster.applyReport('researcher-a1b2c3', 'completed');
+    const afterCompletion = await h.team.list();
+    expect(afterCompletion).toHaveLength(1);
+    expect(afterCompletion[0]).toMatchObject({ name: 'researcher-a1b2c3', status: 'idle', currentTask: null });
+
+    await h.team.assign({ name: 'researcher-a1b2c3', task: 'One more comparison' });
+    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
+      status: 'working', currentTask: 'One more comparison',
+    });
+    // The follow-up reached the existing facet — no dismiss, no fresh spawn.
+    expect(h.calls).toEqual([
+      'spawn:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:One more comparison',
+    ]);
+  });
+
+  test('EVICTION FIX: dismissal archives by default — storage wipe only on explicit keepHistory=false', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ role: 'researcher', mission: 'Mission' });
+
+    expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
+      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });
+    // The runtime seam receives keepHistory=true → the orchestrator's
+    // deleteSubAgent branch (the storage wipe) is not taken.
+    expect(h.calls.at(-1)).toBe('dismiss:researcher-a1b2c3:true');
+  });
 });
 
 describe('subordinate event admission', () => {
