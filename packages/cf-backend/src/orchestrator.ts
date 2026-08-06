@@ -17,7 +17,6 @@ import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { initCompactionStateTable } from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
 import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
-import type { ModelMessage, ToolSet } from "ai";
 import * as v from "valibot";
 import type {
   TimelineSpan,
@@ -31,7 +30,7 @@ import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
 import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
-import type { ChatResponseResult, StreamableResult } from "@cloudflare/think";
+import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
   bootstrapScaffold,
@@ -51,13 +50,10 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldInferenceTransform, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
-  // Auto-judge shadow eval — sampled per-turn shadow rollout closure
-  runAutoShadowEval, JudgeOutputSchema, DEFAULT_AUTO_JUDGE_CONFIG,
-  type StructuredJudgeFn,
   // Durable run-event log
   initRunEventTables,
   // R3 outcome ledger (schema + take_pick CHECK rebuild) — eager in ensureSchema
@@ -113,7 +109,7 @@ import {
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
 } from "@proteus/core";
-import { ActorAgent, extractLastUserText, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
   SubordinateRosterStore,
@@ -973,36 +969,13 @@ export class OrchestratorAgent extends ActorAgent {
       ...(turnUsage ? { usage: turnUsage } : {}),
     };
 
-    // CRITICAL: Evolution hooks make LLM calls (outcome classification,
-    // reflection, extraction, session reflection) that take 5-30 seconds
-    // each. onChatResponse runs INSIDE Think's TurnQueue — if we await here,
-    // the queue is blocked and the next message can't start processing until
-    // evolution finishes. The user sees "nothing happens" for the second message.
-    //
-    // Fix: fire evolution asynchronously, then hold the DO open for it with a
-    // keepAlive heartbeat of our own (settleEvolutionInBackground). The outer
-    // keepAliveWhile Think wraps the turn in disposes the moment this hook
-    // returns, so without that the detached work races eviction. Errors are
-    // caught and logged, never propagated.
-    //
-    // The core AgentOrchestrator owns the shared cadence: advance the
-    // session-reflection counter (firing engine.onSessionComplete every N
-    // turns) + buffer this turn for its outcome review — the NEXT user
-    // message grades it (beforeTurn → observeUserTurn → engine.reviewTurn:
-    // outcome classification, turn.feedback, craft EMA, reflection/lesson,
-    // pattern extraction). Programmatic turns review immediately. All
-    // fire-and-forget; never blocks the TurnQueue.
-    this.orch.recordTurn(turn);
-    // …and keep the DO alive until that detached evolution settles — the cf
-    // peer of the CLI's pre-exit `await orch.settleEvolution()`.
-    this.settleEvolutionInBackground();
-
-    // Auto-judge shadow evaluation. When a pending scaffold exists,
-    // sample-and-run (default 25%) the pending against this turn's task,
-    // ask a judge LLM to compare, record. When minTrials is reached AND
-    // agent_config.auto_promote_scaffold allows it (default ON; the
-    // changelog makes the decision visible and revertable), auto-apply.
-    void this.runShadowEvalSampled(userText, assistantText);
+    // The shared evolution spine (ActorAgent.settleCompletedTurn): the core
+    // AgentOrchestrator's cadence — session-reflection counter (firing
+    // engine.onSessionComplete every N turns) + this turn buffered for its
+    // outcome review, which the NEXT user message grades — plus the keepAlive
+    // that outlives Think's turn wrapper, plus the sampled shadow eval that
+    // scores and promotes whatever scaffold that cadence proposed.
+    this.settleCompletedTurn(turn, { userText, assistantText });
 
     // Sleep-time compute — between-turn background memory compression.
     // Reads recent turn, asks a judge to upsert/decay the agent_facts world
@@ -1056,80 +1029,6 @@ export class OrchestratorAgent extends ActorAgent {
       );
     } catch (err) {
       console.warn('[proteus] sleep-time-compute failed:', err instanceof Error ? err.message : err);
-    }
-  }
-
-  /**
-   * Sampled per-turn auto-judge shadow rollout. Fire-and-forget — never
-   * extends the TurnQueue. Reads sampling/auto-promote from agent_config
-   * so the user can toggle without redeploys.
-   */
-  private async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
-    // Captured synchronously (before any await) so a later turn's stash can
-    // never bleed into this turn's shadow run.
-    const liveOpts = this._lastTurnOpts;
-    try {
-      const sampleRate = this.config.getShadowSampleRate();
-      const autoApply = this.config.getAutoPromoteScaffold();
-      if (sampleRate <= 0) return;
-
-      const judge: StructuredJudgeFn = async (prompt) =>
-        generateJson({
-          model: await this.getModelForReview(),
-          schema: JudgeOutputSchema,
-          prompt,
-          providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
-        });
-
-      const judgeTask = task.slice(0, 2000);
-      const result = await runAutoShadowEval({
-        rt: this.rt,
-        task: judgeTask,
-        currentOutput: currentOutput.slice(0, 4000),
-        judge,
-        llmStream: this.makeScaffoldLLMStream(),
-        // Pass the same tool dispatcher the production chat path uses, so the
-        // pending scaffold runs with the real tool surface, not the disabled
-        // tool-call fallback that would penalize any tool-using pending.
-        callTool: this.makeScaffoldCallTool(),
-        // host.defaultInference for the pending: replay the EXACT streamText
-        // opts the live answer ran with (full conversational context, system
-        // prompt, tool surface) so a pending that delegates to the default
-        // loop is judged on the scaffold delta alone. Costs one extra
-        // full-context inference — that IS the shadow run, already sampled.
-        // Fallback (DO restarted between the live turn and this eval): the
-        // old task-only reconstruction.
-        defaultInference: () => streamText(liveOpts ?? {
-          model: this.getModel(),
-          messages: [{ role: 'user', content: judgeTask }],
-          tools: this.getRawTools(),
-          stopWhen: stepCountIs(50),
-          ...effortFor('scaffold_mutation'),
-        }).toUIMessageStream(),
-        config: {
-          ...DEFAULT_AUTO_JUDGE_CONFIG,
-          sampleRate,
-          autoApply,
-        },
-      });
-
-      if (!result.skipped && result.evaluation) {
-        // Emit a structured note to the event log for visibility.
-        try {
-          if (this._currentRunId) {
-            this.eventRecorder.emit(this._currentRunId, {
-              type: 'memory_write',
-              path: 'shadow-eval',
-              bytes: result.evaluation.rationale.length,
-            });
-          }
-        } catch { /* nop */ }
-      }
-      if (result.applied) {
-        console.log(`[proteus] auto-judge applied: ${result.applied}`);
-      }
-    } catch (err) {
-      console.warn('[proteus] runShadowEvalSampled failed:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -2901,62 +2800,6 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  // ── SKILL.md export/import — make crafted tools git-friendly ──
-
-
-  /** Build a streaming LLM callback the scaffold executor calls via
-   *  `host.llmStream(opts)` — text chunks come back as 'text_delta' events.
-   *  `tools` is a list of tool names from the agent's surface; we resolve them
-   *  to the real executables and run a multi-step loop bounded by `maxSteps`,
-   *  so a scaffold's model call has genuine tool access (not a one-shot). */
-  private makeScaffoldLLMStream(): import('@proteus/core').ScaffoldRunOptions['llmStream'] {
-    const orchestrator = this;
-    const model = this.getModel();
-    return async function* (opts) {
-      const all = orchestrator.getRawTools();
-      const toolSet: ToolSet = (opts.tools && opts.tools.length > 0)
-        ? Object.fromEntries(opts.tools.filter(n => all[n]).map(n => [n, all[n]]))
-        : all;
-      const result = streamText({
-        model,
-        system: opts.system,
-        messages: opts.messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-        tools: toolSet,
-        stopWhen: stepCountIs(opts.maxSteps ?? 50),
-        ...effortFor('scaffold_mutation'),
-      });
-      for await (const chunk of result.textStream) yield chunk;
-    };
-  }
-
-  /**
-   * Internal: build a callTool callback that dispatches to the parent's
-   * ToolSet. Used by the scaffold to invoke any tool the orchestrator has
-   * (e.g. memory, fact, run).
-   */
-  private makeScaffoldCallTool() {
-    const orchestrator = this;
-    return async (name: string, args: Record<string, unknown>): Promise<unknown> => {
-      const tools = orchestrator.getRawTools();
-      const t = tools[name];
-      if (!t || typeof t.execute !== 'function') {
-        return { error: `tool not found: ${name}` };
-      }
-      try {
-        // `args as never` is the legitimate dynamic-dispatch escape: the tool
-        // is selected by string name at runtime, so its input type is unknown
-        // here. The options object IS statically known — type it precisely so
-        // a future required ToolCallOptions field can't silently slip through.
-        const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-          messages: [], toolCallId: `scaffold-${Date.now()}`,
-        };
-        return await t.execute(args as never, options);
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    };
-  }
-
   @callable() async getMemoryContent() {
     try { return await this.rt.memory.read("memory/MEMORY.md") ?? ""; }
     catch { return ""; }
@@ -3338,50 +3181,6 @@ export class OrchestratorAgent extends ActorAgent {
    * Broadcast the current MCTS tree to all connected WebSocket clients.
    * Called after each MCTS iteration so the UI updates in real-time.
    */
-  /**
-   * Inference seam override — THE single production chat path on Think.
-   *
-   * Think's `_runInferenceLoop` is private and calls the AI SDK `streamText`
-   * itself; this protected transform is the one seam a subclass gets that can
-   * replace the stream every turn entry path consumes (the old
-   * `runStreamText` override had zero callers on 0.8.2 — the scaffold was
-   * silently dead until this re-wire). We route through the agent's mutable
-   * scaffold IFF it has evolved one (current version > 0). An un-evolved
-   * agent (still on the bootstrap v0) returns Think's result untouched —
-   * same behaviour as before, zero overhead — until the evolution loop
-   * proves + promotes a better scaffold via shadow eval. Once promoted, that
-   * scaffold becomes the agent's live inference loop. One method, one
-   * decision, no parallel paths (core scaffold/inference-transform.ts owns
-   * the routing + orphan-stream semantics).
-   *
-   * The scaffold runs in the codemode sandbox and reaches the model/tools/
-   * memory only through the `host.*` bridge (the live result object can't
-   * cross the boundary). `host.defaultInference()` streams exactly THIS
-   * prepared result back, so a delegating scaffold is byte-faithful to the
-   * default; a custom scaffold can wrap or replace it.
-   */
-  protected _transformInferenceResult(result: StreamableResult): StreamableResult {
-    let version = 0;
-    try {
-      version = this.sql<{ v: number }>`
-        SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
-    } catch { /* table not initialized yet → treat as un-evolved */ }
-
-    return scaffoldInferenceTransform({
-      currentVersion: version,
-      result,
-      run: {
-        rt: this.rt,
-        // beforeTurn stashed this turn's prepared opts just before streamText
-        // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
-        task: extractLastUserText((this._lastTurnOpts?.messages ?? []) as ModelMessage[]),
-        llmStream: this.makeScaffoldLLMStream(),
-        callTool: this.makeScaffoldCallTool(),
-        timeoutMs: 5 * 60 * 1000,
-      },
-    });
-  }
-
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
     try {
       const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
