@@ -54,7 +54,7 @@ import {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
   ExtensionHost, StepInjections,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -1066,6 +1066,8 @@ export class LocalAgentSession implements BackendHost {
       executors,
       availableTools: availableBuiltins,
       agentsActions: agentsActionsFor({ fork: true }),
+      // Matches the execute_tools wiring: llm.query exists only with a resolver.
+      rlmAvailable: this.modelResolver !== null,
       externalTools,
       backend: 'cli-local',
       mode: promptModeForTurnEvent(event),
@@ -1748,7 +1750,15 @@ export class LocalAgentSession implements BackendHost {
       shellApprovalMode: this.config.getShellApprovalMode(),
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
-        extraProviders: [createLocalAgentSelfProvider(this), createWebCodemodeProvider(this.getWebSearchProvider())],
+        extraProviders: [
+          createLocalAgentSelfProvider(this),
+          createWebCodemodeProvider(this.getWebSearchProvider()),
+          // llm.query (RLM) — CLI parity with the cf backend. Needs a real
+          // resolver to spawn sub-calls; static-model sessions have none.
+          ...(this.modelResolver
+            ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
+            : []),
+        ],
       }),
       codemodeLoader: { __cli: true },
       agents: { fork: this.buildAgentsForkDeps() },

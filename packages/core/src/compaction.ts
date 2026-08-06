@@ -20,7 +20,9 @@ const CHECKPOINT_PREAMBLE =
   `${CONTEXT_CHECKPOINT_PREFIX}\n` +
   'Earlier conversation was compacted into the handoff summary below. Treat it as a record of ' +
   'completed prior work: build on it, do not redo finished steps, and do not re-ask questions it ' +
-  'already answers.';
+  'already answers. Compacted ranges are archived verbatim at the cited VFS paths — for detail ' +
+  'beyond the summary, read the archived transcript with workspace.readFile inside execute_tools, ' +
+  'or slice it and llm.query each slice, then aggregate.';
 
 /** Wrap a fresh summary body in the checkpoint preamble before storage. */
 export function wrapCompactionSummary(summary: string): string {

@@ -119,7 +119,7 @@ import {
   createTeamToolDeps,
   type SubordinatesChangedEvent,
 } from "./subordinate-support.js";
-import type { CodemodeProvider } from "./rlm.js";
+import type { CodemodeProvider } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";

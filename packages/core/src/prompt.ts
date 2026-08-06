@@ -245,9 +245,8 @@ function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): bool
 
 function renderAgentStateSection(surface: PromptSurface): string {
   const tools = surface.builtinTools;
-  // The RLM provider (llm.query) and the mutable scaffold live on the CF
-  // backend only — never advertise them where they would throw.
-  const isCf = surface.backend === 'cf';
+  // llm.query gates on surface.rlmAvailable (wired by both backends); the
+  // scaffold self-provider ships on both since the shared-spine parity.
   const parts: string[] = [];
 
   parts.push([
@@ -274,9 +273,9 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '- `execute_tools` runs JavaScript against the active executor/codemode namespaces.',
       '- Before building from scratch, check `workspace.listTools()` and `memory` search for existing tools and prior lessons.',
       '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
-      ...(isCf ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs; handle either a string result or `{ error }`.'] : []),
+      ...(surface.rlmAvailable ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, `llm.query` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or `{ error }`. For slices that themselves need decomposition, fork (`agents` action=fork) — forks run full tool loops with llm.query in scope.'] : []),
       '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
-      ...(isCf ? ['- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.'] : []),
+      '- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.',
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder.',
       '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
     ].join('\n'));

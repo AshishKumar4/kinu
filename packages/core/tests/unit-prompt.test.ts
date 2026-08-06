@@ -220,22 +220,27 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('advertises llm.query and proposeScaffold only on the CF backend (where they exist)', () => {
+  test('advertises llm.query only where the provider is wired (rlmAvailable), on any backend', () => {
     const { rt } = createTestRuntime();
-    const cf = buildSystemPromptSync(rt, { backend: 'cf' });
-    expect(cf).toMatch(/Code execution and learned capabilities/);
-    expect(cf).toMatch(/llm\.query/);
-    expect(cf).toContain('agent.proposeScaffold');
+    const withRlm = buildSystemPromptSync(rt, { backend: 'cf', rlmAvailable: true });
+    expect(withRlm).toMatch(/Code execution and learned capabilities/);
+    expect(withRlm).toMatch(/llm\.query/);
+    // The recipe names the fork rung for deeper decomposition (depth via
+    // agents, not nested sub-calls).
+    expect(withRlm).toContain('action=fork');
     // Regression: we previously had `splitLargeText(input, 4000)` which
     // doesn't exist anywhere in the runtime surface.
-    expect(cf).not.toContain('splitLargeText');
+    expect(withRlm).not.toContain('splitLargeText');
 
-    // The RLM provider and the scaffold are CF-only — advertising them on the
-    // CLI sent the model to call namespaces that throw.
-    const cli = buildSystemPromptSync(rt, { backend: 'cli-local' });
-    expect(cli).toMatch(/Code execution and learned capabilities/);
-    expect(cli).not.toMatch(/llm\.query/);
-    expect(cli).not.toContain('agent.proposeScaffold');
+    // A static-model CLI session has no resolver, so llm.query would throw —
+    // never advertise it there. The scaffold self-provider ships on BOTH
+    // backends since the shared-spine parity, so it is always advertised.
+    const withoutRlm = buildSystemPromptSync(rt, { backend: 'cli-local' });
+    expect(withoutRlm).toMatch(/Code execution and learned capabilities/);
+    expect(withoutRlm).not.toMatch(/llm\.query/);
+    expect(withoutRlm).toContain('agent.proposeScaffold');
+    const cliWithRlm = buildSystemPromptSync(rt, { backend: 'cli-local', rlmAvailable: true });
+    expect(cliWithRlm).toMatch(/llm\.query/);
   });
 
   test('does not advertise the removed Session context tools/blocks', () => {

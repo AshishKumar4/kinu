@@ -122,7 +122,7 @@ import {
   resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
   hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
 } from "@proteus/core";
-import type { CodemodeProvider } from "./rlm.js";
+import type { CodemodeProvider } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { sha256Hex } from "./lib/crypto.js";
@@ -1333,6 +1333,9 @@ export abstract class ActorAgent extends Think<Env> {
         executors: execs,
         availableTools,
         agentsActions,
+        // The RLM provider is unconditionally wired in buildCfExecuteTools,
+        // so the constant needs no cache-key component.
+        rlmAvailable: true,
         backend: 'cf',
         model,
       });

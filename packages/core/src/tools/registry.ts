@@ -161,7 +161,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     summary: 'Fetch one URL and return its content as clean, citation-ready markdown.',
     whenToUse: 'Use to read a specific page (a web_search hit, a doc, an article) after you have its URL.',
     whenNotToUse: 'Do not use to discover pages — that is web_search. Do not fetch private/internal addresses; they are blocked.',
-    result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head you can re-read.',
+    result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file, or slice it and llm.query each slice inside execute_tools.',
   },
   report: {
     name: 'report',

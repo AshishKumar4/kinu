@@ -62,7 +62,8 @@ export async function clampToolResult(
   // backends, and the model can filter inside the sandbox arrow.
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
-      'read or filter it with workspace.readFile inside execute_tools, or rerun with a filter]'
+      'read or filter it with workspace.readFile inside execute_tools ' +
+      '(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]'
     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]`;
   return `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
 }

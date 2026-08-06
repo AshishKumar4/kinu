@@ -16,18 +16,14 @@
  * Durable Object isolate.
  */
 
+import type { CodemodeProvider } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 
 export interface NodeExecuteToolFactoryDeps {
-  extraProviders?: NodeCodemodeProvider[];
+  extraProviders?: CodemodeProvider[];
 }
 
-export interface NodeCodemodeProvider {
-  name: string;
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-  types?: string;
-  positionalArgs?: boolean;
-}
+
 
 /**
  * Build a createExecuteTool-compatible factory. Pass as deps.createExecuteTool
@@ -46,7 +42,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
     }
 
     const providers = [
-      ...(opts.providers as NodeCodemodeProvider[]),
+      ...(opts.providers as CodemodeProvider[]),
       ...(deps.extraProviders ?? []),
     ];
 

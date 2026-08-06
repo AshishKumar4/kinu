@@ -11,7 +11,7 @@
  * is the imperative parallel spawn+join facade over the sole sub-agent path —
  * a second one would be a drift-prone shadow system).
  */
-import type { CodemodeProvider } from './rlm.js';
+import type { CodemodeProvider } from '@proteus/core';
 import { nextCronFire } from '@proteus/core';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';

@@ -57,6 +57,10 @@ export interface PromptSurfaceOptions {
    *  agentsActionsFor). Defaults to ALL actions when the `agents` tool is on
    *  the surface — the representative full surface — and to none otherwise. */
   agentsActions?: readonly AgentsToolAction[];
+  /** Whether the llm.query (RLM) codemode provider is wired for this actor —
+   *  cf always; cli only when a model resolver exists. Gates the prompt's
+   *  decomposition guidance so it is never advertised where it would throw. */
+  rlmAvailable?: boolean;
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
   mode?: PromptMode;
@@ -66,6 +70,7 @@ export interface PromptSurfaceOptions {
 export interface PromptSurface {
   builtinTools: BuiltinToolName[];
   agentsActions: AgentsToolAction[];
+  rlmAvailable: boolean;
   externalTools: PromptExternalToolInfo[];
   executors: PromptExecutorInfo[];
   selectableExecutors: PromptExecutorInfo[];
@@ -167,6 +172,7 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
   return {
     builtinTools,
     agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
+    rlmAvailable: opts.rlmAvailable ?? false,
     externalTools: uniqueExternalTools(opts.externalTools),
     executors,
     selectableExecutors: executors.filter(executorIsSelectable),

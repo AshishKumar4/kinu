@@ -232,6 +232,8 @@ export {
 } from './tools/builtins.js';
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index.js';
+// Recursive Language Models — the llm.query codemode provider (both backends).
+export { createRLMProvider, type CodemodeProvider, type RLMModelResolver, type RLMOptions } from './rlm.js';
 export {
   clampToolResult,
   clampSerializedToolResult,

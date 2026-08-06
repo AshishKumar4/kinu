@@ -18,22 +18,32 @@
 //
 // Depth budget: the SUB-call has no llm.query in scope (it's a plain
 // generateText call, no sandbox). So recursion depth is bounded at 1 by
-// construction — matching the paper's reference implementation.
+// construction — matching the paper's reference implementation. For slices
+// that themselves need decomposition, the recipe is a fork (`agents`
+// action=fork): forks run full tool loops with llm.query in scope, which is
+// agent-level recursion with budgets and typed merges already attached.
 
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
-import { isReasoningEffort, parseModelSpec, reasoningEffortOptions } from '@proteus/core';
-import type { AgentProviderRegistry } from './providers/agent-registry.js';
+import { isReasoningEffort, reasoningEffortOptions } from './strategy/effort.js';
+import { parseModelSpec } from './providers/types.js';
 
 /** A codemode sandbox provider: a named namespace of callable tools plus the
- *  TypeScript declaration the LLM sees. This is the shape `createCodeTool`
- *  consumes (NOT core's `ResolvedProvider`, which is the executor-side
- *  `{name, fns}` form). */
+ *  TypeScript declaration the LLM sees. Both backends inject this same shape
+ *  into execute_tools (the cf loader consumes `types`; the node factory
+ *  treats it as optional). */
 export interface CodemodeProvider {
   name: string;
-  types: string;
   tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  types?: string;
   positionalArgs?: boolean;
+}
+
+/** The slice of a model registry the RLM provider needs — satisfied
+ *  structurally by cf's AgentProviderRegistry and cli's LocalModelResolver. */
+export interface RLMModelResolver {
+  normalizeSpecSync(spec?: string | null): string;
+  resolveModel(spec?: string | null): LanguageModel;
 }
 
 export interface RLMOptions {
@@ -52,7 +62,7 @@ export interface RLMOptions {
 
 /** Build the codemode provider that exposes `llm.query(...)` to the sandbox. */
 export function createRLMProvider(
-  registry: AgentProviderRegistry,
+  resolver: RLMModelResolver,
   currentSpec: () => string,
 ): CodemodeProvider {
   return {
@@ -83,8 +93,8 @@ export function createRLMProvider(
           let normalizedSpec: string;
           let model: LanguageModel;
           try {
-            normalizedSpec = registry.normalizeSpecSync(spec);
-            model = registry.resolveModel(normalizedSpec);
+            normalizedSpec = resolver.normalizeSpecSync(spec);
+            model = resolver.resolveModel(normalizedSpec);
           }
           catch (err) {
             return { error: `llm.query: model ${spec} unresolvable: ${(err as Error).message}` };

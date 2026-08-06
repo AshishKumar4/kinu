@@ -7,7 +7,7 @@
  * job store remain the source of truth.
  */
 
-import type { NodeCodemodeProvider } from './execute-tools-factory.js';
+import type { CodemodeProvider } from '@proteus/core';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
@@ -71,7 +71,7 @@ const TYPES = `export declare const agent: {
 };
 `;
 
-export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): NodeCodemodeProvider {
+export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): CodemodeProvider {
   return {
     name: 'agent',
     types: TYPES,
