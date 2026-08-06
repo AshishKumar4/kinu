@@ -33,6 +33,13 @@ import {
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
+import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+
+// These suites prove behaviour against a real model. Without a token they
+// cannot run, so they skip loudly instead of failing — see liveModelAuth.
+const LIVE_MODEL = liveModelAuth();
+if (!LIVE_MODEL) announceLiveModelSkip('Evolution Proof');
+const liveTest = test.skipIf(!LIVE_MODEL);
 
 const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
@@ -213,7 +220,7 @@ describe('Evolution Proof', () => {
 
   let session1Results: TurnResult[] = [];
 
-  test('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
+  liveTest('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
     const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
     const toolNames = Object.keys(tools);
     console.log(`    Tools available: ${toolNames.join(', ')}`);
@@ -241,7 +248,7 @@ describe('Evolution Proof', () => {
     });
   }, 600_000);
 
-  test('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
+  liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
     const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_1, 'session-1');
     session1Results.push(result);
@@ -263,7 +270,7 @@ describe('Evolution Proof', () => {
     });
   }, 600_000);
 
-  test('session 1, turn 3: cipher challenge + session reflection', async () => {
+  liveTest('session 1, turn 3: cipher challenge + session reflection', async () => {
     const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
     const result = await chatTurn(model, rt, tools, CIPHER_CHALLENGE, 'session-1');
     session1Results.push(result);
@@ -302,7 +309,7 @@ describe('Evolution Proof', () => {
 
   // ── Verify evolution happened ────────────────────────────────
 
-  test('evolution artifacts exist after session 1', async () => {
+  liveTest('evolution artifacts exist after session 1', async () => {
     // Check memory has reflections
     const memory = await rt.memory.read('memory/MEMORY.md');
     expect(memory).toBeTruthy();
@@ -332,7 +339,7 @@ describe('Evolution Proof', () => {
 
   let session2Results: TurnResult[] = [];
 
-  test('session 2, turn 1: similar RSA challenge (should benefit from pattern)', async () => {
+  liveTest('session 2, turn 1: similar RSA challenge (should benefit from pattern)', async () => {
     // Rebuild tools — should now include crafted tools from session 1
     const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
     const toolNames = Object.keys(tools);
@@ -352,7 +359,7 @@ describe('Evolution Proof', () => {
     expect(result.text.length).toBeGreaterThan(0);
   }, 600_000);
 
-  test('session 2, turn 2: similar graph challenge (should benefit from pattern)', async () => {
+  liveTest('session 2, turn 2: similar graph challenge (should benefit from pattern)', async () => {
     const tools = buildBuiltinTools({ rt, engine: new EvolutionEngine(rt, { enabled: false }) });
     const result = await chatTurn(model, rt, tools, DIJKSTRA_CHALLENGE_2, 'session-2');
     session2Results.push(result);
@@ -366,7 +373,7 @@ describe('Evolution Proof', () => {
 
   // ── Final analysis ─────────────────────────────────────────────
 
-  test('evolution summary: compare session 1 vs session 2', () => {
+  liveTest('evolution summary: compare session 1 vs session 2', () => {
     console.log('\n    ═══ EVOLUTION PROOF SUMMARY ═══');
 
     // Session 1 metrics

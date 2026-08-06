@@ -27,6 +27,13 @@ import {
   type EvolutionEvent,
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
+import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
+
+// These suites prove behaviour against a real model. Without a token they
+// cannot run, so they skip loudly instead of failing — see liveModelAuth.
+const LIVE_MODEL = liveModelAuth();
+if (!LIVE_MODEL) announceLiveModelSkip('Deep Evolution');
+const liveTest = test.skipIf(!LIVE_MODEL);
 
 const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
@@ -157,7 +164,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
-  test('solve 8 algorithmic problems with native tool calling', async () => {
+  liveTest('solve 8 algorithmic problems with native tool calling', async () => {
     for (const problem of PROBLEMS) {
       console.log(`\n  ── Problem ${problem.id} [${problem.difficulty}] ──`);
       console.log(`  Q: ${problem.question.slice(0, 80)}...`);
@@ -184,7 +191,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     expect(correctCount).toBeGreaterThanOrEqual(1);
   }, 1800_000);
 
-  test('scorecard and evolution summary', () => {
+  liveTest('scorecard and evolution summary', () => {
     console.log('\n  ══════════════════════════════════════════════');
     console.log('  SCORECARD');
     console.log('  ══════════════════════════════════════════════');
