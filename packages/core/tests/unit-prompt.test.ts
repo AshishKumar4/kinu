@@ -564,7 +564,11 @@ describe('buildSystemPromptSync', () => {
       'Execution environments': 2450,
       'Persistence': 700,
       'Memory and facts': 560,
-      'Code execution and learned capabilities': 1530,
+      // 2026-08: +1 clause on the schedule line for the mission budget. The
+      // opt-in cap is only reachable if the model knows the argument exists,
+      // and the detail (transitivity, nesting, refusal shape) stays in the
+      // `agent.*` types block the sandbox reads rather than here.
+      'Code execution and learned capabilities': 1640,
       // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
       // ONE lifetime-keyed ladder. It carries both rung triggers verbatim from
       // the registry, so a bare tool-name index (kimi) still gets the whole

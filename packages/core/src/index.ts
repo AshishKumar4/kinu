@@ -270,6 +270,20 @@ export {
   type ContextBudgetSnapshot,
   type SpillTrip,
 } from './context-budget.js';
+// The cumulative, label-scoped spend governor — the outer integral over every
+// call-scoped budget. Opt-in: no label, no cap, no storage traffic.
+export {
+  MissionGovernor,
+  MissionBudgetExhausted,
+  MISSION_LABELS_METADATA_KEY,
+  readMissionLabels,
+  readMissionLimits,
+  type MissionBudgetLimits,
+  type MissionBudgetRefusal,
+  type MissionBudgetSnapshot,
+  type MissionGovernorDeps,
+  type MissionSeam,
+} from './mission-budget.js';
 export {
   buildCompactionSummaryPrompt,
   wrapCompactionSummary,

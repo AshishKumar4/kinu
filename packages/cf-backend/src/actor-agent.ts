@@ -75,6 +75,8 @@ import {
   readMemoryTail,
   // Durable run-event log
   RunEventRecorder,
+  // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
+  MissionGovernor, readMissionLabels,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -606,6 +608,7 @@ export abstract class ActorAgent extends Think<Env> {
         host: this.host,
         engine: this.engine,
         eventLog: this.eventLog,
+        budget: this.budget,
         sessionReflectionInterval: SESSION_REFLECTION_INTERVAL,
         sinks: {
           logActivity: (e, d) => this.logActivity(e, d),
@@ -625,6 +628,24 @@ export abstract class ActorAgent extends Think<Env> {
     return this._orch;
   }
   protected get acc(): TurnAccumulator { return this.orch.acc; }
+
+  /** The actor's mission budget governor — the cumulative cap a scheduled run
+   *  or a fork opts into. Its refusals land in the run's durable event log next
+   *  to `context_budget`; with no active label it costs nothing. Public so the
+   *  `agent.*` self-direction namespace declares and reads budgets through the
+   *  same object the two enforcement seams hold. */
+  private _budget: MissionGovernor | null = null;
+  get budget(): MissionGovernor {
+    this._budget ??= new MissionGovernor({
+      storage: this.rt.storage,
+      onExhausted: ({ error: _error, ...refusal }) => {
+        try {
+          if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
+        } catch (err) { console.warn('[proteus] event emit failed at budget exhaustion:', err); }
+      },
+    });
+    return this._budget;
+  }
 
   /** True while a keepAlive heartbeat is holding the DO open for evolution. */
   private _evolutionSettling = false;
@@ -1038,6 +1059,7 @@ export abstract class ActorAgent extends Think<Env> {
       }),
       ...(actorDeps.team ? { team: actorDeps.team } : {}),
       ...(actorDeps.peers ? { peers: actorDeps.peers } : {}),
+      budget: this.budget,
     };
   }
 
@@ -1750,7 +1772,9 @@ export abstract class ActorAgent extends Think<Env> {
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    this.acc.reset(Date.now());
+    // Per-turn accounting reset + the turn's mission scope, together: what the
+    // turn is allowed to spend is part of what the turn is.
+    this.orch.beginTurn(Date.now(), this.turnMissionLabels());
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
     // Reset event-injection splice state; a continuation turn re-absorbs the
@@ -1994,6 +2018,7 @@ export abstract class ActorAgent extends Think<Env> {
       { stepNumber: ctx.stepNumber, messages: ctx.messages },
       this._turnCachePlan,
       this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
+      this.budget,
     );
   }
 
@@ -2029,6 +2054,14 @@ export abstract class ActorAgent extends Think<Env> {
       ?? (this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined);
     const metadata = source?.metadata;
     return isRecord(metadata) && typeof metadata.proteusEvent === 'string' ? metadata.proteusEvent : null;
+  }
+
+  /** The mission budgets this turn spends against — stamped on the injected
+   *  message by the reactor when a schedule that declared one fired. Empty for
+   *  every chat turn and every unbudgeted wake. */
+  protected turnMissionLabels(): string[] {
+    const source = this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined;
+    return readMissionLabels(source?.metadata);
   }
 
   async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {

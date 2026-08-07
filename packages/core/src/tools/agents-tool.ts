@@ -33,9 +33,11 @@ import {
   type AgentsToolAction,
 } from './registry.js';
 import { FORK_STRATEGY_ID } from '../strategy/heads.js';
+import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
 import type { StrategyContext, StrategyRegistry } from '../strategy/types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MergeStrategy } from '../heads/types.js';
+import { nanoid } from '../utils/nanoid.js';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace DO's facet substrate: spawn =
@@ -152,6 +154,11 @@ export interface AgentsToolDeps {
   team?: TeamToolDeps;
   /** Cross-workspace peer messaging — workspace-orchestrator only. */
   peers?: PeersToolDeps;
+  /** The actor's mission budget governor. Wired, it makes this the SPAWN seam:
+   *  no helper is launched under an exhausted label, and a fork's own declared
+   *  cap nests under the mission that spawned it. Unwired (or unscoped, the
+   *  default) changes nothing. */
+  budget?: MissionGovernor;
 }
 
 /** Which actions this deps set structurally supports. The single gating rule
@@ -221,6 +228,14 @@ export interface AgentsToolInput {
   budget?: number;
   wall_clock_ms?: number;
   options?: Record<string, unknown>;
+  /** Cumulative spend cap for everything this helper transitively spawns.
+   *  Nests under the caller's mission scope, so an inner cap can only ever be
+   *  tighter than the outer one. Omit for the uncapped default. */
+  budget_usd?: number;
+  budget_tokens?: number;
+  /** Name the sub-ledger. Defaults to a generated label under the caller's
+   *  mission; naming it lets a run keep one budget across several calls. */
+  budget_label?: string;
   // staff / converse
   agent?: string;
   role?: string;
@@ -284,10 +299,31 @@ function readAbortSignal(options: unknown): AbortSignal | undefined {
 
 // ── Fork dispatch (the former think tool, verbatim semantics) ───────────────
 
+/**
+ * The mission scope this fork runs under: the caller's, narrowed to a fresh
+ * child label when the call declared its own cap. Returns null when there is no
+ * governor or no scope at all — the uncapped default, where nothing below this
+ * point does any budget work.
+ */
+function forkMissionScope(
+  budget: MissionGovernor | undefined,
+  input: AgentsToolInput,
+): { governor: MissionGovernor; labels: string[] } | null {
+  if (!budget) return null;
+  const limits = readMissionLimits(input);
+  if (limits) {
+    const label = input.budget_label?.trim() || `fork-${nanoid()}`;
+    budget.declare(label, limits);
+    return { governor: budget, labels: [label] };
+  }
+  return budget.scope.length > 0 ? { governor: budget, labels: [...budget.scope] } : null;
+}
+
 async function runFork(
   deps: AgentsForkDeps,
   input: AgentsToolInput,
   toolOptions: unknown,
+  budget?: MissionGovernor,
 ): Promise<unknown> {
   if (!input.task) return { error: 'fork requires task' };
   const settle = input.settle ?? 'merge';
@@ -320,9 +356,24 @@ async function runFork(
     };
   }
 
+  // The fork's mission scope, and with it the model-call seam for everything
+  // the exploration reaches a model through: branch evaluation, the judge
+  // ensemble, convergence. Metering and enforcement ride the same wrapper, so
+  // an exhausted label stops the search mid-flight rather than after it.
+  const mission = forkMissionScope(budget, input);
+  const rt: AgentRuntime = mission
+    ? {
+        ...deps.rt,
+        llm: mission.governor.govern(deps.rt.llm, mission.labels),
+        ...(deps.rt.judgeModel
+          ? { judgeModel: mission.governor.govern(deps.rt.judgeModel, mission.labels) }
+          : {}),
+      }
+    : deps.rt;
+
   const ctx: StrategyContext = {
     task: input.task,
-    rt: deps.rt,
+    rt,
     model: deps.model,
     signal: readAbortSignal(toolOptions),
     budget: {
@@ -338,12 +389,17 @@ async function runFork(
   };
   try {
     const result = await strat.explore(ctx);
+    // The sub-agents' own spend, reported by the strategy rather than seen at
+    // this seam — the heads runtime counts its heads' tokens, so the fork's
+    // total lands on the ledger (and every ancestor label) exactly once.
+    mission?.governor.debit(result.cost.tokens ?? 0, { labels: mission.labels, spawns: 1 });
     return {
       strategy: result.strategy,
       text: result.best.text,
       score: result.best.score,
       trace: result.trace,
       cost: result.cost,
+      ...(mission ? { mission_budget: mission.governor.snapshot(mission.labels[0]!)[0] } : {}),
     };
   } catch (err) {
     return { error: `Fork (settle=${settle}) failed: ${(err as Error).message}` };
@@ -392,6 +448,22 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
     budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
     wall_clock_ms: { type: 'integer', minimum: 1000, description: 'For action=fork: wall-clock cap in ms.' },
     options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },
+    // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
+    // the exploration's model calls and can therefore enforce it; a subordinate
+    // runs on its own storage, so `staff` is gated at the spawn seam instead of
+    // being handed a cap nothing could hold it to.
+    budget_usd: {
+      type: 'number', minimum: 0,
+      description: 'For action=fork: cumulative USD cap for everything this fork transitively spends — its exploration, its judging, and anything it spawns. Enforced by the host, not by the fork. Omit for no cap.',
+    },
+    budget_tokens: {
+      type: 'integer', minimum: 1,
+      description: 'For action=fork: cumulative token cap, same transitive scope as budget_usd.',
+    },
+    budget_label: {
+      type: 'string', maxLength: 120,
+      description: 'For action=fork: name the sub-ledger so several fork calls share one cumulative budget. Omit for a fresh one per call.',
+    },
   };
 }
 
@@ -466,6 +538,14 @@ export async function dispatchAgentsAction(
   if (!actions.includes(input.action)) {
     return { error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}` };
   }
+  // The spawn seam. Launching a helper is what turns one exhausted run into
+  // many, so the cap is checked before the launch — for every action that
+  // creates or wakes an agent, not just fork. `list`, `dismiss` and `reply`
+  // spend nothing and stay available so a stopped run can still wind itself up.
+  if (input.action === 'fork' || input.action === 'staff' || input.action === 'ask' || input.action === 'send') {
+    const refusal = deps.budget?.guard('spawn');
+    if (refusal) return refusal;
+  }
   try {
     const topic = input.topic?.trim() || 'message';
     if (topic === PEER_REPLY_TOPIC) {
@@ -473,7 +553,7 @@ export async function dispatchAgentsAction(
     }
     switch (input.action) {
       case 'fork':
-        return await runFork(deps.fork!, input, toolOptions);
+        return await runFork(deps.fork!, input, toolOptions, deps.budget);
 
       case 'staff': {
         if ((input.scope ?? 'subordinate') === 'workspace') {

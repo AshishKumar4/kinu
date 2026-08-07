@@ -156,6 +156,10 @@ export interface TimerPayload {
   scheduled_fire_at: number;
   label?: string;
   user_payload?: unknown;
+  /** The mission budget this schedule spends against, when it declared one.
+   *  Carried on the event so the woken turn — and everything it forks or
+   *  staffs — debits the same durable ledger (mission-budget.ts). */
+  mission_label?: string;
 }
 
 export interface PeerAgentPayload {

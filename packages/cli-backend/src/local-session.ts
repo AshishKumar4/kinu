@@ -57,6 +57,7 @@ import {
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider,
+  MissionGovernor, readMissionLabels,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -149,6 +150,8 @@ export interface LocalTimerTriggerOpts {
   label?: string;
   payload?: Record<string, unknown>;
   trust?: 'authenticated' | 'owner';
+  /** The mission budget every turn this schedule wakes spends against. */
+  missionLabel?: string;
 }
 
 export interface LocalTriggerView {
@@ -229,6 +232,10 @@ export class LocalAgentSession implements BackendHost {
   private readonly eventLog: EventLog;
   /** Durable per-run event log (run_events) — parity with the DO's recorder. */
   private readonly eventRecorder: RunEventRecorder;
+  /** The actor's cumulative, label-scoped spend governor (opt-in). Public so
+   *  the `agent.*` self-direction namespace declares and reads budgets through
+   *  the same object the two enforcement seams hold. */
+  readonly budget: MissionGovernor;
   /** The run the in-flight turn belongs to; null between turns. */
   private currentRunId: string | null = null;
   private readonly triggerRegistry: TriggerRegistry;
@@ -399,10 +406,19 @@ export class LocalAgentSession implements BackendHost {
     initRunEventTables(this.rt.storage.execRaw);
     this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
 
+    // The cumulative spend governor — a scheduled run or a fork opts into a
+    // label, and its refusals land in this run's durable event log. No label
+    // means no cap, which is every ordinary session.
+    this.budget = new MissionGovernor({
+      storage: this.rt.storage,
+      onExhausted: ({ error: _error, ...refusal }) =>
+        this.recordRunEvent({ type: 'budget_exhausted', ...refusal }),
+    });
     this.orch = new AgentOrchestrator({
       host: this,
       engine: this.engine,
       eventLog: this.eventLog,
+      budget: this.budget,
       sessionReflectionInterval: opts.sessionReflectionInterval,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
@@ -573,7 +589,7 @@ export class LocalAgentSession implements BackendHost {
     if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
     const id = this.triggerRegistry.register({
       kind,
-      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
       creator_trust: opts.trust ?? 'authenticated',
       next_fire_at: nextFireAt ?? undefined,
     }, now);
@@ -588,7 +604,7 @@ export class LocalAgentSession implements BackendHost {
     for (const trigger of due) {
       if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
       fired += 1;
-      const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string };
+      const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string; mission_label?: string };
       const scheduled_fire_at = trigger.next_fire_at ?? now;
 
       this.eventLog.publish({
@@ -600,6 +616,7 @@ export class LocalAgentSession implements BackendHost {
             scheduled_fire_at,
             label: spec.label,
             user_payload: spec.payload,
+            mission_label: spec.mission_label,
           },
           trigger_creator_trust: trigger.creator_trust,
         },
@@ -1056,7 +1073,9 @@ export class LocalAgentSession implements BackendHost {
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
 
     const startedAt = Date.now();
-    this.orch.beginTurn(startedAt);
+    // Per-turn accounting reset + the turn's mission scope, together: what the
+    // turn is allowed to spend is part of what the turn is.
+    this.orch.beginTurn(startedAt, readMissionLabels(item.metadata));
     // Open this turn's run in the durable event log (core turn-lifecycle).
     // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
     // one names its trigger.
@@ -1211,6 +1230,7 @@ export class LocalAgentSession implements BackendHost {
       signal: abort.signal,
       extensions,
       cache,
+      budget: this.budget,
       ...(providerOptions ? { providerOptions } : {}),
     });
 
@@ -1680,7 +1700,7 @@ export class LocalAgentSession implements BackendHost {
    *  tool, from the `agents.*` sandbox namespace, and from the prompt ladder.
    *  Hosted agents get the full surface. */
   private agentsToolDeps(): AgentsToolDeps {
-    return { fork: this.buildAgentsForkDeps() };
+    return { fork: this.buildAgentsForkDeps(), budget: this.budget };
   }
 
   /** The recent conversation handed to each spawned head as inherited context

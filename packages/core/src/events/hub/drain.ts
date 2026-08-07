@@ -9,7 +9,7 @@
  * binds the returned ids (markConsumed) before injecting the message, so a
  * concurrent drain can't double-process them.
  */
-import type { PeerAgentPayload, ProteusEvent } from './types.js';
+import type { PeerAgentPayload, ProteusEvent, TimerPayload } from './types.js';
 import { renderForLLM } from './visibility.js';
 
 export interface DrainBatch {
@@ -20,6 +20,10 @@ export interface DrainBatch {
   /** The same events rendered for splicing into a LIVE turn's next step —
    *  the mid-turn delivery must not tell the model to stop what it is doing. */
   readonly midTurnText: string;
+  /** Mission budget labels the drained schedules declared. The woken turn runs
+   *  under all of them, so its model calls and everything it spawns debit each
+   *  one. Empty for every ordinary drain. */
+  readonly missions: string[];
 }
 
 /** Externally-triggered pending events → one drain batch, or null if there are
@@ -38,8 +42,15 @@ export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
   });
   const count = `${drainable.length} event${drainable.length === 1 ? '' : 's'}`;
   const listing = lines.join('\n');
+  const missions = [...new Set(
+    drainable
+      .filter((e) => e.variant === 'timer')
+      .map((e) => (e.payload as TimerPayload).mission_label)
+      .filter((l): l is string => typeof l === 'string' && l.length > 0),
+  )];
   return {
     ids: drainable.map((e) => e.id),
+    missions,
     text: `${count} arrived while you were idle. Act on each as appropriate, then stop:\n${listing}`,
     midTurnText:
       `${count} arrived while you were working. Before finishing this response, ` +

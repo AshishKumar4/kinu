@@ -5,6 +5,7 @@
 //            prose-only branches are judge-only at reduced confidence.
 import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index.ts';
+import { isParseFailure } from '../src/mcts/evaluation.ts';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
 import type { Executor, LLM } from '../src/index.ts';
 
@@ -331,5 +332,156 @@ describe('degenerate inputs', () => {
     });
     expect(result.grounding).toBe('judge');
     expect(result.score).toBeCloseTo(0.75 * 0.6, 10);
+  });
+});
+
+describe('evaluation cascade — a branch that never parsed skips the judge ensemble', () => {
+  /** A judge whose replies are scripted in order: the assertion harness first,
+   *  then one reply per ensemble sample. */
+  function sequencedJudge(replies: string[]): LLM & { prompts: string[] } {
+    const prompts: string[] = [];
+    return {
+      prompts,
+      async *stream() { yield replies[0] ?? ''; },
+      async complete(prompt: string) {
+        prompts.push(prompt);
+        return replies[prompts.length - 1] ?? '{"score": 0.5}';
+      },
+    };
+  }
+
+  /** An executor whose verdict depends on whether assertions were appended,
+   *  so the attribution re-run is observable. Counts every call. */
+  function stagedExec(byRun: Array<{ error?: string }>): Executor & { runs: string[] } {
+    const runs: string[] = [];
+    return {
+      runs,
+      async execute(code: string) {
+        runs.push(code);
+        return { result: undefined, ...(byRun[runs.length - 1] ?? {}) };
+      },
+    } as unknown as Executor & { runs: string[] };
+  }
+
+  test('unparseable code lands on the fail-band floor with zero judge samples', async () => {
+    const judge = countingJudge('{"score": 0.9}');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42',
+      trajectory: 'here you go',
+      codeUsed: 'const x = (',
+      executor: exec({ error: 'SyntaxError: Unexpected end of input' }),
+      judge,
+      explorer: judge,
+      judgeSamples: 3,
+      maxLLMCalls: 1,  // no assertion call, so the bare run is authoritative
+    });
+    expect(result.grounding).toBe('execution');
+    expect(result.execution?.passed).toBe(false);
+    expect(result.score).toBeCloseTo(0.05, 10);
+    expect(result.judgeSamplesUsed).toBe(0);
+    expect(judge.prompts).toHaveLength(0);
+  });
+
+  test('code that ran and THREW keeps its full judge ensemble — the band placement is real information', async () => {
+    const judge = countingJudge('{"score": 0.8}');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42',
+      trajectory: 'here you go',
+      codeUsed: 'throw new Error("boom")',
+      executor: exec({ error: 'boom' }),
+      judge,
+      explorer: judge,
+      judgeSamples: 3,
+      maxLLMCalls: 4,
+    });
+    expect(result.judgeSamplesUsed).toBe(3);
+    expect(judge.prompts).toHaveLength(4);  // 1 assertion call + 3 judge samples
+    expect(result.score).toBeCloseTo(0.05 + 0.25 * 0.8, 10);
+  });
+
+  test('a parse error the JUDGE\'s assertions caused is not charged to the branch', async () => {
+    // Run 1 = code + a syntactically broken harness → parse error.
+    // Run 2 = the attribution re-run of the code ALONE → clean.
+    const executor = stagedExec([{ error: 'SyntaxError: Unexpected token )' }, {}]);
+    // First reply is the (broken) harness, the rest are judge scores.
+    const judge = sequencedJudge(['```js\nexpect(\n```', '{"score": 0.5}', '{"score": 0.5}']);
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42',
+      trajectory: 'here you go',
+      codeUsed: 'const x = 42;',
+      executor,
+      judge,
+      explorer: judge,
+      judgeSamples: 2,
+      maxLLMCalls: 3,
+    });
+    expect(executor.runs).toHaveLength(2);
+    expect(executor.runs[1]).toBe('const x = 42;');
+    // The branch keeps the original harness verdict AND its judge ensemble.
+    expect(result.execution?.error).toBe('SyntaxError: Unexpected token )');
+    expect(result.judgeSamplesUsed).toBe(2);
+  });
+
+  test('a parse error the BRANCH caused survives attribution and short-circuits', async () => {
+    const executor = stagedExec([
+      { error: 'SyntaxError: Unexpected end of input' },
+      { error: 'SyntaxError: Unexpected end of input' },
+    ]);
+    const judge = countingJudge('```js\nif (x) {}\n```');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42',
+      trajectory: 'here you go',
+      codeUsed: 'const x = (',
+      executor,
+      judge,
+      explorer: judge,
+      judgeSamples: 3,
+      maxLLMCalls: 4,
+    });
+    expect(executor.runs).toHaveLength(2);
+    expect(result.score).toBeCloseTo(0.05, 10);
+    expect(result.judgeSamplesUsed).toBe(0);
+    // Only the assertion-generation call was spent; the ensemble was not.
+    expect(judge.prompts).toHaveLength(1);
+  });
+
+  test('passing code never triggers the attribution re-run', async () => {
+    const executor = stagedExec([{}]);
+    const judge = countingJudge('{"score": 0.5}');
+    await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: 'ok', codeUsed: 'const x = 42;',
+      executor, judge, explorer: judge, judgeSamples: 1, maxLLMCalls: 1,
+    });
+    expect(executor.runs).toHaveLength(1);
+  });
+
+  test('an unrecognised error message falls through to the full judge path', async () => {
+    const judge = countingJudge('{"score": 0.4}');
+    const result = await evaluateWithMultiModelJudging({
+      task: 'compute 42', trajectory: 'ok', codeUsed: 'const x = 42;',
+      executor: exec({ error: 'ECONNRESET talking to the sandbox' }),
+      judge, explorer: judge, judgeSamples: 2, maxLLMCalls: 3,
+    });
+    expect(result.judgeSamplesUsed).toBe(2);
+  });
+});
+
+describe('isParseFailure', () => {
+  test('recognises engine parse messages and nothing else', () => {
+    for (const message of [
+      'SyntaxError: Unexpected token )',
+      'Unexpected end of input',
+      'Invalid or unexpected token',
+      'missing ) after argument list',
+      'unexpected identifier "foo"',
+    ]) expect(isParseFailure(message)).toBe(true);
+
+    for (const message of [
+      'boom',
+      'TypeError: x is not a function',
+      'ReferenceError: fetch is not defined',
+      'Assertion failed: expected 42',
+      'Process exited with code 1',
+    ]) expect(isParseFailure(message)).toBe(false);
   });
 });

@@ -1475,7 +1475,7 @@ export class OrchestratorAgent extends ActorAgent {
       const due = this.triggerRegistry.due(now);
       for (const trigger of due) {
         const spec = trigger.spec as {
-          label?: string; payload?: unknown; cron?: string;
+          label?: string; payload?: unknown; cron?: string; mission_label?: string;
         };
         const scheduled_fire_at = trigger.next_fire_at ?? now;
 
@@ -1488,6 +1488,7 @@ export class OrchestratorAgent extends ActorAgent {
               scheduled_fire_at,
               label: spec.label,
               user_payload: spec.payload,
+              mission_label: spec.mission_label,
             },
             trigger_creator_trust: trigger.creator_trust,
           },
@@ -3565,6 +3566,8 @@ export class OrchestratorAgent extends ActorAgent {
     label?: string;
     payload?: Record<string, unknown>;
     trust?: 'authenticated' | 'owner';
+    /** The mission budget every turn this schedule wakes spends against. */
+    missionLabel?: string;
 	  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
 	    const now = Date.now();
 	    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
@@ -3573,7 +3576,7 @@ export class OrchestratorAgent extends ActorAgent {
 	    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
 	    const id = this.triggerRegistry.register({
 	      kind,
-	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
       creator_trust: opts.trust ?? 'authenticated',
       next_fire_at: nextFireAt ?? undefined,
     }, now);

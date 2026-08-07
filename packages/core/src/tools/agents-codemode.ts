@@ -72,7 +72,14 @@ const AGENTS_CODEMODE_MEMBERS: Record<AgentsToolAction, string> = {
     budget?: number;
     wall_clock_ms?: number;
     options?: object;
-  }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown } | { error: string }>;`,
+    /** Cumulative host-enforced spend cap for this fork and everything it
+     *  spawns, nested under whatever mission this run already spends against.
+     *  Omit for no cap. Name it with budget_label to share one cumulative
+     *  ledger across several fork calls in the same script. */
+    budget_usd?: number;
+    budget_tokens?: number;
+    budget_label?: string;
+  }): Promise<{ strategy: string; text: string; score: number; trace: unknown; cost: unknown; mission_budget?: unknown } | { error: string }>;`,
 
   staff: `  /** Create a persistent named helper that keeps its own context across turns.
    *  Default scope:"subordinate" staffs THIS workspace (role + mission

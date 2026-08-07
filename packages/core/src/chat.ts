@@ -15,6 +15,7 @@ import {
 } from './prompting/model-profile.js';
 import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
 import { composePrepareStep } from './prompting/prepare-step.js';
+import type { MissionGovernor } from './mission-budget.js';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
 import { assembleTurnMessages } from './orchestrator/turn-context.js';
 import { contextWindowForModel } from './context-window.js';
@@ -94,6 +95,10 @@ export interface ChatOptions {
   /** Request-level provider options contributed by the caller. They are
    *  merged by provider namespace with the cache options assembled here. */
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+  /** The actor's mission budget governor. When the turn runs under a label
+   *  whose cumulative cap is spent, the step pipeline declines the next
+   *  request instead of issuing it. Unscoped turns are unaffected. */
+  budget?: MissionGovernor;
 }
 
 /**
@@ -168,7 +173,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
       composePrepareStep(extensions, { stepNumber, messages },
         rollTail ? { strategy: cache.strategy } : null,
-        { contextWindow }),
+        { contextWindow }, opts.budget),
     onStepFinish: (step) => {
       stepCount++;
       const inputTokens = step.usage?.inputTokens;
