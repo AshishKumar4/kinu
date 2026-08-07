@@ -16,7 +16,7 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
+import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-proteus";
@@ -307,6 +307,15 @@ export default function Sidebar() {
               <span>Account settings</span>
             </Link>
             <ModeToggle />
+            <a
+              href="https://github.com/AshishKumar4/Proteus"
+              target="_blank" rel="noopener noreferrer"
+              onClick={() => setShowUserMenu(false)}
+              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
+            >
+              <GithubLogoIcon size={14} />
+              <span>GitHub</span>
+            </a>
             <a
               href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
