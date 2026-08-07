@@ -94,6 +94,35 @@ describe('buildSystemPromptSync', () => {
     expect(forkOnly).toContain('delegation ladder');
   });
 
+  test('the in-sandbox rungs are advertised only where both halves exist', () => {
+    // `agents.*` is built from the same deps that produce agentsActions, so
+    // the line renders exactly when an actor can both delegate and run code.
+    const { rt } = createTestRuntime();
+    const both = buildSystemPromptSync(rt, {
+      availableTools: ['agents', 'execute_tools'],
+      agentsActions: ['fork'],
+      registeredExecutors: [],
+    });
+    expect(both).toContain('callable inside execute_tools as `agents.<action>`');
+    // The honest cost of forking from inside the sandbox, stated once.
+    expect(both).toContain('does not resume after an eviction');
+
+    // No sandbox → no namespace to advertise.
+    const noSandbox = buildSystemPromptSync(rt, {
+      availableTools: ['agents'],
+      agentsActions: ['fork'],
+      registeredExecutors: [],
+    });
+    expect(noSandbox).not.toContain('agents.<action>');
+
+    // No delegation deps → the section is not rendered at all.
+    const noDelegation = buildSystemPromptSync(rt, {
+      availableTools: ['execute_tools'],
+      registeredExecutors: [],
+    });
+    expect(noDelegation).not.toContain('agents.<action>');
+  });
+
   test('the agents schema description leads with positive delegation triggers', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
       /Use when: One delegation ladder keyed on how long the helper needs to live/,
@@ -544,7 +573,10 @@ describe('buildSystemPromptSync', () => {
       // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
       // clamp tightens mechanically, and a model told WHY reaches for a rung
       // instead of re-running the command (core/src/context-budget.ts).
-      'Delegation': 2950,
+      // 2026-08: +1 line for `agents.*` in codemode — the rung ladder is also
+      // a sandbox namespace, which is what makes a crafted tool a workflow,
+      // and it carries the in-sandbox fork's non-resumable cost.
+      'Delegation': 3250,
       'Background work': 260,
       'Proteus product changes': 290,
       'Output format': 180,

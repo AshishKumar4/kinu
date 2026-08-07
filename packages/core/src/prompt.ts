@@ -317,6 +317,15 @@ function renderAgentStateSection(surface: PromptSurface): string {
     if (has('fork')) {
       lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.');
     }
+    // The rungs are also a codemode namespace, so a multi-step plan is code
+    // rather than a tool-call-at-a-time grind. Gated on the same actions the
+    // tool exposes: both backends build the `agents.*` provider from the deps
+    // that produced surface.agentsActions, so it exists exactly when they do.
+    if (actions.length > 0 && hasTool(tools, 'execute_tools')) {
+      lines.push(
+        'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves it as a reusable, schedulable workflow. A fork started there rides that call, which does not resume after an eviction.',
+      );
+    }
     if (has('staff')) {
       lines.push(
         'Run the coordination loop: staff the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you. A finished subordinate stays in your roster with its context — re-engage it with ask/send; dismiss only when its role is permanently over.',

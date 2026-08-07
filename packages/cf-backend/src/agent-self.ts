@@ -6,10 +6,14 @@
  * the event→turn reactor). Registered exactly like the RLM provider — zero new
  * top-level builtins, so it respects the 6-tool surface.
  *
- * Deliberately NOT here: fork (forkAgent rejects while a turn is in flight, so
- * it can't run mid-codemode) and spawn/join (the agents fork already
- * is the imperative parallel spawn+join facade over the sole sub-agent path —
- * a second one would be a drift-prone shadow system).
+ * Deliberately NOT here: `forkAgent` — the workspace-clone RPC behind the UI's
+ * fork-chat, which copies the whole agent DO at a message and rejects while a
+ * turn is in flight. Cloning the actor mid-script is not delegation.
+ *
+ * Delegation itself is NOT absent from the sandbox — it just isn't duplicated
+ * here. The `agents.*` namespace projects the existing `agents` tool over the
+ * actor's own deps (core tools/agents-codemode.ts), so there is still exactly
+ * one spawn/join implementation, with one more caller.
  */
 import type { CodemodeProvider } from '@proteus/core';
 import { nextCronFire } from '@proteus/core';

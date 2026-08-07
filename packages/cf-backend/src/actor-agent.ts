@@ -1181,6 +1181,9 @@ export abstract class ActorAgent extends Think<Env> {
         registry: this.providerRegistry(),
         modelSpec: () => this.getStoredModelId(),
         webSearch: this.getWebSearchProvider(),
+        // `agents.*` in the sandbox — the same deps the top-level tool holds,
+        // so a script delegates through the one path with the one action gate.
+        agents: () => this.getAgentsToolDeps(),
         extraProviders: () => this.extraCodemodeProviders(),
         // Record which executor the agent actually works in, so the UI (diff /
         // file manager) defaults to where work happened. One upsert per executor

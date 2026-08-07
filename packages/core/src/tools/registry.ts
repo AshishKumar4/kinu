@@ -92,6 +92,9 @@ export const DELEGATION_CONVERSE =
  *     properties inside the execute_tools async arrow, injected by the
  *     preamble. Crafted-tool bodies may call `workspace.*`, `codemode.*`,
  *     and `tools.<other>` interchangeably.
+ *   - `agents.*` — the delegation tool projected into the sandbox, gated to the
+ *     same actions (tools/agents-codemode.ts). It is what makes a crafted tool
+ *     able to BE a workflow: plain control flow over delegated steps.
  */
 export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   execute_tools: {

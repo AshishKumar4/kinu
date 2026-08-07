@@ -8,7 +8,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, initSearchTables, initAlternateTakesTable, captureAlternateTakes } from '@proteus/core';
+import {
+  DEFAULT_WORKERS_AI_MODEL_SPEC, FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
+  initSearchTables, initAlternateTakesTable, captureAlternateTakes,
+  type AgentsToolDeps, type StrategyContext,
+} from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
@@ -111,6 +115,42 @@ function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<Lo
     ...extra,
   });
   return { db, rt, session, events };
+}
+
+/** A model that calls execute_tools once with the given code, then answers. */
+function executeToolsModel(code: string): LanguageModel {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  let step = 0;
+  return {
+    specificationVersion: 'v2',
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {},
+    doStream: async () => {
+      step += 1;
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            if (step === 1) {
+              controller.enqueue({
+                type: 'tool-call', toolCallId: 'call-1', toolName: 'execute_tools',
+                input: JSON.stringify({ code }),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+            } else {
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            }
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  } as unknown as LanguageModel;
 }
 
 function setupWithResolver(resolver: LocalModelResolver) {
@@ -1886,6 +1926,136 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end?.type).toBe('run_end');
     expect(end).toMatchObject({ reason: 'error', error: expect.stringContaining('upstream is on fire') });
 
+    await session.end();
+  });
+});
+
+// ── agents.* in the node codemode sandbox ───────────────────────────────────
+// The bridge that makes a crafted tool able to BE a workflow: LLM-authored JS
+// delegating with plain control flow. Exercised through the REAL node sandbox
+// (`new Function` over the real provider bindings), with the exploration
+// strategy scripted so no model is called.
+
+describe('agents.* codemode namespace — node sandbox', () => {
+  /** The node factory with only the agents provider bound, so the code under
+   *  test is the sandbox + the projection and nothing else. */
+  function sandboxWith(deps: AgentsToolDeps) {
+    const tool = createNodeExecuteToolFactory({
+      extraProviders: [createAgentsCodemodeProvider(() => deps)],
+    })({ tools: {}, providers: [], loader: {} });
+    return (code: string, options?: unknown) =>
+      (tool as { execute: (a: { code: string }, o?: unknown) => Promise<unknown> }).execute({ code }, options);
+  }
+
+  /** A scripted exploration strategy: records what the fork asked for and
+   *  answers without an LLM. */
+  function scriptedFork(seen: StrategyContext[] = []): { deps: AgentsToolDeps; seen: StrategyContext[] } {
+    const registry = createStrategyRegistry();
+    for (const id of [FORK_STRATEGY_ID, 'mcts']) {
+      registry.register({
+        id,
+        async explore(ctx: StrategyContext) {
+          seen.push(ctx);
+          return {
+            strategy: id,
+            best: { text: `${id} settled: ${ctx.task}`, score: 0.9, source: id },
+            all: [],
+            cost: { durationMs: 1 },
+          };
+        },
+      });
+    }
+    const db = new Database(':memory:');
+    const rt = createCLIRuntime(db as never, { dbPath: ':memory:', llm: DUMMY_LLM });
+    return { deps: { fork: { registry, rt, model: rt.llm as never } }, seen };
+  }
+
+  test('a script forks, branches on the result, and returns its own synthesis', async () => {
+    const { deps, seen } = scriptedFork();
+    const run = sandboxWith(deps);
+    // The shape a workflow actually has: fan out, inspect, decide, aggregate.
+    const result = await run(`
+      const angles = ['auth', 'billing'];
+      const settled = await Promise.all(angles.map((a) => agents.fork({
+        task: 'review ' + a,
+        forks: [
+          { task: 'read ' + a, rationale: 'ground it' },
+          { task: 'test ' + a, rationale: 'check it' },
+        ],
+      })));
+      const good = settled.filter((s) => !s.error && s.score > 0.5);
+      return { count: good.length, texts: good.map((g) => g.text) };
+    `);
+    expect(result).toEqual({
+      result: {
+        count: 2,
+        texts: [`${FORK_STRATEGY_ID} settled: review auth`, `${FORK_STRATEGY_ID} settled: review billing`],
+      },
+    });
+    expect(seen.map((c) => c.task)).toEqual(['review auth', 'review billing']);
+    // The typed fork specs reached the strategy the same way the tool sends them.
+    expect((seen[0].options?.heads as { heads: unknown[] }).heads).toHaveLength(2);
+  });
+
+  test('settle:"mcts" from the sandbox reaches the mcts strategy', async () => {
+    const { deps } = scriptedFork();
+    const result = await sandboxWith(deps)(
+      'return await agents.fork({ task: "pick an approach", settle: "mcts" });',
+    ) as { result: { strategy: string } };
+    expect(result.result.strategy).toBe('mcts');
+  });
+
+  test('a fork error is a value the script can branch on, not a sandbox failure', async () => {
+    const registry = createStrategyRegistry();
+    registry.register({
+      id: FORK_STRATEGY_ID,
+      async explore() { throw new Error('heads unavailable'); },
+    });
+    const db = new Database(':memory:');
+    const rt = createCLIRuntime(db as never, { dbPath: ':memory:', llm: DUMMY_LLM });
+    const result = await sandboxWith({ fork: { registry, rt, model: rt.llm as never } })(`
+      const settled = await agents.fork({ task: 't' });
+      return settled.error ? 'recovered: ' + settled.error.includes('heads unavailable') : 'no error';
+    `);
+    expect(result).toEqual({ result: 'recovered: true' });
+  });
+
+  test('the turn abort signal reaches a fork started inside the sandbox', async () => {
+    const { deps, seen } = scriptedFork();
+    const controller = new AbortController();
+    await sandboxWith(deps)('return await agents.fork({ task: "t" });', { abortSignal: controller.signal });
+    expect(seen[0].signal).toBeDefined();
+    expect(seen[0].signal?.aborted).toBe(false);
+    controller.abort();
+    expect(seen[0].signal?.aborted).toBe(true);
+  });
+
+  test('ungated actions are structurally absent from the local sandbox', async () => {
+    const { deps } = scriptedFork();
+    const result = await sandboxWith(deps)(
+      'return { members: Object.keys(agents), staff: typeof agents.staff, fork: typeof agents.fork };',
+    );
+    // Local sessions wire fork only — no daemon routes staffing or peer mail.
+    expect(result).toEqual({ result: { members: ['fork'], staff: 'undefined', fork: 'function' } });
+  });
+
+  test('a live session turn gets the namespace, gated to what it actually wired', async () => {
+    // The production wiring, end to end: a real turn, the real toolset, the
+    // real sandbox. The script reports what it can reach by writing to the
+    // workspace, which is how sandbox code returns anything durable anyway.
+    const { rt, session, events } = setup('done', executeToolsModel(`
+      await workspace.writeFile('/workspace/probe/agents.json', JSON.stringify({
+        members: Object.keys(agents), fork: typeof agents.fork, staff: typeof agents.staff,
+      }));
+      return 'probed';
+    `));
+    await session.send('what can you delegate to?');
+    expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
+    // Local sessions wire fork only — no daemon routes staffing or peer mail.
+    const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
+    expect(JSON.parse(String(probe))).toEqual({
+      members: ['fork'], fork: 'function', staff: 'undefined',
+    });
     await session.end();
   });
 });

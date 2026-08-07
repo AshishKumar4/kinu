@@ -299,6 +299,8 @@ export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableForkInput,
   type AgentsToolInput,
 } from './tools/agents-tool.js';
+// The same delegation dispatch, projected into the codemode sandbox.
+export { createAgentsCodemodeProvider } from './tools/agents-codemode.js';
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,

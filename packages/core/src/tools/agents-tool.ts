@@ -155,7 +155,8 @@ export interface AgentsToolDeps {
 }
 
 /** Which actions this deps set structurally supports. The single gating rule
- *  shared by the tool schema and the system prompt's Delegation section.
+ *  shared by the tool schema, the system prompt's Delegation section and the
+ *  `agents.*` codemode namespace.
  *  Presence-typed so prompt assembly can ask without building fork deps. */
 export function agentsActionsFor(deps: { fork?: unknown; team?: unknown; peers?: unknown }): AgentsToolAction[] {
   const converse = !!deps.team || !!deps.peers;
@@ -431,13 +432,28 @@ function converseProperties(deps: AgentsToolDeps): SchemaProps {
   };
 }
 
-/** Build the `agents` tool for whatever deps this actor wires. At least one
- *  deps group must be present — callers gate on that, not this function. */
-export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
+/**
+ * The one delegation dispatch. Both surfaces that can delegate — the `agents`
+ * tool the model calls directly, and the `agents.*` namespace its codemode
+ * script calls — run this exact function over the exact same deps, so there is
+ * no second spawn/join implementation to drift.
+ *
+ * The codemode caller hands over an object the sandbox built, with none of the
+ * AI SDK's schema validation behind it, so every read of `input` happens inside
+ * the try: a malformed field comes back as an inspectable error rather than
+ * throwing into the model's script.
+ *
+ * `toolOptions` is the AI SDK tool-call options bag; only `abortSignal` is
+ * read (fork cancellation).
+ */
+export async function dispatchAgentsAction(
+  deps: AgentsToolDeps,
+  input: AgentsToolInput,
+  toolOptions?: unknown,
+): Promise<unknown> {
   const actions = agentsActionsFor(deps);
   const team = deps.team;
   const peers = deps.peers;
-
   const isSubordinate = async (name: string): Promise<boolean> => {
     if (!team) return false;
     try {
@@ -446,6 +462,114 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       return false;
     }
   };
+
+  if (!actions.includes(input.action)) {
+    return { error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}` };
+  }
+  try {
+    const topic = input.topic?.trim() || 'message';
+    if (topic === PEER_REPLY_TOPIC) {
+      return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
+    }
+    switch (input.action) {
+      case 'fork':
+        return await runFork(deps.fork!, input, toolOptions);
+
+      case 'staff': {
+        if ((input.scope ?? 'subordinate') === 'workspace') {
+          if (!peers) return { error: 'staff scope=workspace needs the peer transport, which this actor does not have' };
+          if (!input.mission || !input.message) return { error: 'staff scope=workspace requires mission and message' };
+          return await peers.spawnWorkspace({
+            ...(input.agent ? { name: input.agent } : {}),
+            purpose: input.mission,
+            message: input.message,
+            timeoutMs: askTimeoutMs(input.timeout_seconds),
+          });
+        }
+        if (!team) return { error: 'staffing subordinates is not available on this actor' };
+        if (!input.role || !input.mission) return { error: 'staff requires role and mission' };
+        return await team.spawn({
+          ...(input.agent ? { name: input.agent } : {}),
+          role: input.role,
+          mission: input.mission,
+          ...(input.model ? { model: input.model } : {}),
+        });
+      }
+
+      case 'ask': {
+        if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
+        if (team && await isSubordinate(input.agent)) {
+          await team.assign({
+            name: input.agent,
+            task: input.message,
+            ...(input.deliverable ? { deliverable: input.deliverable } : {}),
+            ...(input.deadline_hint ? { deadlineHint: input.deadline_hint } : {}),
+          });
+          return {
+            status: 'working',
+            agent: input.agent,
+            note: 'Assigned. The subordinate\'s report arrives as an event that wakes you.',
+          };
+        }
+        if (peers) {
+          return await peers.ask({
+            agent: input.agent, topic, message: input.message,
+            timeoutMs: askTimeoutMs(input.timeout_seconds),
+          });
+        }
+        return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
+      }
+
+      case 'send': {
+        if (!input.agent || !input.message) return { error: 'send requires agent and message' };
+        if (team && await isSubordinate(input.agent)) {
+          await team.message({ name: input.agent, content: input.message });
+          return { status: 'delivered', agent: input.agent };
+        }
+        if (peers) {
+          return await peers.send({ agent: input.agent, topic, message: input.message });
+        }
+        return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
+      }
+
+      case 'reply':
+        if (!peers) return { error: 'reply needs the peer transport, which this actor does not have' };
+        if (!input.event_id || !input.message) return { error: 'reply requires event_id and message' };
+        return await peers.reply({ eventId: input.event_id, message: input.message });
+
+      case 'list': {
+        if (input.agent && team && await isSubordinate(input.agent)) {
+          return await team.status({ name: input.agent });
+        }
+        const subordinates = team ? await team.list() : undefined;
+        const peerRoster = peers ? await peers.listPeers() : undefined;
+        const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
+        return {
+          ...(subordinates ? { subordinates } : {}),
+          ...(peerRoster ? { peers: peerRoster } : {}),
+          ...(empty ? { note: 'No helper agents yet — create one with action:"staff".' } : {}),
+        };
+      }
+
+      case 'dismiss':
+        if (!team) return { error: 'dismiss applies to subordinates, which this actor does not have' };
+        if (!input.agent) return { error: 'dismiss requires agent' };
+        return await team.dismiss({
+          name: input.agent,
+          keepHistory: input.keep_history ?? true,
+        });
+    }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Build the `agents` tool for whatever deps this actor wires. At least one
+ *  deps group must be present — callers gate on that, not this function. */
+export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
+  const actions = agentsActionsFor(deps);
+  const team = deps.team;
+  const peers = deps.peers;
 
   return tool({
     description: renderAgentsToolDescription(deps),
@@ -469,106 +593,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
         ...converseProperties(deps),
       },
     }),
-    execute: async (input: AgentsToolInput, toolOptions?: unknown) => {
-      if (!actions.includes(input.action)) {
-        return { error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}` };
-      }
-      const topic = input.topic?.trim() || 'message';
-      if (topic === PEER_REPLY_TOPIC) {
-        return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
-      }
-      try {
-        switch (input.action) {
-          case 'fork':
-            return await runFork(deps.fork!, input, toolOptions);
-
-          case 'staff': {
-            if ((input.scope ?? 'subordinate') === 'workspace') {
-              if (!peers) return { error: 'staff scope=workspace needs the peer transport, which this actor does not have' };
-              if (!input.mission || !input.message) return { error: 'staff scope=workspace requires mission and message' };
-              return await peers.spawnWorkspace({
-                ...(input.agent ? { name: input.agent } : {}),
-                purpose: input.mission,
-                message: input.message,
-                timeoutMs: askTimeoutMs(input.timeout_seconds),
-              });
-            }
-            if (!team) return { error: 'staffing subordinates is not available on this actor' };
-            if (!input.role || !input.mission) return { error: 'staff requires role and mission' };
-            return await team.spawn({
-              ...(input.agent ? { name: input.agent } : {}),
-              role: input.role,
-              mission: input.mission,
-              ...(input.model ? { model: input.model } : {}),
-            });
-          }
-
-          case 'ask': {
-            if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
-            if (team && await isSubordinate(input.agent)) {
-              await team.assign({
-                name: input.agent,
-                task: input.message,
-                ...(input.deliverable ? { deliverable: input.deliverable } : {}),
-                ...(input.deadline_hint ? { deadlineHint: input.deadline_hint } : {}),
-              });
-              return {
-                status: 'working',
-                agent: input.agent,
-                note: 'Assigned. The subordinate\'s report arrives as an event that wakes you.',
-              };
-            }
-            if (peers) {
-              return await peers.ask({
-                agent: input.agent, topic, message: input.message,
-                timeoutMs: askTimeoutMs(input.timeout_seconds),
-              });
-            }
-            return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
-          }
-
-          case 'send': {
-            if (!input.agent || !input.message) return { error: 'send requires agent and message' };
-            if (team && await isSubordinate(input.agent)) {
-              await team.message({ name: input.agent, content: input.message });
-              return { status: 'delivered', agent: input.agent };
-            }
-            if (peers) {
-              return await peers.send({ agent: input.agent, topic, message: input.message });
-            }
-            return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
-          }
-
-          case 'reply':
-            if (!peers) return { error: 'reply needs the peer transport, which this actor does not have' };
-            if (!input.event_id || !input.message) return { error: 'reply requires event_id and message' };
-            return await peers.reply({ eventId: input.event_id, message: input.message });
-
-          case 'list': {
-            if (input.agent && team && await isSubordinate(input.agent)) {
-              return await team.status({ name: input.agent });
-            }
-            const subordinates = team ? await team.list() : undefined;
-            const peerRoster = peers ? await peers.listPeers() : undefined;
-            const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
-            return {
-              ...(subordinates ? { subordinates } : {}),
-              ...(peerRoster ? { peers: peerRoster } : {}),
-              ...(empty ? { note: 'No helper agents yet — create one with action:"staff".' } : {}),
-            };
-          }
-
-          case 'dismiss':
-            if (!team) return { error: 'dismiss applies to subordinates, which this actor does not have' };
-            if (!input.agent) return { error: 'dismiss requires agent' };
-            return await team.dismiss({
-              name: input.agent,
-              keepHistory: input.keep_history ?? true,
-            });
-        }
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    },
+    execute: async (input: AgentsToolInput, toolOptions?: unknown) =>
+      dispatchAgentsAction(deps, input, toolOptions),
   });
 }

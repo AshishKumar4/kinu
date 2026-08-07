@@ -24,7 +24,7 @@ import type {
   SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome,
-  AgentsForkDeps,
+  AgentsForkDeps, AgentsToolDeps,
   IngressDescriptor, ProteusEvent, EventVariant,
   RunEvent, RunEventInput, RunEventQuery,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
@@ -56,6 +56,7 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
+  createAgentsCodemodeProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -1672,6 +1673,16 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
+  /** This session's delegation deps. `team` / `peers` are deliberately absent:
+   *  staffing and peer messaging need a cross-agent transport, and local agents
+   *  are one-per-process SQLite sessions with no daemon to route between them.
+   *  Absent deps → those actions are structurally missing from the `agents`
+   *  tool, from the `agents.*` sandbox namespace, and from the prompt ladder.
+   *  Hosted agents get the full surface. */
+  private agentsToolDeps(): AgentsToolDeps {
+    return { fork: this.buildAgentsForkDeps() };
+  }
+
   /** The recent conversation handed to each spawned head as inherited context
    *  (core heads-support; capped to bound the head's LLM context). */
   private readInheritedContext(): SerializedMessage[] {
@@ -1823,6 +1834,9 @@ export class LocalAgentSession implements BackendHost {
       createExecuteTool: createNodeExecuteToolFactory({
         extraProviders: [
           createLocalAgentSelfProvider(this),
+          // `agents.*` — the delegation tool projected into the sandbox, over
+          // the same deps the top-level tool holds. Locally that is fork only.
+          createAgentsCodemodeProvider(() => this.agentsToolDeps()),
           createWebCodemodeProvider(this.getWebSearchProvider()),
           // llm.query (RLM) — CLI parity with the cf backend. Needs a real
           // resolver to spawn sub-calls; static-model sessions have none.
@@ -1832,7 +1846,7 @@ export class LocalAgentSession implements BackendHost {
         ],
       }),
       codemodeLoader: { __cli: true },
-      agents: { fork: this.buildAgentsForkDeps() },
+      agents: this.agentsToolDeps(),
       facts: this.factsStore,
       skills: {
         vfs: this.getSkillsVfs(),
@@ -1840,12 +1854,6 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
-      // agents.team / agents.peers are deliberately NOT wired: staffing and
-      // peer messaging need a cross-agent transport, and local agents are
-      // one-per-process SQLite sessions with no daemon to route between them.
-      // Absent deps → those ACTIONS are structurally missing from the agents
-      // tool and the prompt ladder never advertises them. Hosted agents get
-      // the full surface.
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;

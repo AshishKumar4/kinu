@@ -111,6 +111,42 @@ const result = await codemode.my_custom_parser({ input: "data" });
 4. The resulting `craftedToolSet` is passed as the `tools` parameter to `createExecuteTool`; codemode wraps it as an unnamed provider → `codemode.*`.
 5. Inside the sandbox, the LLM calls `codemode.name(args)` or `tools.name(args)`.
 
+### agents.* APIs (delegation, dep-gated)
+
+The `agents` delegation tool is also projected into the sandbox, so a script can
+delegate with ordinary control flow. This is what makes a crafted tool able to
+*be* a workflow: fan out, inspect results, branch, aggregate — then save the
+routine with `workspace.createTool`, and schedule or trigger it like any other
+craft. There is no workflow DSL, graph engine or step store, because
+`CraftStore`, `agent.schedule` and the trigger hub already cover those.
+
+```javascript
+// Inside execute_tools — a workflow is just code.
+const settled = await Promise.all(areas.map((area) => agents.fork({
+  task: `review ${area}`,
+  forks: [
+    { task: `read ${area}`, rationale: "ground it" },
+    { task: `test ${area}`, rationale: "check it" },
+  ],
+})));
+return settled.filter((s) => !s.error && s.score > 0.6).map((s) => s.text);
+```
+
+`createAgentsCodemodeProvider` (`packages/core/src/tools/agents-codemode.ts`)
+builds the namespace, and every member lands in the same `dispatchAgentsAction`
+the top-level `agents` tool calls, over the same deps — one delegation path with
+one more caller, not a second spawn/join implementation. Which members exist is
+`agentsActionsFor(deps)`, the identical gate behind the tool's action enum: an
+orchestrator gets all seven, a subordinate or a local CLI session gets `fork`
+alone, and a head — handed no delegation deps — has no `agents` namespace at
+all. The workspace-clone `forkAgent` RPC is deliberately not projected.
+
+One limitation to know: a fork started inside the sandbox rides the enclosing
+`execute_tools` call, and that job kind declines background resume (its side
+effects cannot be safely re-run). Quick orchestration belongs in the sandbox; a
+single long search that must survive an eviction belongs at the top-level tool,
+which resumes from its MCTS checkpoint.
+
 ### Example usage
 
 ```javascript
