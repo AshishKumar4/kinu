@@ -49,6 +49,14 @@ export {
   type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
   type MeasuredProportion, type PredictionStratum,
 } from './ppi.js';
+// The LLM panel that re-judges the hand-labeled turns, and the pre-registered
+// bar it must clear before a recalibration may lean on it instead of the owner.
+export {
+  runEnsemble, ensembleReport, renderEnsembleReport, describeEnsembleGap,
+  buildEnsembleJudgePrompt, panelVerdict, STAND_IN_THRESHOLDS,
+  type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
+  type EnsembleReport, type EnsembleMember, type StandInCondition,
+} from './ensemble.js';
 export {
   renderScaffoldHandbook, indexScaffoldSites, type ScaffoldSite,
 } from './scaffold-handbook.js';

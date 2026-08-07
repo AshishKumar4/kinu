@@ -15,15 +15,21 @@ import {
   initEventsHubTables,
   alignmentConvergence,
   calibrationReport,
+  createCompletionLLM,
+  ensembleReport,
   ingestOutcomeLabels,
   initTurnOutcomeTables,
   listGepaRuns,
   loadGepaCandidates,
   nextCronFire,
   productChangeSqlFromExec,
+  runEnsemble,
   sampleForLabeling,
+  selectEnsembleJudges,
   type AlignmentConvergence,
   type CalibrationReport,
+  type EnsembleReport,
+  type EnsembleRunResult,
   type LabelIngestResult,
   type LabelingItem,
   type OutcomeLabel,
@@ -373,6 +379,48 @@ export function recordLocalOutcomeLabels(
     initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
     return ingestOutcomeLabels(sql, input);
   });
+}
+
+/** How the LLM panel scored against the owner's own labels, and whether it
+ *  cleared the bar to stand in for them. Reads "not run" until it has. */
+export function getLocalEnsemble(name: string): EnsembleReport {
+  return withLocalDb(name, (db) => ensembleReport(makeSql(db)));
+}
+
+/**
+ * Put a local agent's hand-labeled turns to the panel — one blind pass per
+ * judge. Judges are the models the owner named, else one per available vendor
+ * family other than the chat model's: core's `selectEnsembleJudges`, over the
+ * same candidate list the DO backend walks.
+ *
+ * The database is held open for the whole pass rather than per judge, because
+ * each judge's verdicts are written as they land: a run interrupted halfway
+ * keeps the model calls it already paid for, and the next run tops up.
+ */
+export async function runLocalOutcomeEnsemble(
+  name: string,
+  specs: string[] | null,
+): Promise<EnsembleRunResult> {
+  ensureLocalAgent(name);
+  const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+  const chatSpec = withLocalDb(name, (db) => createAgentConfigStore(makeSql(db)).getModel());
+  const selection = await selectEnsembleJudges({
+    specs,
+    chatSpec: resolver.normalizeSpecSync(chatSpec),
+    candidates: () => resolver.judgeCandidates(),
+  });
+  const judges = selection.specs.map((named) => {
+    const spec = resolver.normalizeSpecSync(named);
+    return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
+  });
+  const db = new Database(agentDbPath(name));
+  try {
+    const sql = makeSql(db);
+    initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
+    return await runEnsemble(sql, judges);
+  } finally {
+    db.close();
+  }
 }
 
 export function getLocalGepaRun(name: string, runId: string): unknown {

@@ -236,6 +236,17 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     labeler TEXT NOT NULL,
     created_at INTEGER NOT NULL
   )`);
+  // The same verdicts from LLM judges instead of the human — one row per model
+  // per turn (evolution/ensemble.ts). Kept beside the gold labels rather than
+  // in them so a model's opinion can never be counted as ground truth by a
+  // query that forgot to filter; append-only for the same reason as above.
+  execRaw(`CREATE TABLE IF NOT EXISTS outcome_ensemble_labels (
+    id TEXT PRIMARY KEY,
+    outcome_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    label TEXT NOT NULL CHECK (label IN (${OUTCOME_LABELS.map((l) => `'${l}'`).join(',')})),
+    created_at INTEGER NOT NULL
+  )`);
 }
 
 export interface OutcomeLabelRow {
@@ -294,6 +305,50 @@ export function goldLabels(sql: SqlExecutor): Map<string, OutcomeLabelRow> {
     if (!latest.has(row.outcomeId)) latest.set(row.outcomeId, row);
   }
   return latest;
+}
+
+export interface EnsembleLabelRow {
+  id: string;
+  outcomeId: string;
+  /** `<provider>/<modelId>` the verdict came from. */
+  model: string;
+  label: OutcomeLabel;
+  createdAt: number;
+}
+
+/** Append one model's pass over a set of turns. */
+export function recordEnsembleLabels(sql: SqlExecutor, input: {
+  model: string;
+  labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
+  now?: number;
+}): number {
+  const now = input.now ?? nowMs();
+  for (const entry of input.labels) {
+    sql`INSERT INTO outcome_ensemble_labels (id, outcome_id, model, label, created_at)
+        VALUES (${`ens-${nanoid()}`}, ${entry.outcomeId}, ${input.model}, ${entry.label}, ${now})`;
+  }
+  return input.labels.length;
+}
+
+/** The verdict that counts for each (turn, model): the most recent one. Same
+ *  "append-only, newest wins" read as `goldLabels`. */
+export function ensembleLabels(sql: SqlExecutor): EnsembleLabelRow[] {
+  try {
+    const rows = sql<{
+      id: string; outcome_id: string; model: string; label: OutcomeLabel; created_at: number;
+    }>`SELECT * FROM outcome_ensemble_labels ORDER BY created_at DESC, id DESC`;
+    const latest = new Map<string, EnsembleLabelRow>();
+    for (const r of rows) {
+      const key = `${r.outcome_id}\n${r.model}`;
+      if (latest.has(key)) continue;
+      latest.set(key, {
+        id: r.id, outcomeId: r.outcome_id, model: r.model, label: r.label, createdAt: r.created_at,
+      });
+    }
+    return [...latest.values()];
+  } catch {
+    return [];
+  }
 }
 
 export interface TurnOutcomeRow {

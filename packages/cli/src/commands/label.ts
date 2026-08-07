@@ -8,28 +8,44 @@
  *   $EDITOR <file>                        # one letter per turn
  *   proteus label ingest <agent> <file>   # validates and stores
  *   proteus label report <agent>          # what the labels established
+ *
+ * And then, once labels exist, the question of whether that has to be done by
+ * hand every time:
+ *
+ *   proteus label ensemble <agent>        # two LLM judges re-do the same turns
+ *
+ * which scores a cross-family panel against those labels and says plainly
+ * whether it may stand in for the owner next time. It refuses to run before
+ * there is anything to score it against — an unmeasured stand-in would be the
+ * same unmeasured judge the calibration flow exists to eliminate.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  DEFAULT_LABEL_BUDGET, parseLabelingFile, renderCalibrationReport, renderLabelingFile,
-  type CalibrationReport, type LabelIngestResult, type LabelingItem,
+  DEFAULT_LABEL_BUDGET, describeEnsembleGap, parseLabelingFile, renderCalibrationReport,
+  renderEnsembleReport, renderLabelingFile,
+  type CalibrationReport, type EnsembleReport, type EnsembleRunResult,
+  type LabelIngestResult, type LabelingItem,
 } from '@proteus/core';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { requireAuthConfig } from '../config.js';
 import { callAgentRpc } from '../cloud-api.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import {
-  getLocalCalibration, recordLocalOutcomeLabels, sampleLocalLabeling,
+  getLocalCalibration, getLocalEnsemble, recordLocalOutcomeLabels, runLocalOutcomeEnsemble,
+  sampleLocalLabeling,
 } from '../local-inspection.js';
 
 interface LabelOpts {
   out?: string;
   size?: string;
   labeler?: string;
+  models?: string;
   json?: boolean;
 }
+
+const USAGE = 'Usage: proteus label <export|ingest|ensemble|report> <agent> [file]';
 
 export async function labelCommand(
   action: string | undefined,
@@ -37,14 +53,15 @@ export async function labelCommand(
   file: string | undefined,
   opts: LabelOpts = {},
 ): Promise<void> {
-  if (!name) throw new Error('Usage: proteus label <export|ingest|report> <agent> [file]');
+  if (!name) throw new Error(USAGE);
   const target = resolveAgentTarget(name);
   switch (action) {
     case 'export': return exportLabels(target, opts);
     case 'ingest': return ingestLabels(target, file, opts);
+    case 'ensemble': return ensembleLabels(target, opts);
     case 'report': return reportLabels(target, opts);
     default:
-      throw new Error(`Unknown action "${action ?? ''}" — use export, ingest, or report.`);
+      throw new Error(`Unknown action "${action ?? ''}" — use export, ingest, ensemble, or report.`);
   }
 }
 
@@ -77,6 +94,8 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log(DIM('     In vim: /^verdict:  then  n  to step, then  A <letter> Esc.'));
   console.log(`  2. ${ACCENT(`proteus label ingest ${target.requestedName} ${path}`)}`);
   console.log(`  3. ${ACCENT(`proteus label report ${target.requestedName}`)}`);
+  console.log(DIM(`     …and ${`proteus label ensemble ${target.requestedName}`} to find out whether two models`));
+  console.log(DIM('     could have done this for you next time.'));
   console.log('');
   console.log(DIM("The classifier's own verdicts are not in the file on purpose — seeing them"));
   console.log(DIM('first would anchor yours, and the gap between the two is the measurement.'));
@@ -126,14 +145,55 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
   console.log(renderCalibrationReport(await fetchReport(target)));
 }
 
+// ── ensemble ─────────────────────────────────────────────────────
+
+async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
+  const specs = (opts.models ?? '')
+    .split(',')
+    .map((spec) => spec.trim())
+    .filter((spec) => spec !== '');
+
+  if (!opts.json) {
+    console.log(DIM('Each judge sees the same clipped turn you did and nothing else — not the'));
+    console.log(DIM("classifier's verdict, not yours, not the other judge's. This costs one model"));
+    console.log(DIM('call per judge per labeled turn.'));
+    console.log('');
+  }
+
+  const result = target.mode === 'cloud'
+    ? await cloudRpc<EnsembleRunResult>(target, 'runOutcomeEnsemble', specs.length > 0 ? [specs] : [])
+    : await runLocalOutcomeEnsemble(target.localName, specs.length > 0 ? specs : null);
+
+  if (opts.json) {
+    console.log(JSON.stringify({ run: result, report: await fetchEnsemble(target) }, null, 2));
+    return;
+  }
+  if (result.run === null) {
+    console.log(`${WARN('did not run')} ${describeEnsembleGap(result.gap)}`);
+    return;
+  }
+  for (const judge of result.run.judged) {
+    console.log(`${OK('judged')} ${judge.model} — ${judge.stored} verdict${judge.stored === 1 ? '' : 's'}` +
+      (judge.failed > 0 ? WARN(`, ${judge.failed} unanswered`) : ''));
+  }
+  if (result.run.alreadyJudged > 0) {
+    console.log(DIM(`  ${result.run.alreadyJudged} already judged on an earlier run, left alone.`));
+  }
+  console.log('');
+  console.log(renderEnsembleReport(await fetchEnsemble(target)));
+}
+
 // ── report ───────────────────────────────────────────────────────
 
 async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
+  const [calibration, ensemble] = await Promise.all([fetchReport(target), fetchEnsemble(target)]);
   if (opts.json) {
-    console.log(JSON.stringify(await fetchReport(target), null, 2));
+    console.log(JSON.stringify({ calibration, ensemble }, null, 2));
     return;
   }
-  console.log(renderCalibrationReport(await fetchReport(target)));
+  console.log(renderCalibrationReport(calibration));
+  console.log('');
+  console.log(renderEnsembleReport(ensemble));
 }
 
 /** The calibration report for either backend. Shared with `proteus alignment`,
@@ -142,6 +202,12 @@ export async function fetchReport(target: AgentTarget): Promise<CalibrationRepor
   return target.mode === 'cloud'
     ? cloudRpc<CalibrationReport>(target, 'getOutcomeCalibration', [])
     : getLocalCalibration(target.localName);
+}
+
+function fetchEnsemble(target: AgentTarget): Promise<EnsembleReport> {
+  return target.mode === 'cloud'
+    ? cloudRpc<EnsembleReport>(target, 'getOutcomeEnsemble', [])
+    : Promise.resolve(getLocalEnsemble(target.localName));
 }
 
 function cloudRpc<T>(target: AgentTarget, method: string, args: unknown[]): Promise<T> {

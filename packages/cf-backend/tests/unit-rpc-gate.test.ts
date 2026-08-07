@@ -246,4 +246,12 @@ describe('the table is the CLI dispatch allowlist, not documentation', () => {
     expect(AGENT_RPC_ACCESS.recordOutcomeLabeling).toBe('interactive');
     expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('recordOutcomeLabeling'))).not.toBeNull();
   });
+
+  test('reading the judge panel is a read; running it is not', () => {
+    // Running it spends the owner's model budget across two providers and
+    // writes verdicts, so it sits with the mutations rather than the reports.
+    expect(AGENT_RPC_ACCESS.getOutcomeEnsemble).toBe('workspace.read');
+    expect(AGENT_RPC_ACCESS.runOutcomeEnsemble).toBe('interactive');
+    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('runOutcomeEnsemble'))).not.toBeNull();
+  });
 });

@@ -60,6 +60,7 @@ export {
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
   isNegativeOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
+  recordEnsembleLabels, ensembleLabels, type EnsembleLabelRow,
   type OutcomeLabel, type OutcomeLabelRow,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
@@ -82,6 +83,14 @@ export {
   type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
   type MeasuredProportion, type PredictionStratum,
 } from './evolution/ppi.js';
+// The LLM panel that re-judges the hand-labeled turns, and the pre-registered
+// bar it must clear before a recalibration may lean on it instead of the owner.
+export {
+  runEnsemble, ensembleReport, renderEnsembleReport, describeEnsembleGap,
+  buildEnsembleJudgePrompt, panelVerdict, STAND_IN_THRESHOLDS,
+  type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
+  type EnsembleReport, type EnsembleMember, type StandInCondition,
+} from './evolution/ensemble.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
 // config; the persisted loss curve.
 export {
@@ -237,7 +246,7 @@ export {
 } from './turn-failure.js';
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
-export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
+export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
 export { contextWindowForModel } from './context-window.js';
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.

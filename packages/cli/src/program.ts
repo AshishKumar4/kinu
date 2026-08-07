@@ -385,10 +385,11 @@ export function buildProgram(): Command {
   program
     .command('label [action] <name> [file]')
     .helpGroup(INSPECT)
-    .description('Hand-label turn outcomes (export | ingest | report) to measure and correct the classifier')
+    .description('Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the classifier')
     .option('--out <file>', 'Where to write the labeling file (export)')
     .option('--size <n>', 'Turns to draw (export)')
     .option('--labeler <name>', 'Who is labeling (ingest)')
+    .option('--models <a,b>', 'Judges to run, comma-separated (ensemble; default: one per connected vendor)')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(labelCommand));
 

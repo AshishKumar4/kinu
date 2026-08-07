@@ -84,6 +84,9 @@ import {
   alignmentConvergence, type AlignmentConvergence,
   calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
   type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
+  // The LLM panel that re-judges the same turns, and the bar it must clear
+  ensembleReport, runEnsemble, createCompletionLLM,
+  type EnsembleReport, type EnsembleRunResult,
   // Evolution Changelog — the self-change digest + revert dispatch
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -116,6 +119,7 @@ import {
   spillEventContent,
 } from "@proteus/core";
 import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
   SubordinateRosterStore,
@@ -2533,6 +2537,37 @@ export class OrchestratorAgent extends ActorAgent {
     labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>,
   ): Promise<LabelIngestResult> {
     return ingestOutcomeLabels(this.boundSql, { labeler, labels });
+  }
+
+  /** How the LLM panel scored against the owner's own labels, and whether it
+   *  cleared the pre-registered bar to stand in for them. */
+  @callable()
+  async getOutcomeEnsemble(): Promise<EnsembleReport> {
+    return ensembleReport(this.boundSql);
+  }
+
+  /**
+   * Put the hand-labeled turns to the panel — one blind pass per judge, stored
+   * append-only. Judges come from `specs` when the owner names them, else one
+   * model per connected vendor family other than the chat model's.
+   *
+   * Fewer than two families available is reported as the gap it is (by
+   * `runEnsemble`, after the prerequisites the owner would fix first); nothing
+   * is padded with a second model from the same vendor, which would agree with
+   * the first for reasons that have nothing to do with the turn.
+   */
+  @callable()
+  async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
+    const registry = this.providerRegistry();
+    const selection = await resolveEnsembleJudgeSelection({
+      registry,
+      specs: specs ?? null,
+      chatSpec: this.getStoredModelId(),
+    });
+    return runEnsemble(this.boundSql, selection.specs.map((spec) => ({
+      spec,
+      llm: createCompletionLLM({ model: registry.resolveModel(spec), spec, stage: 'judge' }),
+    })));
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +

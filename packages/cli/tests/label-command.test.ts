@@ -117,12 +117,19 @@ describe('proteus label', () => {
     expect(ingested.stdout).toMatch(/You disagreed with the classifier on \d+ of 100\./);
 
     const report = runCli(home, ['label', 'report', 'demo', '--json']);
-    const parsed = JSON.parse(report.stdout) as {
-      universe: number; labeled: number; gap: unknown;
-      accuracy: { sensitivity: { mean: number }; specificity: { mean: number } };
-      overall: { raw: number; corrected: { mean: number; lo: number; hi: number } };
-      segments: Array<{ scaffoldVersion: number; rate: { corrected: { mean: number } } }>;
+    const { calibration: parsed, ensemble } = JSON.parse(report.stdout) as {
+      calibration: {
+        universe: number; labeled: number; gap: unknown;
+        accuracy: { sensitivity: { mean: number }; specificity: { mean: number } };
+        overall: { raw: number; corrected: { mean: number; lo: number; hi: number } };
+        segments: Array<{ scaffoldVersion: number; rate: { corrected: { mean: number } } }>;
+      };
+      ensemble: { gap: { kind: string } | null; standIn: unknown };
     };
+    // The panel has not been run, and the report says so rather than implying
+    // the classifier has been checked by anything but the owner.
+    expect(ensemble.gap?.kind).toBe('not_run');
+    expect(ensemble.standIn).toBeNull();
 
     const trueRate = [...truth.values()].filter((t) => t === 'corrected').length / truth.size;
     expect(parsed.universe).toBe(600);
@@ -200,9 +207,33 @@ describe('proteus label', () => {
     expect(ingested.stdout).toContain('no verdicts');
   });
 
+  test('the panel refuses before there is anything to score it against', () => {
+    const { home, truth } = seedWorkspace('demo');
+    const file = join(home, 'calib.txt');
+
+    // No hand labels yet: the missing step is named before anything else is
+    // checked, because it is the step the whole flow exists for.
+    const early = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,codex/gpt-5.6-sol']);
+    expect(early.exitCode).toBe(0);
+    expect(early.stdout).toContain('did not run');
+    expect(early.stdout).toContain('proteus label export');
+    expect(early.stdout).toContain('proteus label ingest');
+
+    runCli(home, ['label', 'export', 'demo', '--out', file]);
+    fillFile(file, truth);
+    runCli(home, ['label', 'ingest', 'demo', file]);
+
+    // Labels exist, but one model is not a panel — and no second model from the
+    // same vendor is substituted for the missing one.
+    const alone = runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5']);
+    expect(alone.exitCode).toBe(0);
+    expect(alone.stdout).toContain('two models from different vendors');
+    expect(runCli(home, ['label', 'report', 'demo']).stdout).toContain('Judge panel');
+  });
+
   test('unknown actions and missing arguments say what to type', () => {
     const { home } = seedWorkspace('demo');
-    expect(runCli(home, ['label', 'summarise', 'demo']).stdout).toContain('use export, ingest, or report');
+    expect(runCli(home, ['label', 'summarise', 'demo']).stdout).toContain('use export, ingest, ensemble, or report');
     expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('proteus label ingest <agent> <file>');
   });
 });

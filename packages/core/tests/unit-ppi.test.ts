@@ -445,7 +445,10 @@ describe('calibration gaps — no number rather than a wrong one', () => {
 // ── Agreement ────────────────────────────────────────────────────
 
 describe('designWeightedKappa', () => {
-  const gold = (key: string, population: number, actuals: string[]): GoldStratum => ({ key, population, actuals });
+  /** A stratum whose first rater is the classifier verdict the stratum is
+   *  named for — the shape the calibration report passes in. */
+  const gold = (key: string, population: number, actuals: string[]): GoldStratum =>
+    ({ key, population, draws: actuals.map((b) => ({ a: key, b })) });
 
   test('perfect agreement is κ = 1', () => {
     const kappa = designWeightedKappa([
@@ -482,5 +485,42 @@ describe('designWeightedKappa', () => {
     expect(designWeightedKappa(strata)).toEqual(designWeightedKappa(strata));
     expect(designWeightedKappa([gold('accepted', 800, [])])).toBeNull();
     expect(designWeightedKappa([])).toBeNull();
+  });
+
+  test('scores two raters who both vary, and is symmetric between them', () => {
+    // Neither rater is the stratum's own verdict here — the ensemble-vs-labeler
+    // comparison. κ is a property of the pair, so swapping them cannot move it.
+    const pairs = (spec: Array<[string, string, number]>): Array<{ a: string; b: string }> =>
+      spec.flatMap(([a, b, n]) => Array<{ a: string; b: string }>(n).fill({ a, b }));
+    const strata = [
+      { key: 'accepted', population: 800, draws: pairs([['accepted', 'accepted', 30], ['corrected', 'accepted', 6], ['accepted', 'corrected', 4]]) },
+      { key: 'corrected', population: 200, draws: pairs([['corrected', 'corrected', 30], ['accepted', 'corrected', 5], ['corrected', 'accepted', 5]]) },
+    ];
+    const forward = designWeightedKappa(strata);
+    const swapped = designWeightedKappa(
+      strata.map((s) => ({ ...s, draws: s.draws.map((d) => ({ a: d.b, b: d.a })) })),
+    );
+    expect(forward?.value).toBeCloseTo(swapped?.value ?? -1, 12);
+    expect(forward?.value).toBeGreaterThan(0);
+    expect(forward?.n).toBe(80);
+  });
+
+  test('weights a stratum by its population, not by how often it was drawn', () => {
+    // Same 40 draws per stratum; the raters agree in the rare one and disagree
+    // in the common one. A tally that ignored the design would call this good.
+    const agree = Array<{ a: string; b: string }>(40).fill({ a: 'corrected', b: 'corrected' });
+    const disagree = [
+      ...Array<{ a: string; b: string }>(20).fill({ a: 'accepted', b: 'accepted' }),
+      ...Array<{ a: string; b: string }>(20).fill({ a: 'accepted', b: 'corrected' }),
+    ];
+    const weighted = designWeightedKappa([
+      { key: 'accepted', population: 900, draws: disagree },
+      { key: 'corrected', population: 100, draws: agree },
+    ]);
+    const even = designWeightedKappa([
+      { key: 'accepted', population: 500, draws: disagree },
+      { key: 'corrected', population: 500, draws: agree },
+    ]);
+    expect(weighted?.value).toBeLessThan(even?.value ?? 0);
   });
 });

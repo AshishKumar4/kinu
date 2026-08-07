@@ -251,6 +251,153 @@ export function classifierAccuracy(strata: ReadonlyArray<PredictionStratum>): Cl
   };
 }
 
+// ── The same profile for a rater whose verdict varies within a stratum ──
+
+/** One sampling stratum's gold draws, for a rater the sample was NOT stratified
+ *  on. Each draw carries what that rater said about the turn and what the
+ *  labeler found it to be. */
+export interface AccuracyStratum {
+  /** The stratum the draws were sampled from — the classifier's verdict. */
+  key: string;
+  /** Ledger rows in this stratum. */
+  population: number;
+  draws: ReadonlyArray<{ predictedEvent: boolean; event: boolean }>;
+}
+
+/**
+ * Re-express draws as prediction strata by splitting each sampling stratum on
+ * what the rater said, and giving each half its share of the stratum's
+ * population: N̂ = N_s · m/n_s.
+ *
+ * This is exactly what makes the POINT estimate right — Σ w_cell ȳ_cell
+ * telescopes back to Σ_s w_s (rater-flagged ∧ event)_s / n_s. It is also
+ * exactly what makes the closed-form interval wrong, which is why the caller
+ * below throws that interval away and bootstraps instead: the two halves of a
+ * stratum are neither independent of each other nor of fixed size, and
+ * `classifierAccuracy`'s delta method assumes both.
+ */
+function splitOnPrediction(strata: ReadonlyArray<AccuracyStratum>): PredictionStratum[] {
+  return strata.flatMap((stratum) => {
+    if (stratum.draws.length === 0) {
+      return [{ key: stratum.key, predictedEvent: false, population: stratum.population, labeled: 0, events: 0 }];
+    }
+    return [true, false].flatMap((predictedEvent) => {
+      const cell = stratum.draws.filter((draw) => draw.predictedEvent === predictedEvent);
+      return cell.length === 0 ? [] : [{
+        key: `${stratum.key}/${predictedEvent ? 'flagged' : 'clear'}`,
+        predictedEvent,
+        population: (stratum.population * cell.length) / stratum.draws.length,
+        labeled: cell.length,
+        events: cell.filter((draw) => draw.event).length,
+      }];
+    });
+  });
+}
+
+/** Resamples for a resampled profile. Fixed so a report is reproducible. */
+const ACCURACY_RESAMPLES = 2000;
+
+/**
+ * The error profile of a rater the gold sample was not stratified on — an LLM
+ * panel judging turns that were drawn by the classifier's verdict
+ * (evolution/ensemble.ts).
+ *
+ * The point estimate is `classifierAccuracy`'s, unchanged and unforked: the
+ * draws are split on the rater's own verdict and handed to it, and the design
+ * weighting telescopes to the right answer (see `splitOnPrediction`).
+ *
+ * The INTERVAL is the stratified percentile bootstrap `designWeightedKappa`
+ * uses, for the same reason it does: resampling whole draws inside the stratum
+ * that produced them is the design's own randomness, and it needs no
+ * independence assumption between a stratum's two halves nor a fixed split
+ * between them. `classifierAccuracy`'s closed form needs both — its delta
+ * method is derived for strata that are disjoint samples, which post-split
+ * halves are not.
+ *
+ * MEASURED, over 250 simulated calibration sets per regime at the ~100-label
+ * budget, on a 3,000-row ledger with 15% negatives (`unit-ensemble.test.ts`
+ * pins the ordering, not the decimals):
+ *
+ *   - the point estimate is unbiased to ≤0.01 in every regime, which is the
+ *     part `classifierAccuracy` is doing and the reason it is reused;
+ *   - the interval covers at 85–98% against a nominal 95% in the regimes that
+ *     matter — a rater whose true rates are 0.6–0.9 — where the closed form
+ *     applied to the same split covers at 44–75%;
+ *   - it stays under-covering (66%) only for a rater whose true rate is within
+ *     ~0.01 of a boundary, where the estimate is discrete and no interval from
+ *     ~30 draws resolves it. No method here pretends otherwise, and it does not
+ *     move the decision those numbers feed: see the bar in
+ *     evolution/ensemble.ts, whose false-pass rate is measured at 0%.
+ *
+ * Percentile rather than basic/pivotal or normal-on-bootstrap-SE: all three
+ * were measured over the same regimes and percentile covered best in every one
+ * (basic ran 4–14 points worse, normal 1–3).
+ *
+ * `se` comes back as the bootstrap distribution's own spread — or the closed
+ * form's, whichever is larger, for the boundary reason `resampled` explains —
+ * so everything downstream that propagates it (`correctedRate`) propagates the
+ * same uncertainty the interval shows.
+ */
+export function resampledAccuracy(
+  strata: ReadonlyArray<AccuracyStratum>,
+  opts: { seed?: number; iterations?: number } = {},
+): ClassifierAccuracyResult {
+  const point = classifierAccuracy(splitOnPrediction(strata));
+  if (point.accuracy === null) return point;
+
+  const random = seededRandom(opts.seed ?? 1);
+  const sensitivities: number[] = [];
+  const specificities: number[] = [];
+  for (let i = 0; i < (opts.iterations ?? ACCURACY_RESAMPLES); i++) {
+    const draw = classifierAccuracy(splitOnPrediction(strata.map((stratum) => ({
+      ...stratum,
+      draws: stratum.draws.map(() => stratum.draws[Math.floor(random() * stratum.draws.length)]),
+    }))));
+    if (draw.accuracy === null) continue;
+    sensitivities.push(draw.accuracy.sensitivity.mean);
+    specificities.push(draw.accuracy.specificity.mean);
+  }
+
+  const n = strata.reduce((count, stratum) => count + stratum.draws.length, 0);
+  return {
+    accuracy: {
+      sensitivity: resampled(point.accuracy.sensitivity, sensitivities, n),
+      specificity: resampled(point.accuracy.specificity, specificities, n),
+      prevalence: point.accuracy.prevalence,
+    },
+    gap: null,
+  };
+}
+
+/**
+ * A point estimate wearing its bootstrap distribution's interval — but never
+ * narrower than the closed form's, in either direction.
+ *
+ * The floor matters at the boundary. A rater that flagged nothing it should not
+ * have makes every resample report specificity exactly 1, so the percentile
+ * interval is [1, 1]: a claim of certainty resting on forty draws. That is the
+ * same false precision the Agresti–Coull adjustment exists to prevent
+ * everywhere else in this module, and the closed form still carries it, so the
+ * wider of the two bounds is taken. It can only improve coverage — the
+ * measurement that chose the bootstrap is a claim about which is WIDER in the
+ * regimes that matter, and there the bootstrap still wins.
+ */
+function resampled(closed: MeasuredProportion, samples: number[], n: number): MeasuredProportion {
+  if (samples.length === 0) return { mean: closed.mean, lo: 0, hi: 1, se: Number.POSITIVE_INFINITY, n };
+  const sorted = [...samples].sort((a, b) => a - b);
+  const pick = (q: number): number =>
+    sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+  const mean = sorted.reduce((sum, s) => sum + s, 0) / sorted.length;
+  const spread = Math.sqrt(sorted.reduce((sum, s) => sum + (s - mean) ** 2, 0) / sorted.length);
+  return {
+    mean: closed.mean,
+    lo: Math.min(pick(0.025), closed.lo),
+    hi: Math.max(pick(0.975), closed.hi),
+    se: Math.max(spread, closed.se),
+    n,
+  };
+}
+
 // ── Correcting a slice's observed rate ───────────────────────────
 
 /** A rate the gold labels corrected, next to the rate the classifier claimed. */
@@ -326,15 +473,22 @@ export function correctedRate(
 
 // ── Agreement (Cohen's κ) ────────────────────────────────────────
 
-/** One stratum's gold draws, kept as raw verdicts so the full multi-class
- *  confusion — not just the binary projection — can be rebuilt. */
+/** One stratum's gold draws, kept as raw verdict PAIRS so the full multi-class
+ *  confusion — not just the binary projection — can be rebuilt.
+ *
+ *  `key` is the SAMPLING stratum, not a rater: it carries the population weight
+ *  and is the unit the bootstrap resamples within. Both raters vary per draw,
+ *  which is what lets one estimator answer every pair — the classifier against
+ *  the labeler (where rater `a` happens to be constant and equal to `key`), an
+ *  ensemble against the labeler, and the ensemble against the classifier — all
+ *  under the same stratified design. */
 export interface GoldStratum {
-  /** The classifier's verdict for every ledger row in this stratum. */
+  /** The stratum the draws were sampled from — the classifier's verdict. */
   key: string;
-  /** Ledger rows the classifier assigned here. */
+  /** Ledger rows in this stratum. */
   population: number;
-  /** What the labeler said about each gold draw from this stratum. */
-  actuals: ReadonlyArray<string>;
+  /** One entry per gold draw: what each of the two raters said about it. */
+  draws: ReadonlyArray<{ a: string; b: string }>;
 }
 
 export interface KappaEstimate {
@@ -350,36 +504,37 @@ export interface KappaEstimate {
 const KAPPA_RESAMPLES = 4000;
 
 function kappaPoint(strata: ReadonlyArray<GoldStratum>, population: number): number | null {
-  const predicted = new Map<string, number>();
-  const actual = new Map<string, number>();
+  const byA = new Map<string, number>();
+  const byB = new Map<string, number>();
   let observed = 0;
   for (const stratum of strata) {
-    const weight = stratum.population / population;
-    predicted.set(stratum.key, (predicted.get(stratum.key) ?? 0) + weight);
-    for (const label of stratum.actuals) {
-      const share = weight / stratum.actuals.length;
-      actual.set(label, (actual.get(label) ?? 0) + share);
-      if (label === stratum.key) observed += share;
+    const share = stratum.population / population / stratum.draws.length;
+    for (const draw of stratum.draws) {
+      byA.set(draw.a, (byA.get(draw.a) ?? 0) + share);
+      byB.set(draw.b, (byB.get(draw.b) ?? 0) + share);
+      if (draw.a === draw.b) observed += share;
     }
   }
   let expected = 0;
-  for (const [label, share] of predicted) expected += share * (actual.get(label) ?? 0);
+  for (const [label, share] of byA) expected += share * (byB.get(label) ?? 0);
   return expected >= 1 ? null : (observed - expected) / (1 - expected);
 }
 
 /**
- * Cohen's κ between the classifier and the labeler, over the design-weighted
- * confusion matrix (same re-weighting as `classifierAccuracy`, and for the same
- * reason). κ rather than raw agreement because agreement alone is flattered by
- * a skewed ledger: a classifier that answers "accepted" every single time
- * agrees with a labeler ~85% of the time here while carrying no information at
- * all, and κ scores exactly that at 0.
+ * Cohen's κ between two raters, over the design-weighted confusion matrix (same
+ * re-weighting as `classifierAccuracy`, and for the same reason). κ rather than
+ * raw agreement because agreement alone is flattered by a skewed ledger: a
+ * classifier that answers "accepted" every single time agrees with a labeler
+ * ~85% of the time here while carrying no information at all, and κ scores
+ * exactly that at 0.
  *
  * The interval is a stratified percentile bootstrap — resample each stratum's
  * gold draws within that stratum, the design that produced them — rather than a
  * closed form: κ's asymptotic variance (Fleiss, Cohen & Everitt, Psychol. Bull.
  * 72:323, 1969) assumes multinomial cell counts, which a stratified sample does
- * not have.
+ * not have. Resampling whole DRAWS keeps the two raters' verdicts attached to
+ * each other, which is what makes the interval valid for a pair of raters who
+ * both vary — the ensemble comparisons in ensemble.ts.
  *
  * Weighting runs over the strata that carry gold draws. Callers gate this on
  * `classifierAccuracy` reporting no gap, so in practice that is every populated
@@ -390,7 +545,7 @@ export function designWeightedKappa(
   strata: ReadonlyArray<GoldStratum>,
   opts: { seed?: number; iterations?: number } = {},
 ): KappaEstimate | null {
-  const drawn = strata.filter((s) => s.population > 0 && s.actuals.length > 0);
+  const drawn = strata.filter((s) => s.population > 0 && s.draws.length > 0);
   const population = drawn.reduce((n, s) => n + s.population, 0);
   if (population === 0) return null;
   const value = kappaPoint(drawn, population);
@@ -402,7 +557,7 @@ export function designWeightedKappa(
   for (let i = 0; i < iterations; i++) {
     const resampled = drawn.map((s) => ({
       ...s,
-      actuals: s.actuals.map(() => s.actuals[Math.floor(random() * s.actuals.length)]),
+      draws: s.draws.map(() => s.draws[Math.floor(random() * s.draws.length)]),
     }));
     const draw = kappaPoint(resampled, population);
     if (draw !== null) samples.push(draw);
@@ -410,6 +565,6 @@ export function designWeightedKappa(
   samples.sort((a, b) => a - b);
   const pick = (q: number): number =>
     samples[Math.min(samples.length - 1, Math.max(0, Math.round(q * (samples.length - 1))))];
-  const n = drawn.reduce((count, s) => count + s.actuals.length, 0);
+  const n = drawn.reduce((count, s) => count + s.draws.length, 0);
   return samples.length === 0 ? { value, lo: value, hi: value, n } : { value, lo: pick(0.025), hi: pick(0.975), n };
 }

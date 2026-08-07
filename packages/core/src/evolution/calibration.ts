@@ -58,19 +58,21 @@ const LABEL_KEYS: ReadonlyArray<readonly [string, OutcomeLabel]> = [
   ['?', 'unclear'],
 ];
 
-/** What each verdict means, in the words a human deciding between them needs. */
-const LABEL_HELP: Record<OutcomeLabel, string> = {
-  accepted: 'accepted    the user moved on, or built on the answer',
-  corrected: 'corrected   the user re-asked, fixed it, or contradicted it',
-  frustrated: 'frustrated  the user said, in so many words, that it was bad',
-  abandoned: 'abandoned   the thread was dropped; the follow-up is a new topic',
-  unclear: 'unclear     you genuinely cannot tell from what is here',
+/** What each verdict means, in the words a human deciding between them needs.
+ *  The ensemble judges (ensemble.ts) are given these same sentences verbatim —
+ *  two raters answering differently-worded questions would not be comparable. */
+export const OUTCOME_LABEL_HELP: Record<OutcomeLabel, string> = {
+  accepted: 'the user moved on, or built on the answer',
+  corrected: 'the user re-asked, fixed it, or contradicted it',
+  frustrated: 'the user said, in so many words, that it was bad',
+  abandoned: 'the thread was dropped; the follow-up is a new topic',
+  unclear: 'you genuinely cannot tell from what is here',
 };
 
 // ── The calibration universe ─────────────────────────────────────
 
 /** One row of the population the classifier's error profile is about. */
-interface UniverseRow {
+export interface UniverseRow {
   id: string;
   predicted: TurnOutcome;
   scaffoldVersion: number | null;
@@ -90,8 +92,12 @@ interface UniverseRow {
  *
  * Ordered by time so a systematic draw over this list is spread across the
  * agent's whole history.
+ *
+ * Exported because it is the ONE definition of that population: the sample, the
+ * report and the ensemble check (ensemble.ts) must all speak for the same rows
+ * or their numbers are about different things.
  */
-function calibrationUniverse(sql: SqlExecutor): UniverseRow[] {
+export function calibrationUniverse(sql: SqlExecutor): UniverseRow[] {
   try {
     return sql<{
       id: string; outcome: TurnOutcome; scaffold_version: number | null;
@@ -183,6 +189,18 @@ export interface LabelingItem {
   createdAt: number;
 }
 
+/** A ledger row as a rater sees it: everything needed to judge the turn,
+ *  nothing that would anchor the judgement. */
+export function labelingItem(row: UniverseRow): LabelingItem {
+  return {
+    outcomeId: row.id,
+    userMessage: row.userMessage,
+    assistantResponse: row.assistantResponse,
+    followup: row.followup,
+    createdAt: row.createdAt,
+  };
+}
+
 /** Fixed so the same draw always renders in the same order — a re-export of
  *  an unchanged ledger is byte-identical, which makes a file easy to diff and
  *  a bug easy to reproduce. */
@@ -233,13 +251,7 @@ export function sampleForLabeling(sql: SqlExecutor, opts: { size?: number } = {}
   );
 
   const drawn = verdicts.flatMap((verdict, i) => spread(byVerdict.get(verdict) ?? [], quotas[i]));
-  return shuffled(drawn, SHUFFLE_SEED).map((row) => ({
-    outcomeId: row.id,
-    userMessage: row.userMessage,
-    assistantResponse: row.assistantResponse,
-    followup: row.followup,
-    createdAt: row.createdAt,
-  }));
+  return shuffled(drawn, SHUFFLE_SEED).map(labelingItem);
 }
 
 // ── The labeling file ────────────────────────────────────────────
@@ -257,6 +269,26 @@ function clip(text: string, limit: number): string {
 const BLOCK_HEADER = /^###\s+\d+\s*\/\s*\d+\s+(\S+)\s*$/;
 const VERDICT_LINE = /^verdict:\s*(\S*)\s*$/;
 
+/**
+ * The evidence one turn is judged from — and the ONLY thing any rater sees of
+ * it. The human file and the ensemble judges (ensemble.ts) both render through
+ * here, so the two cannot end up judging from different amounts of the turn,
+ * and neither can be shown the classifier's verdict by accident: nothing in
+ * this function has access to one.
+ */
+export function renderLabelingEvidence(item: LabelingItem): string {
+  return [
+    `USER  (${new Date(item.createdAt).toISOString().slice(0, 10)})`,
+    clip(item.userMessage, SHOWN.user),
+    '',
+    'AGENT',
+    clip(item.assistantResponse, SHOWN.response),
+    '',
+    "USER'S NEXT MESSAGE",
+    item.followup === null ? '(none — the session ended here)' : clip(item.followup, SHOWN.followup),
+  ].join('\n');
+}
+
 /** Render a drawn calibration set as the file a human fills in. */
 export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
   const lines = [
@@ -265,7 +297,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
     "# For each turn, judge what the user's FOLLOW-UP shows about how the agent's",
     '# answer landed. Put ONE letter after `verdict:` —',
     '#',
-    ...LABEL_KEYS.map(([key, label]) => `#   ${key}  ${LABEL_HELP[label]}`),
+    ...LABEL_KEYS.map(([key, label]) => `#   ${key}  ${label.padEnd(12)}${OUTCOME_LABEL_HELP[label]}`),
     '#',
     '# Leave a verdict blank to skip that turn.',
     '#',
@@ -283,14 +315,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
       `### ${index + 1}/${items.length} ${item.outcomeId}`,
       'verdict:',
       '',
-      `USER  (${new Date(item.createdAt).toISOString().slice(0, 10)})`,
-      clip(item.userMessage, SHOWN.user),
-      '',
-      'AGENT',
-      clip(item.assistantResponse, SHOWN.response),
-      '',
-      "USER'S NEXT MESSAGE",
-      item.followup === null ? '(none — the session ended here)' : clip(item.followup, SHOWN.followup),
+      renderLabelingEvidence(item),
       '',
     );
   });
@@ -538,7 +563,8 @@ export function calibrationReport(sql: SqlExecutor): CalibrationReport {
     kappa: designWeightedKappa(strata.map((stratum) => ({
       key: stratum.predicted,
       population: stratum.population,
-      actuals: stratum.actual.flatMap((cell) => Array<string>(cell.count).fill(cell.outcome)),
+      draws: stratum.actual.flatMap((cell) =>
+        Array<{ a: string; b: string }>(cell.count).fill({ a: stratum.predicted, b: cell.outcome })),
     }))),
     overall: overall.rate,
     segments,
