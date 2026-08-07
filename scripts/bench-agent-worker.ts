@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-// One Proteus turn, in its own process.
+// One Proteus session, in its own process — one ask for a defect task, a whole
+// episode sequence for a long-horizon continuation task.
 //
 // A subprocess is not incidental here — it is what makes the isolation real.
 // The local shell and laptop executor root themselves at process.cwd(), and
@@ -11,8 +12,8 @@
 // stdout carries exactly one JSON line (the result); everything else goes to
 // stderr so a noisy agent cannot corrupt the measurement.
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import {
   createWorkspace, initSearchTables, initScaffoldTables, initCraftScoreTables, usageTokens,
@@ -25,7 +26,13 @@ interface WorkerInput {
   dbPath: string;
   workspaceName: string;
   purpose: string;
-  prompt: string;
+  /** Sent in order on ONE session. A defect task sends one. */
+  asks: string[];
+  /** Parallel to `asks`: a path relative to the sandbox that is removed once
+   *  that ask has been answered, or null. This is what makes a continuation
+   *  task measure continuation — the materials an early episode read are gone
+   *  before the final ask, so only what survived can answer it. */
+  removeAfterAsk: Array<string | null>;
   maxTokens: number;
   autoEvolve: boolean;
   /** Provider config, passed explicitly so no ambient PROTEUS_* can reach a
@@ -39,6 +46,10 @@ interface WorkerOutput {
   steps: number;
   hadError: boolean;
   budgetBreach: 'tokens' | null;
+  /** Largest per-turn prompt size the provider actually priced, over the whole
+   *  ask sequence. The context-discipline number: a variant can spend the same
+   *  total tokens with a much smaller working set. */
+  peakPromptTokens: number;
   error?: string;
 }
 
@@ -113,9 +124,27 @@ async function main(): Promise<void> {
     cwd: process.cwd(),
   });
 
+  // The provider-priced prompt size the compaction ladder measured for the
+  // last turn. Read after each ask and maxed, because the row is overwritten
+  // every turn and the peak is what a context-discipline change moves.
+  const readPromptTokens = (): number => {
+    const row = db.query('SELECT MAX(last_prompt_tokens) AS peak FROM compaction_state').get() as { peak: number | null } | null;
+    return row?.peak ?? 0;
+  };
+
   let error: string | undefined;
+  let peakPromptTokens = 0;
   try {
-    await session.send(input.prompt);
+    for (const [index, ask] of input.asks.entries()) {
+      await session.send(ask);
+      peakPromptTokens = Math.max(peakPromptTokens, readPromptTokens());
+      const remove = input.removeAfterAsk[index];
+      if (remove) rmSync(join(process.cwd(), remove), { recursive: true, force: true });
+      // Fold at every episode boundary, so a continuation task genuinely
+      // crosses compaction rather than depending on the corpus happening to
+      // trip the measured trigger.
+      if (index < input.asks.length - 1) session.armForcedCompaction();
+    }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     hadError = true;
@@ -124,13 +153,16 @@ async function main(): Promise<void> {
     db.close();
   }
 
-  const out: WorkerOutput = { tokens, steps, hadError, budgetBreach: breach, ...(error ? { error } : {}) };
+  const out: WorkerOutput = {
+    tokens, steps, hadError, budgetBreach: breach, peakPromptTokens,
+    ...(error ? { error } : {}),
+  };
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
 main().catch((err) => {
   const out: WorkerOutput = {
-    tokens: 0, steps: 0, hadError: true, budgetBreach: null,
+    tokens: 0, steps: 0, hadError: true, budgetBreach: null, peakPromptTokens: 0,
     error: err instanceof Error ? (err.stack ?? err.message) : String(err),
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);

@@ -5,10 +5,14 @@ import { describe, test, expect, afterAll } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { splitOf } from '../packages/core/src/index.js';
-import { DEFAULT_VALIDATE_RETRIES, parseArgv, parseCommon } from './bench.js';
+import {
+  LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
+  encodeLongHorizonSpec, renderLongHorizonAnswerFile, splitOf,
+} from '../packages/core/src/index.js';
+import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, parseArgv, parseCommon } from './bench.js';
 import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus.js';
-import { assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox.js';
+import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon.js';
+import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox.js';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const scratch: string[] = [];
@@ -48,6 +52,12 @@ describe('parseCommon — repeats and the validation retry budget', () => {
   test('accepts a repeat count and zero retries', () => {
     expect(opts({ repeats: '3' }).repeats).toBe(3);
     expect(opts({ 'validate-retries': '0' }).validateRetries).toBe(0);
+  });
+
+  test('defaults to the defect family and refuses a corpus that does not exist', () => {
+    expect(opts().family).toBe('defect');
+    for (const family of BENCH_FAMILIES) expect(opts({ family }).family).toBe(family);
+    expect(() => opts({ family: 'nope' })).toThrow(/--family must be one of/);
   });
 
   test('refuses counts that would silently change what is being measured', () => {
@@ -95,11 +105,11 @@ describe('sandboxEnv', () => {
 
 describe('createAttemptSandbox', () => {
   const { patches } = loadBenchCorpus(REPO_ROOT);
-  const defect = patches.get('ema-alpha-weights')!;
+  const prepare = (dir: string) => applyPatch(dir, patches.get('ema-alpha-weights')!, { reverse: false });
 
   test('applies the defect and keeps the copy independent of the real repo', () => {
     const runRoot = tempDir('bench-sbx-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a1', defect });
+    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a1', prepare });
     const target = 'packages/core/src/craft/ema.ts';
     expect(readFileSync(join(sandbox.dir, target), 'utf8')).not.toBe(readFileSync(join(REPO_ROOT, target), 'utf8'));
 
@@ -111,7 +121,7 @@ describe('createAttemptSandbox', () => {
 
   test('the task corpus is absent from the sandbox — a solver cannot read any task', () => {
     const runRoot = tempDir('bench-seal-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a2', defect });
+    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a2', prepare });
     expect(existsSync(join(REPO_ROOT, 'tests', 'bench', 'tasks.jsonl'))).toBe(true);
     expect(existsSync(join(sandbox.dir, 'tests', 'bench'))).toBe(false);
     // The rest of tests/ is still there, so the checks can run.
@@ -124,7 +134,7 @@ describe('createAttemptSandbox', () => {
   // multi-gigabyte path), while the workspace scope is re-pointed at the copy.
   test('third-party deps are shared, and .git is not copied', () => {
     const runRoot = tempDir('bench-nm-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a3', defect });
+    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a3', prepare });
     const shared = join(sandbox.dir, 'node_modules', 'ai');
     expect(lstatSync(shared).isSymbolicLink()).toBe(true);
     expect(realpathSync(shared).startsWith(realpathSync(sandbox.dir))).toBe(false);
@@ -139,7 +149,7 @@ describe('createAttemptSandbox', () => {
   // facts-confidence-default-zero validating as "breaks nothing".
   test('workspace links resolve inside the copy, not back into the real repo', () => {
     const runRoot = tempDir('bench-ws-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', defect });
+    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', prepare });
     // Bun hoists workspace links to the ROOT node_modules — the per-package
     // paths this used to check have not existed for some time, so it ENOENTed
     // instead of catching the leak it was written to catch.
@@ -152,8 +162,8 @@ describe('createAttemptSandbox', () => {
 
   test('each attempt gets its own PROTEUS_HOME, and it is not the real one', () => {
     const runRoot = tempDir('bench-home-');
-    const one = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a4', defect });
-    const two = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a5', defect });
+    const one = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a4', prepare });
+    const two = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a5', prepare });
     expect(one.proteusHome).not.toBe(two.proteusHome);
     expect(one.proteusHome.startsWith(runRoot)).toBe(true);
     expect(one.proteusHome).not.toContain(join(homedir(), '.proteus'));
@@ -298,6 +308,113 @@ describe('loadBenchCorpus', () => {
   test('reports the line number for malformed JSON', () => {
     const root = fixtureRoot('{not json', { patch: 'x' });
     expect(() => loadBenchCorpus(root)).toThrow(/tasks\.jsonl:1/);
+  });
+});
+
+describe('the long-horizon corpus', () => {
+  const { corpus, specs, path } = loadLongHorizonCorpus(REPO_ROOT);
+
+  test('loads with a generator spec for every task, in both shapes', () => {
+    expect(corpus.dev.length + corpus.sealed.size).toBe(specs.size);
+    expect(corpus.dev.length).toBeGreaterThan(0);
+    expect(path.endsWith(join('tests', 'bench', 'longhorizon.jsonl'))).toBe(true);
+    expect(new Set([...specs.values()].map((s) => s.shape))).toEqual(new Set(['digest', 'continuation']));
+    for (const task of corpus.dev) expect(splitOf(task.id)).toBe('dev');
+  });
+
+  test('the held-out split is large enough to reach significance at all', () => {
+    expect(corpus.sealed.size).toBeGreaterThanOrEqual(6);
+  });
+
+  test('a task carries its spec in the check argv, so the manifest covers the corpus size', () => {
+    for (const task of corpus.dev) {
+      const check = task.checks[0]!;
+      expect(check.id).toBe('longhorizon-answers');
+      expect(check.command.slice(0, 2)).toEqual(['bun', 'scripts/bench-longhorizon-check.ts']);
+      expect(decodeLongHorizonSpec(check.command[2]!)).toEqual(specs.get(task.id)!);
+    }
+  });
+
+  test('the checker and everything it imports are guarded — the apparatus cannot be edited', () => {
+    for (const task of corpus.dev) {
+      expect(task.guarded).toEqual(['scripts', 'packages/core/src']);
+      expect(task.editable).toEqual([LONGHORIZON_ANSWER_FILE]);
+    }
+  });
+
+  test('regenerating a task at a different size changes the manifest', () => {
+    const bigger = loadLongHorizonCorpus(REPO_ROOT);
+    expect(bigger.corpus.manifestHash).toBe(corpus.manifestHash);
+    const [id, spec] = [...specs.entries()][0]!;
+    expect(encodeLongHorizonSpec({ ...spec, entries: spec.entries + 1 }))
+      .not.toBe(encodeLongHorizonSpec(specs.get(id)!));
+  });
+
+  function longHorizonFixture(line: unknown): string {
+    const root = tempDir('bench-lh-fixture-');
+    mkdirSync(join(root, 'tests', 'bench'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), `${JSON.stringify(line)}\n`);
+    return root;
+  }
+
+  test('refuses a spec that cannot produce a task', () => {
+    const base = { id: 'demo', title: 'demo', shape: 'continuation', seed: 1, entries: 100, filler: 10 };
+    expect(() => loadLongHorizonCorpus(longHorizonFixture({ ...base, markers: 2, parts: 4 })))
+      .toThrow(/every part must plant at least one/);
+    expect(() => loadLongHorizonCorpus(longHorizonFixture({ ...base, shape: 'digest', markers: 2, parts: 3 })))
+      .toThrow(/digest shape has exactly one part/);
+  });
+
+  test('reports the line number for malformed JSON, and refuses an empty corpus', () => {
+    const root = tempDir('bench-lh-empty-');
+    mkdirSync(join(root, 'tests', 'bench'), { recursive: true });
+    writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), '{not json\n');
+    expect(() => loadLongHorizonCorpus(root)).toThrow(/longhorizon\.jsonl:1/);
+    writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), '# only a comment\n');
+    expect(() => loadLongHorizonCorpus(root)).toThrow(/no tasks/);
+  });
+});
+
+// The instrument, end to end, without a sandbox or a model: materialize a
+// task's corpus, write the answers a perfect solver would write, and let the
+// REAL check command score it. An oracle that cannot pass and a null that can
+// would both mean the family measures nothing.
+describe('the long-horizon check scores what was actually materialized', () => {
+  const { corpus, specs } = loadLongHorizonCorpus(REPO_ROOT);
+  const task = corpus.dev.find((t) => specs.get(t.id)!.shape === 'continuation')!;
+  const spec = specs.get(task.id)!;
+
+  function runCheck(dir: string): number {
+    const [, script, encoded] = task.checks[0]!.command;
+    return Bun.spawnSync(['bun', join(REPO_ROOT, script!), encoded!], { cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
+  }
+
+  test('materializes every part, and the null control fails for want of an answer', () => {
+    const dir = tempDir('bench-lh-null-');
+    materializeLongHorizon(dir, spec);
+    for (let part = 1; part <= spec.parts; part++) {
+      expect(existsSync(join(dir, `bench-corpus/part-${part}`))).toBe(true);
+    }
+    expect(runCheck(dir)).toBe(1);
+  });
+
+  test('the oracle answer file passes; one wrong line fails the whole task', () => {
+    const dir = tempDir('bench-lh-oracle-');
+    materializeLongHorizon(dir, spec);
+    const answers = renderLongHorizonAnswerFile(buildLongHorizonQuestions(spec));
+    writeFileSync(join(dir, LONGHORIZON_ANSWER_FILE), answers);
+    expect(runCheck(dir)).toBe(0);
+
+    writeFileSync(join(dir, LONGHORIZON_ANSWER_FILE), answers.replace(/^q-count: .*$/m, 'q-count: 999999'));
+    expect(runCheck(dir)).toBe(1);
+  });
+
+  test('deleting the corpus does not change the score — the answer key is not on disk', () => {
+    const dir = tempDir('bench-lh-gone-');
+    materializeLongHorizon(dir, spec);
+    writeFileSync(join(dir, LONGHORIZON_ANSWER_FILE), renderLongHorizonAnswerFile(buildLongHorizonQuestions(spec)));
+    rmSync(join(dir, 'bench-corpus'), { recursive: true, force: true });
+    expect(runCheck(dir)).toBe(0);
   });
 });
 

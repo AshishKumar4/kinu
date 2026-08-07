@@ -19,9 +19,26 @@ the harness will say so.
 bun scripts/bench.ts validate --run-root /tmp/bench
 bun scripts/bench.ts compare  --run-root /tmp/bench --a null --b oracle --sealed --repeats 3
 bun scripts/bench.ts gain     --run-root /tmp/bench --stateful agent-evolving --stateless agent
+bun scripts/bench.ts validate --run-root /tmp/bench --family longhorizon
 ```
 
-## The task family
+## Two families, one harness
+
+`--family` selects the corpus. Everything downstream — the sandbox isolation,
+the seal, the pairing, the statistics, the report, the acceptance rule — is
+shared; the families differ in exactly three things (what the corpus is, how a
+sandbox is seeded, and what the controls do).
+
+| family | a task is | scored by |
+|---|---|---|
+| `defect` (default) | a seeded defect in this repo | this repo's own checks |
+| `longhorizon` | a generated corpus and three questions about it | exact answers, no LLM |
+
+They are never mixed. They measure different things, so one pass rate over both
+would be a number about nothing — `--family` reaches the config hash through the
+corpus path, and two runs on different families are not comparable.
+
+## The defect family
 
 A task is **a seeded defect in this repo**, and the score is **this repo's own
 checks**. `tests/bench/tasks.jsonl` holds 165 of them; `tests/bench/patches/<id>.patch`
@@ -80,6 +97,89 @@ signal.
 `BENCH_SUITES` in `scripts/bench-corpus.ts` also defines a `lean` suite over
 `scripts/verify-lean.sh`. The check mechanism is just an argv and an exit code,
 so the Lean build is a first-class scoring target; no Lean tasks ship yet.
+
+## The long-horizon family
+
+The defect corpus scores a repo fix. It is blind to everything context-shaped:
+whether a turn drowned in tool bulk, whether a fact survived compaction, where
+peak prompt tokens went. `tests/bench/longhorizon.jsonl` is the corpus that
+isn't — 24 tasks over four length buckets (~35k / ~137k / ~549k / ~1.1M
+characters) crossed with the planted-fact count, in two shapes.
+
+The corpus file holds **generator parameters only**. The materials, the asks and
+the answer key are all derived from them by
+`packages/core/src/bench/longhorizon.ts`, so nothing in the corpus is a fact
+somebody wrote down and the answer key exists only as a pure function of a seed.
+
+**Shape (a) — single-query digestion.** The materials are materialized into the
+sandbox, the agent gets one ask, and it writes `bench-answer.txt`. This is the
+shape every published RLM result uses.
+
+**Shape (b) — multi-episode continuation.** The same corpus is delivered across
+K asks on one session. Each part is **deleted** once its ask is answered, and
+the compaction ladder is forced to fold at every episode boundary
+(`armForcedCompaction`), so the final ask is answerable only from what survived.
+The RLM literature has no instrument of this kind — every one of its results is
+single-query over an inert corpus — and it is where a claim about navigation
+manifests, agent-invoked folding, or turn-cumulative budgets can get a number.
+
+Deleting the parts is what makes the shape honest. An agent that re-reads the
+corpus at the end is not demonstrating continuation, and "please don't re-read"
+is a rubric rather than a measurement. An agent that wrote its **own** notes to
+a file keeps them, and should: that is the lossless-archive discipline, done by
+hand, and it is exactly the behaviour worth rewarding.
+
+**Three aggregation arities** over one corpus, all spanning every part:
+
+| question | arity | answer |
+|---|---|---|
+| `q-count` | whole-corpus aggregation | how many entries failed in one component |
+| `q-list` | exact enumeration | every entry id carrying a planted marker |
+| `q-verbatim` | recall of one planted fact | the value on a named marker |
+
+Markers are ranked **within each part** rather than globally, so no part can end
+up planting nothing — a part the final ask does not depend on would be an
+episode measuring nothing. The verbatim target is always planted in part 1, the
+part that has been through the most compaction by the time the final ask lands.
+
+**Scoring** is `bun scripts/bench-longhorizon-check.ts <encoded-spec>`, run in
+the sandbox like every other check. All-or-nothing: every question must match.
+A count is read as its first integer, a list as its set of entry ids, a planted
+value as its exact token — prose around an answer is tolerated, a wrong answer
+inside prose is not, because punctuation is not what this measures.
+
+Two properties fall out of generating the key rather than storing it:
+
+- **There is no answer key on disk.** The expected answers are recomputed from
+  the spec, and the spec reaches the checker through the harness's argv — the
+  task corpus is excluded from every sandbox, so a solver cannot read it.
+- **Tampering with the materials cannot help.** Scoring never reads them.
+  `scripts` and `packages/core/src` — the checker and everything it imports —
+  are restored from the pristine tree before the check runs, so the solver's
+  edit surface on these tasks is the answer file and its own notes.
+
+`bench validate --family longhorizon` proves the same precondition the defect
+family does: 24/24 fail with nothing done and pass under the oracle, in about
+five seconds and with no model.
+
+**Power.** 10 dev / 14 sealed. The seal can reach p = 2·0.5¹⁴ at best, so it can
+produce a significant result, but 14 pairs resolve only a large effect — read
+the `detectable at this n` line, not the headline.
+
+## Cost, alongside the effect
+
+Every comparison reports two cost numbers per variant, because a variant that
+wins by spending twice as much has not won the same thing:
+
+- **tokens/task** — mean over tasks of the per-attempt total. What an attempt costs.
+- **peak prompt tokens** — the largest per-turn prompt the provider actually
+  priced, over the whole ask sequence (read from `compaction_state.
+  last_prompt_tokens` after each ask). How big the working set got.
+
+A context-discipline change is supposed to move the second without moving the
+first, which is why they are reported separately and why the peak is a **maximum**
+— averaging peaks would report a working set no attempt ever reached. Both read
+0 for the deterministic controls, which make no model calls.
 
 ## How the guarantees are enforced
 
@@ -273,7 +373,7 @@ interval spans zero, and "the stateful arm did WORSE" when it is negative.
 | variant | model calls | what it is |
 |---|---|---|
 | `null` | none | no-op control; must fail every task |
-| `oracle` | none | reverses the defect; must pass every task |
+| `oracle` | none | reverses the defect / writes the generated answers; must pass every task |
 | `noisy:<rate>` | none | seeded synthetic solver with a known success rate |
 | `agent` | yes | Proteus from a fresh v0 workspace per task |
 | `agent-evolving` | yes | Proteus with evolution live, state carried across the sequence |
@@ -283,11 +383,14 @@ oracle must score 1.0 and a null 0.0 or the harness is broken, and two noisy
 oracles with a known gap must be recovered by the statistics or the statistics
 are broken.
 
-Agent variants run in a subprocess (`scripts/bench-agent-worker.ts`). That is not
-incidental — the local shell and laptop executor root themselves at
+Every variant exists in both families; the family decides which factory builds
+it. Agent variants run in a subprocess (`scripts/bench-agent-worker.ts`). That is
+not incidental — the local shell and laptop executor root themselves at
 `process.cwd()` and `PROTEUS_HOME` is read once at module load, so an in-process
 driver would run every attempt against the harness's own working directory and
-home.
+home. The worker drives a whole **ask sequence** on one session: one ask for a
+defect task, one per episode plus a final ask for a continuation task, arming a
+forced compaction and removing the spent materials in between.
 
 ## What is instrument, and what is demonstrated
 

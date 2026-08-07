@@ -79,7 +79,76 @@ interface WorkerOutput {
   steps: number;
   hadError: boolean;
   budgetBreach: 'tokens' | null;
+  peakPromptTokens: number;
   error?: string;
+}
+
+export interface AgentWorkerOptions extends Omit<AgentSolverOptions, 'id' | 'description'> {
+  ctx: SolverContext;
+  /** What the workspace is told it is for. */
+  purpose: string;
+  /** Sent in order on ONE session. A defect task sends one. */
+  asks: readonly string[];
+  /** Parallel to `asks`: a sandbox-relative path removed once that ask has been
+   *  answered, or null. */
+  removeAfterAsk: ReadonlyArray<string | null>;
+}
+
+/** Drive the agent worker over a task's ask sequence, in its own process.
+ *  Shared by both families — the only thing that differs between them is what
+ *  the asks say and what gets removed between them. */
+export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverResult> {
+  const { ctx } = opts;
+  const home = opts.state === 'shared'
+    ? (opts.sharedHome ?? (() => { throw new Error('shared-state solver needs a sharedHome'); })())
+    : ctx.proteusHome;
+  const workspaceName = opts.state === 'shared' ? 'bench' : `bench-${ctx.task.id}`;
+
+  const input = {
+    dbPath: join(home, workspaceName, 'agent.db'),
+    workspaceName,
+    purpose: opts.purpose,
+    asks: opts.asks,
+    removeAfterAsk: opts.removeAfterAsk,
+    maxTokens: ctx.budget.maxTokens,
+    autoEvolve: opts.autoEvolve,
+    llm: opts.llm,
+    sessionId: opts.state === 'shared' ? 'bench' : ctx.task.id,
+  };
+
+  const proc = Bun.spawn(
+    ['bun', join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts')],
+    {
+      cwd: ctx.sandboxDir,
+      env: { ...sandboxEnv(home), PROTEUS_HOME: home },
+      stdin: Buffer.from(JSON.stringify(input)),
+      stdout: 'pipe',
+      stderr: 'pipe',
+      signal: ctx.signal,
+    },
+  );
+
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+
+  const line = stdout.trim().split('\n').filter(Boolean).pop();
+  if (!line) {
+    return { error: `agent worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
+  }
+  let parsed: WorkerOutput;
+  try {
+    parsed = JSON.parse(line) as WorkerOutput;
+  } catch {
+    return { error: `agent worker emitted unparseable output: ${line.slice(0, 400)}` };
+  }
+  return {
+    tokens: parsed.tokens,
+    peakPromptTokens: parsed.peakPromptTokens,
+    ...(parsed.error ? { error: parsed.error } : {}),
+  };
 }
 
 /** The real thing: one Proteus turn against the sandbox, in its own process. */
@@ -87,55 +156,12 @@ export function createAgentSolver(opts: AgentSolverOptions): Solver {
   return {
     id: opts.id,
     description: opts.description,
-    async solve(ctx: SolverContext): Promise<SolverResult> {
-      const home = opts.state === 'shared'
-        ? (opts.sharedHome ?? (() => { throw new Error('shared-state solver needs a sharedHome'); })())
-        : ctx.proteusHome;
-      const workspaceName = opts.state === 'shared' ? 'bench' : `bench-${ctx.task.id}`;
-
-      const input = {
-        dbPath: join(home, workspaceName, 'agent.db'),
-        workspaceName,
-        purpose: 'Fix defects in a TypeScript repository so its own test suite and typecheck pass.',
-        prompt: ctx.task.prompt,
-        maxTokens: ctx.budget.maxTokens,
-        autoEvolve: opts.autoEvolve,
-        llm: opts.llm,
-        sessionId: opts.state === 'shared' ? 'bench' : ctx.task.id,
-      };
-
-      const proc = Bun.spawn(
-        ['bun', join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts')],
-        {
-          cwd: ctx.sandboxDir,
-          env: { ...sandboxEnv(home), PROTEUS_HOME: home },
-          stdin: Buffer.from(JSON.stringify(input)),
-          stdout: 'pipe',
-          stderr: 'pipe',
-          signal: ctx.signal,
-        },
-      );
-
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      await proc.exited;
-
-      const line = stdout.trim().split('\n').filter(Boolean).pop();
-      if (!line) {
-        return { error: `agent worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
-      }
-      let parsed: WorkerOutput;
-      try {
-        parsed = JSON.parse(line) as WorkerOutput;
-      } catch {
-        return { error: `agent worker emitted unparseable output: ${line.slice(0, 400)}` };
-      }
-      return {
-        tokens: parsed.tokens,
-        ...(parsed.error ? { error: parsed.error } : {}),
-      };
-    },
+    solve: (ctx: SolverContext) => runAgentWorker({
+      ...opts,
+      ctx,
+      purpose: 'Fix defects in a TypeScript repository so its own test suite and typecheck pass.',
+      asks: [ctx.task.prompt],
+      removeAfterAsk: [null],
+    }),
   };
 }

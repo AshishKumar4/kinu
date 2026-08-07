@@ -22,7 +22,7 @@ function attempt(taskId: string, variantId: string, passed: boolean, extra: Part
   return {
     taskId, variantId, slot: variantId === CONFIG.variantA ? 'a' : 'b', repeat: 0,
     passed, checks: [{ id: 'c', passed, exitCode: passed ? 0 : 1, durationMs: 5, output: '' }],
-    durationMs: 10, tokens: 100, budgetBreach: null, ...extra,
+    durationMs: 10, tokens: 100, peakPromptTokens: 1000, budgetBreach: null, ...extra,
   };
 }
 
@@ -98,9 +98,9 @@ describe('buildBenchReport', () => {
         ...repeats('t1', 'candidate', [true, true, true]),
         // Emitted out of repeat order on purpose: the report must not depend
         // on the order the runner happened to produce.
-        attempt('t2', 'baseline', false, { repeat: 1, tokens: 400, durationMs: 30 }),
-        attempt('t2', 'baseline', false, { repeat: 0, tokens: 200, durationMs: 10 }),
-        attempt('t2', 'baseline', false, { repeat: 2, tokens: 300, durationMs: 20, budgetBreach: 'tokens' }),
+        attempt('t2', 'baseline', false, { repeat: 1, tokens: 400, durationMs: 30, peakPromptTokens: 9000 }),
+        attempt('t2', 'baseline', false, { repeat: 0, tokens: 200, durationMs: 10, peakPromptTokens: 3000 }),
+        attempt('t2', 'baseline', false, { repeat: 2, tokens: 300, durationMs: 20, budgetBreach: 'tokens', peakPromptTokens: 6000 }),
         ...repeats('t2', 'candidate', [false, false, false]),
       ],
     });
@@ -109,6 +109,10 @@ describe('buildBenchReport', () => {
     expect(t2).toMatchObject({ taskId: 't2', attempts: 3, passesA: 0, passesB: 0 });
     // Mean per attempt, so a k=3 row reads against the same per-attempt budget.
     expect(t2!.tokensA).toBe(300);
+    // Cost fields are means so a k=3 row reads against the same per-attempt
+    // budget a k=1 row does — except the PEAK, which is a maximum: averaging
+    // peaks would report a working set no attempt ever reached.
+    expect(t2!.peakPromptTokensA).toBe(9000);
     expect(t2!.durationMsA).toBe(20);
     expect(t2!.breachA).toBe('tokens');
     expect(report.budgetBreaches).toBe(1);

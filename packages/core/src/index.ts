@@ -364,6 +364,7 @@ export {
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
 } from './prompts/structured.js';
+export { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
 
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder.js';
@@ -728,7 +729,12 @@ export {
   type CompactionTriggerState,
 } from './orchestrator/turn-lifecycle.js';
 export {
-  createScaffoldLLMStream, createScaffoldCallTool, type ScaffoldBridgeOpts,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
+  SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
+  SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
+  SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
+  type ScaffoldBridgeOpts, type ScaffoldHistoryQuery,
+  type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host.js';
 export { runSampledShadowEval, type ShadowEvalConfig } from './orchestrator/shadow-eval.js';
 export {

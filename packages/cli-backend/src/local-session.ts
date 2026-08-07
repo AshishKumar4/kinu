@@ -65,7 +65,7 @@ import {
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
-  createScaffoldLLMStream, createScaffoldCallTool, runSampledShadowEval,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
   createStructuredJudge, modifyScaffold, listScaffoldArchive,
   getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
   initShadowTables,
@@ -828,6 +828,15 @@ export class LocalAgentSession implements BackendHost {
     return dropped;
   }
 
+  /** Fold the history at this point: the next turn's context transform runs
+   *  with `force`, so the ladder rebuilds now instead of waiting for the
+   *  measured token trigger. One-shot — `takeForceCompaction` consumes the
+   *  flag, so this can never loop. The session owns its compaction key, so a
+   *  caller marking a phase boundary never has to reconstruct it. */
+  armForcedCompaction(): void {
+    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
+  }
+
   /** Connect configured stdio MCP servers + merge their tools into the surface.
    *  Call once at startup (no-op for empty config). Idempotent-safe to skip. */
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
@@ -1201,6 +1210,7 @@ export class LocalAgentSession implements BackendHost {
         task: item.text,
         llmStream: this.makeScaffoldLLMStream(model, turnTools),
         callTool: this.makeScaffoldCallTool(turnTools),
+        history: this.makeScaffoldHistory(),
         timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
       },
     });
@@ -1472,6 +1482,7 @@ export class LocalAgentSession implements BackendHost {
       judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
       llmStream: this.makeScaffoldLLMStream(opts.model, opts.tools),
       callTool: this.makeScaffoldCallTool(opts.tools),
+      history: this.makeScaffoldHistory(),
       // A pending that delegates is judged on the scaffold delta alone, so
       // it gets a real default turn for the shadow task — same system prompt
       // and tool surface, isolated history.
@@ -1560,6 +1571,13 @@ export class LocalAgentSession implements BackendHost {
    *  scaffold-host). */
   private makeScaffoldCallTool(turnTools: ToolSet): NonNullable<ScaffoldRunOptions['callTool']> {
     return createScaffoldCallTool(() => turnTools);
+  }
+
+  /** `host.history` — a read-only, budgeted page of the conversation the
+   *  scaffold is the inference loop for. Resolved per call, so a scaffold that
+   *  reads twice in one turn sees the second read's state. */
+  private makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
+    return createScaffoldHistory(() => this.history);
   }
 
   /** Re-run a task for the replay-eval harness: the current system prompt

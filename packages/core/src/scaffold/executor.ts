@@ -61,6 +61,17 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
   function readMemory(path: string): Promise<string>;
   /** Append content to a memory file. */
   function appendMemory(path: string, content: string): Promise<string>;
+  /** Read a page of the conversation this loop is running for. READ-ONLY and
+   *  budgeted: at most 100 messages and 8000 chars each, and a page stops at
+   *  40000 chars total. \`offset\` counts back from the end when negative and
+   *  defaults to the tail; \`total\` and each entry's \`chars\` tell you what you
+   *  are NOT being shown, so page for the rest rather than asking for it all. */
+  function history(query?: { offset?: number; limit?: number; maxChars?: number }): Promise<{
+    total: number;
+    offset: number;
+    entries: Array<{ index: number; role: string; chars: number; text: string; truncated: boolean }>;
+    clipped: boolean;
+  }>;
 }`;
 
 /** What scaffold execution emits back to the caller. */
@@ -147,6 +158,14 @@ export interface ScaffoldRunOptions {
    * capability is unavailable and host.defaultInference returns an error.
    */
   defaultInference?: () => AsyncIterable<unknown>;
+  /**
+   * Read-only history bridge — when the scaffold calls host.history(query),
+   * this returns a budgeted page of the conversation it is the inference loop
+   * for. Absent means the capability is unavailable and host.history returns an
+   * error, exactly like the other optional bridges. Built by
+   * orchestrator/scaffold-host.ts, which owns the budget.
+   */
+  history?: (query: { offset?: number; limit?: number; maxChars?: number }) => Promise<unknown>;
   /** Hard timeout in milliseconds. Default 5 min. */
   timeoutMs?: number;
   /** Optional: override the scaffold code (for shadow-mode A/B). Default: rt.identity.scaffold.read(). */
@@ -159,12 +178,13 @@ function buildHostProvider(opts: {
   llmStream: ScaffoldRunOptions['llmStream'];
   callTool?: ScaffoldRunOptions['callTool'];
   defaultInference?: ScaffoldRunOptions['defaultInference'];
+  history?: ScaffoldRunOptions['history'];
   readMemory: (path: string) => Promise<string>;
   appendMemory: (path: string, content: string) => Promise<void>;
   capturedEvents: ScaffoldEvent[];
   state: { doneEmitted: boolean; finalResult: unknown };
 }): { name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>>; types: string } {
-  const { emit, llmStream, callTool, defaultInference, readMemory, appendMemory, capturedEvents, state } = opts;
+  const { emit, llmStream, callTool, defaultInference, history, readMemory, appendMemory, capturedEvents, state } = opts;
 
   async function pushEvent(ev: ScaffoldEvent): Promise<void> {
     capturedEvents.push(ev);
@@ -236,6 +256,15 @@ function buildHostProvider(opts: {
         return { error: msg };
       }
     },
+    history: async (query: unknown) => {
+      if (!history) return { error: 'host.history: unavailable in this runtime' };
+      const q = (query && typeof query === 'object' && !Array.isArray(query)) ? query as Record<string, unknown> : {};
+      try {
+        return await history(q);
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
     readMemory: async (path: unknown) => {
       try { return await readMemory(String(path)); }
       catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
@@ -293,6 +322,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const hostProvider = buildHostProvider({
     emit, llmStream, callTool,
     defaultInference: opts.defaultInference,
+    history: opts.history,
     readMemory: async (path) => (await rt.memory.read(path)) ?? '',
     appendMemory: async (path, content) => { await rt.memory.append(path, content); },
     capturedEvents, state,

@@ -9,5 +9,8 @@
     "rootDir": "..",
     "allowImportingTsExtensions": true
   },
-  "include": ["bench.ts", "bench.test.ts", "bench-corpus.ts", "bench-sandbox.ts", "bench-solvers.ts", "bench-agent-worker.ts"]
+  "include": [
+    "bench.ts", "bench.test.ts", "bench-corpus.ts", "bench-sandbox.ts", "bench-solvers.ts",
+    "bench-agent-worker.ts", "bench-longhorizon.ts", "bench-longhorizon-check.ts"
+  ]
 }

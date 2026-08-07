@@ -21,6 +21,7 @@
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn, type ShadowTrialVerdict,
@@ -111,6 +112,11 @@ export interface RunAutoShadowEvalOpts {
    *  When the pending delegates to the default loop, this runs it for the
    *  shadow task. Omitted → host.defaultInference returns an error. */
   defaultInference?: Parameters<typeof runScaffold>[0]['defaultInference'];
+  /** Read-only history bridge for the pending scaffold (host.history). Passed
+   *  through for the same reason callTool is: a pending judged without a
+   *  capability the live turn had is judged on a handicap, and a scaffold whose
+   *  whole point is context discipline would lose every trial. */
+  history?: Parameters<typeof runScaffold>[0]['history'];
   config?: Partial<AutoJudgeConfig>;
   /** Deterministic randomness override (used by tests). Drives both the
    *  sampling roll and the judge's presentation order. Default Math.random. */
@@ -183,6 +189,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       // and every applied decision is revertable from the changelog.
       callTool: opts.callTool,
       defaultInference: opts.defaultInference,
+      history: opts.history,
       scaffoldCodeOverride: pendingCode,
       timeoutMs: config.scaffoldTimeoutMs,
     });
@@ -193,15 +200,18 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
 
   const pendingOutput = pendingEvents.join('') || (pendingResult.error ?? '');
 
+  // Windowed ONCE, then judged and recorded from the same strings — so the
+  // trial row is exactly the evidence the verdict was formed on, rather than a
+  // differently-truncated view of it.
+  const evidence = {
+    task: evidenceWindow(opts.task, EVIDENCE_BUDGETS.shadowTask),
+    currentOutput: evidenceWindow(opts.currentOutput, EVIDENCE_BUDGETS.shadowOutput),
+    pendingOutput: evidenceWindow(pendingOutput, EVIDENCE_BUDGETS.shadowOutput),
+  };
+
   let judgeResult: ShadowTrialVerdict;
   try {
-    judgeResult = await judgeTrialOrderSwapped({
-      judge: opts.judge,
-      task: opts.task,
-      currentOutput: opts.currentOutput,
-      pendingOutput,
-      pendingFirst: rng() < 0.5,
-    });
+    judgeResult = await judgeTrialOrderSwapped({ ...evidence, judge: opts.judge, pendingFirst: rng() < 0.5 });
   } catch (err) {
     console.warn('[auto-judge] judge LLM failed:', err instanceof Error ? err.message : err);
     return { skipped: true };
@@ -212,9 +222,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
     // pending - 1 (the numbering is non-contiguous).
     currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql) ?? pending.version - 1,
     pendingVersion: pending.version,
-    task: opts.task.slice(0, 1000),
-    currentOutput: opts.currentOutput.slice(0, 4000),
-    pendingOutput: pendingOutput.slice(0, 4000),
+    ...evidence,
     judgeResult,
   });
 
@@ -318,7 +326,9 @@ function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdic
 }
 
 /** The judge prompt for one ordering. Carries NO provenance: neither response
- *  is identified as the incumbent, and the instructions say so explicitly. */
+ *  is identified as the incumbent, and the instructions say so explicitly.
+ *  Its inputs arrive already bounded (see `evidence` in runAutoShadowEval), so
+ *  there is exactly one place that decides how much of a turn is judged. */
 function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
   const responseA = pendingIsA ? opts.pendingOutput : opts.currentOutput;
   const responseB = pendingIsA ? opts.currentOutput : opts.pendingOutput;
@@ -333,11 +343,11 @@ function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
     'helpfulness and clarity together.',
     'Pick a winner ("a" / "b" / "tie") and give a one-sentence rationale.',
     '',
-    `Task:\n${opts.task.slice(0, 1500)}`,
+    `Task:\n${opts.task}`,
     '',
-    `Response A:\n${responseA.slice(0, 2500)}`,
+    `Response A:\n${responseA}`,
     '',
-    `Response B:\n${responseB.slice(0, 2500)}`,
+    `Response B:\n${responseB}`,
     '',
     'Respond with the structured JSON {winner, rationale, scoreA, scoreB},',
     'where scoreA and scoreB are plain numbers, not objects.',

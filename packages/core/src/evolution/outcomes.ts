@@ -19,6 +19,7 @@ import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
 import type { EvalInstance } from './gepa/types.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
@@ -101,9 +102,9 @@ export function buildOutcomeClassifierPrompt(input: {
     `You are reviewing how a conversation turn landed. The user sent a request, ` +
     `the assistant responded, and the user has now sent a FOLLOW-UP message. ` +
     `Classify what the follow-up reveals about the previous response.\n\n` +
-    `Previous user request:\n"${input.userMessage.slice(0, 1000)}"\n\n` +
-    `Assistant response:\n"${input.assistantResponse.slice(0, 2000)}"\n\n` +
-    `User's follow-up message:\n"${input.followup.slice(0, 1000)}"\n\n` +
+    `Previous user request:\n"${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n\n` +
+    `Assistant response:\n"${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"\n\n` +
+    `User's follow-up message:\n"${evidenceWindow(input.followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n\n` +
     `Outcomes:\n` +
     `- "accepted": the user moved on, built on the answer, or asked something new that presumes it worked.\n` +
     `- "corrected": the user re-asked the same thing, fixed a mistake, contradicted the answer, or had to ` +
@@ -239,7 +240,10 @@ export interface RecordTurnOutcomeInput {
 }
 
 /** Record (or, for a known turn id, replace — explicit thumbs override the
- *  classifier) one turn's outcome. Texts are truncated to keep rows bounded. */
+ *  classifier) one turn's outcome. Texts are windowed to keep rows bounded —
+ *  and this is the ceiling for everything downstream, since the GEPA eval
+ *  instances and the replay judge both read these rows and can never see more
+ *  than was stored. */
 export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInput): string {
   const id = `outc-${nanoid()}`;
   if (input.turnId) {
@@ -250,8 +254,9 @@ export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInpu
          user_message, assistant_response, followup, scaffold_version, created_at)
       VALUES
         (${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
-         ${input.confidence}, ${input.source}, ${input.userMessage.slice(0, 2000)},
-         ${input.assistantResponse.slice(0, 4000)}, ${input.followup?.slice(0, 2000) ?? null},
+         ${input.confidence}, ${input.source}, ${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.storedUserMessage)},
+         ${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.storedAssistantResponse)},
+         ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
          ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()})`;
   return id;
 }

@@ -1999,6 +1999,7 @@ export class OrchestratorAgent extends ActorAgent {
       emit: () => undefined, // RPC mode — events captured in result.events
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       scaffoldCodeOverride: codeOverride,
       timeoutMs: opts?.timeoutMs,
     });
@@ -2132,6 +2133,7 @@ export class OrchestratorAgent extends ActorAgent {
       emit: () => undefined,
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       scaffoldCodeOverride: codeOverride,
       timeoutMs: opts?.timeoutMs,
     });
@@ -2692,6 +2694,7 @@ export class OrchestratorAgent extends ActorAgent {
       emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       defaultInference: () => streamText({
         model: this.getModel(),
         messages: [{ role: 'user', content: task }],

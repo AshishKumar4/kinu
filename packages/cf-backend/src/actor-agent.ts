@@ -43,7 +43,7 @@ import {
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
-  createScaffoldLLMStream, createScaffoldCallTool, runSampledShadowEval,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
   JudgeOutputSchema,
   type StructuredJudgeFn, effortFor, type CompletedTurn,
   // canonical tool + prompt surface — single source of truth
@@ -711,6 +711,7 @@ export abstract class ActorAgent extends Think<Env> {
       // pending scaffold runs with the real tool surface, not the disabled
       // tool-call fallback that would penalize any tool-using pending.
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       // host.defaultInference for the pending: replay the EXACT streamText
       // opts the live answer ran with (full conversational context, system
       // prompt, tool surface) so a pending that delegates to the default
@@ -763,6 +764,14 @@ export abstract class ActorAgent extends Think<Env> {
     return createScaffoldCallTool(() => this.getRawTools());
   }
 
+  /** The scaffold's host.history bridge (core scaffold-host): a read-only,
+   *  budgeted page of THIS turn's prepared messages — the same stream the
+   *  scaffold is the inference loop for. Read per call, so a scaffold running
+   *  across a turn sees the messages as they stand when it looks. */
+  protected makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
+    return createScaffoldHistory(() => (this._lastTurnOpts?.messages ?? []) as ModelMessage[]);
+  }
+
   /**
    * Inference seam override — THE single production chat path on Think, for
    * EVERY actor. A facet that evolves a scaffold it cannot run is a dead
@@ -804,6 +813,7 @@ export abstract class ActorAgent extends Think<Env> {
         task: extractLastUserText((this._lastTurnOpts?.messages ?? []) as ModelMessage[]),
         llmStream: this.makeScaffoldLLMStream(),
         callTool: this.makeScaffoldCallTool(),
+        history: this.makeScaffoldHistory(),
         timeoutMs: 5 * 60 * 1000,
       },
     });

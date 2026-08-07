@@ -157,6 +157,30 @@ models the judging protocol itself). At the shipping settings a genuinely
 better scaffold is promoted about 62% of the time, against a worst case of
 about 3.2% for promoting a clearly worse one.
 
+### How much of a turn a judge actually sees
+
+Every reader in this loop — the shadow judge, the GEPA reflector, the turn
+outcome classifier, the replay judge — used to carry its own hard-coded
+`slice(0, n)`: the FIRST n characters. That is not a cost bound, it is a blind
+spot with a shape. A turn whose payoff lands at step 9 of 12 was invisible to a
+judge reading its opening 2,500 characters, so the loop could not select for
+long-horizon behaviour at all.
+
+`core/src/prompts/evidence-window.ts` is now the single source. `evidenceWindow`
+keeps head **and** tail and names what it dropped, on an even split — a tool
+result's head carries the command echo, but a judged trajectory carries its
+outcome at the end, and the outcome is what is being judged. The budgets are 4×
+their predecessors and, for the first time, **ordered**: a reader never asks for
+more than the row it reads was stored at, which is why `turn_outcomes` had to be
+widened first (GEPA's eval instances and the replay judge both read those rows).
+A candidate's *source* stays head-truncated rather than windowed — a rewrite of
+code whose middle was elided comes back with a hole.
+
+The protocols, thresholds and sampling rates above are unchanged by this. That
+is not the same as unaffected: the Monte Carlo that settled them modelled the
+OLD evidence, and richer evidence moves both decisive yield and tie rate, so
+those constants are due a re-run against the new budgets.
+
 The archive keeps **every** version — it is a read model over
 `scaffold_versions` joined to `scaffold_evaluations`, with no eviction — so a
 rolled-back variant remains available as a future stepping stone.

@@ -79,6 +79,11 @@ export interface AttemptOutcome {
   checks: readonly CheckOutcome[];
   durationMs: number;
   tokens: number;
+  /** Largest per-turn prompt the provider actually priced over the attempt, or
+   *  0 when the variant made no model call. Total tokens says what an attempt
+   *  cost; this says how big its working set got, and a context-discipline
+   *  change moves the two independently. */
+  peakPromptTokens: number;
   /** null when the attempt stayed inside its envelope. */
   budgetBreach: BudgetBreach | null;
   error?: string;
@@ -104,6 +109,8 @@ export interface SolverContext {
 
 export interface SolverResult {
   tokens?: number;
+  /** See AttemptOutcome.peakPromptTokens. Deterministic controls omit it. */
+  peakPromptTokens?: number;
   error?: string;
 }
 
