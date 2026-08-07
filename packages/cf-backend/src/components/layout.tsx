@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { BrainIcon, GearIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
+import { BrainIcon, GearIcon, GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 
@@ -36,6 +36,9 @@ export default function Layout() {
           </Link>
         </div>
         <div className="flex items-center gap-1">
+          <a href="https://github.com/AshishKumar4/Proteus" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
+            <GithubLogoIcon size={17} />
+          </a>
           <button type="button" onClick={() => setShowCreate(true)} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </button>

@@ -194,10 +194,19 @@ export default function Sidebar() {
     <div className="flex h-full min-h-0 flex-col">
       {/* Logo + new workspace */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
-        <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
-          <BrainIcon size={22} weight="duotone" className="p-accent" />
-          <span className="font-medium tracking-tight">Proteus</span>
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
+            <BrainIcon size={22} weight="duotone" className="p-accent" />
+            <span className="font-medium tracking-tight">Proteus</span>
+          </Link>
+          <a
+            href="https://github.com/AshishKumar4/Proteus"
+            target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"
+            className="flex size-8 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text transition-colors"
+          >
+            <GithubLogoIcon size={17} />
+          </a>
+        </div>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-3 py-2 rounded-lg p-card hover:p-card-hover transition-colors text-sm cursor-pointer"
@@ -307,15 +316,6 @@ export default function Sidebar() {
               <span>Account settings</span>
             </Link>
             <ModeToggle />
-            <a
-              href="https://github.com/AshishKumar4/Proteus"
-              target="_blank" rel="noopener noreferrer"
-              onClick={() => setShowUserMenu(false)}
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
-            >
-              <GithubLogoIcon size={14} />
-              <span>GitHub</span>
-            </a>
             <a
               href="/logout"
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover"
