@@ -6,6 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   listScaffoldArchive,
+  listRejectedProposals,
   selectEvolutionBase,
   modifyScaffold,
   applyPromotionDecision,
@@ -17,6 +18,7 @@ import {
   buildScaffoldProposalPrompt,
   type ScaffoldArchiveEntry,
 } from '../src/index.js';
+import { clusterPathologies } from '../src/evolution/pathology.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import { createTestRuntime } from './helpers.js';
 
@@ -41,7 +43,7 @@ async function seedV0(rt: AgentRuntime): Promise<void> {
 
 function entry(over: Partial<ScaffoldArchiveEntry>): ScaffoldArchiveEntry {
   return {
-    version: 1, parentVersion: 0, status: 'historical', rationale: 'r', writtenAt: 0,
+    version: 1, parentVersion: 0, status: 'historical', rationale: 'r', pathology: null, writtenAt: 0,
     trials: 0, wins: 0, losses: 0, ties: 0, winRate: null,
     ...over,
   };
@@ -262,6 +264,148 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
   });
 });
 
+describe('pathology coverage — the diversity signal beside the clade score', () => {
+  function seq(...rolls: number[]): () => number {
+    let i = 0;
+    return () => rolls[i++] ?? 0;
+  }
+
+  /** The policy WITHOUT the diversity term — clade + novelty only. The
+   *  reference a pathology-free archive has to reproduce exactly. */
+  function noDiversityPick(archive: ReadonlyArray<ScaffoldArchiveEntry>, roll: number): number {
+    return selectEvolutionBase(
+      archive.map((e) => ({ ...e, pathology: null })),
+      { exploreShare: 1, random: seq(0, roll) },
+    )!.version;
+  }
+
+  test('a pathology-free archive reproduces the pre-pathology policy exactly', () => {
+    const archive: ScaffoldArchiveEntry[] = [
+      entry({ version: 3, parentVersion: 2, status: 'current', trials: 5, wins: 4, losses: 1, winRate: 0.8 }),
+      entry({ version: 2, parentVersion: 1, status: 'historical', trials: 4, wins: 3, losses: 1, winRate: 0.75 }),
+      entry({ version: 1, parentVersion: null, status: 'rolled_back', trials: 2, wins: 0, losses: 2, winRate: 0 }),
+    ];
+    for (const roll of [0, 0.05, 0.2, 0.37, 0.5, 0.63, 0.8, 0.99]) {
+      expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
+        .toBe(noDiversityPick(archive, roll));
+    }
+  });
+
+  test('a thinly-covered cell outranks a crowded one at equal clade and trials', () => {
+    // Identical in every scored respect; they differ only in how many
+    // versions already target the cell each was written for.
+    const crowded: ScaffoldArchiveEntry[] = [
+      entry({ version: 4, parentVersion: null, status: 'current', pathology: 'error/code', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+      entry({ version: 3, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+      entry({ version: 2, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+      entry({ version: 1, parentVersion: null, status: 'historical', pathology: 'overreach/prose', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+    ];
+    let s = 7;
+    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+    const picks: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    for (let i = 0; i < 600; i++) {
+      picks[selectEvolutionBase(crowded, { exploreShare: 1, random: rng })!.version]! += 1;
+    }
+    // v1 owns a cell of its own; v2 and v3 share theirs with the live current.
+    expect(picks[1]!).toBeGreaterThan(picks[2]!);
+    expect(picks[1]!).toBeGreaterThan(picks[3]!);
+    // …and the crowded cell keeps a real share — this is a tilt, not a filter.
+    expect(picks[2]! + picks[3]!).toBeGreaterThan(picks[1]!);
+  });
+
+  test('diversity never overrides a clade score', () => {
+    // v1 is the only version in its cell, but its lineage produced nothing.
+    // v2 shares a crowded cell and its lineage is proven. Clade wins.
+    const archive: ScaffoldArchiveEntry[] = [
+      entry({ version: 4, parentVersion: 2, status: 'current', pathology: 'error/code', trials: 40, wins: 40, losses: 0, winRate: 1 }),
+      entry({ version: 3, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 40, wins: 40, losses: 0, winRate: 1 }),
+      entry({ version: 2, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 40, wins: 40, losses: 0, winRate: 1 }),
+      entry({ version: 1, parentVersion: null, status: 'historical', pathology: 'repeat/terse', trials: 40, wins: 0, losses: 40, winRate: 0 }),
+    ];
+    let s = 3;
+    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+    const picks: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    for (let i = 0; i < 600; i++) {
+      picks[selectEvolutionBase(archive, { exploreShare: 1, random: rng })!.version]! += 1;
+    }
+    expect(picks[2]!).toBeGreaterThan(picks[1]!);
+    expect(picks[3]!).toBeGreaterThan(picks[1]!);
+  });
+
+  test('a version that named no cell claims no coverage credit', () => {
+    // Two unlabelled versions do not form a "cell" that dilutes each other,
+    // and they earn nothing for being unlabelled.
+    const archive: ScaffoldArchiveEntry[] = [
+      entry({ version: 3, parentVersion: null, status: 'current', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+      entry({ version: 2, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+      entry({ version: 1, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
+    ];
+    for (const roll of [0.1, 0.4, 0.9]) {
+      expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
+        .toBe(noDiversityPick(archive, roll));
+    }
+  });
+});
+
+describe('rejected proposals are queryable evidence', () => {
+  test('a rolled-back version reports its reason and the judge’s own words', async () => {
+    const rt = setupRt();
+    await seedV0(rt);
+
+    const proposal = `// pathology: error/code\n${scaffoldSrc('v1')}`;
+    const result = await modifyScaffold(rt, RATIONALE, proposal);
+    expect(result.ok).toBe(true);
+    for (const winner of ['current', 'current', 'pending'] as const) {
+      recordShadowEvaluation(rt.storage.sql, {
+        currentVersion: 0, pendingVersion: result.version!, task: 't',
+        currentOutput: 'a', pendingOutput: 'b',
+        judgeResult: { winner, rationale: `${winner} was clearer`, currentScore: 1, pendingScore: 0 },
+      });
+    }
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
+
+    const [rejected] = listRejectedProposals(rt.storage.sql);
+    expect(rejected!.kind).toBe('rolled_back');
+    expect(rejected!.version).toBe(result.version!);
+    expect(rejected!.reason).toBe('lost 2 of 3 decisive shadow trials');
+    expect(rejected!.pathology).toBe('error/code');
+    expect(rejected!.judgeRationales).toEqual(['current was clearer', 'current was clearer']);
+  });
+
+  test('a proposal discarded before any decisive trial says so', async () => {
+    const rt = setupRt();
+    await seedV0(rt);
+    const result = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
+
+    const [rejected] = listRejectedProposals(rt.storage.sql);
+    expect(rejected!.reason).toBe('discarded before any decisive shadow trial (0 trials, all ties)');
+    expect(rejected!.pathology).toBeNull();
+  });
+
+  test('a misevolution veto is rejection evidence too, with no version behind it', async () => {
+    const rt = setupRt();
+    await seedV0(rt);
+    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS evolution_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, message TEXT, data TEXT, created_at INTEGER)`);
+
+    const vetoed = `async function* run(rt, task) { await fetch("https://x"); }`;
+    expect((await modifyScaffold(rt, RATIONALE, vetoed)).ok).toBe(false);
+
+    const [rejected] = listRejectedProposals(rt.storage.sql);
+    expect(rejected!.kind).toBe('misevolution_veto');
+    expect(rejected!.version).toBeNull();
+    expect(rejected!.reason).toContain('network-egress');
+    expect(rejected!.rationale).toBe(RATIONALE);
+  });
+
+  test('an archive with nothing refused answers with nothing', async () => {
+    const rt = setupRt();
+    await seedV0(rt);
+    expect(listRejectedProposals(rt.storage.sql)).toEqual([]);
+  });
+});
+
 describe('proposal prompt cites the archive', () => {
   test('archive block lists variants with lineage + record and names the branch base', () => {
     const prompt = buildScaffoldProposalPrompt(scaffoldSrc('v1'), 'be terser', {
@@ -281,5 +425,62 @@ describe('proposal prompt cites the archive', () => {
   test('without archive context the prompt is unchanged in shape', () => {
     const prompt = buildScaffoldProposalPrompt(scaffoldSrc('v0'), 'be terser');
     expect(prompt).not.toContain('Scaffold archive');
+  });
+
+  test('a version’s pathology and why it was refused ride along on its line', () => {
+    const prompt = buildScaffoldProposalPrompt(scaffoldSrc('v1'), 'be terser', {
+      base: { version: 2, mode: 'current' },
+      entries: [
+        entry({ version: 2, parentVersion: 1, status: 'current', pathology: 'repeat/prose' }),
+        entry({ version: 1, parentVersion: 0, status: 'rolled_back', pathology: 'error/code', trials: 3, wins: 1, losses: 2, winRate: 1 / 3 }),
+      ],
+      rejections: new Map([[1, 'lost 2 of 3 decisive shadow trials']]),
+    });
+    expect(prompt).toContain('for repeat/prose');
+    expect(prompt).toContain('refused: lost 2 of 3 decisive shadow trials');
+  });
+});
+
+describe('proposal prompt requires a named pathology when cells exist', () => {
+  const cells = clusterPathologies([{
+    turnId: 't1', outcome: 'corrected', userMessage: 'add retries to the uploader',
+    assistantResponse: 'Sure, here is what I would do.\n'.repeat(40),
+    followup: 'you did not actually run anything', scaffoldVersion: 1,
+  }]);
+
+  test('the cells and the tag requirement both appear', () => {
+    const prompt = buildScaffoldProposalPrompt(scaffoldSrc('v0'), 'be terser', undefined, cells);
+    expect(prompt).toContain('Failure pathologies mined from turns');
+    expect(prompt).toContain(cells[0]!.id);
+    expect(prompt).toContain('6. Name the failure pathology');
+    expect(prompt).toContain('// pathology: <id>');
+  });
+
+  test('with no cells mined there is nothing to name and nothing is asked for', () => {
+    const prompt = buildScaffoldProposalPrompt(scaffoldSrc('v0'), 'be terser');
+    expect(prompt).not.toContain('Failure pathologies');
+    expect(prompt).not.toContain('6. Name the failure pathology');
+  });
+});
+
+describe('the named pathology is stamped on the version it belongs to', () => {
+  test('modifyScaffold reads the tag off the code, for every proposal path', async () => {
+    const rt = setupRt();
+    await seedV0(rt);
+    const tagged = `// pathology: no_action/prose\n${scaffoldSrc('v1')}`;
+    const result = await modifyScaffold(rt, RATIONALE, tagged);
+
+    const [row] = listScaffoldArchive(rt.storage.sql).filter((e) => e.version === result.version);
+    expect(row!.pathology).toBe('no_action/prose');
+  });
+
+  test('an untagged or invented pathology stamps nothing rather than a guess', async () => {
+    for (const code of [scaffoldSrc('v1'), `// pathology: made_up/cell\n${scaffoldSrc('v1')}`]) {
+      const rt = setupRt();
+      await seedV0(rt);
+      const result = await modifyScaffold(rt, RATIONALE, code);
+      const [row] = listScaffoldArchive(rt.storage.sql).filter((e) => e.version === result.version);
+      expect(row!.pathology).toBeNull();
+    }
   });
 });

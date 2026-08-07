@@ -16,6 +16,9 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
   // parent_version: DGM-style lineage — the version this one branched from
   // (NULL for the v0 bootstrap and pre-lineage rows). Drives the variant
   // archive in scaffold/archive.ts.
+  // pathology: the failure cell this version was written to fix
+  // (evolution/pathology.ts, `<complaint>/<shape>`; NULL when the proposal
+  // named none). Gives the archive a second axis to be read and branched on.
   execRaw(`
     CREATE TABLE IF NOT EXISTS scaffold_versions (
       version        INTEGER PRIMARY KEY,
@@ -24,7 +27,8 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
       canary_score   REAL,
       baseline_score REAL,
       status         TEXT NOT NULL DEFAULT 'current',
-      parent_version INTEGER
+      parent_version INTEGER,
+      pathology      TEXT
     )
   `);
   // Existing databases: backfill columns via ALTER if missing. Try/catch
@@ -34,6 +38,9 @@ export function initScaffoldTables(execRaw: RawSqlExec): void {
   } catch { /* column exists — fine */ }
   try {
     execRaw(`ALTER TABLE scaffold_versions ADD COLUMN parent_version INTEGER`);
+  } catch { /* column exists — fine */ }
+  try {
+    execRaw(`ALTER TABLE scaffold_versions ADD COLUMN pathology TEXT`);
   } catch { /* column exists — fine */ }
 
   execRaw(`

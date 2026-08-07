@@ -20,6 +20,10 @@ export interface ScaffoldArchiveEntry {
   parentVersion: number | null;
   status: ScaffoldStatus;
   rationale: string;
+  /** The failure cell this version was written to fix (`<complaint>/<shape>`,
+   *  evolution/pathology.ts), or null when the proposal named none. Read as a
+   *  plain string here: the archive keys on it, it never interprets it. */
+  pathology: string | null;
   writtenAt: number;
   /** Shadow-eval record while this version was the pending under trial. */
   trials: number;
@@ -38,11 +42,11 @@ export function listScaffoldArchive(sql: SqlExecutor, limit = 50): ScaffoldArchi
   try {
     type Row = {
       version: number; parent_version: number | null; status: ScaffoldStatus;
-      rationale: string; written_at: number;
+      rationale: string; pathology: string | null; written_at: number;
       trials: number | null; wins: number | null; losses: number | null; ties: number | null;
     };
     const rows = sql<Row>`
-      SELECT v.version, v.parent_version, v.status, v.rationale, v.written_at,
+      SELECT v.version, v.parent_version, v.status, v.rationale, v.pathology, v.written_at,
              COUNT(e.id) AS trials,
              SUM(CASE WHEN e.winner = 'pending' THEN 1 ELSE 0 END) AS wins,
              SUM(CASE WHEN e.winner = 'current' THEN 1 ELSE 0 END) AS losses,
@@ -59,6 +63,7 @@ export function listScaffoldArchive(sql: SqlExecutor, limit = 50): ScaffoldArchi
         parentVersion: r.parent_version,
         status: r.status,
         rationale: r.rationale,
+        pathology: r.pathology,
         writtenAt: r.written_at,
         trials: r.trials ?? 0,
         wins, losses,
@@ -69,6 +74,96 @@ export function listScaffoldArchive(sql: SqlExecutor, limit = 50): ScaffoldArchi
   } catch {
     return [];
   }
+}
+
+/** Why a proposal never became the live scaffold. Both kinds are states the
+ *  pipeline already records — this adds no state, only a way to ask. */
+export type RejectionKind = 'rolled_back' | 'misevolution_veto';
+
+export interface RejectedProposal {
+  kind: RejectionKind;
+  /** null for a veto: it was refused at gate 1, before a version existed. */
+  version: number | null;
+  at: number;
+  /** The proposal's own rationale, or the veto's recorded detail. */
+  rationale: string;
+  /** Why it was rejected, derived from the evidence below. */
+  reason: string;
+  pathology: string | null;
+  /** Shadow record for a rolled-back version; zeroes for a veto. */
+  trials: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  /** What the judge actually said on the trials the pending lost. */
+  judgeRationales: string[];
+}
+
+/**
+ * Every proposal that was refused, newest first, with the reason.
+ *
+ * Weng's negative-result preservation: a self-improving system that only
+ * records what worked cannot answer "what keeps failing to work". Both halves
+ * of the answer were already durable — `scaffold_versions.status =
+ * 'rolled_back'` for versions that lost their shadow trial or were discarded,
+ * `evolution_events` rows for misevolution vetoes — but nothing joined them to
+ * the judge's stated reasons, so nothing could be mined. This is that join and
+ * nothing more: a read model, no new table, no new status, no new write path.
+ */
+export function listRejectedProposals(sql: SqlExecutor, limit = 50): RejectedProposal[] {
+  const rejected: RejectedProposal[] = [];
+
+  for (const entry of listScaffoldArchive(sql, limit).filter((e) => e.status === 'rolled_back')) {
+    let judgeRationales: string[] = [];
+    try {
+      judgeRationales = sql<{ judge_rationale: string | null }>`
+        SELECT judge_rationale FROM scaffold_evaluations
+        WHERE pending_version = ${entry.version} AND winner = 'current'
+        ORDER BY evaluated_at DESC LIMIT 3`
+        .flatMap((r) => (r.judge_rationale ? [r.judge_rationale] : []));
+    } catch { /* no evaluations table — the rollback itself still stands */ }
+    const decisive = entry.wins + entry.losses;
+    rejected.push({
+      kind: 'rolled_back',
+      version: entry.version,
+      at: entry.writtenAt,
+      rationale: entry.rationale,
+      reason: decisive === 0
+        ? `discarded before any decisive shadow trial (${entry.trials} trial${entry.trials === 1 ? '' : 's'}, all ties)`
+        : `lost ${entry.losses} of ${decisive} decisive shadow trials`,
+      pathology: entry.pathology,
+      trials: entry.trials, wins: entry.wins, losses: entry.losses, ties: entry.ties,
+      judgeRationales,
+    });
+  }
+
+  try {
+    const vetoes = sql<{ message: string; data: string | null; created_at: number }>`
+      SELECT message, data, created_at FROM evolution_events
+      WHERE type = 'misevolution_veto' ORDER BY created_at DESC LIMIT ${limit}`;
+    for (const veto of vetoes) {
+      let detail = '';
+      let surface = 'scaffold';
+      try {
+        const parsed = JSON.parse(veto.data ?? '{}') as { detail?: unknown; surface?: unknown };
+        if (typeof parsed.detail === 'string') detail = parsed.detail;
+        if (typeof parsed.surface === 'string') surface = parsed.surface;
+      } catch { /* malformed payload — the message still carries the reason */ }
+      if (surface !== 'scaffold') continue;
+      rejected.push({
+        kind: 'misevolution_veto',
+        version: null,
+        at: veto.created_at,
+        rationale: detail,
+        reason: veto.message,
+        pathology: null,
+        trials: 0, wins: 0, losses: 0, ties: 0,
+        judgeRationales: [],
+      });
+    }
+  } catch { /* no evolution_events table — rollbacks alone are the answer */ }
+
+  return rejected.sort((a, b) => b.at - a.at).slice(0, limit);
 }
 
 export interface EvolutionBaseSelection {
@@ -144,20 +239,53 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
 }
 
 /**
+ * Pathology coverage — how crowded each named failure cell already is.
+ *
+ * Weng names diversity collapse as a top open problem in evolutionary agent
+ * loops, and the quality-diversity line (GSME's WHERE×WHY archive, CodeEvolve's
+ * islands) answers it by keeping the search spread across niches instead of
+ * pouring it into whichever one is currently winning. Proteus's niches are the
+ * pathology cells a proposal names (evolution/pathology.ts), so coverage falls
+ * straight out of the archive: 1/(1+n) over the versions sharing a cell, in the
+ * same decaying shape as the novelty bonus beside it.
+ *
+ * A version that named NO cell scores 0, not a shared-bucket bonus. That is
+ * the honest reading — it claimed no niche, so it has no coverage to be thin
+ * in — and it is also what makes the term backward-compatible: an archive with
+ * no pathologies at all adds zero to every weight and reproduces the
+ * pre-pathology policy exactly, term for term, the same way a lineage-free
+ * archive reproduces the pre-clade one.
+ */
+function pathologyCoverage(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const e of archive) {
+    if (e.pathology === null) continue;
+    counts.set(e.pathology, (counts.get(e.pathology) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
  * Pick the version a new scaffold proposal should branch from.
  *
  * Policy: with probability (1 - exploreShare) build on the live current —
  * exploitation keeps the lineage's proven trunk improving. With probability
  * exploreShare, branch from an archived variant instead, weighted by its
- * clade-metaproductivity (above) plus a novelty bonus that decays with trial
- * count (1/(1+trials), never-tried variants score it in full). This is DGM's
- * archive-sampling insight (arXiv:2505.22954) — rolled-back and historical
- * variants are stepping stones, and the ones we know least about deserve
- * disproportionate exploration — corrected by HGM's: score the stepping stone
- * by what its lineage produced, not by how it did itself. A pure
- * greedy-on-current policy can never reach improvements whose ancestor lost its
- * first shadow trial; a pure own-score policy keeps re-branching from lucky
- * dead ends.
+ * clade-metaproductivity (above), a novelty bonus that decays with trial
+ * count (1/(1+trials), never-tried variants score it in full), and a
+ * pathology-diversity bonus that decays with how many versions already target
+ * the same failure cell (above). This is DGM's archive-sampling insight
+ * (arXiv:2505.22954) — rolled-back and historical variants are stepping
+ * stones, and the ones we know least about deserve disproportionate
+ * exploration — corrected by HGM's: score the stepping stone by what its
+ * lineage produced, not by how it did itself. A pure greedy-on-current policy
+ * can never reach improvements whose ancestor lost its first shadow trial; a
+ * pure own-score policy keeps re-branching from lucky dead ends; and a policy
+ * blind to which failure a variant was FOR keeps re-exploring the one cell
+ * that already has the most attempts.
+ *
+ * The three terms are additive and independent: diversity never overrides a
+ * clade score, it breaks ties between comparably-productive stepping stones.
  *
  * The clade is always complete inside the caller's window: descendants carry
  * higher version numbers than their parents, and the archive is truncated
@@ -186,11 +314,15 @@ export function selectEvolutionBase(
     return { version: current.version, mode: 'current' };
   }
 
-  // Scored over the FULL archive, not just the explorable slice — a stepping
-  // stone's best descendant is usually the live current.
+  // Both scored over the FULL archive, not just the explorable slice — a
+  // stepping stone's best descendant is usually the live current, and a cell
+  // the current version already targets is a covered cell.
   const clade = cladeScores(archive);
+  const coverage = pathologyCoverage(archive);
   const weight = (e: ScaffoldArchiveEntry): number =>
-    (clade.get(e.version) ?? 0.5) + 1 / (1 + e.trials);
+    (clade.get(e.version) ?? 0.5) +
+    1 / (1 + e.trials) +
+    (e.pathology === null ? 0 : 1 / (1 + coverage.get(e.pathology)!));
   const total = explorable.reduce((acc, e) => acc + weight(e), 0);
   let roll = random() * total;
   for (const e of explorable) {

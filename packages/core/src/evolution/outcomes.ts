@@ -31,6 +31,11 @@ export const TURN_OUTCOMES = ['accepted', 'corrected', 'frustrated', 'abandoned'
 
 export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
 
+/** The outcomes that carry a complaint — what "a turn that landed badly"
+ *  means everywhere it is drawn as a set (GEPA's optimization targets, the
+ *  pathology clustering). `abandoned` is an absence of signal, not a verdict. */
+export const NEGATIVE_TURN_OUTCOMES = ['corrected', 'frustrated'] as const;
+
 /** Where an outcome row came from: the user's explicit thumbs, the LLM
  *  follow-up classifier, the session-end (abandoned) rule, or an Alternate
  *  Takes pick (mcts/takes.ts — explicit preference between explored takes). */
@@ -521,7 +526,7 @@ const NEGATIVE_HOLDOUT_SHARE = 1 / 3;
  *  out, the split says so via `degeneracy` instead of quietly overlapping. */
 export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): OutcomeEvalSplit {
   const size = Math.max(2, Math.floor(budget));
-  const negatives = listTurnOutcomes(sql, { limit: size, outcomes: ['corrected', 'frustrated'] });
+  const negatives = listTurnOutcomes(sql, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
   const accepted = listTurnOutcomes(sql, { limit: size, outcomes: ['accepted'] });
 
   const negativeShare = Math.min(negatives.length, Math.ceil(size / 2));

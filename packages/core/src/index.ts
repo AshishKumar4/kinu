@@ -393,8 +393,9 @@ export {
 // Variant archive — DGM-style lineage + branch-base selection over the
 // existing scaffold_versions/scaffold_evaluations rows (no parallel store).
 export {
-  listScaffoldArchive, selectEvolutionBase,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
   type ScaffoldArchiveEntry, type EvolutionBaseSelection,
+  type RejectedProposal, type RejectionKind,
 } from './scaffold/archive.js';
 // scaffold execution + shadow-mode rollout
 export {

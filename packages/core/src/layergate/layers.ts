@@ -155,6 +155,7 @@ function archiveEntry(over: Partial<ScaffoldArchiveEntry>): ScaffoldArchiveEntry
     parentVersion: null,
     status: 'historical',
     rationale: 'r',
+    pathology: null,
     writtenAt: 0,
     trials: 0,
     wins: 0,

@@ -21,6 +21,7 @@ export {
   feedbackToQuality, outcomeToFeedback, outcomeQuality,
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome, takePickOutcome,
+  NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   buildOutcomeEvalSplit, describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
@@ -30,6 +31,16 @@ export {
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus,
 } from './outcomes.js';
+export {
+  renderScaffoldHandbook, indexScaffoldSites, type ScaffoldSite,
+} from './scaffold-handbook.js';
+export {
+  COMPLAINT_CLASSES, RESPONSE_SHAPES, PATHOLOGY_TAG_EXAMPLE,
+  clusterPathologies, complaintClass, responseShape, pathologyId, isPathologyId,
+  describePathology, labelPathologyClusters, buildPathologyLabelPrompt,
+  parsePathologyTag, renderPathologyBlock,
+  type ComplaintClass, type ResponseShape, type PathologyInput, type PathologyCluster,
+} from './pathology.js';
 export {
   initReplayTables, runReplayEval, listReplayEvals,
   DEFAULT_REPLAY_SAMPLE_SIZE,

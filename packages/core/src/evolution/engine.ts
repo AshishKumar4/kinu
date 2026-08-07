@@ -47,6 +47,7 @@ import {
   initTurnOutcomeTables, isTrivialTurn, classifyTurnOutcome,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
+  listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
@@ -57,6 +58,12 @@ import {
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 import { buildChangelog } from './changelog.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
+import { renderScaffoldHandbook } from './scaffold-handbook.js';
+import {
+  clusterPathologies, labelPathologyClusters, renderPathologyBlock,
+  describePathology, parsePathologyTag, PATHOLOGY_TAG_EXAMPLE,
+  type PathologyCluster,
+} from './pathology.js';
 
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
@@ -70,7 +77,7 @@ import { modifyScaffold } from '../scaffold/modify.js';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
 import {
-  listScaffoldArchive, selectEvolutionBase,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive.js';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
@@ -85,6 +92,10 @@ export interface ProposalArchiveContext {
   /** Real user-outcome record per version (accepted/negative counts) — shown
    *  alongside the shadow record when present. */
   realRates?: ReadonlyMap<number, { accepted: number; negative: number }>;
+  /** Why each refused version was refused (scaffold/archive.ts
+   *  listRejectedProposals) — Weng's negative-result preservation, so a
+   *  proposal can see what has already failed to work and why. */
+  rejections?: ReadonlyMap<number, string>;
 }
 
 function renderArchiveBlock(archive: ProposalArchiveContext): string {
@@ -95,7 +106,10 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
     const realNote = real && real.accepted + real.negative > 0
       ? `, real ${real.accepted}✓/${real.negative}✗`
       : '';
-    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}] — ${e.rationale.slice(0, 80)}`;
+    const targeted = e.pathology !== null ? `, for ${e.pathology}` : '';
+    const rejection = archive.rejections?.get(e.version);
+    const why = rejection ? `\n    refused: ${rejection}` : '';
+    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}] — ${e.rationale.slice(0, 80)}${why}`;
   });
   const baseNote = archive.base.mode === 'explore'
     ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current) — its code is shown above.`
@@ -115,16 +129,28 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
  * tests can assert a proposal written against these instructions survives
  * the executor's smoke path. When archive context is given, the prompt shows
  * the variant archive so proposals can cite stepping stones (DGM-style).
+ *
+ * The handbook (evolution/scaffold-handbook.ts) is prepended beside the host
+ * d.ts: the Harness Handbook result is that an agent editing its own harness
+ * plans better and cheaper from a behaviour→site map than from raw source.
+ *
+ * When mined pathologies are supplied, the prompt shows them and requires the
+ * proposal to name the one it targets — Self-Harness's mine-weaknesses step,
+ * typed. With none mined there is nothing to name, so the requirement is
+ * absent rather than answered with a guess.
  */
 export function buildScaffoldProposalPrompt(
   baseScaffold: string,
   reflection: string,
   archive?: ProposalArchiveContext,
+  pathologies: ReadonlyArray<PathologyCluster> = [],
 ): string {
   return (
+    `${renderScaffoldHandbook(baseScaffold)}\n` +
     `Current agent scaffold (your agentic loop — it runs inside a sandboxed worker):\n` +
     `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
     (archive ? renderArchiveBlock(archive) : '') +
+    (pathologies.length > 0 ? renderPathologyBlock(pathologies) : '') +
     `Based on these session patterns:\n${reflection.slice(0, 500)}\n\n` +
     `Propose an improved scaffold. The scaffold MUST:\n` +
     `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
@@ -138,8 +164,14 @@ export function buildScaffoldProposalPrompt(
     `(fetch/WebSocket — use host.callTool for I/O), the scaffold version files/tables, ` +
     `promotion/rollout config keys, or shell-approval/consent settings — any of these is a hard ` +
     `misevolution veto.\n` +
-    `5. Be a self-contained agentic loop.\n\n` +
-    `Return ONLY the JavaScript code, no explanation.`
+    `5. Be a self-contained agentic loop.\n` +
+    (pathologies.length > 0
+      ? `6. Name the failure pathology it targets, as a tag line in the code: ` +
+        `\`${PATHOLOGY_TAG_EXAMPLE}\`, using one of the ids listed above. The archive is ` +
+        `read by pathology — a version that names none cannot be compared with the ones ` +
+        `that do, and cannot show whether that failure ever went away.\n`
+      : '') +
+    `\nReturn ONLY the JavaScript code, no explanation.`
   );
 }
 
@@ -546,11 +578,23 @@ export class EvolutionEngine {
         ? (base.mode === 'current' ? currentScaffold : await readScaffoldVersion(this.rt, base.version))
         : null;
 
+      // What keeps going wrong, as named cells the proposal can target. The
+      // cells are deterministic (evolution/pathology.ts); the model only gets
+      // to phrase their titles, and only after they exist.
+      const pathologies = await labelPathologyClusters(this.rt.llm, clusterPathologies(
+        listTurnOutcomes(this.rt.storage.sql, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
+      ));
+      const rejections = new Map(
+        listRejectedProposals(this.rt.storage.sql, 12)
+          .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
+      );
+
       const proposed = await this.rt.llm.complete(
         buildScaffoldProposalPrompt(
           baseCode ?? currentScaffold,
           reflection,
-          base && baseCode ? { base, entries: archive, realRates } : undefined,
+          base && baseCode ? { base, entries: archive, realRates, rejections } : undefined,
+          pathologies,
         ),
       );
 
@@ -569,7 +613,14 @@ export class EvolutionEngine {
         base && baseCode ? { baseVersion: base.version } : undefined,
       );
       if (result.ok) {
-        this.emit({ type: 'scaffold_proposed', message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` });
+        // The same parse modifyScaffold stamped the row with, over the same
+        // code — the event and the row cannot disagree about what was targeted.
+        const targeted = parsePathologyTag(code);
+        this.emit({
+          type: 'scaffold_proposed',
+          message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
+            (targeted ? ` — targets ${describePathology(targeted)}` : ''),
+        });
       }
     } catch {
       // Scaffold mutation failed validation — that's fine, skip silently
