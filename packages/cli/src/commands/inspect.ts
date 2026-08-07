@@ -1,5 +1,6 @@
-import { renderAlignmentConvergence, type AlignmentConvergence } from '@proteus/core';
+import { renderAlignmentConvergence, renderCalibrationReport, type AlignmentConvergence } from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
+import { fetchReport } from './label.js';
 import { requireAuthConfig } from '../config.js';
 import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
 import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display.js';
@@ -181,18 +182,26 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
 }
 
 /** K_align — how often the user had to correct this agent, per 100 graded
- *  turns, split by the scaffold version that served them. */
+ *  turns, split by the scaffold version that served them.
+ *
+ *  Always printed with the calibration block underneath it: the rate above is
+ *  the CLASSIFIER's count of corrections, and how far that is from the real
+ *  one is a measurement, not an assumption. Without hand labels the block says
+ *  "uncalibrated" rather than leaving the reader to assume the two agree. */
 export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
     cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAlignmentConvergence'),
     local: () => getLocalAlignment(target.localName),
   });
+  const calibration = await fetchReport(target);
   if (opts.json) {
-    printJson(data);
+    printJson({ alignment: data, calibration });
     return;
   }
   console.log(renderAlignmentConvergence(data as AlignmentConvergence));
+  console.log('');
+  console.log(renderCalibrationReport(calibration));
 }
 
 export async function productCommand(name: string, opts: InspectOpts = {}): Promise<void> {

@@ -59,11 +59,29 @@ export {
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
+  isNegativeOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
+  type OutcomeLabel, type OutcomeLabelRow,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes.js';
+// C8/C11 — the hand-labeled calibration set, and the bias-corrected view of
+// every rate the classifier feeds. Uncalibrated is reported as such, never
+// approximated away.
+export {
+  sampleForLabeling, renderLabelingFile, parseLabelingFile, allocateLabelBudget,
+  ingestOutcomeLabels, type LabelIngestResult,
+  calibrationReport, renderCalibrationReport, DEFAULT_LABEL_BUDGET,
+  type LabelingItem, type ParsedLabelFile, type CalibrationReport,
+  type CalibrationStratum, type CalibratedSegment,
+} from './evolution/calibration.js';
+export {
+  classifierAccuracy, correctedRate, designWeightedKappa, describeCalibrationGap,
+  type CalibrationGap, type ClassifierAccuracy, type CorrectedRate, type CorrectedRateResult,
+  type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
+  type MeasuredProportion, type PredictionStratum,
+} from './evolution/ppi.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
 // config; the persisted loss curve.
 export {
@@ -673,7 +691,7 @@ export {
 export { nanoid } from './utils/nanoid.js';
 // Confidence intervals — every score this system reports travels with one.
 export {
-  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
+  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
 } from './utils/stats.js';
 export { isoDate, today, nowMs } from './utils/date.js';

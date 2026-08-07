@@ -44,7 +44,7 @@ import { updateCraftScores } from '../craft/ema.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
-  initTurnOutcomeTables, isTrivialTurn, classifyTurnOutcome,
+  initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
@@ -326,8 +326,10 @@ export class EvolutionEngine {
     }
 
     // A real negative outcome corroborates any provisional lessons waiting on
-    // this turn (e.g. an earlier error reflection or a session reflection).
-    if (outcome === 'corrected' || outcome === 'frustrated') {
+    // this turn (e.g. an earlier error reflection or a session reflection),
+    // and is the same signal that warrants a reflection below.
+    const corroborated = isNegativeOutcome(outcome);
+    if (corroborated) {
       await this.corroborateLessons(turn.turnId);
     }
 
@@ -338,7 +340,6 @@ export class EvolutionEngine {
     // Reflection is warranted by real negative signal — or by an error on a
     // turn nobody graded, which stays provisional until an outcome
     // corroborates it.
-    const corroborated = outcome === 'corrected' || outcome === 'frustrated';
     if (corroborated || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
       const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
       recordLesson(this.rt.storage.sql, {

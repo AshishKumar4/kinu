@@ -37,6 +37,21 @@ export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
  *  pathology clustering). `abandoned` is an absence of signal, not a verdict. */
 export const NEGATIVE_TURN_OUTCOMES = ['corrected', 'frustrated'] as const;
 
+/** The event every rate downstream is really about: a turn the user had to
+ *  correct, or was unhappy with. K_align's numerator, the craft-retirement
+ *  signal, and the GEPA split's optimization target are all this predicate. */
+export function isNegativeOutcome(outcome: TurnOutcome | null): boolean {
+  return outcome !== null && (NEGATIVE_TURN_OUTCOMES as readonly string[]).includes(outcome);
+}
+
+/** What a HUMAN may say about a turn when hand-labeling it (calibration.ts):
+ *  any real outcome, or an admission that the follow-up does not settle it.
+ *  `unclear` is a verdict, not a skip — it is recorded, then excluded from
+ *  every estimate. */
+export const OUTCOME_LABELS = [...TURN_OUTCOMES, 'unclear'] as const;
+
+export type OutcomeLabel = (typeof OUTCOME_LABELS)[number];
+
 /** Where an outcome row came from: the user's explicit thumbs, the LLM
  *  follow-up classifier, the session-end (abandoned) rule, or an Alternate
  *  Takes pick (mcts/takes.ts — explicit preference between explored takes). */
@@ -210,6 +225,75 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     created_at INTEGER NOT NULL,
     corroborated_at INTEGER
   )`);
+  // Gold labels — turns a HUMAN judged directly, the calibration set that
+  // measures how far the classifier's verdicts are from the truth
+  // (calibration.ts). Append-only: a re-label inserts a new row and the newest
+  // wins, so nothing a human spent attention on is overwritten in place.
+  execRaw(`CREATE TABLE IF NOT EXISTS outcome_labels (
+    id TEXT PRIMARY KEY,
+    outcome_id TEXT NOT NULL,
+    label TEXT NOT NULL CHECK (label IN (${OUTCOME_LABELS.map((l) => `'${l}'`).join(',')})),
+    labeler TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+}
+
+export interface OutcomeLabelRow {
+  id: string;
+  outcomeId: string;
+  label: OutcomeLabel;
+  labeler: string;
+  createdAt: number;
+}
+
+/** Append a labeling pass. Returns how many rows were written. */
+export function recordOutcomeLabels(sql: SqlExecutor, input: {
+  labeler: string;
+  labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
+  now?: number;
+}): number {
+  const now = input.now ?? nowMs();
+  for (const entry of input.labels) {
+    sql`INSERT INTO outcome_labels (id, outcome_id, label, labeler, created_at)
+        VALUES (${`lbl-${nanoid()}`}, ${entry.outcomeId}, ${entry.label}, ${input.labeler}, ${now})`;
+  }
+  return input.labels.length;
+}
+
+interface RawOutcomeLabelRow {
+  id: string; outcome_id: string; label: OutcomeLabel; labeler: string; created_at: number;
+}
+
+function toOutcomeLabelRow(r: RawOutcomeLabelRow): OutcomeLabelRow {
+  return {
+    id: r.id, outcomeId: r.outcome_id, label: r.label,
+    labeler: r.labeler, createdAt: r.created_at,
+  };
+}
+
+/** Every stored label, newest first. Unbounded when `limit` is omitted: the
+ *  gold set is the whole basis of every corrected number, and a window that
+ *  silently dropped the oldest labels would drop the turns they speak for. */
+export function listOutcomeLabels(sql: SqlExecutor, limit?: number): OutcomeLabelRow[] {
+  try {
+    const rows = limit === undefined
+      ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC`
+      : sql<RawOutcomeLabelRow>`
+          SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
+    return rows.map(toOutcomeLabelRow);
+  } catch {
+    return [];
+  }
+}
+
+/** The label that counts for each turn: the most recent one. Append-only
+ *  storage makes a correction a new row, so "newest wins" is the whole read. */
+export function goldLabels(sql: SqlExecutor): Map<string, OutcomeLabelRow> {
+  const latest = new Map<string, OutcomeLabelRow>();
+  for (const row of listOutcomeLabels(sql)) {
+    if (!latest.has(row.outcomeId)) latest.set(row.outcomeId, row);
+  }
+  return latest;
 }
 
 export interface TurnOutcomeRow {

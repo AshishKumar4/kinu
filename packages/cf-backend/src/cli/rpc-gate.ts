@@ -81,6 +81,7 @@ export const AGENT_RPC_ACCESS = {
   getMctsNodeDetail: 'workspace.read',
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
+  getOutcomeCalibration: 'workspace.read',
   getProductChangeBoard: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getStoredModelSpec: 'workspace.read',
@@ -91,6 +92,7 @@ export const AGENT_RPC_ACCESS = {
   listPendingConsents: 'workspace.read',
   listRecentEvents: 'workspace.read',
   listTriggers: 'workspace.read',
+  sampleOutcomeLabeling: 'workspace.read',
   searchMemoryHybrid: 'workspace.read',
 
   // ── Run-a-task surfaces a workspace.exec token may perform ──
@@ -141,6 +143,7 @@ export const AGENT_RPC_ACCESS = {
   previewScaffoldLive: 'interactive',
   proposeCurriculumTasks: 'interactive',
   readExecutorFile: 'interactive',
+  recordOutcomeLabeling: 'interactive',
   requestProductChangeApproval: 'interactive',
   resetWorkspaceBaseline: 'interactive',
   resolveDeviceConsent: 'interactive',

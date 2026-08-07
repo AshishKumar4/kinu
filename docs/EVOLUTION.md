@@ -72,6 +72,44 @@ into a reusable async arrow function with JSON Schema parameters, stored in
 word overlap > 0.85). An existing tool is only overwritten when the candidate
 scores more than 0.1 above it.
 
+## Judge Calibration
+
+Every outcome the follow-up classifier records is a *judgement*, and every rate
+downstream — K_align, the per-scaffold outcome rates, the GEPA train/val split,
+craft retirement — counts those judgements rather than what actually happened.
+If the classifier misses a third of the corrections, all of those numbers are
+wrong by an unknown amount in an unknown direction, and more turns only tighten
+the interval around the wrong answer.
+
+`calibration.ts` + `ppi.ts` close that with a few hand labels:
+
+```
+proteus label export <agent>            # draws ~100 turns into a file
+$EDITOR <agent>-calibration.txt         # one letter per turn (~30-45 min)
+proteus label ingest <agent> <file>     # validates, then stores
+proteus label report <agent>            # what the labels established
+```
+
+The draw is stratified on the classifier's verdict (a uniform sample of an
+~85%-`accepted` ledger would measure nothing about the rare verdicts) and
+systematic in time within each stratum. The file is **blind** — it shows the
+request, the answer and the user's follow-up, never the classifier's verdict —
+because pre-filling the guess would anchor the labeler on the very number under
+test. Labels land append-only in `outcome_labels`; a re-label is a new row and
+the newest wins.
+
+The estimator is prediction-powered inference (Angelopoulos et al. 2023) with a
+prediction-stratified rectifier, factored so it transports across slices:
+sensitivity and specificity are estimated once with the population
+re-weighting the design requires, then each slice's own observed rate is
+corrected by Rogan–Gladen, `θ̂ = (p̂ + q̂₀ − 1)/(q̂₁ + q̂₀ − 1)`, with the delta
+method propagating all three uncertainties. Over the population the labels came
+from, that is algebraically the same estimate as the stratified PPI form.
+
+`proteus alignment` prints the corrected block beneath K_align always. With no
+labels it reads `uncalibrated` rather than letting the reader assume the
+classifier and the truth agree.
+
 ## Session-Level Evolution
 
 The cadence lives in `AgentOrchestrator`, not the engine: every

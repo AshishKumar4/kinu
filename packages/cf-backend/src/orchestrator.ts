@@ -82,6 +82,8 @@ import {
   type OutcomeEvalExpectation, type ReplayEvalSummary,
   // K_align — the correction-rate trend over the same outcome ledger
   alignmentConvergence, type AlignmentConvergence,
+  calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
+  type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
   // Evolution Changelog — the self-change digest + revert dispatch
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -2507,6 +2509,30 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async getAlignmentConvergence(): Promise<AlignmentConvergence> {
     return alignmentConvergence(this.boundSql);
+  }
+
+  /** What hand labels establish about the turn-outcome classifier, and the
+   *  bias-corrected rates they buy. Reads "uncalibrated" until labels exist —
+   *  K_align above is the classifier's opinion until this one has numbers. */
+  @callable()
+  async getOutcomeCalibration(): Promise<CalibrationReport> {
+    return calibrationReport(this.boundSql);
+  }
+
+  /** Draw the next calibration set: turns for a human to judge blind. */
+  @callable()
+  async sampleOutcomeLabeling(size: number = DEFAULT_LABEL_BUDGET): Promise<LabelingItem[]> {
+    return sampleForLabeling(this.boundSql, { size });
+  }
+
+  /** Store a labeling pass. Append-only; ids the ledger no longer knows are
+   *  reported back rather than losing the pass. */
+  @callable()
+  async recordOutcomeLabeling(
+    labeler: string,
+    labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>,
+  ): Promise<LabelIngestResult> {
+    return ingestOutcomeLabels(this.boundSql, { labeler, labels });
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +

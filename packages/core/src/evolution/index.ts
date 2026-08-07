@@ -25,12 +25,30 @@ export {
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   buildOutcomeEvalSplit, describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
+  isNegativeOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
+  type OutcomeLabel, type OutcomeLabelRow,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeClassification, type RecordTurnOutcomeInput, type RealOutcomeRate,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus,
 } from './outcomes.js';
+// C8/C11 — the hand-labeled calibration set and the bias-corrected estimates
+// it buys. Without it every rate this system reports about itself is a
+// classifier's opinion of the truth rather than the truth.
+export {
+  sampleForLabeling, renderLabelingFile, parseLabelingFile, allocateLabelBudget,
+  ingestOutcomeLabels, type LabelIngestResult,
+  calibrationReport, renderCalibrationReport, DEFAULT_LABEL_BUDGET,
+  type LabelingItem, type ParsedLabelFile, type CalibrationReport,
+  type CalibrationStratum, type CalibratedSegment,
+} from './calibration.js';
+export {
+  classifierAccuracy, correctedRate, designWeightedKappa, describeCalibrationGap,
+  type CalibrationGap, type ClassifierAccuracy, type CorrectedRate, type CorrectedRateResult,
+  type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
+  type MeasuredProportion, type PredictionStratum,
+} from './ppi.js';
 export {
   renderScaffoldHandbook, indexScaffoldSites, type ScaffoldSite,
 } from './scaffold-handbook.js';

@@ -14,11 +14,19 @@ import {
   initAgentConfigTable,
   initEventsHubTables,
   alignmentConvergence,
+  calibrationReport,
+  ingestOutcomeLabels,
+  initTurnOutcomeTables,
   listGepaRuns,
   loadGepaCandidates,
   nextCronFire,
   productChangeSqlFromExec,
+  sampleForLabeling,
   type AlignmentConvergence,
+  type CalibrationReport,
+  type LabelIngestResult,
+  type LabelingItem,
+  type OutcomeLabel,
   type EventVariant,
   type ProductChangeBoard,
   type RunEvent,
@@ -341,6 +349,30 @@ export function listLocalGepaRuns(name: string, limit = 20): unknown[] {
  *  an empty result — alignmentConvergence already owns that case. */
 export function getLocalAlignment(name: string): AlignmentConvergence {
   return withLocalDb(name, (db) => alignmentConvergence(makeSql(db)));
+}
+
+/** What the hand labels establish about this agent's outcome classifier, and
+ *  the corrected rates they buy. Reads "uncalibrated" until labels exist. */
+export function getLocalCalibration(name: string): CalibrationReport {
+  return withLocalDb(name, (db) => calibrationReport(makeSql(db)));
+}
+
+/** Draw the next calibration set for a local agent. */
+export function sampleLocalLabeling(name: string, size: number): LabelingItem[] {
+  return withLocalDb(name, (db) => sampleForLabeling(makeSql(db), { size }));
+}
+
+/** Store a labeling pass. The ledger's tables are ensured first: a workspace
+ *  can predate the label table without ever having run a turn since. */
+export function recordLocalOutcomeLabels(
+  name: string,
+  input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }> },
+): LabelIngestResult {
+  return withLocalWritableDb(name, (db) => {
+    const sql = makeSql(db);
+    initTurnOutcomeTables((ddl) => { db.exec(ddl); }, sql);
+    return ingestOutcomeLabels(sql, input);
+  });
 }
 
 export function getLocalGepaRun(name: string, runId: string): unknown {

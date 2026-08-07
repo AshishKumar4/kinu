@@ -18,7 +18,7 @@
  */
 
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
-import { listTurnOutcomes, type TurnOutcomeRow } from './outcomes.js';
+import { isNegativeOutcome, listTurnOutcomes, type TurnOutcomeRow } from './outcomes.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -162,7 +162,7 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     ranAt: opts.now ?? nowMs(),
     sampleSize: results.length,
     acceptedCount: results.filter((r) => r.outcome === 'accepted').length,
-    negativeCount: results.filter((r) => r.outcome === 'corrected' || r.outcome === 'frustrated').length,
+    negativeCount: results.filter((r) => isNegativeOutcome(r.outcome)).length,
     meanScore: interval.mean,
     loss: 1 - interval.mean,
     interval,
