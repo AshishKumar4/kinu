@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${1:-$ROOT/packages/cf-backend/dist/client/downloads/proteus-source.tar.gz}"
+# The deployed asset dir is dist/proteus/assets (wrangler follows the vite
+# plugin's .wrangler/deploy/config.json redirect) — dist/client is NOT what
+# ships. Writing there bricked fresh installs with SPA-fallback 200s.
+OUT="${1:-$ROOT/packages/cf-backend/dist/proteus/assets/downloads/proteus-source.tar.gz}"
 
 tmp="$(mktemp -d)"
 cleanup() {
