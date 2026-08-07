@@ -10,6 +10,7 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery,
   TurnAccumulator,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  SPILL_DIRS,
   type CompactionTriggerState, type ProgrammaticTurn,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
@@ -51,6 +52,44 @@ describe('openTurnRun / closeTurnRun', () => {
     const runEnd = events[3] as Extract<typeof events[number], { type: 'run_end' }>;
     expect(runEnd.reason).toBe('error');
     expect(runEnd.error).toBe('boom');
+  });
+
+  test('the turn writes its context-budget ledger row before the seal — the M1 counters', () => {
+    const rec = recorder();
+    const acc = new TurnAccumulator();
+    acc.reset(Date.now());
+    acc.context.admit(41_000);
+    acc.context.recordSpill({ producer: 'run', omitted: 160_000, referenced: true });
+    acc.recordToolCall({
+      toolName: 'execute_tools',
+      input: { code: `await workspace.readFile('/${SPILL_DIRS.toolOutput}/abc.log')` },
+      success: true,
+      output: 'ok',
+    });
+
+    openTurnRun(rec, 'run-2', { agentId: 'ws', causedBy: 'chat', userMessage: 'm', turnIndex: 0 });
+    closeTurnRun(rec, 'run-2', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed', context: acc.context,
+    });
+
+    const events = rec.read('run-2');
+    expect(events.map((e) => e.type)).toEqual(['run_start', 'turn_start', 'context_budget', 'turn_end', 'run_end']);
+    const row = events[2] as Extract<typeof events[number], { type: 'context_budget' }>;
+    expect(row.admittedChars).toBe(41_000);
+    expect(row.omittedChars).toBe(160_000);
+    expect(row.trips).toEqual({ run: 1 });
+    expect(row.referenced).toBe(1);
+    expect(row.followUps).toBe(1);
+  });
+
+  test('a turn that never touched bulk writes no ledger row — turn_end is the denominator', () => {
+    const rec = recorder();
+    const acc = new TurnAccumulator();
+    acc.reset(Date.now());
+    closeTurnRun(rec, 'run-3', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed', context: acc.context,
+    });
+    expect(rec.read('run-3').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
 
   test('a recorder failure never throws into the turn', () => {

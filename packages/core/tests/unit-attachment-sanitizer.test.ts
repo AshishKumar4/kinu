@@ -14,6 +14,7 @@ import {
   type MediaModality,
 } from '../src/prompting/attachment-sanitizer.js';
 import type { VFS } from '../src/types/primitives.js';
+import { TurnContextBudget } from '../src/context-budget.js';
 import { createMemoryVFS } from './helpers.js';
 
 function countingVfs(): { vfs: VFS; writes: () => number } {
@@ -184,6 +185,117 @@ describe('sanitizeAttachmentsForModel', () => {
     expect(out[0]).toBe(input[0]!);
     expect(out[1]).toBe(input[1]!);
     expect(out[2]).toBe(input[2]!);
+  });
+});
+
+// Message-borne bulk, generalized: a giant paste and an oversize document the
+// model CAN accept are the same problem as a model-incompatible attachment —
+// they ride the root's token stream forever, re-priced every turn. Same idiom:
+// content-addressed spill + bounded head + resolvable address.
+describe('message-borne bulk (pasted text and oversize accepted documents)', () => {
+  const HUGE_PASTE = `PASTE-HEAD ${'p'.repeat(20_000)} PASTE-TAIL`;
+
+  test('a giant pasted user message keeps a bounded head plus the address of the whole', async () => {
+    const { vfs, writes } = countingVfs();
+    const budget = new TurnContextBudget();
+    const input: ModelMessage[] = [{ role: 'user', content: HUGE_PASTE }];
+
+    const out = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs, budget });
+    const text = out[0]!.content as string;
+
+    expect(text.length).toBeLessThan(3_000);
+    expect(text).toContain('PASTE-HEAD');
+    expect(text).toContain(`${HUGE_PASTE.length} bytes`);
+    expect(text).toContain('slice + llm.query each slice, aggregate');
+    const path = /saved to (\S+) —/.exec(text)?.[1];
+    expect(path).toStartWith('/local/attachments/');
+    expect(new TextDecoder().decode(await vfs.readFile(path!) as Uint8Array)).toBe(HUGE_PASTE);
+    expect(writes()).toBe(1);
+    expect(budget.snapshot().trips).toEqual({ pasted_text: 1 });
+    expect(budget.snapshot().referenced).toBe(1);
+  });
+
+  test('the same treatment reaches a text PART of a multi-part user message', async () => {
+    const { vfs } = countingVfs();
+    const input: ModelMessage[] = [{
+      role: 'user',
+      content: [{ type: 'text', text: 'here is the log:' }, { type: 'text', text: HUGE_PASTE }],
+    }];
+    const parts = (await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs }))[0]!
+      .content as Array<{ type: string; text: string }>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0]!.text).toBe('here is the log:');
+    expect(parts[1]!.text).toContain('/local/attachments/');
+  });
+
+  test('ordinary messages inline untouched — the root must not starve on normal material', async () => {
+    const { vfs, writes } = countingVfs();
+    const budget = new TurnContextBudget();
+    const stackTrace = 'Error: boom\n' + '    at frame\n'.repeat(200);
+    const input: ModelMessage[] = [
+      { role: 'user', content: 'fix the auth bug' },
+      { role: 'user', content: [{ type: 'text', text: stackTrace }] },
+    ];
+    const out = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs, budget });
+    expect(out[0]).toBe(input[0]!);
+    expect(out[1]).toBe(input[1]!);
+    expect(writes()).toBe(0);
+    expect(budget.active).toBe(false);
+  });
+
+  test('a spilled paste is byte-stable across turns — same bytes, same path, same text', async () => {
+    const { vfs, writes } = countingVfs();
+    const policy = { accepts: accepts('image'), vfs };
+    const input: ModelMessage[] = [{ role: 'user', content: HUGE_PASTE }];
+    const first = await sanitizeAttachmentsForModel(input, policy);
+    const second = await sanitizeAttachmentsForModel(input, policy);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    expect(writes()).toBe(1);
+  });
+
+  test('the replacement is itself under budget, so a re-sanitized history is a fixed point', async () => {
+    const { vfs, writes } = countingVfs();
+    const policy = { accepts: accepts('image'), vfs };
+    const once = await sanitizeAttachmentsForModel([{ role: 'user', content: HUGE_PASTE }], policy);
+    const twice = await sanitizeAttachmentsForModel(once, policy);
+    expect(twice[0]).toBe(once[0]!);
+    expect(writes()).toBe(1);
+  });
+
+  test('an accepted PDF past the inline ceiling is spilled; a small one still rides inline', async () => {
+    const { vfs } = countingVfs();
+    const budget = new TurnContextBudget();
+    const bigPdf: ModelMessage = {
+      role: 'user',
+      content: [{
+        type: 'file',
+        data: new Uint8Array(2 * 1024 * 1024),
+        mediaType: 'application/pdf',
+        filename: 'thesis.pdf',
+      }],
+    };
+    const policy = { accepts: accepts('image', 'pdf'), vfs, budget };
+
+    const spilled = await sanitizeAttachmentsForModel([bigPdf], policy);
+    const part = (spilled[0]!.content as Array<{ type: string; text: string }>)[0]!;
+    expect(part.type).toBe('text');
+    expect(part.text).toContain('thesis.pdf');
+    expect(part.text).toContain('/local/attachments/');
+    expect(budget.snapshot().trips).toEqual({ attachment: 1 });
+
+    const small = pdfMessage();
+    expect((await sanitizeAttachmentsForModel([small], policy))[0]).toBe(small);
+  });
+
+  test('an oversize accepted IMAGE stays inline — a file it cannot see is not a reference', async () => {
+    const { vfs, writes } = countingVfs();
+    const bigImage: ModelMessage = {
+      role: 'user',
+      content: [{ type: 'image', image: new Uint8Array(4 * 1024 * 1024), mediaType: 'image/png' }],
+    };
+    const out = await sanitizeAttachmentsForModel([bigImage], { accepts: accepts('image', 'pdf'), vfs });
+    expect(out[0]).toBe(bigImage);
+    expect(writes()).toBe(0);
   });
 });
 

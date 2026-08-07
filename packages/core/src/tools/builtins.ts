@@ -43,6 +43,7 @@ import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { TurnContextBudget } from '../context-budget.js';
 import { isMcpToolKey } from './mcp-naming.js';
 import type { CraftedToolExecute } from './crafted-executor.js';
 import { filterByEffectiveScore } from '../craft/ema.js';
@@ -169,6 +170,12 @@ export interface BuiltinToolDeps {
    *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
    *  same provider in each backend's execute_tools assembly. */
   webSearch?: WebSearchProvider;
+  /** The turn's cumulative context budget — the per-result clamp tightens once
+   *  a turn has admitted its budget, and every spill trip is counted for the
+   *  durable `context_budget` row. Backends pass their TurnAccumulator's; a
+   *  caller that omits it (a fork's own toolset, tests) gets a fresh one, so
+   *  the policy is per-root by construction. */
+  contextBudget?: TurnContextBudget;
 }
 
 // The Team/Peers deps contracts (and the reserved peer-reply topic) live with
@@ -303,6 +310,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const memory = rt.memory;
   const router = rt.executionRouter;
   const shell = rt.shell;
+  // A toolset built without a budget still budgets — a fresh one, scoped to
+  // whatever root owns this toolset. Never absent, so there is one policy.
+  const budget = deps.contextBudget ?? new TurnContextBudget();
 
   const tools: ToolSet = {};
 
@@ -367,7 +377,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // Restorable result budget: oversize execute_tools results are offloaded to
   // the workspace VFS and clamped to head+tail (see clamp.ts). The `run` tool
   // clamps at its own return sites below.
-  tools.execute_tools = withClampedToolResult(tools.execute_tools, rt.storage.vfs);
+  tools.execute_tools = withClampedToolResult(tools.execute_tools, {
+    vfs: rt.storage.vfs, budget, producer: 'execute_tools',
+  });
 
   // ── 2. run ───────────────────────────────────────────────────────────────
   // Shell command tool. The `runtime` parameter dispatches through the
@@ -424,7 +436,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // Restorable result budget — full stdout/stderr is offloaded to the
       // workspace VFS before clamping (see clamp.ts), so big outputs never
       // rot the session and nothing is lost.
-      const clamp = (text: string) => clampToolResult(text, { vfs: rt.storage.vfs });
+      const clamp = (text: string) => clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
       const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
@@ -709,7 +721,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           // VFS and reduced to a re-readable head (see clamp.ts), so a big
           // page never rots the session.
           const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
-          const body = await clampToolResult(res.markdown, { vfs: rt.storage.vfs });
+          const body = await clampToolResult(res.markdown, {
+            vfs: rt.storage.vfs, budget, producer: 'web_fetch',
+          });
           return header + body;
         } catch (err) {
           return webErrorResult(err);

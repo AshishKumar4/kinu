@@ -48,6 +48,7 @@ import {
   type StructuredJudgeFn, effortFor, type CompletedTurn,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
+  withClampedToolResults,
   type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
@@ -512,6 +513,7 @@ export abstract class ActorAgent extends Think<Env> {
       closeTurnRun(this.eventRecorder, this._currentRunId, {
         turnIndex: this.orch.sessionTurnIndex,
         usage: this.acc.usage,
+        context: this.acc.context,
         reason: result.status,
         error: errorText,
       });
@@ -1428,6 +1430,10 @@ export abstract class ActorAgent extends Think<Env> {
       const tools = buildBuiltinTools({
         rt: this.rt,
         preBuiltExecuteTool: this.getExecuteToolsTool(),
+        // The turn's cumulative bulk budget lives on the accumulator, so the
+        // cached toolset holds a stable reference across turns and the reset
+        // rides the turn's own accounting.
+        contextBudget: this.acc.context,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
         // settle) is universal; staff/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution
@@ -1640,11 +1646,16 @@ export abstract class ActorAgent extends Think<Env> {
         },
       });
     }
-
-    this._cachedMcpTools = tools;
+    // An MCP server is a bulk producer like any other — a 2MB API response
+    // rots the session exactly as a big `cat` does. Same clamp, same spill
+    // path, same turn budget as the builtins.
+    const clamped = withClampedToolResults(tools, {
+      vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
+    });
+    this._cachedMcpTools = clamped;
     this._cachedMcpToolsKey = watermark;
-    this.logActivity('mcp_tools_rebuilt', `${Object.keys(tools).length} tools @ wm=${watermark}`);
-    return tools;
+    this.logActivity('mcp_tools_rebuilt', `${Object.keys(clamped).length} tools @ wm=${watermark}`);
+    return clamped;
   }
 
   configureSession(session: Session): Session {
@@ -1882,7 +1893,9 @@ export abstract class ActorAgent extends Think<Env> {
     cfg.messages = await assembleTurnMessages({
       system: systemOverride,
       history: rawMessages,
-      attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
+      attachments: {
+        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
+      },
       extensions: this.extensions,
       systemState: {
         ledger: this.ephemeralLedger,

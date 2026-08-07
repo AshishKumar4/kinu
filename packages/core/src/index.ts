@@ -222,6 +222,17 @@ export {
 export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
 export { contextWindowForModel } from './context-window.js';
+// The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
+export {
+  TurnContextBudget,
+  citesSpillAddress,
+  SPILL_DIRS,
+  DEFAULT_TURN_ADMIT_BUDGET_CHARS,
+  TIGHTENED_RESULT_MAX_CHARS,
+  type BulkProducer,
+  type ContextBudgetSnapshot,
+  type SpillTrip,
+} from './context-budget.js';
 export {
   buildCompactionSummaryPrompt,
   wrapCompactionSummary,
@@ -267,6 +278,7 @@ export {
   clampToolResult,
   clampSerializedToolResult,
   withClampedToolResult,
+  withClampedToolResults,
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,

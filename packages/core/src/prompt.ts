@@ -301,6 +301,10 @@ function renderAgentStateSection(surface: PromptSurface): string {
         + (surface.rlmAvailable
           ? ' The cheapest helper is not an agent: for bulk text that needs no tools, slice it and `llm.query` each slice inside execute_tools — reach for the ladder only when the work needs tool loops.'
           : ''),
+        // The turn-cumulative clamp is mechanical, so say so: a model that
+        // knows WHY the ninth heavy read came back short reaches for a rung
+        // instead of re-running the command (context-budget.ts).
+        'Tool output is budgeted per turn, not just per call: the first heavy reads come back whole, and once a turn has pulled in a lot of output the rest arrive as a head plus a workspace path — read that as the signal to hand the bulk to a helper instead of pulling more of it into this turn.',
         '- Do it yourself — a single short coherent change.',
       );
     }

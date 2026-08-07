@@ -16,11 +16,11 @@
  * it navigable (manifest.ts).
  */
 
-import type { RawSqlExec, SqlExecutor, VFS } from '@proteus/core';
+import { SPILL_DIRS, type RawSqlExec, type SqlExecutor, type VFS } from '@proteus/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest.js';
 
-const COMPACTION_DIR = '/local/.proteus/compaction';
+const COMPACTION_DIR = SPILL_DIRS.compaction;
 
 /** Path components come from session keys (agent names, `affinity:sessionId`
  *  pairs) and hex range hashes — collapse anything path-hostile. */

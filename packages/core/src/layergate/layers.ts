@@ -18,6 +18,7 @@
 import type { ModelMessage } from 'ai';
 import { ExtensionHost } from '../extension.js';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
+import { TurnContextBudget } from '../context-budget.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
@@ -534,7 +535,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'context-budget',
-    owns: 'the token budget: model window sizing and at-source tool-result clamping',
+    owns: 'the token budget: model window sizing, at-source tool-result clamping, and the turn-cumulative admit budget',
     subjects: [
       'contextWindowForModel',
       'clampToolResult',
@@ -560,6 +561,23 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: async (s) => {
           const clamped = await s.clampToolResult(`${'H'.repeat(600)}${'M'.repeat(400)}${'T'.repeat(600)}`, { maxChars: 200 });
           return { length: clamped.length, clamped };
+        },
+      },
+      {
+        id: 'context-budget/turn-cumulative-cap',
+        asserts: 'the per-result cap holds at full fidelity until the turn spends its admit budget, then drops to the floor',
+        observe: async (s) => {
+          // The budget is probe DATA, not a subject: it is a per-turn value
+          // carrier the whole turn pipeline passes around, and the policy
+          // under measurement is the clamp's response to it.
+          const budget = new TurnContextBudget(1_000, 100);
+          const caps: number[] = [];
+          const sizes: number[] = [];
+          for (let i = 0; i < 4; i++) {
+            caps.push(budget.capFor(400));
+            sizes.push((await s.clampToolResult('Z'.repeat(5_000), { maxChars: 400, budget, producer: 'run' })).length);
+          }
+          return { caps, sizes, snapshot: budget.snapshot() };
         },
       },
       {

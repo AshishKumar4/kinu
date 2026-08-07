@@ -15,9 +15,10 @@
 import type { ToolSet } from 'ai';
 import type { VFS } from '../types/primitives.js';
 import { nanoid } from '../utils/nanoid.js';
+import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget.js';
 
 /** Workspace VFS directory full outputs are offloaded to. */
-export const TOOL_OUTPUT_DIR = '.proteus/tool-output';
+export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
 
 export const DEFAULT_TOOL_RESULT_MAX_CHARS = 40_000;
 
@@ -30,6 +31,12 @@ export interface ClampToolResultOptions {
   /** Workspace VFS the full output is saved to. Without it the marker still
    *  reports the omission but cannot offer a restore path. */
   vfs?: VFS;
+  /** The turn's cumulative budget. Present: the per-result cap tightens once
+   *  the turn has admitted its budget, and every trip is counted. Absent: the
+   *  per-result cap is the whole policy (heads, tests, one-off calls). */
+  budget?: TurnContextBudget;
+  /** Which producer this result came from — the counter's breakdown key. */
+  producer?: BulkProducer;
 }
 
 /** Clamp one oversize tool result, offloading the full text to the VFS. */
@@ -37,8 +44,12 @@ export async function clampToolResult(
   text: string,
   opts: ClampToolResultOptions = {},
 ): Promise<string> {
-  const maxChars = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
-  if (text.length <= maxChars) return text;
+  const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+  const maxChars = opts.budget?.capFor(configured) ?? configured;
+  if (text.length <= maxChars) {
+    opts.budget?.admit(text.length);
+    return text;
+  }
 
   let savedPath: string | null = null;
   if (opts.vfs) {
@@ -65,7 +76,17 @@ export async function clampToolResult(
       'read or filter it with workspace.readFile inside execute_tools ' +
       '(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]'
     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]`;
-  return `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
+  const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
+  if (opts.budget) {
+    opts.budget.admit(clamped.length);
+    opts.budget.recordSpill({
+      producer: opts.producer ?? 'execute_tools',
+      omitted,
+      referenced: savedPath !== null,
+      tightened: maxChars < configured,
+    });
+  }
+  return clamped;
 }
 
 /** Serialize-and-clamp for tools whose results are structured (execute_tools).
@@ -76,17 +97,18 @@ export async function clampSerializedToolResult(
   opts: ClampToolResultOptions = {},
 ): Promise<unknown> {
   if (output == null) return output;
-  const maxChars = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
-  if (typeof output === 'string') {
-    return output.length <= maxChars ? output : clampToolResult(output, opts);
-  }
+  if (typeof output === 'string') return clampToolResult(output, opts);
   let serialized: string;
   try {
     serialized = JSON.stringify(output);
   } catch {
     serialized = String(output);
   }
-  if (serialized == null || serialized.length <= maxChars) return output;
+  const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+  if (serialized == null || serialized.length <= (opts.budget?.capFor(configured) ?? configured)) {
+    opts.budget?.admit(serialized?.length ?? 0);
+    return output;
+  }
   return clampToolResult(serialized, opts);
 }
 
@@ -94,14 +116,24 @@ export async function clampSerializedToolResult(
  *  Shallow-clones — schema and description are untouched. */
 export function withClampedToolResult(
   toolEntry: ToolSet[string],
-  vfs: VFS | undefined,
-  maxChars?: number,
+  opts: ClampToolResultOptions,
 ): ToolSet[string] {
   const execute = (toolEntry as { execute?: (...args: never[]) => unknown }).execute;
   if (typeof execute !== 'function') return toolEntry;
   return {
     ...toolEntry,
-    execute: async (...args: never[]) =>
-      clampSerializedToolResult(await execute(...args), { vfs, ...(maxChars !== undefined ? { maxChars } : {}) }),
+    execute: async (...args: never[]) => clampSerializedToolResult(await execute(...args), opts),
   } as ToolSet[string];
+}
+
+/** Wrap every entry of an externally supplied ToolSet (MCP servers) so its
+ *  results ride the same budget as the builtins. Without this an MCP tool is
+ *  the one bulk producer with no cap at all. */
+export function withClampedToolResults(
+  tools: ToolSet,
+  opts: ClampToolResultOptions,
+): ToolSet {
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, entry]) => [name, withClampedToolResult(entry, opts)]),
+  ) as ToolSet;
 }

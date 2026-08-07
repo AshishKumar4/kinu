@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/prompting/attachment-sanitizer.ts b/packages/core/src/prompting/attachment-sanitizer.ts
-index 6c69ba1..72db657 100644
 --- a/packages/core/src/prompting/attachment-sanitizer.ts
 +++ b/packages/core/src/prompting/attachment-sanitizer.ts
-@@ -200,7 +200,7 @@ async function storeAndReference(
- ): Promise<TextPart> {
-   const basename = `${fnv1a64Bytes(bytes)}.${extensionFor(mediaType)}`;
-   const path = `${ATTACHMENTS_DIR}/${basename}`;
--  if (!(await vfs.exists(path))) {
-+  if (!vfs.exists(path)) {
+@@ -294,7 +294,7 @@
+   policy: AttachmentPolicy,
+ ): Promise<string> {
+   const path = `${ATTACHMENTS_DIR}/${fnv1a64Bytes(bytes)}.${extensionFor(mediaType)}`;
+-  if (!(await policy.vfs.exists(path))) {
++  if (!policy.vfs.exists(path)) {
      try {
-       await vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
+       await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
      } catch (err) {

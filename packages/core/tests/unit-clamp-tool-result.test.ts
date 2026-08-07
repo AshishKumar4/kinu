@@ -8,9 +8,11 @@ import {
   clampToolResult,
   clampSerializedToolResult,
   withClampedToolResult,
+  withClampedToolResults,
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   TOOL_OUTPUT_DIR,
 } from '../src/tools/clamp.js';
+import { TurnContextBudget } from '../src/context-budget.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
@@ -86,7 +88,7 @@ describe('clampSerializedToolResult', () => {
       description: 'desc', inputSchema: { type: 'object' },
       execute: async () => 'b'.repeat(120_000),
     } as unknown as ToolSet[string];
-    const wrapped = withClampedToolResult(entry, rt.storage.vfs);
+    const wrapped = withClampedToolResult(entry, { vfs: rt.storage.vfs });
     expect((wrapped as { description?: string }).description).toBe('desc');
     const out = await (wrapped as { execute: () => Promise<unknown> }).execute();
     expect(String(out)).toContain('chars omitted');
@@ -134,5 +136,103 @@ describe('run tool result budget (behavior through the public tool surface)', ()
     expect(out).toStartWith('Error (exit 2):');
     expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
     expect(out).toContain('chars omitted');
+  });
+});
+
+// The turn-cumulative half of the same seam: the per-result cap is not the
+// whole policy, because eight in-budget results still bury the root. Once a
+// turn has admitted its budget the remaining results clamp to the floor —
+// full text still spilled, marker recipe unchanged.
+describe('turn-cumulative egress budget (through the run tool)', () => {
+  function runToolWithBudget(budget: TurnContextBudget, output: () => string) {
+    const { rt } = createTestRuntime();
+    const shell = { exec: async () => ({ stdout: output(), stderr: '', exitCode: 0 }) };
+    const tools = buildBuiltinTools({
+      rt: { ...rt, shell } as AgentRuntime,
+      contextBudget: budget,
+    });
+    return { run: tools.run as unknown as RunTool, rt };
+  }
+
+  test('the first results keep full fidelity; once the turn is heavy the rest clamp to the floor', async () => {
+    const budget = new TurnContextBudget();
+    const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+
+    const sizes: number[] = [];
+    for (let i = 0; i < 5; i++) sizes.push((await run.execute({ command: `big-${i}` })).length);
+
+    // 40k per result until 120k cumulative is admitted → three full, then floor.
+    expect(sizes.slice(0, 3).every((n) => n > 39_000)).toBe(true);
+    expect(sizes.slice(3).every((n) => n < 9_000)).toBe(true);
+    const snapshot = budget.snapshot();
+    expect(snapshot.trips.run).toBe(5);
+    expect(snapshot.referenced).toBe(5);
+    expect(snapshot.tightened).toBe(2);
+  });
+
+  test('the tightened result still spills the whole output and keeps the same recipe', async () => {
+    const budget = new TurnContextBudget();
+    const { run, rt } = runToolWithBudget(budget, () => `UNIQUE-${'M'.repeat(200_000)}-END`);
+    for (let i = 0; i < 4; i++) await run.execute({ command: `big-${i}` });
+    const tightened = await run.execute({ command: 'big-last' });
+
+    expect(tightened.length).toBeLessThan(9_000);
+    expect(tightened).toContain('slice + llm.query each slice, aggregate');
+    const restored = await rt.storage.vfs.readFile(markerPath(tightened), { encoding: 'utf8' });
+    expect(restored as string).toStartWith('UNIQUE-');
+    expect(restored as string).toEndWith('-END');
+  });
+
+  test('a fresh turn starts at full fidelity again', async () => {
+    const budget = new TurnContextBudget();
+    const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+    for (let i = 0; i < 4; i++) await run.execute({ command: `big-${i}` });
+    budget.reset();
+    expect((await run.execute({ command: 'next-turn' })).length).toBeGreaterThan(39_000);
+  });
+
+  test('small results accumulate toward the budget without ever tripping the counters', async () => {
+    const budget = new TurnContextBudget();
+    const { run } = runToolWithBudget(budget, () => 'ok'.repeat(10));
+    await run.execute({ command: 'small' });
+    expect(budget.snapshot()).toMatchObject({ admittedChars: 20, omittedChars: 0, trips: {} });
+  });
+
+  test('a toolset built without a budget still budgets — per root, by construction', async () => {
+    const { rt } = createTestRuntime();
+    const shell = { exec: async () => ({ stdout: 'L'.repeat(200_000), stderr: '', exitCode: 0 }) };
+    const run = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime }).run as unknown as RunTool;
+    for (let i = 0; i < 3; i++) await run.execute({ command: `big-${i}` });
+    expect((await run.execute({ command: 'big-4' })).length).toBeLessThan(9_000);
+  });
+});
+
+describe('withClampedToolResults (external/MCP tool surfaces)', () => {
+  test('every entry rides the same budget, and the counters name the producer', async () => {
+    const { rt } = createTestRuntime();
+    const budget = new TurnContextBudget();
+    const entry = (payload: unknown) => ({
+      description: 'd', inputSchema: { type: 'object' }, execute: async () => payload,
+    } as unknown as ToolSet[string]);
+
+    const wrapped = withClampedToolResults(
+      { mcp_srv_a: entry('A'.repeat(300_000)), mcp_srv_b: entry({ rows: 'B'.repeat(300_000) }) },
+      { vfs: rt.storage.vfs, budget, producer: 'external_tool' },
+    );
+    expect(Object.keys(wrapped)).toEqual(['mcp_srv_a', 'mcp_srv_b']);
+
+    for (const key of Object.keys(wrapped)) {
+      const out = await (wrapped[key] as unknown as { execute: () => Promise<unknown> }).execute();
+      expect(String(out)).toContain('chars omitted');
+    }
+    expect(budget.snapshot().trips).toEqual({ external_tool: 2 });
+    expect(budget.snapshot().referenced).toBe(2);
+  });
+
+  test('an entry with no execute (a provider-native tool) passes through untouched', () => {
+    const budget = new TurnContextBudget();
+    const declarative = { description: 'd', inputSchema: { type: 'object' } } as unknown as ToolSet[string];
+    const wrapped = withClampedToolResults({ native: declarative }, { budget });
+    expect(wrapped.native).toBe(declarative);
   });
 });

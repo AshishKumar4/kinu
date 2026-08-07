@@ -541,7 +541,10 @@ describe('buildSystemPromptSync', () => {
       // the registry, so a bare tool-name index (kimi) still gets the whole
       // decision — deliberate, and the load-bearing fix for "the agent never
       // reached for think".
-      'Delegation': 2800,
+      // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
+      // clamp tightens mechanically, and a model told WHY reaches for a rung
+      // instead of re-running the command (core/src/context-budget.ts).
+      'Delegation': 2950,
       'Background work': 260,
       'Proteus product changes': 290,
       'Output format': 180,

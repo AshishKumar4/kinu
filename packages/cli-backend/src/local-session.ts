@@ -47,7 +47,7 @@ import {
   recordGroundedHeadsTake, inheritedContextFromHistory,
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
+  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
   createChatModel, runChat, resolveMaxSteps,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
@@ -833,7 +833,11 @@ export class LocalAgentSession implements BackendHost {
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
     const conn = await connectMcpServers(servers, (msg) => this.emit({ type: 'evolution', event: 'mcp', message: msg }));
-    this.extraTools = conn.tools;
+    // MCP servers are bulk producers like any other tool — same clamp, same
+    // spill path, same turn budget as the builtins.
+    this.extraTools = withClampedToolResults(conn.tools, {
+      vfs: this.rt.storage.vfs, budget: this.orch.acc.context, producer: 'external_tool',
+    });
     this.mcpClose = conn.close;
   }
 
@@ -1001,6 +1005,7 @@ export class LocalAgentSession implements BackendHost {
     closeTurnRun(this.eventRecorder, this.currentRunId, {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
+      context: this.orch.acc.context,
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1168,7 +1173,9 @@ export class LocalAgentSession implements BackendHost {
       // the whole history BEFORE the transform seam and the ledger weave
       // (same ordering as the DO's beforeTurn); this.history itself is
       // never mutated.
-      attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
+      attachments: {
+        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.orch.acc.context,
+      },
       systemState,
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
@@ -1764,6 +1771,9 @@ export class LocalAgentSession implements BackendHost {
     const rawTools = buildBuiltinTools({
       rt: this.rt,
       shellApprovalMode: this.config.getShellApprovalMode(),
+      // The turn's cumulative bulk budget — held on the accumulator so this
+      // toolset (rebuilt only on model change) reads the live turn's state.
+      contextBudget: this.orch.acc.context,
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
         extraProviders: [
