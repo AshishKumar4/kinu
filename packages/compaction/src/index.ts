@@ -4,8 +4,9 @@
  * One deep module: the published better-compact ladder core, the Proteus
  * ModelMessage codec, the
  * `createCompactionExtension` factory whose `transformContext` runs the
- * ladder, and the real ports over the shared storage primitives (stores.ts:
- * VFS transcript store + durable SQL compaction state). Backends inject the
+ * ladder, the archive manifest that makes its citable transcripts navigable
+ * (manifest.ts), and the real ports over the shared storage primitives
+ * (stores.ts: VFS transcript store + durable SQL compaction state). Backends inject the
  * genuinely backend-specific pieces (summarizer transport, logger, onOutcome)
  * and register the extension; nothing here touches a backend.
  */
@@ -17,6 +18,13 @@ export {
   type CompactionExtensionDeps,
   type CompactionOutcomeEvent,
 } from './extension.js';
+export {
+  deriveArchiveRange,
+  renderArchiveManifest,
+  withArchiveManifest,
+  type ArchiveIndexStore,
+  type ArchiveRange,
+} from './manifest.js';
 export {
   compactionTranscriptPath,
   createVfsTranscriptStore,

@@ -14,7 +14,10 @@ import {
   type CompactionOutcomeEvent,
   type CompactionProfile,
 } from '../src/index.js';
-import { assistant, history, memoryPorts, toolCall, toolMessage, toolResult, user, validSummary, type MemoryPorts } from './helpers.js';
+import {
+  assistant, history, memoryArchive, memoryPorts, toolCall, toolMessage, toolResult, user,
+  validSummary, type MemoryArchiveStore, type MemoryPorts,
+} from './helpers.js';
 
 const SESSION = 'agent-test-session';
 
@@ -29,6 +32,7 @@ const profile: CompactionProfile = {
 
 interface Rig {
   ports: MemoryPorts;
+  archive: MemoryArchiveStore;
   prompts: string[];
   outcomes: CompactionOutcomeEvent[];
   transform: (messages: ModelMessage[], overrides?: Partial<TransformContext>) => Promise<ModelMessage[] | undefined>;
@@ -36,10 +40,12 @@ interface Rig {
 
 function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
   const ports = memoryPorts();
+  const archive = memoryArchive();
   const prompts: string[] = [];
   const outcomes: CompactionOutcomeEvent[] = [];
   const extension = createCompactionExtension({
     ports,
+    archive,
     summarize: async (prompt) => {
       prompts.push(prompt);
       return validSummary(String(prompts.length));
@@ -59,7 +65,7 @@ function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
       ...ctxOverrides,
     });
   };
-  return { ports, prompts, outcomes, transform };
+  return { ports, archive, prompts, outcomes, transform };
 }
 
 describe('trigger gating', () => {
@@ -225,7 +231,9 @@ describe('replay', () => {
     // A foreign snapshot (sessionId=agent-test-session) under another key is
     // ignored by the ownership check; a fresh plan is built and saved.
     ports.plans.snapshots.set('other-session', snapshot);
-    const ext = createCompactionExtension({ ports, summarize: async () => validSummary('other'), profile });
+    const ext = createCompactionExtension({
+      ports, archive: memoryArchive(), summarize: async () => validSummary('other'), profile,
+    });
     const result = await ext.transformContext?.({
       sessionKey: 'other-session',
       messages,
@@ -275,6 +283,89 @@ describe('force trigger', () => {
   test('force on a too-small history is benign', async () => {
     const { transform } = rig();
     expect(await transform([user('only message')], { trigger: 'force' })).toBeUndefined();
+  });
+});
+
+describe('archive manifest', () => {
+  /** Fat USER turns: no prune stage touches them, so the ladder falls through
+   *  to the checkpoint — the message the manifest must ride on. */
+  const fatUser = (i: number): ModelMessage[] => [
+    user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
+    assistant([{ type: 'text', text: `noted ${i}` }]),
+  ];
+  const fatHistory = (turns: number): ModelMessage[] =>
+    Array.from({ length: turns }, (_, i) => fatUser(i)).flat();
+
+  test('the checkpoint message carries a manifest line for the archived range', async () => {
+    const { archive, ports, transform } = rig();
+    const result = await transform(fatHistory(8));
+    if (!result) throw new Error('expected a rewrite');
+    const snapshot = ports.plans.snapshots.get(SESSION);
+    if (!snapshot) throw new Error('expected a persisted plan snapshot');
+
+    const ranges = archive.list(SESSION);
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]).toMatchObject({
+      rangeHash: snapshot.rangeHash,
+      path: snapshot.transcriptRelativePath,
+      startTurn: 1,
+      endTurn: 12,
+      userTurns: 6,
+      assistantTurns: 6,
+    });
+    expect(ranges[0].firstUserAsk).toStartWith('requirement 0:');
+
+    // Same message as the checkpoint — the manifest is navigation FOR it.
+    const checkpoint = result.find(
+      (m) => typeof m.content === 'string' && m.content.includes('[Context Summary]'),
+    );
+    expect(checkpoint?.content).toInclude('## Compaction Archive');
+    expect(checkpoint?.content).toInclude(
+      '- turns 1-12 (6 user / 6 assistant) — "requirement 0: detail detail',
+    );
+    expect(checkpoint?.content).toInclude(snapshot.transcriptRelativePath);
+  });
+
+  test('a replayed plan indexes nothing more and re-renders byte-identically', async () => {
+    const { archive, transform } = rig();
+    const messages = fatHistory(8);
+    const first = await transform(messages);
+    const second = await transform(messages);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    expect(archive.list(SESSION)).toHaveLength(1);
+  });
+
+  test('an advanced boundary indexes only the delta and lists both ranges', async () => {
+    const { archive, transform } = rig();
+    const messages = fatHistory(8);
+    await transform(messages);
+    const grown = [...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)];
+    const result = await transform(grown);
+    if (!result) throw new Error('expected a rebuild');
+
+    const ranges = archive.list(SESSION);
+    expect(ranges).toHaveLength(2);
+    expect(ranges[1]).toMatchObject({ startTurn: 13, endTurn: 18, userTurns: 3, assistantTurns: 3 });
+    expect(ranges[1].firstUserAsk).toStartWith('requirement 6:');
+    expect(ranges[1].path).not.toBe(ranges[0].path);
+    const checkpoint = result.find(
+      (m) => typeof m.content === 'string' && m.content.includes('## Compaction Archive'),
+    );
+    expect(checkpoint?.content).toInclude('- turns 1-12 ');
+    expect(checkpoint?.content).toInclude('- turns 13-18 ');
+  });
+
+  test('an edited prefix restarts the index instead of stacking a stale range', async () => {
+    const { archive, transform } = rig();
+    const messages = fatHistory(8);
+    await transform(messages);
+    const edited = [...messages];
+    edited[0] = user(`REWRITTEN requirement: ${'detail '.repeat(1_000)}`);
+    await transform(edited);
+    const ranges = archive.list(SESSION);
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]).toMatchObject({ startTurn: 1 });
+    expect(ranges[0].firstUserAsk).toStartWith('REWRITTEN requirement:');
   });
 });
 

@@ -906,6 +906,28 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(received?.atMs).toBeGreaterThan(Date.now());
   });
 
+  test('Node execute fallback exposes agent.compactNow, arming the ladder for the next turn', async () => {
+    let arms = 0;
+    const executeTool = createNodeExecuteToolFactory({
+      extraProviders: [createLocalAgentSelfProvider({
+        proposeCurriculumTasks: async () => [],
+        listCurriculumTasks: async () => [],
+        setCurriculumTaskStatus: async () => ({ ok: true }),
+        createTimerTrigger: () => ({ id: 'trg-local', kind: 'timer_oneshot', nextFireAt: 1 }),
+        cancelTrigger: async () => ({ ok: true }),
+        jobResult: async () => null,
+        listBackgroundJobs: async () => [],
+        armCompactNow: () => { arms++; },
+      })],
+    })({ tools: {}, providers: [], loader: {} });
+
+    const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
+      code: 'return await agent.compactNow();',
+    });
+    expect(result).toMatchObject({ result: { armed: true, appliesAt: 'next-turn-assembly' } });
+    expect(arms).toBe(1);
+  });
+
   test('a /skill activation filters the turn toolset to allowed_tools (+ skills)', async () => {
     let captured: string[] = [];
     const { rt, session } = setup('ok', capturingModel('ok', (t) => { captured = t; }));

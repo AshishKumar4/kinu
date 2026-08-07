@@ -520,6 +520,15 @@ export abstract class ActorAgent extends Think<Env> {
    *  assembly — the length the turn's prompt-token measurement is bound to. */
   protected _turnDurableLength = 0;
 
+  /** `agent.compactNow()` — the agent folding a finished phase itself instead
+   *  of waiting for the token trigger. It rides the SAME one-shot flag
+   *  overflow recovery arms, so there is one forced-rebuild path and a repeat
+   *  call can never loop the ladder. The in-flight turn's context is already
+   *  assembled, so the fold lands on the next one. */
+  armCompactNow(): void {
+    this.compactionState.armForceCompaction(this.name);
+  }
+
   /** Better-compact is THE default (and only) compaction path: the staged
    *  pruning ladder runs as a transformContext extension once per turn
    *  assembly, replaying its persisted plan byte-stably until the context
@@ -545,6 +554,7 @@ export abstract class ActorAgent extends Think<Env> {
         plans: this.compactionState.plans,
         logger,
       },
+      archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.getModel()),
       onOutcome: ({ outcome }) => {
         // The model-visible stream changed shape — a NEW plan rewrote it
@@ -1845,10 +1855,11 @@ export abstract class ActorAgent extends Think<Env> {
     this._turnDurableLength = rawMessages.length;
     const lastPromptTokens = this.compactionState.loadPromptTokens(this.name, rawMessages.length);
     this._turnContextWindow = this.sessionContextWindow();
-    // Overflow recovery (onChatResponse arms the flag on a context_length
-    // failure): consume it — at most one forced rebuild per arm, never a loop.
+    // The forced rebuild, armed either by overflow recovery (onChatResponse, on
+    // a context_length failure) or by the agent itself (agent.compactNow):
+    // consume it — at most one rebuild per arm, never a loop.
     const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
-    if (trigger === 'force') this.logActivity('compaction_forced', 'overflow recovery — forced context rebuild');
+    if (trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
     // The newest MEMORY.md lessons/reflections ride the ephemeral block too
     // (the same bounded tail the CLI weave supplies) — the reflection loop
     // assumes the model sees its latest lessons in-turn.

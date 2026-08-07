@@ -1,7 +1,9 @@
 /** Shared fixtures: ModelMessage builders and in-memory engine ports. */
 
 import type { AssistantModelMessage, ModelMessage, ToolCallPart, ToolModelMessage, ToolResultPart } from 'ai';
-import type { EnginePorts, Logger, PlanSnapshot, PlanStore, TranscriptStore } from '../src/index.js';
+import type {
+  ArchiveIndexStore, ArchiveRange, EnginePorts, Logger, PlanSnapshot, PlanStore, TranscriptStore,
+} from '../src/index.js';
 
 export function user(text: string): ModelMessage {
   return { role: 'user', content: text };
@@ -79,6 +81,26 @@ export function memoryPorts(): MemoryPorts {
       },
     },
     logger: silentLogger,
+  };
+}
+
+export interface MemoryArchiveStore extends ArchiveIndexStore {
+  ranges: Map<string, ArchiveRange[]>;
+}
+
+export function memoryArchive(): MemoryArchiveStore {
+  const ranges = new Map<string, ArchiveRange[]>();
+  return {
+    ranges,
+    list: (sessionKey) => [...(ranges.get(sessionKey) ?? [])],
+    append: (sessionKey, range) => {
+      const existing = ranges.get(sessionKey) ?? [];
+      if (existing.some((entry) => entry.rangeHash === range.rangeHash)) return;
+      ranges.set(sessionKey, [...existing, range]);
+    },
+    clear: (sessionKey) => {
+      ranges.delete(sessionKey);
+    },
   };
 }
 

@@ -338,6 +338,7 @@ export class LocalAgentSession implements BackendHost {
           error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
         },
       },
+      archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.ensureModelState()),
       onOutcome: ({ outcome }) => {
         // Fires inside runTransformContext, BEFORE runChat's ledger weave —
@@ -1367,6 +1368,15 @@ export class LocalAgentSession implements BackendHost {
     } catch {
       return 'local';
     }
+  }
+
+  /** `agent.compactNow()` — the agent folding a finished phase itself instead
+   *  of waiting for the token trigger. It rides the SAME one-shot flag
+   *  overflow recovery arms, so there is one forced-rebuild path and a repeat
+   *  call can never loop the ladder. The in-flight turn's context is already
+   *  assembled, so the fold lands on the next one. */
+  armCompactNow(): void {
+    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
   }
 
   /** Prompt-cache identity for runChat: the resolved provider/model plus a
