@@ -27,6 +27,7 @@ function landingResponse(origin: string): Response {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Proteus</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/proteus-icon.svg" />
   <style>
     :root {
       color-scheme: dark;
