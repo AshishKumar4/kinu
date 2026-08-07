@@ -139,7 +139,7 @@ describe('craft surface — extracted-tool acceptance veto', () => {
     });
     expect(result.accepted).toBe(false);
     expect(result.vetoReason).toContain('self-modification-reentry');
-    expect(rt.craftStore.get('auto_upgrade')).toBeNull();
+    expect(rt.craftStore.get('auto_upgrade')).toBeUndefined();
 
     const vetoes = recordedVetoes(rt);
     expect(vetoes.length).toBe(1);

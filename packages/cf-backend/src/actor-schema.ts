@@ -6,6 +6,7 @@ import {
   initEventsHubTables,
   initFactsTable,
   initHeadsTables,
+  initImportedExperienceTable,
   initRunEventTables,
   initScaffoldTables,
   initSearchTables,
@@ -36,6 +37,7 @@ export function ensureActorSchema(
   initScaffoldTables(execRaw);
   initCraftScoreTables(execRaw);
   initTurnOutcomeTables(execRaw, sql);
+  initImportedExperienceTable(execRaw);
   initEventsHubTables(storageSql);
   initHeadsTables(execRaw);
   initRunEventTables(execRaw);

@@ -13,6 +13,10 @@
  *     after acceptance (the VFS is agent-writable) cannot go live.
  *   • craft    — upsertCraftedTool, before an extracted tool is stored.
  *   • gepa     — runCraftedToolGepa, before a winner replaces a tool body.
+ *   • import   — experience/imports.ts, before knowledge published by ANOTHER
+ *     of the owner's workspaces is staged in this one. Not just code: an
+ *     imported lesson lands in MEMORY.md and an imported fact lands in the
+ *     per-turn facts block, which are the paper's memory pathway exactly.
  *
  * The criteria are HARDCODED and consulted from no mutable store: the checker
  * reads no SQL, no VFS, no config — its only input is the artifact source.
@@ -25,7 +29,7 @@
 
 import type { SqlExecutor } from '../types/primitives.js';
 
-export type MisevolutionSurface = 'scaffold' | 'craft' | 'gepa';
+export type MisevolutionSurface = 'scaffold' | 'craft' | 'gepa' | 'import';
 
 export interface MisevolutionViolation {
   ok: false;

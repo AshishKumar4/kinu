@@ -9,8 +9,8 @@ owning its tables and creating them idempotently.
 Three other Durable Object classes hold their own isolated databases:
 `SubordinateAgent` (the full actor schema plus a one-row `subordinate_identity`),
 `ExplorationAgent` (`facet_owner`, `facet_parent`, `traces` — the isolation MCTS
-branches depend on), and `UserDO` (the per-user `user_*` / `device_*` tables,
-which are the user's, not any workspace's). Three things live outside DO SQLite
+branches depend on), and `UserDO` (the per-user `user_*` / `device_*` tables and
+the owner's `experience_library`, which are the user's, not any workspace's). Three things live outside DO SQLite
 entirely: browser auth in the `AUTH_DB` D1 database
 (`packages/cf-backend/migrations/auth/`), sandbox `/workspace` backups in the
 `BACKUP_BUCKET` R2 bucket, and optional embedding recall in the
@@ -224,6 +224,7 @@ pass:
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Product change | `product_source_bindings`, `product_change_requests`, `product_change_checks`, `product_change_approvals`, `product_deployments` | `core/src/product-change/sql-store.ts` |
+| Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state` | `compaction/src/stores.ts` |
 | Subordinates | `workspace_subordinates` (parent), `subordinate_identity` (child DO) | `cf-backend/src/subordinate-support.ts` |
 | Orchestrator-local | `agent_config`, `vfs_baseline`, `turn_feedback`, `turn_craft_usage`, `webhook_secrets` | `cf-backend/src/orchestrator.ts` |

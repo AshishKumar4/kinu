@@ -14,6 +14,9 @@ interface CraftCandidate {
   description: string;
   code: string;
   score: number;
+  /** Declared parameter map. Extraction produces none (the body reads its own
+   *  arguments); an imported tool carries the source workspace's declaration. */
+  params?: Record<string, string> | null;
 }
 
 /** Check for name or semantic conflicts before adding a tool */
@@ -61,6 +64,7 @@ export async function upsertCraftedTool(
       rt.craftStore.update(conflicting[0]!, {
         code: candidate.code,
         description: candidate.description,
+        ...(candidate.params !== undefined ? { params: candidate.params } : {}),
       });
       rt.storage.sql`
         UPDATE craft_scores SET score = ${candidate.score}, last_used_at = ${nowMs()}
@@ -73,7 +77,7 @@ export async function upsertCraftedTool(
   rt.craftStore.create({
     name: candidate.name,
     description: candidate.description,
-    params: null,
+    params: candidate.params ?? null,
     code: candidate.code,
     scope: 'local',
   });

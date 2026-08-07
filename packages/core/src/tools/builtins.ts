@@ -24,10 +24,13 @@
  *                       + Vectorize when a VectorStore is wired).
  *   6. fact           — typed keyed world model: remember / recall / forget.
  *                       Gated on deps.facts.
- *   7. report         — the subordinate's progress spine back to its parent
+ *   7. experience     — cross-workspace transfer of proven crafts / lessons /
+ *                       facts through the owner's library. Gated on
+ *                       deps.experience (workspace orchestrator only).
+ *   8. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
- *   8. product_change — governed product/UI self-customization lane.
+ *   9. product_change — governed product/UI self-customization lane.
  *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -49,6 +52,7 @@ import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memor
 import { SessionSearchStore } from '../memory/session-search.js';
 import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
+import { createExperienceTool, type ExperienceToolDeps } from './experience-tool.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import {
@@ -131,6 +135,9 @@ export interface BuiltinToolDeps {
   /** agent_facts world model. When provided, exposes the `fact` tool
    *  (remember / recall / forget actions). */
   facts?: import('../memory/facts.js').FactsStore;
+  /** The owner's cross-workspace experience library. When provided, exposes
+   *  the `experience` tool (publish / search / import). */
+  experience?: ExperienceToolDeps;
   /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
    *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
    *  ∪ frequently-used recent) are injected — saves context as the store
@@ -654,7 +661,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 6. web_search / web_fetch — live web research ─────────────────────────
+  // ── 6. experience — cross-workspace transfer of proven crafts/lessons/facts ──
+  if (deps.experience) {
+    tools.experience = createExperienceTool(deps.experience);
+  }
+
+  // ── 7. web_search / web_fetch — live web research ─────────────────────────
   // Two tools, the universal 2026 agent shape: web_search discovers ranked
   // results, web_fetch retrieves one URL as clean markdown. Both work key-less
   // (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential upgrades
@@ -706,7 +718,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 7. report — subordinate → parent progress spine ────────────────────────
+  // ── 8. report — subordinate → parent progress spine ────────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = tool({
@@ -734,7 +746,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 8. product_change — governed product/UI self-customization lane ───────
+  // ── 9. product_change — governed product/UI self-customization lane ───────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({

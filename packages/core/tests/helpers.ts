@@ -148,6 +148,26 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     )
   `);
 
+  // The row→tool mapping the production CraftStore performs. Handing raw rows
+  // back instead would hide real drift: `params` is stored as JSON text and the
+  // timestamps are snake_case, so a caller reading `tool.params` would get a
+  // string in tests and an object in production.
+  interface CraftRow {
+    name: string; description: string; params: string | null; code: string;
+    scope: string; created_at: number; updated_at: number;
+  }
+  const toTool = (row: CraftRow): CraftedTool => ({
+    name: row.name,
+    description: row.description,
+    params: row.params ? JSON.parse(row.params) as Record<string, string> : null,
+    code: row.code,
+    scope: row.scope as CraftedTool['scope'],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+  const rows = (query: string, ...bindings: unknown[]): CraftRow[] =>
+    db.query(query).all(...(bindings as never[])) as CraftRow[];
+
   return {
     create(tool) {
       db.run(
@@ -158,21 +178,23 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     update(name, patch) {
       if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
       if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
+      if (patch.params !== undefined) db.run('UPDATE crafted_tools SET params = ?, updated_at = ? WHERE name = ?', [patch.params ? JSON.stringify(patch.params) : null, Date.now(), name]);
     },
     get(name) {
-      return db.query('SELECT * FROM crafted_tools WHERE name = ?').get(name) as CraftedTool | undefined;
+      const row = rows('SELECT * FROM crafted_tools WHERE name = ?', name)[0];
+      return row ? toTool(row) : undefined;
     },
     delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
-    list() { return db.query('SELECT * FROM crafted_tools').all() as CraftedTool[]; },
+    list() { return rows('SELECT * FROM crafted_tools').map(toTool); },
     search(query, limit = 10) {
       // Word-level search: match tools where any query word appears in description
       const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const all = db.query('SELECT * FROM crafted_tools').all() as CraftedTool[];
-      return all
+      return rows('SELECT * FROM crafted_tools')
         .filter(t => words.some(w => t.description.toLowerCase().includes(w)))
-        .slice(0, limit);
+        .slice(0, limit)
+        .map(toTool);
     },
-    getAll() { return db.query('SELECT * FROM crafted_tools').all() as CraftedTool[]; },
+    getAll() { return rows('SELECT * FROM crafted_tools').map(toTool); },
   };
 }
 

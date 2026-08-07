@@ -1,7 +1,7 @@
 /** Date helpers — no external dependencies. */
 
-export function isoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+export function isoDate(at: number = Date.now()): string {
+  return new Date(at).toISOString().slice(0, 10);
 }
 
 export function today(): string {

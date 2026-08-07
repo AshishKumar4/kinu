@@ -627,6 +627,16 @@ export function listLessons(
   }
 }
 
+/** One lesson by id, or null. */
+export function getLesson(sql: SqlExecutor, id: string): LessonRow | null {
+  try {
+    const rows = sql<RawLessonRow>`SELECT * FROM lessons WHERE id = ${id} LIMIT 1`;
+    return rows[0] ? toLessonRow(rows[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A real negative outcome landed on `turnId`: flip every provisional lesson
  *  tied to that turn to corroborated. Returns the newly corroborated lessons
  *  so the caller can append them to durable memory (MEMORY.md). */

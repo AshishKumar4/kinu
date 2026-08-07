@@ -103,6 +103,18 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
 
+  { capability: 'experience.read', name: 'searchExperience', run: (u, c) => u.searchExperience(c, { query: 'deploy' }) },
+  { capability: 'experience.read', name: 'getExperienceEntry', run: (u, c) => u.getExperienceEntry(c, 'exp-nope') },
+  {
+    capability: 'experience.write',
+    name: 'publishExperience',
+    run: (u, c) => u.publishExperience(c, {
+      kind: 'fact', key: 'deploy.target', title: 'deploy.target',
+      payload: { kind: 'fact', key: 'deploy.target', value: 'x.workers.dev', confidence: 1 },
+      evidence: 'held at confidence 1.00',
+    }),
+  },
+
   { capability: 'product_change', name: 'listProductSourceBindings', run: (u, c) => u.listProductSourceBindings(c) },
   { capability: 'product_change', name: 'upsertProductSourceBinding', run: (u, c) => u.upsertProductSourceBinding(c, { kind: 'github', repo: 'o/r' } as never) },
   { capability: 'product_change', name: 'createProductChange', run: (u, c) => u.createProductChange(c, WORKSPACE, { bindingId: 'b1', userPrompt: 'x' }) },
@@ -195,6 +207,8 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
     expect(cut).toContain('workspaces.read:listWorkspaces');
     expect(cut).toContain('workspaces.write:registerWorkspace');
     expect(cut).toContain('product_change:getProductChangeBoard');
+    expect(cut).toContain('experience.read:searchExperience');
+    expect(cut).toContain('experience.write:publishExperience');
     expect(cut).toContain('profile:getProfile');
     expect(cut).toContain('auth_tokens:mintCliToken');
     expect(kept).toContain('credentials.model:getAuthHeaders(codex.oauth)');

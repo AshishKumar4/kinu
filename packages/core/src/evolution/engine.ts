@@ -51,6 +51,9 @@ import {
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
+import {
+  bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
+} from '../experience/imports.js';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
 import {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
@@ -328,6 +331,10 @@ export class EvolutionEngine {
       await this.corroborateLessons(turn.turnId);
     }
 
+    // Imported experience rides this turn's verdict: accepted adopts it into
+    // this workspace's own stores, anything else discards it.
+    await this.settleImports(turn.turnId, outcome);
+
     // Reflection is warranted by real negative signal — or by an error on a
     // turn nobody graded, which stays provisional until an outcome
     // corroborates it.
@@ -435,6 +442,43 @@ export class EvolutionEngine {
       await this.rt.memory.append('memory/MEMORY.md', `\n${header}\n${lesson.text}\n`);
     }
     if (upgraded.length > 0) await this.rt.memory.index('memory/MEMORY.md');
+  }
+
+  /**
+   * Settle the experience this workspace imported from the owner's other
+   * workspaces against the verdict of a turn it has just graded.
+   *
+   * Imports are staged, never adopted, so this is the only path by which
+   * another workspace's craft, lesson or fact becomes part of THIS one — and it
+   * runs on the same real-outcome signal that corroborates a lesson. An
+   * ungraded turn settles nothing: the imports keep waiting for a turn that
+   * carries a verdict.
+   */
+  private async settleImports(turnId: string | undefined, outcome: TurnOutcome | null): Promise<void> {
+    if (!turnId || outcome === null || outcome === 'abandoned') return;
+    try {
+      bindPendingImports(this.rt.storage.sql, turnId);
+      const settled = await settleImportsForTurn(
+        this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
+      );
+      if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
+      const describe = (rows: ImportedExperienceRow[]) =>
+        rows.map((r) => `${r.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
+      this.emit({
+        type: 'experience_import',
+        message: settled.corroborated.length > 0
+          ? `Adopted imported experience after an accepted turn: ${describe(settled.corroborated)}`
+          : `Discarded imported experience after a ${outcome} turn: ${describe(settled.discarded)}`,
+        data: {
+          outcome,
+          corroborated: settled.corroborated.map((r) => r.libraryId),
+          discarded: settled.discarded.map((r) => r.libraryId),
+        },
+      });
+    } catch {
+      // The imports ledger may not exist in minimal runtimes — settling is not
+      // allowed to fail the turn review that produced the verdict.
+    }
   }
 
   // ── Timescale 2: Session-level (end of conversation or every N turns) ──

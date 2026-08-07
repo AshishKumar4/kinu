@@ -39,7 +39,7 @@ import {
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
   initAgentConfigTable, createAgentConfigStore,
-  initFactsTable, createFactsStore, readMemoryTail,
+  initFactsTable, createFactsStore, initImportedExperienceTable, readMemoryTail,
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
   HeadController, HeadJournal, initHeadsTables,
@@ -320,6 +320,12 @@ export class LocalAgentSession implements BackendHost {
     // agent_facts world model — exposes the `fact` tool (parity with the DO).
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
+
+    // Imported-experience staging ledger. A local session has no owner library
+    // to import FROM (no `experience` tool without a UserDO), but a workspace
+    // that imported in the cloud and is later driven from here must still be
+    // able to settle what is staged, so the ledger exists on both backends.
+    initImportedExperienceTable(this.rt.storage.execRaw);
 
     // Better-compact is THE default (and only) compaction path — the same
     // staged transformContext ladder the cloud backend registers, over the

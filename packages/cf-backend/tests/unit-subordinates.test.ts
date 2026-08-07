@@ -143,6 +143,14 @@ describe('subordinate identity', () => {
     expect(profile).not.toContain('team:');
     expect(profile).not.toContain('peers:');
     expect(profile).not.toContain('productChanges:');
+    // Cross-workspace experience transfer is reach beyond the workspace, so it
+    // rides the orchestrator's profile for the same reason peers does.
+    expect(profile).not.toContain('experience:');
+    expect(source('orchestrator.ts')).toContain('experience: this.getExperienceToolDeps(),');
+    // …and absence is structural: a deps-gated name is dropped from the
+    // advertised surface too, not just from the ToolSet.
+    expect(source('actor-agent.ts'))
+      .toContain("const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;");
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {

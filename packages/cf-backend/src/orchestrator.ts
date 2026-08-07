@@ -94,6 +94,7 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeStatus,
   type ProductChangeToolDeps, type ProductSourceBindingInput,
+  type ExperienceToolDeps,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
@@ -713,6 +714,24 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
+  /** The `experience` tool's deps: this workspace's own stores plus a client
+   *  for the owner's library, every call of which crosses the UserDO
+   *  capability gate. Absent until the workspace is claimed — there is no
+   *  owner library to reach before that. */
+  private getExperienceToolDeps(): ExperienceToolDeps | undefined {
+    if (!this.getOwnerUserDO()) return undefined;
+    const hub = () => this.userHub();
+    return {
+      rt: this.rt,
+      facts: this.facts,
+      library: {
+        publish: async (candidate) => { const { stub, caller } = await hub(); return stub.publishExperience(caller, candidate); },
+        search: async (options) => { const { stub, caller } = await hub(); return stub.searchExperience(caller, options); },
+        get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
+      },
+    };
+  }
+
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
@@ -762,13 +781,14 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The actor profile (ActorAgent): the orchestrator wires the full
-   *  user-facing tool surface — cross-workspace peers + the product-change
-   *  lane. */
+   *  user-facing tool surface — cross-workspace peers, cross-workspace
+   *  experience transfer, and the product-change lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
       team: this.getTeamToolDeps(),
       productChanges: this.getProductChangeToolDeps(),
       peers: this.getPeersToolDeps(),
+      experience: this.getExperienceToolDeps(),
     };
   }
 

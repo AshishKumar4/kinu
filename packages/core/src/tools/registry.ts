@@ -16,6 +16,7 @@ export const BUILTIN_TOOLS = [
   'agents',
   'memory',
   'fact',
+  'experience',
   'web_search',
   'web_fetch',
   'report',
@@ -147,6 +148,18 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenToUse: 'Use for named durable state that should be recalled or updated precisely.',
     whenNotToUse: 'Do not use for long prose notes; use memory for those.',
     result: 'Returns fact mutation status or recalled fact values.',
+  },
+  experience: {
+    name: 'experience',
+    summary:
+      "Share and reuse proven experience — crafted tools, corroborated lessons, and confident facts — across the owner's workspaces.",
+    whenToUse:
+      'Search it before grinding out something another of the owner\'s workspaces has already solved, and import what fits — an import comes back inline, ready to use in this same turn. '
+      + 'Publish back what THIS workspace has proven, so the owner\'s other agents inherit it.',
+    whenNotToUse:
+      'Do not publish unproven work — a craft with no real uses, a provisional lesson, or a low-confidence fact is refused. Do not import speculatively: an import that does not survive this turn\'s outcome is discarded.',
+    result:
+      'search returns hits with their source workspace and the evidence that earned them; import returns the payload inline, staged provisional until this turn is accepted; publish returns what was shared, or what qualifies.',
   },
   web_search: {
     name: 'web_search',
