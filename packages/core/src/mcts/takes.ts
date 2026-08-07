@@ -11,6 +11,7 @@
  */
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import type { MergeResult } from '../heads/types.js';
 import type { SearchNode } from '../types/mcts.js';
 import { recordTurnOutcome } from '../evolution/outcomes.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -22,7 +23,7 @@ const MAX_TAKE_CANDIDATES = 4;
 
 /** Where a take set came from: near-tied MCTS convergence rivals, a mid-turn
  *  Steer-as-Branch redirect run as a parallel head, or the comparable reports of
- *  a think({strategy:'heads'}) fan-out. ONE pipeline — the comparison +
+ *  an agents-fork fan-out. ONE pipeline — the comparison +
  *  pick→ledger flow is identical for all three (synthetic-id sources skip the
  *  search_nodes re-point; only 'mcts' has real nodes to move). */
 export type AlternateTakeSource = 'mcts' | 'branch' | 'heads';
@@ -213,7 +214,7 @@ export interface HeadTakeCandidate {
 }
 
 /**
- * Persist a think({strategy:'heads'}) fan-out as an alternate-takes set: each
+ * Persist an agents-fork fan-out as an alternate-takes set: each
  * comparable head answer is a candidate, ranked by its grounded score (highest =
  * the answer the merge favored). Like MCTS, heads run MID-TURN (before the
  * assistant message id exists), so the set is written UNCLAIMED (turn_id NULL)
@@ -421,4 +422,18 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
     `${chosen.text.slice(0, 2000)}\n\n` +
     `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
   );
+}
+
+/** Record the comparable heads of a completed think({strategy:'heads'}) run as
+ *  an unclaimed Alternate-Takes set — claimed against the turn at turn end,
+ *  exactly like an MCTS capture. Only grounded scores are a real preference
+ *  signal, so emit nothing when ungrounded. Shared by both backends. */
+export function recordGroundedHeadsTake(sql: SqlExecutor, merge: MergeResult, task: string): void {
+  if (!merge.grounded) return;
+  const heads = merge.headScores
+    .filter((s) => s.status === 'completed')
+    .map((s) => ({ id: s.id, text: s.text, score: s.score }));
+  try {
+    recordHeadsTakeSet(sql, { task, heads });
+  } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
 }

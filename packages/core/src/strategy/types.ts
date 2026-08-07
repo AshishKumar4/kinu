@@ -2,7 +2,7 @@
 // score them, return the best." MCTS, Heads, Tree-of-Thoughts, Reflexion,
 // single-shot — all fit this shape.
 //
-// All strategies hide behind one `think(strategy, task, budget)` tool
+// All strategies hide behind the one `agents` tool's fork action
 // dispatching over a strategy registry, so the agent surface stays small and
 // stable while new strategies (ToT, GoT, Reflexion, RLM-on-subtask) drop in as
 // registry entries — no tool/UI/orchestrator changes.

@@ -11,7 +11,11 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
 import type { LLM } from './types/primitives.js';
+import { parseModelSpec } from './providers/types.js';
 import { withRateLimitRetry } from './providers/rate-limit-retry.js';
+import {
+  reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
+} from './strategy/effort.js';
 
 export interface LLMProviderConfig {
   /** Display name for the provider (e.g., 'workers-ai', 'anthropic') */
@@ -63,6 +67,41 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         model,
         prompt,
         ...cap,
+      });
+      return text.trim();
+    },
+  };
+}
+
+/**
+ * A completion-only `LLM` over one already-resolved model — the shape the
+ * offline raters use (judges, classifiers), where a spec names the model and
+ * both backends have their own way of turning that spec into a `LanguageModel`.
+ * The reasoning knob follows the stage policy, expressed in whichever provider
+ * the spec belongs to rather than always Workers AI's.
+ *
+ * `stream` throws: these callers do not stream, and an empty generator would
+ * turn "wrong seam" into a silently empty answer.
+ */
+export function createCompletionLLM(opts: {
+  model: LanguageModel;
+  /** `<provider>/<modelId>` — decides which provider's reasoning knob applies. */
+  spec: string;
+  stage: InferenceStage;
+}): LLM {
+  const providerOptions = reasoningEffortOptions(
+    REASONING_EFFORT_FOR_STAGE[opts.stage],
+    parseModelSpec(opts.spec).provider,
+  );
+  return {
+    async *stream() {
+      throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
+    },
+    async complete(prompt) {
+      const { text } = await generateText({
+        model: opts.model,
+        prompt,
+        ...(providerOptions ? { providerOptions } : {}),
       });
       return text.trim();
     },

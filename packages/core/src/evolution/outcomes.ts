@@ -19,6 +19,7 @@ import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
 import type { EvalInstance } from './gepa/types.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
@@ -30,6 +31,26 @@ import { delegationFeatures, renderDelegationFeatures } from './delegation-featu
 export const TURN_OUTCOMES = ['accepted', 'corrected', 'frustrated', 'abandoned'] as const;
 
 export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
+
+/** The outcomes that carry a complaint — what "a turn that landed badly"
+ *  means everywhere it is drawn as a set (GEPA's optimization targets, the
+ *  pathology clustering). `abandoned` is an absence of signal, not a verdict. */
+export const NEGATIVE_TURN_OUTCOMES = ['corrected', 'frustrated'] as const;
+
+/** The event every rate downstream is really about: a turn the user had to
+ *  correct, or was unhappy with. K_align's numerator, the craft-retirement
+ *  signal, and the GEPA split's optimization target are all this predicate. */
+export function isNegativeOutcome(outcome: TurnOutcome | null): boolean {
+  return outcome !== null && (NEGATIVE_TURN_OUTCOMES as readonly string[]).includes(outcome);
+}
+
+/** What a HUMAN may say about a turn when hand-labeling it (calibration.ts):
+ *  any real outcome, or an admission that the follow-up does not settle it.
+ *  `unclear` is a verdict, not a skip — it is recorded, then excluded from
+ *  every estimate. */
+export const OUTCOME_LABELS = [...TURN_OUTCOMES, 'unclear'] as const;
+
+export type OutcomeLabel = (typeof OUTCOME_LABELS)[number];
 
 /** Where an outcome row came from: the user's explicit thumbs, the LLM
  *  follow-up classifier, the session-end (abandoned) rule, or an Alternate
@@ -96,9 +117,9 @@ export function buildOutcomeClassifierPrompt(input: {
     `You are reviewing how a conversation turn landed. The user sent a request, ` +
     `the assistant responded, and the user has now sent a FOLLOW-UP message. ` +
     `Classify what the follow-up reveals about the previous response.\n\n` +
-    `Previous user request:\n"${input.userMessage.slice(0, 1000)}"\n\n` +
-    `Assistant response:\n"${input.assistantResponse.slice(0, 2000)}"\n\n` +
-    `User's follow-up message:\n"${input.followup.slice(0, 1000)}"\n\n` +
+    `Previous user request:\n"${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n\n` +
+    `Assistant response:\n"${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"\n\n` +
+    `User's follow-up message:\n"${evidenceWindow(input.followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n\n` +
     `Outcomes:\n` +
     `- "accepted": the user moved on, built on the answer, or asked something new that presumes it worked.\n` +
     `- "corrected": the user re-asked the same thing, fixed a mistake, contradicted the answer, or had to ` +
@@ -204,6 +225,130 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     created_at INTEGER NOT NULL,
     corroborated_at INTEGER
   )`);
+  // Gold labels — turns a HUMAN judged directly, the calibration set that
+  // measures how far the classifier's verdicts are from the truth
+  // (calibration.ts). Append-only: a re-label inserts a new row and the newest
+  // wins, so nothing a human spent attention on is overwritten in place.
+  execRaw(`CREATE TABLE IF NOT EXISTS outcome_labels (
+    id TEXT PRIMARY KEY,
+    outcome_id TEXT NOT NULL,
+    label TEXT NOT NULL CHECK (label IN (${OUTCOME_LABELS.map((l) => `'${l}'`).join(',')})),
+    labeler TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  // The same verdicts from LLM judges instead of the human — one row per model
+  // per turn (evolution/ensemble.ts). Kept beside the gold labels rather than
+  // in them so a model's opinion can never be counted as ground truth by a
+  // query that forgot to filter; append-only for the same reason as above.
+  execRaw(`CREATE TABLE IF NOT EXISTS outcome_ensemble_labels (
+    id TEXT PRIMARY KEY,
+    outcome_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    label TEXT NOT NULL CHECK (label IN (${OUTCOME_LABELS.map((l) => `'${l}'`).join(',')})),
+    created_at INTEGER NOT NULL
+  )`);
+}
+
+export interface OutcomeLabelRow {
+  id: string;
+  outcomeId: string;
+  label: OutcomeLabel;
+  labeler: string;
+  createdAt: number;
+}
+
+/** Append a labeling pass. Returns how many rows were written. */
+export function recordOutcomeLabels(sql: SqlExecutor, input: {
+  labeler: string;
+  labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
+  now?: number;
+}): number {
+  const now = input.now ?? nowMs();
+  for (const entry of input.labels) {
+    sql`INSERT INTO outcome_labels (id, outcome_id, label, labeler, created_at)
+        VALUES (${`lbl-${nanoid()}`}, ${entry.outcomeId}, ${entry.label}, ${input.labeler}, ${now})`;
+  }
+  return input.labels.length;
+}
+
+interface RawOutcomeLabelRow {
+  id: string; outcome_id: string; label: OutcomeLabel; labeler: string; created_at: number;
+}
+
+function toOutcomeLabelRow(r: RawOutcomeLabelRow): OutcomeLabelRow {
+  return {
+    id: r.id, outcomeId: r.outcome_id, label: r.label,
+    labeler: r.labeler, createdAt: r.created_at,
+  };
+}
+
+/** Every stored label, newest first. Unbounded when `limit` is omitted: the
+ *  gold set is the whole basis of every corrected number, and a window that
+ *  silently dropped the oldest labels would drop the turns they speak for. */
+export function listOutcomeLabels(sql: SqlExecutor, limit?: number): OutcomeLabelRow[] {
+  try {
+    const rows = limit === undefined
+      ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC`
+      : sql<RawOutcomeLabelRow>`
+          SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
+    return rows.map(toOutcomeLabelRow);
+  } catch {
+    return [];
+  }
+}
+
+/** The label that counts for each turn: the most recent one. Append-only
+ *  storage makes a correction a new row, so "newest wins" is the whole read. */
+export function goldLabels(sql: SqlExecutor): Map<string, OutcomeLabelRow> {
+  const latest = new Map<string, OutcomeLabelRow>();
+  for (const row of listOutcomeLabels(sql)) {
+    if (!latest.has(row.outcomeId)) latest.set(row.outcomeId, row);
+  }
+  return latest;
+}
+
+export interface EnsembleLabelRow {
+  id: string;
+  outcomeId: string;
+  /** `<provider>/<modelId>` the verdict came from. */
+  model: string;
+  label: OutcomeLabel;
+  createdAt: number;
+}
+
+/** Append one model's pass over a set of turns. */
+export function recordEnsembleLabels(sql: SqlExecutor, input: {
+  model: string;
+  labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
+  now?: number;
+}): number {
+  const now = input.now ?? nowMs();
+  for (const entry of input.labels) {
+    sql`INSERT INTO outcome_ensemble_labels (id, outcome_id, model, label, created_at)
+        VALUES (${`ens-${nanoid()}`}, ${entry.outcomeId}, ${input.model}, ${entry.label}, ${now})`;
+  }
+  return input.labels.length;
+}
+
+/** The verdict that counts for each (turn, model): the most recent one. Same
+ *  "append-only, newest wins" read as `goldLabels`. */
+export function ensembleLabels(sql: SqlExecutor): EnsembleLabelRow[] {
+  try {
+    const rows = sql<{
+      id: string; outcome_id: string; model: string; label: OutcomeLabel; created_at: number;
+    }>`SELECT * FROM outcome_ensemble_labels ORDER BY created_at DESC, id DESC`;
+    const latest = new Map<string, EnsembleLabelRow>();
+    for (const r of rows) {
+      const key = `${r.outcome_id}\n${r.model}`;
+      if (latest.has(key)) continue;
+      latest.set(key, {
+        id: r.id, outcomeId: r.outcome_id, model: r.model, label: r.label, createdAt: r.created_at,
+      });
+    }
+    return [...latest.values()];
+  } catch {
+    return [];
+  }
 }
 
 export interface TurnOutcomeRow {
@@ -234,7 +379,10 @@ export interface RecordTurnOutcomeInput {
 }
 
 /** Record (or, for a known turn id, replace — explicit thumbs override the
- *  classifier) one turn's outcome. Texts are truncated to keep rows bounded. */
+ *  classifier) one turn's outcome. Texts are windowed to keep rows bounded —
+ *  and this is the ceiling for everything downstream, since the GEPA eval
+ *  instances and the replay judge both read these rows and can never see more
+ *  than was stored. */
 export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInput): string {
   const id = `outc-${nanoid()}`;
   if (input.turnId) {
@@ -245,8 +393,9 @@ export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInpu
          user_message, assistant_response, followup, scaffold_version, created_at)
       VALUES
         (${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
-         ${input.confidence}, ${input.source}, ${input.userMessage.slice(0, 2000)},
-         ${input.assistantResponse.slice(0, 4000)}, ${input.followup?.slice(0, 2000) ?? null},
+         ${input.confidence}, ${input.source}, ${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.storedUserMessage)},
+         ${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.storedAssistantResponse)},
+         ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
          ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()})`;
   return id;
 }
@@ -521,7 +670,7 @@ const NEGATIVE_HOLDOUT_SHARE = 1 / 3;
  *  out, the split says so via `degeneracy` instead of quietly overlapping. */
 export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): OutcomeEvalSplit {
   const size = Math.max(2, Math.floor(budget));
-  const negatives = listTurnOutcomes(sql, { limit: size, outcomes: ['corrected', 'frustrated'] });
+  const negatives = listTurnOutcomes(sql, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
   const accepted = listTurnOutcomes(sql, { limit: size, outcomes: ['accepted'] });
 
   const negativeShare = Math.min(negatives.length, Math.ceil(size / 2));
@@ -619,6 +768,16 @@ export function listLessons(
     return rows.map(toLessonRow);
   } catch {
     return [];
+  }
+}
+
+/** One lesson by id, or null. */
+export function getLesson(sql: SqlExecutor, id: string): LessonRow | null {
+  try {
+    const rows = sql<RawLessonRow>`SELECT * FROM lessons WHERE id = ${id} LIMIT 1`;
+    return rows[0] ? toLessonRow(rows[0]) : null;
+  } catch {
+    return null;
   }
 }
 

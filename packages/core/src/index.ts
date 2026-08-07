@@ -59,11 +59,38 @@ export {
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
+  isNegativeOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
+  recordEnsembleLabels, ensembleLabels, type EnsembleLabelRow,
+  type OutcomeLabel, type OutcomeLabelRow,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes.js';
+// C8/C11 — the hand-labeled calibration set, and the bias-corrected view of
+// every rate the classifier feeds. Uncalibrated is reported as such, never
+// approximated away.
+export {
+  sampleForLabeling, renderLabelingFile, parseLabelingFile, allocateLabelBudget,
+  ingestOutcomeLabels, type LabelIngestResult,
+  calibrationReport, renderCalibrationReport, DEFAULT_LABEL_BUDGET,
+  type LabelingItem, type ParsedLabelFile, type CalibrationReport,
+  type CalibrationStratum, type CalibratedSegment,
+} from './evolution/calibration.js';
+export {
+  classifierAccuracy, correctedRate, designWeightedKappa, describeCalibrationGap,
+  type CalibrationGap, type ClassifierAccuracy, type CorrectedRate, type CorrectedRateResult,
+  type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
+  type MeasuredProportion, type PredictionStratum,
+} from './evolution/ppi.js';
+// The LLM panel that re-judges the hand-labeled turns, and the pre-registered
+// bar it must clear before a recalibration may lean on it instead of the owner.
+export {
+  runEnsemble, ensembleReport, renderEnsembleReport, describeEnsembleGap,
+  buildEnsembleJudgePrompt, panelVerdict, STAND_IN_THRESHOLDS,
+  type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
+  type EnsembleReport, type EnsembleMember, type StandInCondition,
+} from './evolution/ensemble.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
 // config; the persisted loss curve.
 export {
@@ -156,6 +183,35 @@ export {
   type RunChecksResult,
 } from './product-change/index.js';
 
+// Cross-workspace experience transfer (owner-scoped library + gated imports).
+// The gate, the staging ledger and the settle path are driven from inside core
+// (the tool and EvolutionEngine), so what crosses the package boundary is the
+// library a backend hosts, the two schema initializers, and the read surfaces.
+export {
+  createExperienceLibrary,
+  findPublishable,
+  initExperienceLibraryTables,
+  initImportedExperienceTable,
+  listImportedExperience,
+  listPublishable,
+  type ExperienceEntry,
+  type ExperienceKind,
+  type ExperienceLibraryStore,
+  type ExperiencePayload,
+  type ExperienceSearchOptions,
+  type ExperienceSqlExec,
+  type ImportStatus,
+  type ImportedExperienceRow,
+  type PublishRefusal,
+  type PublishSources,
+  type PublishableCandidate,
+} from './experience/index.js';
+export {
+  createExperienceTool,
+  type ExperienceLibraryClient,
+  type ExperienceToolDeps,
+} from './tools/experience-tool.js';
+
 // Chat engine (shared between server and CLI)
 export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
 
@@ -190,9 +246,20 @@ export {
 } from './turn-failure.js';
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
-export { createVercelAILLM, collectStepText, createChatModel } from './llm.js';
+export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
 export { contextWindowForModel } from './context-window.js';
+// The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
+export {
+  TurnContextBudget,
+  citesSpillAddress,
+  SPILL_DIRS,
+  DEFAULT_TURN_ADMIT_BUDGET_CHARS,
+  TIGHTENED_RESULT_MAX_CHARS,
+  type BulkProducer,
+  type ContextBudgetSnapshot,
+  type SpillTrip,
+} from './context-budget.js';
 export {
   buildCompactionSummaryPrompt,
   wrapCompactionSummary,
@@ -208,13 +275,23 @@ export {
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
+  AGENTS_TOOL_ACTIONS,
+  DELEGATION_FRAME,
+  DELEGATION_RUNGS,
+  DELEGATION_CONVERSE,
   renderToolSchemaDescription,
+  type AgentsToolAction,
   type BuiltinToolName,
   type BuiltinToolSpec,
 } from './tools/registry.js';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming.js';
 export {
+  createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableForkInput,
+  type AgentsToolInput,
+} from './tools/agents-tool.js';
+export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
+  type AgentsToolDeps, type AgentsForkDeps,
   type BuiltinToolDeps, type ProductChangeToolDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type PeersToolDeps, type ReportToolDeps,
@@ -222,10 +299,13 @@ export {
 } from './tools/builtins.js';
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index.js';
+// Recursive Language Models — the llm.query codemode provider (both backends).
+export { createRLMProvider, type CodemodeProvider, type RLMModelResolver, type RLMOptions } from './rlm.js';
 export {
   clampToolResult,
   clampSerializedToolResult,
   withClampedToolResult,
+  withClampedToolResults,
   DEFAULT_TOOL_RESULT_MAX_CHARS,
   TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,
@@ -311,6 +391,7 @@ export {
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
 } from './prompts/structured.js';
+export { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
 
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder.js';
@@ -381,8 +462,9 @@ export {
 // Variant archive — DGM-style lineage + branch-base selection over the
 // existing scaffold_versions/scaffold_evaluations rows (no parallel store).
 export {
-  listScaffoldArchive, selectEvolutionBase,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
   type ScaffoldArchiveEntry, type EvolutionBaseSelection,
+  type RejectedProposal, type RejectionKind,
 } from './scaffold/archive.js';
 // scaffold execution + shadow-mode rollout
 export {
@@ -618,7 +700,7 @@ export {
 export { nanoid } from './utils/nanoid.js';
 // Confidence intervals — every score this system reports travels with one.
 export {
-  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
+  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
 } from './utils/stats.js';
 export { isoDate, today, nowMs } from './utils/date.js';
@@ -667,6 +749,36 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
 export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
+export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context.js';
+export {
+  openTurnRun, closeTurnRun, snapshotCompletedTurn,
+  persistMeasuredPromptTokens, applyOverflowRecovery,
+  type CompactionTriggerState,
+} from './orchestrator/turn-lifecycle.js';
+export {
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
+  SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
+  SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
+  SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
+  type ScaffoldBridgeOpts, type ScaffoldHistoryQuery,
+  type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
+} from './orchestrator/scaffold-host.js';
+export { runSampledShadowEval, type ShadowEvalConfig } from './orchestrator/shadow-eval.js';
+export {
+  BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeForkBackgroundJob,
+} from './orchestrator/background-tools.js';
+export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-deps.js';
+export { createDurableMctsSession } from './orchestrator/mcts-session.js';
+export {
+  skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
+  renderFactsForTurn, type TurnSkillsConfig,
+} from './orchestrator/turn-surface.js';
+export { ModelCatalogSession } from './orchestrator/model-catalog.js';
+export {
+  serializeContentForHeads, narrowInheritedRole,
+  inheritedContextFromHistory, INHERITED_CONTEXT_CAP,
+} from './orchestrator/heads-support.js';
+export { recordGroundedHeadsTake } from './mcts/takes.js';
 
 // ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow

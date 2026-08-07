@@ -82,6 +82,11 @@ import {
   type OutcomeEvalExpectation, type ReplayEvalSummary,
   // K_align — the correction-rate trend over the same outcome ledger
   alignmentConvergence, type AlignmentConvergence,
+  calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
+  type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
+  // The LLM panel that re-judges the same turns, and the bar it must clear
+  ensembleReport, runEnsemble, createCompletionLLM,
+  type EnsembleReport, type EnsembleRunResult,
   // Evolution Changelog — the self-change digest + revert dispatch
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -94,10 +99,11 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeStatus,
   type ProductChangeToolDeps, type ProductSourceBindingInput,
+  type ExperienceToolDeps,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
-  // Peer-agent teams (the `team` tool contract)
+  // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
@@ -108,16 +114,21 @@ import {
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
+  // Shared turn lifecycle
+  snapshotCompletedTurn,
+  spillEventContent,
 } from "@proteus/core";
 import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
   SubordinateRosterStore,
   admitSubordinateReport,
   createTeamToolDeps,
+  normalizeReportContent,
   type SubordinatesChangedEvent,
 } from "./subordinate-support.js";
-import type { CodemodeProvider } from "./rlm.js";
+import type { CodemodeProvider } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import type { UserDO } from "./user/user-do.js";
@@ -440,7 +451,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── Peer transport endpoint (agent teams) ────────────────────────────────
   // Sender: peer_outbox rows dispatched via DO RPC (inline + alarm retry).
-  // Receiver: the receivePeerMessage cross-DO RPC below. The `team` tool's
+  // Receiver: the receivePeerMessage cross-DO RPC below. The agents tool's
   // ask/send/reply actions ride this hub; spawn adds the create-agent path.
   private _peerHub: PeerHub | null = null;
   protected get peerHub(): PeerHub {
@@ -450,6 +461,7 @@ export class OrchestratorAgent extends ActorAgent {
         sql: this.ctx.storage.sql,
         log: this.eventLog,
         replyChannels: this.replyChannels,
+        vfs: () => orchestrator.rt.storage.vfs,
         selfAgentName: () => orchestrator.name,
         selfUserId: () => {
           const userId = orchestrator.getOwnerUserId();
@@ -593,7 +605,7 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
-  /** The `peers` tool over the cross-workspace peer transport. Owner
+  /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
    *  turns — including a pre-claim build — so deps must not capture owner
    *  state at construction). */
@@ -708,6 +720,24 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
+  /** The `experience` tool's deps: this workspace's own stores plus a client
+   *  for the owner's library, every call of which crosses the UserDO
+   *  capability gate. Absent until the workspace is claimed — there is no
+   *  owner library to reach before that. */
+  private getExperienceToolDeps(): ExperienceToolDeps | undefined {
+    if (!this.getOwnerUserDO()) return undefined;
+    const hub = () => this.userHub();
+    return {
+      rt: this.rt,
+      facts: this.facts,
+      library: {
+        publish: async (candidate) => { const { stub, caller } = await hub(); return stub.publishExperience(caller, candidate); },
+        search: async (options) => { const { stub, caller } = await hub(); return stub.searchExperience(caller, options); },
+        get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
+      },
+    };
+  }
+
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
@@ -757,13 +787,14 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The actor profile (ActorAgent): the orchestrator wires the full
-   *  user-facing tool surface — cross-workspace peers + the product-change
-   *  lane. */
+   *  user-facing tool surface — cross-workspace peers, cross-workspace
+   *  experience transfer, and the product-change lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
       team: this.getTeamToolDeps(),
       productChanges: this.getProductChangeToolDeps(),
       peers: this.getPeersToolDeps(),
+      experience: this.getExperienceToolDeps(),
     };
   }
 
@@ -952,22 +983,15 @@ export class OrchestratorAgent extends ActorAgent {
       void this.completeEventBatch(injected.turnId, assistantText);
     }
 
-    const turnUsage = this.acc.reportedUsage();
-    const turn: CompletedTurn = {
+    // status is "completed" here (the !== "completed" early-return above), so
+    // turn errors are tracked via the accumulator's per-step hadError flag.
+    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
       userMessage: userText,
       assistantResponse: assistantText,
-      toolCalls: this.acc.toolCalls,
-      steps: this.acc.stepCount,
-      durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
-      feedback: null,
-      // status is "completed" here (the !== "completed" early-return above),
-      // so turn errors are tracked via the accumulator's per-step hadError flag.
-      hadError: this.acc.hadError,
       turnId: msgId,
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
-      ...(turnUsage ? { usage: turnUsage } : {}),
-    };
+    });
 
     // The shared evolution spine (ActorAgent.settleCompletedTurn): the core
     // AgentOrchestrator's cadence — session-reflection counter (firing
@@ -1325,7 +1349,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Background-job registry — work auto-detached past the 30s threshold.
     initBackgroundJobsTable(execRaw);
-    // Durable MCTS search checkpoints — an evicted think(mcts) resumes from here.
+    // Durable MCTS search checkpoints — an evicted fork(settle=mcts) resumes from here.
     initMctsSearchTable(execRaw);
 
     // Compaction: the replayable plan snapshot + the measured prompt-token
@@ -1981,6 +2005,7 @@ export class OrchestratorAgent extends ActorAgent {
       emit: () => undefined, // RPC mode — events captured in result.events
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       scaffoldCodeOverride: codeOverride,
       timeoutMs: opts?.timeoutMs,
     });
@@ -2114,6 +2139,7 @@ export class OrchestratorAgent extends ActorAgent {
       emit: () => undefined,
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       scaffoldCodeOverride: codeOverride,
       timeoutMs: opts?.timeoutMs,
     });
@@ -2489,6 +2515,61 @@ export class OrchestratorAgent extends ActorAgent {
     return alignmentConvergence(this.boundSql);
   }
 
+  /** What hand labels establish about the turn-outcome classifier, and the
+   *  bias-corrected rates they buy. Reads "uncalibrated" until labels exist —
+   *  K_align above is the classifier's opinion until this one has numbers. */
+  @callable()
+  async getOutcomeCalibration(): Promise<CalibrationReport> {
+    return calibrationReport(this.boundSql);
+  }
+
+  /** Draw the next calibration set: turns for a human to judge blind. */
+  @callable()
+  async sampleOutcomeLabeling(size: number = DEFAULT_LABEL_BUDGET): Promise<LabelingItem[]> {
+    return sampleForLabeling(this.boundSql, { size });
+  }
+
+  /** Store a labeling pass. Append-only; ids the ledger no longer knows are
+   *  reported back rather than losing the pass. */
+  @callable()
+  async recordOutcomeLabeling(
+    labeler: string,
+    labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>,
+  ): Promise<LabelIngestResult> {
+    return ingestOutcomeLabels(this.boundSql, { labeler, labels });
+  }
+
+  /** How the LLM panel scored against the owner's own labels, and whether it
+   *  cleared the pre-registered bar to stand in for them. */
+  @callable()
+  async getOutcomeEnsemble(): Promise<EnsembleReport> {
+    return ensembleReport(this.boundSql);
+  }
+
+  /**
+   * Put the hand-labeled turns to the panel — one blind pass per judge, stored
+   * append-only. Judges come from `specs` when the owner names them, else one
+   * model per connected vendor family other than the chat model's.
+   *
+   * Fewer than two families available is reported as the gap it is (by
+   * `runEnsemble`, after the prerequisites the owner would fix first); nothing
+   * is padded with a second model from the same vendor, which would agree with
+   * the first for reasons that have nothing to do with the turn.
+   */
+  @callable()
+  async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
+    const registry = this.providerRegistry();
+    const selection = await resolveEnsembleJudgeSelection({
+      registry,
+      specs: specs ?? null,
+      chatSpec: this.getStoredModelId(),
+    });
+    return runEnsemble(this.boundSql, selection.specs.map((spec) => ({
+      spec,
+      llm: createCompletionLLM({ model: registry.resolveModel(spec), spec, stage: 'judge' }),
+    })));
+  }
+
   /** One GEPA run in full: its candidates (scores/feedback per instance) +
    *  the Pareto-front membership — drives the Reasoning surface's Pareto
    *  scatter + ancestry tree. Maps are flattened to plain objects for RPC. */
@@ -2674,6 +2755,7 @@ export class OrchestratorAgent extends ActorAgent {
       emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
       llmStream: this.makeScaffoldLLMStream(),
       callTool: this.makeScaffoldCallTool(),
+      history: this.makeScaffoldHistory(),
       defaultInference: () => streamText({
         model: this.getModel(),
         messages: [{ role: 'user', content: task }],
@@ -2755,7 +2837,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
-   *  agents over the exact `peers` tool transport (owner + same-owner roster
+   *  agents over the exact peer-deps transport (owner + same-owner roster
    *  gate enforced inside getPeersToolDeps). */
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
     if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
@@ -2870,7 +2952,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Browser-only subordinate controls. These delegate to the exact same
-   * orchestration policy as the model's team tool, including rollback and the
+   * orchestration policy as the model's agents tool, including rollback and the
    * authoritative roster broadcast. */
   @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
     return this.getTeamToolDeps().list();
@@ -3742,12 +3824,19 @@ export class OrchestratorAgent extends ActorAgent {
       throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
     }
     const receivedAt = Date.now();
+    // A report longer than the brief budget is spilled to this workspace's own
+    // file plane first, so the drained turn gets a readable path alongside the
+    // brief's head instead of an unreachable tail. Before the transaction: the
+    // VFS write is async, admission is not.
+    const content = normalizeReportContent(input.content);
+    const contentPath = await spillEventContent(this.rt.storage.vfs, content);
     const result = this.ctx.storage.transactionSync(() => {
       const published = admitSubordinateReport(this.eventLog, {
         fromSubordinate: input.fromSubordinate,
         status: input.status,
-        content: input.content,
+        content,
         ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+        ...(contentPath ? { contentPath } : {}),
         now: receivedAt,
       });
       if (published.admitted) {

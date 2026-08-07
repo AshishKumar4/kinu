@@ -21,6 +21,7 @@ import {
   initShadowTables,
   initTurnOutcomeTables,
   seedSoul,
+  snapshotCompletedTurn,
   type CompletedTurn,
   type ParentRpcFileHandle,
   type SubordinateReportStatus,
@@ -324,20 +325,13 @@ export class SubordinateAgent extends ActorAgent {
       responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
     });
 
-    const turnUsage = this.acc.reportedUsage();
-    const turn: CompletedTurn = {
+    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
       userMessage: userText,
       assistantResponse: assistantText,
-      toolCalls: this.acc.toolCalls,
-      steps: this.acc.stepCount,
-      durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
-      feedback: null,
-      hadError: this.acc.hadError,
       ...(result.message.id ? { turnId: result.message.id } : {}),
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
-      ...(turnUsage ? { usage: turnUsage } : {}),
-    };
+    });
     this.settleCompletedTurn(turn, { userText, assistantText });
 
     if (!this.reportedThisTurn && assistantText.trim()) {

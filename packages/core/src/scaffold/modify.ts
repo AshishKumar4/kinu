@@ -14,6 +14,7 @@ import {
   SCAFFOLD_REQUIRED_SIGNATURE as REQUIRED_SIGNATURE,
 } from './safety-patterns.js';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution.js';
+import { parsePathologyTag } from '../evolution/pathology.js';
 
 /** Outcome of one scaffold proposal through the 4-gate pipeline. */
 export interface ModifyResult {
@@ -111,9 +112,13 @@ export async function modifyScaffold(
   // rollback can restore it.
   const current = await rt.identity.scaffold.read();
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${currentVersion}`, current);
+  // The failure cell the proposal claims to target, read off the code's own
+  // `// pathology: <id>` tag. Parsed HERE rather than at each call site so
+  // every proposal path — session evolution, agent.proposeScaffold, a GEPA
+  // scaffold winner — stamps it the same way or not at all.
   rt.storage.sql`
-    INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_version)
-    VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion})
+    INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_version, pathology)
+    VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion}, ${parsePathologyTag(code)})
   `;
 
   // Gate 4: write the pending code to the VERSIONED file, NOT the live file.

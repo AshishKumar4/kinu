@@ -72,6 +72,83 @@ into a reusable async arrow function with JSON Schema parameters, stored in
 word overlap > 0.85). An existing tool is only overwritten when the candidate
 scores more than 0.1 above it.
 
+## Judge Calibration
+
+Every outcome the follow-up classifier records is a *judgement*, and every rate
+downstream — K_align, the per-scaffold outcome rates, the GEPA train/val split,
+craft retirement — counts those judgements rather than what actually happened.
+If the classifier misses a third of the corrections, all of those numbers are
+wrong by an unknown amount in an unknown direction, and more turns only tighten
+the interval around the wrong answer.
+
+`calibration.ts` + `ppi.ts` close that with a few hand labels:
+
+```
+proteus label export <agent>            # draws ~100 turns into a file
+$EDITOR <agent>-calibration.txt         # one letter per turn (~30-45 min)
+proteus label ingest <agent> <file>     # validates, then stores
+proteus label report <agent>            # what the labels established
+```
+
+The draw is stratified on the classifier's verdict (a uniform sample of an
+~85%-`accepted` ledger would measure nothing about the rare verdicts) and
+systematic in time within each stratum. The file is **blind** — it shows the
+request, the answer and the user's follow-up, never the classifier's verdict —
+because pre-filling the guess would anchor the labeler on the very number under
+test. Labels land append-only in `outcome_labels`; a re-label is a new row and
+the newest wins.
+
+The estimator is prediction-powered inference (Angelopoulos et al. 2023) with a
+prediction-stratified rectifier, factored so it transports across slices:
+sensitivity and specificity are estimated once with the population
+re-weighting the design requires, then each slice's own observed rate is
+corrected by Rogan–Gladen, `θ̂ = (p̂ + q̂₀ − 1)/(q̂₁ + q̂₀ − 1)`, with the delta
+method propagating all three uncertainties. Over the population the labels came
+from, that is algebraically the same estimate as the stratified PPI form.
+
+`proteus alignment` prints the corrected block beneath K_align always. With no
+labels it reads `uncalibrated` rather than letting the reader assume the
+classifier and the truth agree.
+
+### Can two models do the labeling next time?
+
+A profile measured against last quarter's classifier says nothing about this
+quarter's, so calibration has to be redone — and thirty minutes a time is the
+kind of cost that quietly stops being paid. `ensemble.ts` asks whether that job
+can be handed over, and answers it with a measurement rather than a hope:
+
+```
+proteus label ensemble <agent>          # two cross-family judges, same turns
+```
+
+Both judges see exactly what the human file showed (the same
+`renderLabelingEvidence` call renders both) and never the classifier's verdict,
+the human's, or each other's. They answer independently; agreement is the
+panel's verdict and a split is `unclear`. There is no third judge on purpose —
+a majority vote would turn those admissions of ignorance back into confident
+answers, and the admissions are what a two-model panel is for. Verdicts land
+append-only in `outcome_ensemble_labels`, one row per model per turn.
+
+The report is Cohen's κ for all three rater pairs (you↔panel, you↔classifier,
+panel↔classifier) over the same turns, the panel's verdict against yours cell
+by cell, and the panel's sensitivity/specificity on the negative class through
+the same `classifierAccuracy` estimator the classifier's own profile comes
+from. One thing needed care: the panel's verdict varies inside a stratum the
+sample was drawn on, so `classifierAccuracy`'s closed-form interval treats two
+halves of one sample as independent and comes back far too narrow — measured
+against a known truth it covers at 44–75% against a nominal 95%, where the
+stratified bootstrap `resampledAccuracy` uses covers at 86–93%.
+
+Whether the panel may stand in is decided by three conditions written into
+`ensemble.ts` **before** any of these numbers existed: κ(you↔panel) lower bound
+≥ 0.60, κ(you↔panel) ≥ κ(you↔classifier) on the same turns, and negative-class
+recall ≥ 0.70 with specificity ≥ 0.90 as lower bounds (which keeps the
+Rogan–Gladen denominator at ≥ 0.60). The second is the one that matters: a
+panel no closer to you than the classifier already is would be measuring one
+flawed rater with another. Below the bar the report says the panel cannot stand
+in and nothing changes; above it, nothing switches on either — what it buys is
+grounds to draw the next set with the panel and hand-audit a slice.
+
 ## Session-Level Evolution
 
 The cadence lives in `AgentOrchestrator`, not the engine: every
@@ -156,6 +233,30 @@ Monte Carlo rather than taste (`scripts/shadow-veto-monte-carlo.ts`, which
 models the judging protocol itself). At the shipping settings a genuinely
 better scaffold is promoted about 62% of the time, against a worst case of
 about 3.2% for promoting a clearly worse one.
+
+### How much of a turn a judge actually sees
+
+Every reader in this loop — the shadow judge, the GEPA reflector, the turn
+outcome classifier, the replay judge — used to carry its own hard-coded
+`slice(0, n)`: the FIRST n characters. That is not a cost bound, it is a blind
+spot with a shape. A turn whose payoff lands at step 9 of 12 was invisible to a
+judge reading its opening 2,500 characters, so the loop could not select for
+long-horizon behaviour at all.
+
+`core/src/prompts/evidence-window.ts` is now the single source. `evidenceWindow`
+keeps head **and** tail and names what it dropped, on an even split — a tool
+result's head carries the command echo, but a judged trajectory carries its
+outcome at the end, and the outcome is what is being judged. The budgets are 4×
+their predecessors and, for the first time, **ordered**: a reader never asks for
+more than the row it reads was stored at, which is why `turn_outcomes` had to be
+widened first (GEPA's eval instances and the replay judge both read those rows).
+A candidate's *source* stays head-truncated rather than windowed — a rewrite of
+code whose middle was elided comes back with a hole.
+
+The protocols, thresholds and sampling rates above are unchanged by this. That
+is not the same as unaffected: the Monte Carlo that settled them modelled the
+OLD evidence, and richer evidence moves both decisive yield and tie rate, so
+those constants are due a re-run against the new budgets.
 
 The archive keeps **every** version — it is a read model over
 `scaffold_versions` joined to `scaffold_evaluations`, with no eviction — so a

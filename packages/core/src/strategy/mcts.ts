@@ -1,7 +1,7 @@
 // MCTS as an ExplorationStrategy.
 //
 // Wraps the existing `runMCTS` engine behind the StrategyContext/StrategyResult
-// contract so callers (think tool, eval harness) can dispatch by strategy id
+// contract so callers (the agents tool's fork action, eval harness) can dispatch by strategy id
 // instead of importing runMCTS directly.
 //
 // Per-strategy options (StrategyContext.options.mcts):

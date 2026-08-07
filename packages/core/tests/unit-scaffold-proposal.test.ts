@@ -8,6 +8,7 @@
 // against the documented API survives the executor's smoke path.
 import { describe, test, expect } from 'bun:test';
 import { buildScaffoldProposalPrompt } from '../src/evolution/engine.js';
+import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook.js';
 import { modifyScaffold } from '../src/scaffold/modify.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { readScaffoldVersion } from '../src/scaffold/shadow.js';
@@ -61,6 +62,16 @@ describe('buildScaffoldProposalPrompt — documents the real sandbox contract', 
   test('documents the required signature and that both params are the task string', () => {
     expect(prompt).toContain('async function* run(rt, task)');
     expect(prompt).toMatch(/task STRING/);
+  });
+
+  test('leads with the behaviour→site handbook, indexed against the base scaffold', () => {
+    expect(prompt.startsWith(renderScaffoldHandbook('async function* run(rt, task) {}'))).toBe(true);
+    // …and it indexes the base being proposed against, not some other source.
+    const withBridge = buildScaffoldProposalPrompt(
+      'async function* run(rt, task) {\n  await host.llmStream({ system: "", messages: [] });\n}',
+      'be terser',
+    );
+    expect(withBridge).toContain('run (generator, line 1) → host.llmStream()');
   });
 });
 

@@ -12,7 +12,7 @@
  * lives here once instead of being duplicated per frontend.
  */
 
-import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, initCompactionStateTable, createModelSummarizer,
@@ -21,8 +21,9 @@ import {
 import type {
   AgentRuntime, LLMProviderConfig, CompletedTurn, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SessionMessage, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
+  SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
+  AgentsForkDeps,
   IngressDescriptor, ProteusEvent, EventVariant,
   RunEvent, RunEventInput, RunEventQuery,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
@@ -30,37 +31,42 @@ import type {
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, initBackgroundJobsTable, withBackgroundThreshold,
-  MctsSearchStore, nanoid,
+  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, initBackgroundJobsTable,
+  wrapToolsForBackground, resumeForkBackgroundJob,
+  MctsSearchStore, createDurableMctsSession,
   EventLog, initEventsHubTables,
   RunEventRecorder, initRunEventTables,
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
   initAgentConfigTable, createAgentConfigStore,
-  initFactsTable, createFactsStore, renderFactsBlock, readMemoryTail,
+  initFactsTable, createFactsStore, initImportedExperienceTable, readMemoryTail,
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
-  createStrategyRegistry, createSingleShotStrategy, createMCTSStrategy, createHeadsStrategy, createThinkTool,
+  buildStrategyForkDeps, agentsActionsFor,
   HeadController, HeadJournal, initHeadsTables,
-  discoverSkills, resolveActiveSkills, extractExplicitInvocations, BUILTIN_SKILLS,
-  unionAllowedTools, toolAllowedBySkills,
+  skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
+  recordGroundedHeadsTake, inheritedContextFromHistory,
+  ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  buildBuiltinTools, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
+  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
   createChatModel, runChat, resolveMaxSteps,
-  parseModelSpec, agentAffinityKey, contextWindowForModel,
-  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  parseModelSpec, agentAffinityKey,
+  OVERFLOW_RETRY_EVENT,
+  openTurnRun, closeTurnRun, snapshotCompletedTurn,
+  persistMeasuredPromptTokens, applyOverflowRecovery,
   ExtensionHost, StepInjections,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
-  acceptedMediaForModel, type MediaModality, type ModelInfo,
+  type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet, recordTakePick,
-  recordHeadsTakeSet,
   buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   scaffoldChatTransform, type ScaffoldRunOptions,
-  runAutoShadowEval, createStructuredJudge, modifyScaffold, listScaffoldArchive,
+  bootstrapScaffold,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  createStructuredJudge, modifyScaffold, listScaffoldArchive,
   getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
   initShadowTables,
   type AlternateTakeSet, type TakePickOutcome,
@@ -70,7 +76,6 @@ import {
   isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
   type ReasoningEffort,
 } from '@proteus/core';
-import { combineAbortSignals } from '@proteus/agent-utils';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
@@ -102,10 +107,6 @@ function providerFamilyForSpec(spec: string): string | undefined {
 /** A scaffold turn is a whole agentic loop, not a tool call — it gets the
  *  same wall-clock budget the DO gives it. */
 const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** Tools whose calls auto-detach to the background past the 30s threshold —
- *  the same set the cf-backend wraps. */
-const BACKGROUNDABLE_TOOLS: ReadonlySet<string> = new Set(['think', 'execute_tools', 'run']);
 
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export interface LocalSessionDb {
@@ -320,6 +321,12 @@ export class LocalAgentSession implements BackendHost {
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
 
+    // Imported-experience staging ledger. A local session has no owner library
+    // to import FROM (no `experience` tool without a UserDO), but a workspace
+    // that imported in the cloud and is later driven from here must still be
+    // able to settle what is staged, so the ledger exists on both backends.
+    initImportedExperienceTable(this.rt.storage.execRaw);
+
     // Better-compact is THE default (and only) compaction path — the same
     // staged transformContext ladder the cloud backend registers, over the
     // same shared stores (transcripts in the composite VFS, plan + trigger
@@ -337,6 +344,7 @@ export class LocalAgentSession implements BackendHost {
           error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
         },
       },
+      archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.ensureModelState()),
       onOutcome: ({ outcome }) => {
         // Fires inside runTransformContext, BEFORE runChat's ledger weave —
@@ -406,6 +414,13 @@ export class LocalAgentSession implements BackendHost {
       // interrupted job from its durable checkpoint instead of failing it.
       resume: (kind, input, signal) => this.resumeBackgroundJob(kind, input, signal),
     });
+    // Scaffold cold-start heal (the DO's onStart parity): a workspace created
+    // before scaffold bootstrap landed has no scaffold/agent.js, and
+    // engine.maybeEvolveScaffold returns early when it is absent — silently
+    // disabling the WHOLE scaffold-evolution loop on that workspace forever.
+    // bootstrapScaffold is idempotent (exists-check + INSERT OR IGNORE v0);
+    // tracked so end()/settleEvolution joins it before the process exits.
+    this.orch.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
     this.restoreHistory(opts.historyLimit ?? 40);
     this.ensureModelState();
     this.rearmLocalAlarm();
@@ -706,18 +721,9 @@ export class LocalAgentSession implements BackendHost {
     };
   }
 
-  /** Record the comparable heads of a completed think({strategy:'heads'}) run as
-   *  an unclaimed Alternate-Takes set — claimed against this turn at turn end by
-   *  claimAlternateTakesForTurn, exactly like an MCTS capture. Only the grounded
-   *  scores are a real preference signal, so emit nothing when ungrounded. */
+  /** Alternate-Takes capture of a completed heads run (core heads-support). */
   private recordHeadsTake(merge: MergeResult, task: string): void {
-    if (!merge.grounded) return;
-    const heads = merge.headScores
-      .filter((s) => s.status === 'completed')
-      .map((s) => ({ id: s.id, text: s.text, score: s.score }));
-    try {
-      recordHeadsTakeSet(this.rt.storage.sql, { task, heads });
-    } catch { /* no takes table yet — the first MCTS/heads run creates it */ }
+    recordGroundedHeadsTake(this.rt.storage.sql, merge, task);
   }
 
   /** The drain-debounce timer (BackendHost seam) — a plain one-shot timeout.
@@ -822,12 +828,25 @@ export class LocalAgentSession implements BackendHost {
     return dropped;
   }
 
+  /** Fold the history at this point: the next turn's context transform runs
+   *  with `force`, so the ladder rebuilds now instead of waiting for the
+   *  measured token trigger. One-shot — `takeForceCompaction` consumes the
+   *  flag, so this can never loop. The session owns its compaction key, so a
+   *  caller marking a phase boundary never has to reconstruct it. */
+  armForcedCompaction(): void {
+    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
+  }
+
   /** Connect configured stdio MCP servers + merge their tools into the surface.
    *  Call once at startup (no-op for empty config). Idempotent-safe to skip. */
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
     const conn = await connectMcpServers(servers, (msg) => this.emit({ type: 'evolution', event: 'mcp', message: msg }));
-    this.extraTools = conn.tools;
+    // MCP servers are bulk producers like any other tool — same clamp, same
+    // spill path, same turn budget as the builtins.
+    this.extraTools = withClampedToolResults(conn.tools, {
+      vfs: this.rt.storage.vfs, budget: this.orch.acc.context, producer: 'external_tool',
+    });
     this.mcpClose = conn.close;
   }
 
@@ -903,20 +922,16 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Re-drive a background job interrupted by a previous process exit. Only
-   *  `think` is resumable: re-running the RAW strategy tool continues an
-   *  interrupted MCTS from its durable search checkpoint (runMCTS.findResumable
-   *  matches the unfinished run by task) and re-runs heads. Side-effecting kinds
-   *  (execute_tools / run) can't be blindly re-executed, so they decline and the
-   *  runner falls back to failing the job. */
-  private async resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
-    if (kind !== 'think') throw new JobNotResumable(kind);
-    this.ensureModelState();
-    const exec = this.rawTools[kind]?.execute;
-    if (typeof exec !== 'function') throw new JobNotResumable(kind);
-    return (exec as (i: unknown, o: unknown) => unknown)(input, {
-      abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
-    });
+  /** Re-drive a background job interrupted by a previous process exit — the
+   *  shared fork-only resume gate (core background-tools) over the RAW
+   *  surface, so a re-drive can't detach a second job. Legacy 'think' jobs
+   *  translate onto the same fork path; the model-bound surface resolves
+   *  inside the thunk, only for a resumable kind. */
+  private resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
+    return resumeForkBackgroundJob(() => {
+      this.ensureModelState();
+      return this.rawTools;
+    }, kind, input, signal);
   }
 
   // ── Internals ──────────────────────────────────────────────────────
@@ -992,19 +1007,14 @@ export class LocalAgentSession implements BackendHost {
     catch (err) { console.warn('[proteus] run event emit failed:', err); }
   }
 
-  /** Seal the in-flight run: turn_end (index + token usage) then run_end
-   *  (status + the failure text), mirroring the DO's settle spine. Idempotent
-   *  per run — clearing the id makes a second call a no-op. */
+  /** Seal the in-flight run via the shared core turn-lifecycle bracket.
+   *  Idempotent per run — clearing the id makes a second call a no-op. */
   private closeRun(error: string | null): void {
     if (!this.currentRunId) return;
-    const { input, output, cached } = this.orch.acc.usage;
-    this.recordRunEvent({
-      type: 'turn_end',
+    closeTurnRun(this.eventRecorder, this.currentRunId, {
       turnIndex: this.orch.sessionTurnIndex,
-      tokenUsage: { input, output, cached },
-    });
-    this.recordRunEvent({
-      type: 'run_end',
+      usage: this.orch.acc.usage,
+      context: this.orch.acc.context,
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1030,16 +1040,16 @@ export class LocalAgentSession implements BackendHost {
 
     const startedAt = Date.now();
     this.orch.beginTurn(startedAt);
-    // Open this turn's run in the durable event log. Provenance mirrors the
-    // DO's: a real chat turn is 'chat', a programmatic one names its trigger.
+    // Open this turn's run in the durable event log (core turn-lifecycle).
+    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
+    // one names its trigger.
     this.currentRunId = `run-${crypto.randomUUID()}`;
-    this.recordRunEvent({
-      type: 'run_start',
+    openTurnRun(this.eventRecorder, this.currentRunId, {
       agentId: this.agentName(),
-      caused_by: event ?? 'chat',
-      userMessage: item.text.slice(0, 500),
+      causedBy: event ?? 'chat',
+      userMessage: item.text,
+      turnIndex: this.orch.sessionTurnIndex,
     });
-    this.recordRunEvent({ type: 'turn_start', turnIndex: this.orch.sessionTurnIndex });
     // Shadow-git checkpoints: arm the per-turn dedup so the first host-FS
     // mutation of this turn snapshots its working directory (invisible /undo
     // substrate — see core checkpoints/types.ts).
@@ -1076,6 +1086,9 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, {
       executors,
       availableTools: availableBuiltins,
+      agentsActions: agentsActionsFor({ fork: true }),
+      // Matches the execute_tools wiring: llm.query exists only with a resolver.
+      rlmAvailable: this.modelResolver !== null,
       externalTools,
       backend: 'cli-local',
       mode: promptModeForTurnEvent(event),
@@ -1169,7 +1182,9 @@ export class LocalAgentSession implements BackendHost {
       // the whole history BEFORE the transform seam and the ledger weave
       // (same ordering as the DO's beforeTurn); this.history itself is
       // never mutated.
-      attachments: { accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs },
+      attachments: {
+        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.orch.acc.context,
+      },
       systemState,
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
@@ -1195,6 +1210,7 @@ export class LocalAgentSession implements BackendHost {
         task: item.text,
         llmStream: this.makeScaffoldLLMStream(model, turnTools),
         callTool: this.makeScaffoldCallTool(turnTools),
+        history: this.makeScaffoldHistory(),
         timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
       },
     });
@@ -1256,56 +1272,33 @@ export class LocalAgentSession implements BackendHost {
       const message = err instanceof Error ? err.message : String(err);
       runError = message.slice(0, 500);
       this.emit({ type: 'error', message });
-      // Overflow recovery (core turn-failure policy, shared with the cf
-      // backend): a context_length-class failure arms force-compaction for
-      // the next assembly and enqueues ONE retry turn — a failed retry never
-      // enqueues another. Rate limits never force-compact (throughput is not
-      // size) unless the measured PER-REQUEST prompt crossed half the window.
-      const recovery = planOverflowRecovery({
+      // Overflow recovery — the shared core policy, APPLIED by the shared
+      // core helper (arm force-compaction + at most one retry enqueue).
+      applyOverflowRecovery({
         error: message,
         lastPromptTokens: this.orch.acc.lastPromptTokens,
         contextWindow,
         turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
+        state: this.compactionState,
+        sessionKey: cache.sessionKey,
+        enqueueTurn: (t) => this.enqueueTurn(t),
       });
-      if (recovery.forceCompaction) {
-        this.compactionState.armForceCompaction(cache.sessionKey);
-        if (recovery.enqueueRetry) {
-          void this.enqueueTurn({
-            text: OVERFLOW_RETRY_TEXT,
-            metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
-          });
-        }
-      }
     } finally {
       this.currentAbort = null;
     }
 
     let assistantMsgId: string | null = null;
-    const snapshotTurn = (): CompletedTurn => {
-      const usage = this.orch.acc.reportedUsage();
-      return {
-        userMessage: item.text,
-        assistantResponse: fullText,
-        toolCalls: this.orch.acc.toolCalls,
-        steps: this.orch.acc.stepCount,
-        durationMs: Date.now() - startedAt,
-        feedback: null,
-        hadError: this.orch.acc.hadError,
-        ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
-        sessionId: this.sessionId,
-        origin: item.kind,
-        ...(usage ? { usage } : {}),
-      };
-    };
+    const snapshotTurn = (): CompletedTurn => snapshotCompletedTurn(this.orch.acc, {
+      userMessage: item.text,
+      assistantResponse: fullText,
+      ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
+      sessionId: this.sessionId,
+      origin: item.kind,
+    });
 
     try {
-      // Persist the turn's final provider-priced prompt size — the NEXT turn's
-      // measured compaction trigger. Any step that reported was a real priced
-      // request, so errored turns record too. Bound to the turn's durable
-      // history length so a later shrink voids it.
-      if (this.orch.acc.lastPromptTokens > 0) {
-        this.compactionState.savePromptTokens(cache.sessionKey, this.orch.acc.lastPromptTokens, historyLength);
-      }
+      // The NEXT turn's measured compaction trigger (core turn-lifecycle).
+      persistMeasuredPromptTokens(this.compactionState, cache.sessionKey, this.orch.acc.lastPromptTokens, historyLength);
 
       // Steers that never saw a step boundary (the model was already finishing)
       // run as the IMMEDIATE next turn — ahead of any programmatic injects.
@@ -1386,18 +1379,9 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Passthrough SkillsVfs shim over rt.storage.vfs (mirrors the DO). */
+  /** Passthrough SkillsVfs shim over rt.storage.vfs (core turn-surface). */
   private getSkillsVfs(): SkillsVfs {
-    if (this.skillsVfs) return this.skillsVfs;
-    const vfs = this.rt.storage.vfs;
-    this.skillsVfs = {
-      exists: (p) => vfs.exists(p),
-      readFile: (p, opts) => vfs.readFile(p, opts),
-      writeFile: (p, data) => vfs.writeFile(p, data),
-      readdir: (p) => vfs.readdir(p),
-      unlink: (p) => vfs.unlink(p),
-      mkdir: (p, opts) => vfs.mkdir(p, opts),
-    };
+    if (!this.skillsVfs) this.skillsVfs = skillsVfsOver(this.rt.storage.vfs);
     return this.skillsVfs;
   }
 
@@ -1407,6 +1391,15 @@ export class LocalAgentSession implements BackendHost {
     } catch {
       return 'local';
     }
+  }
+
+  /** `agent.compactNow()` — the agent folding a finished phase itself instead
+   *  of waiting for the token trigger. It rides the SAME one-shot flag
+   *  overflow recovery arms, so there is one forced-rebuild path and a repeat
+   *  call can never loop the ladder. The in-flight turn's context is already
+   *  assembled, so the fold lands on the next one. */
+  armCompactNow(): void {
+    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
   }
 
   /** Prompt-cache identity for runChat: the resolved provider/model plus a
@@ -1449,38 +1442,21 @@ export class LocalAgentSession implements BackendHost {
     return this._webSearchProvider;
   }
 
-  /** Resolve the skills active for this turn — explicit @invocations,
-   *  always-active config, and builtin auto-activation. Mirrors the DO's
-   *  beforeTurn: only scans the VFS when activation is plausible, and records the
-   *  activated names onto the per-turn invoke tracker for skills.list. */
-  private async resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
-    try {
-      const explicit = extractExplicitInvocations(userText);
-      const alwaysActive = this.config.getAlwaysActiveSkills();
-      const anyAutoActivate = BUILTIN_SKILLS.some((s) => s.auto_activate);
-      if (explicit.length === 0 && alwaysActive.length === 0 && !anyAutoActivate) return undefined;
-      const available = await discoverSkills(this.getSkillsVfs());
-      const activeSet = resolveActiveSkills({ available, explicit, userMessage: userText, alwaysActive });
-      if (activeSet.active.length === 0) return undefined;
-      for (const r of activeSet.reasons) this.turnInvokedSkills.add(r.name);
-      return activeSet;
-    } catch {
-      return undefined;
-    }
+  /** Resolve the skills active for this turn (core turn-surface — the SAME
+   *  resolution the DO's beforeTurn runs). */
+  private resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
+    return resolveTurnSkills({
+      vfs: this.getSkillsVfs(),
+      config: this.config,
+      userText,
+      invoked: this.turnInvokedSkills,
+    });
   }
 
-  /** Restrict the turn's toolset to the active skills' allowed_tools union (the
-   *  skills tool stays reachable so the agent can list/invoke more mid-turn).
-   *  Empty union / no skills = full surface. */
+  /** Restrict the turn's toolset to the active skills' allowed_tools union
+   *  (core turn-surface; the skills tool stays reachable). */
   private filterToolsBySkills(activeSkills?: ActiveSkillSet): ToolSet {
-    if (!activeSkills) return this.tools;
-    const allowed = unionAllowedTools(activeSkills.active);
-    if (allowed.length === 0) return this.tools;
-    const filtered: ToolSet = {};
-    for (const [name, t] of Object.entries(this.tools)) {
-      if (name === 'skills' || toolAllowedBySkills(name, allowed)) filtered[name] = t;
-    }
-    return filtered;
+    return filterToolSetBySkills(this.tools, activeSkills);
   }
 
   /**
@@ -1498,40 +1474,34 @@ export class LocalAgentSession implements BackendHost {
   private async runShadowEvalSampled(opts: {
     task: string; currentOutput: string; model: LanguageModel; tools: ToolSet; system: string;
   }): Promise<void> {
-    try {
-      const sampleRate = this.config.getShadowSampleRate();
-      if (sampleRate <= 0) return;
-      const task = opts.task.slice(0, 2000);
-      const result = await runAutoShadowEval({
-        rt: this.rt,
-        task,
-        currentOutput: opts.currentOutput.slice(0, 4000),
-        judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
-        llmStream: this.makeScaffoldLLMStream(opts.model, opts.tools),
-        callTool: this.makeScaffoldCallTool(opts.tools),
-        // A pending that delegates is judged on the scaffold delta alone, so
-        // it gets a real default turn for the shadow task — same system prompt
-        // and tool surface, isolated history.
-        defaultInference: () => runChat({
-          model: opts.model,
-          modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
-          system: opts.system,
-          history: [{ role: 'user', content: task }],
-          tools: opts.tools,
-          maxSteps: resolveMaxSteps(),
-        }),
-        config: { sampleRate, autoApply: this.config.getAutoPromoteScaffold() },
+    const result = await runSampledShadowEval({
+      rt: this.rt,
+      config: this.config,
+      task: opts.task,
+      currentOutput: opts.currentOutput,
+      judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
+      llmStream: this.makeScaffoldLLMStream(opts.model, opts.tools),
+      callTool: this.makeScaffoldCallTool(opts.tools),
+      history: this.makeScaffoldHistory(),
+      // A pending that delegates is judged on the scaffold delta alone, so
+      // it gets a real default turn for the shadow task — same system prompt
+      // and tool surface, isolated history.
+      defaultInference: () => runChat({
+        model: opts.model,
+        modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
+        system: opts.system,
+        history: [{ role: 'user', content: opts.task.slice(0, 2000) }],
+        tools: opts.tools,
+        maxSteps: resolveMaxSteps(),
+      }),
+    });
+    if (result?.applied) {
+      this.emit({
+        type: 'evolution',
+        event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+        message: `Shadow eval ${result.applied}d the pending scaffold`,
       });
-      if (result.applied) {
-        this.emit({
-          type: 'evolution',
-          event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-          message: `Shadow eval ${result.applied}d the pending scaffold`,
-        });
-        this.invalidateModelState();
-      }
-    } catch (err) {
-      console.warn('[proteus] shadow eval failed:', err instanceof Error ? err.message : err);
+      this.invalidateModelState();
     }
   }
 
@@ -1591,43 +1561,23 @@ export class LocalAgentSession implements BackendHost {
     }));
   }
 
-  /** `host.llmStream` — the scaffold's own inference bridge. Tool NAMES cross
-   *  the sandbox boundary; the host resolves them against THIS turn's surface. */
+  /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
+   *  over THIS turn's tool surface. */
   private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
-    return async function* (opts) {
-      const tools: ToolSet = (opts.tools && opts.tools.length > 0)
-        ? Object.fromEntries(opts.tools.filter((n) => turnTools[n]).map((n) => [n, turnTools[n]]))
-        : turnTools;
-      const result = streamText({
-        model,
-        system: opts.system,
-        messages: opts.messages.map((m) => ({
-          role: m.role as 'system' | 'user' | 'assistant', content: m.content,
-        })),
-        tools,
-        stopWhen: stepCountIs(opts.maxSteps ?? resolveMaxSteps()),
-      });
-      for await (const chunk of result.textStream) yield chunk;
-    };
+    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps() });
   }
 
-  /** `host.callTool` — dispatch into THIS turn's tool surface by name. */
+  /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
+   *  scaffold-host). */
   private makeScaffoldCallTool(turnTools: ToolSet): NonNullable<ScaffoldRunOptions['callTool']> {
-    return async (name, args) => {
-      const t = turnTools[name];
-      if (!t || typeof t.execute !== 'function') return { error: `tool not found: ${name}` };
-      try {
-        // `args as never` is the legitimate dynamic-dispatch escape — the tool
-        // is picked by string name at runtime, so its input type is unknown
-        // here. The options object IS statically known, so it stays typed.
-        const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-          messages: [], toolCallId: `scaffold-${Date.now()}`,
-        };
-        return await t.execute(args as never, options);
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    };
+    return createScaffoldCallTool(() => turnTools);
+  }
+
+  /** `host.history` — a read-only, budgeted page of the conversation the
+   *  scaffold is the inference loop for. Resolved per call, so a scaffold that
+   *  reads twice in one turn sees the second read's state. */
+  private makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
+    return createScaffoldHistory(() => this.history);
   }
 
   /** Re-run a task for the replay-eval harness: the current system prompt
@@ -1664,12 +1614,10 @@ export class LocalAgentSession implements BackendHost {
     return text;
   }
 
-  /** The recent-facts world-model block for the volatile turn context (single
-   *  seam with the DO backend — see core prompting/volatile-context.ts). */
+  /** The recent-facts world-model block for the volatile turn context (core
+   *  turn-surface — the single seam with the DO backend). */
   private renderFactsForTurn(): string | undefined {
-    try {
-      return renderFactsBlock(this.factsStore.recentTopK(20), { maxChars: 2000 }) || undefined;
-    } catch { return undefined; /* facts table not yet populated */ }
+    return renderFactsForTurn(this.factsStore);
   }
 
   /** Byte-stability telemetry: the system prompt should change only on real
@@ -1683,44 +1631,33 @@ export class LocalAgentSession implements BackendHost {
     this.lastSystemPromptHash = hash;
   }
 
-  /** The unified `think` tool — single-shot + MCTS + heads. MCTS explores over
-   *  rt.spawnBranch; heads run in-process via the CLI HeadRuntime. Mirrors the
-   *  DO's getThinkTool defaultOptions (mcts session + heads controller/context/
-   *  onPhase). */
-  private buildThinkTool(): ToolSet[string] {
-    const registry = createStrategyRegistry();
-    registry.register(createSingleShotStrategy());
-    registry.register(createMCTSStrategy());
-    registry.register(createHeadsStrategy());
-    return createThinkTool({
-      registry,
+  /** The `agents` tool's fork substrate — the SAME shared factory the DO
+   *  wires (core fork-deps): single-shot + MCTS + heads, host-injected infra
+   *  recomputed per fork call. MCTS explores over rt.spawnBranch; heads run
+   *  in-process via the CLI HeadRuntime. The CLI wires no team or peer
+   *  transport, so fork is the tool's only action here. */
+  private buildAgentsForkDeps(): AgentsForkDeps {
+    return buildStrategyForkDeps({
       rt: this.rt,
       model: this.cachedModel ?? this.fallbackModel,
-      defaultOptions: () => ({
-        // Stored operator overrides ride along; an explicit LLM budget wins.
-        // `search` is the durable checkpoint: an MCTS interrupted by Ctrl-C or
-        // a process exit continues its remaining budget instead of restarting.
-        mcts: { session: this.createMCTSSession(), search: this.mctsSearchStore, ...this.config.getMctsOverrides() },
-        heads: {
-          controller: this.headController,
-          inheritedContext: this.readInheritedContext(),
-          onPhase: (e: SplitPhaseEvent) => this.emitHeadPhase(e),
-          onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
-        },
-      }),
+      mcts: {
+        session: () => this.createMCTSSession(),
+        search: this.mctsSearchStore,
+        overrides: () => this.config.getMctsOverrides(),
+      },
+      heads: {
+        controller: () => this.headController,
+        inheritedContext: () => this.readInheritedContext(),
+        onPhase: (e: SplitPhaseEvent) => this.emitHeadPhase(e),
+        onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
+      },
     });
   }
 
   /** The recent conversation handed to each spawned head as inherited context
-   *  (capped to bound the head's LLM context). */
+   *  (core heads-support; capped to bound the head's LLM context). */
   private readInheritedContext(): SerializedMessage[] {
-    const CAP = 50;
-    return this.history.slice(-CAP).map((m, i) => ({
-      id: `ctx-${i}`,
-      role: (m.role === 'system' || m.role === 'user' || m.role === 'assistant' || m.role === 'tool') ? m.role : 'assistant',
-      content: serializeContentForHeads(m.content),
-      createdAt: i,
-    }));
+    return inheritedContextFromHistory(this.history);
   }
 
   /** Fan head_split / head_merge lifecycle out as broadcasts so the frontends
@@ -1731,50 +1668,19 @@ export class LocalAgentSession implements BackendHost {
       : { type: 'head_merge', rootId: event.rootId, headCount: event.headCount, mergedNarrative: event.mergedNarrative });
   }
 
-  /** A fresh SessionWriter for an MCTS run — an in-memory message tree that also
-   *  persists nodes to the messages table (session_id='mcts'), mirroring the DO. */
+  /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO
+   *  uses (core mcts-session): the messages table is the source of truth, so
+   *  a search resumed after a process exit reconstructs its branch ancestry
+   *  from the persisted rows instead of an in-memory mirror that died with
+   *  the previous process (B6 parity). */
   private createMCTSSession(): SessionWriter {
-    const messages: Array<{ id: string; parentId: string | null; role: 'user' | 'assistant'; content: string }> = [];
-    const sql = this.rt.storage.sql;
-    return {
-      async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
-        const content = msg.parts.map((p) => p.text).join('');
-        messages.push({ id: msg.id, parentId: parentId ?? null, role: msg.role, content });
-        sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-          VALUES (${msg.id}, ${'mcts'}, ${parentId ?? null}, ${msg.role}, ${content})`;
-      },
-      getHistory(leafId?: string): Array<{ role: string; content: string }> {
-        const result: Array<{ role: string; content: string }> = [];
-        let current = leafId ? messages.find((m) => m.id === leafId) : undefined;
-        while (current) {
-          result.unshift({ role: current.role, content: current.content });
-          current = current.parentId ? messages.find((m) => m.id === current!.parentId) : undefined;
-        }
-        return result;
-      },
-    };
+    return createDurableMctsSession(this.rt.storage.sql);
   }
 
-  /** Mirror the cf-backend wrapToolsForBackground: shallow-clone the toolset and
-   *  wrap the long-running tools' execute in the 30s threshold. */
+  /** The shared background wrap (core background-tools) — the SAME wrapper
+   *  the cf backend applies: shallow clone, 30s threshold, per-call abort. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    const wrapped: ToolSet = { ...raw };
-    for (const key of BACKGROUNDABLE_TOOLS) {
-      const orig = wrapped[key];
-      const exec = orig?.execute;
-      if (!orig || typeof exec !== 'function') continue;
-      wrapped[key] = {
-        ...orig,
-        execute: (input: unknown, options: unknown) => {
-          const controller = new AbortController();
-          const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
-          const deps = this.jobRunner.thresholdDeps(key, input, controller);
-          return withBackgroundThreshold(key, () => exec(input as never, { ...(options as object), abortSignal } as never), deps);
-        },
-      } as ToolSet[string];
-    }
-    return wrapped;
+    return wrapToolsForBackground(raw, { jobRunner: this.jobRunner });
   }
 
   /** Persist the exchange (user, any mid-turn steers, assistant); returns the
@@ -1830,50 +1736,21 @@ export class LocalAgentSession implements BackendHost {
     return this.cachedModelSpec ?? this.fallbackModelSpec;
   }
 
-  /** The resolved model's catalog entry — one cached, non-blocking lookup per
-   *  spec (the DO's catalogInfoForSession). Feeds BOTH the context-window
-   *  budget and the attachment policy; until it lands, the static fallbacks
-   *  answer. */
-  private _catalogModel: { spec: string; info: ModelInfo | null } | null = null;
-  private catalogInfoForSession(): ModelInfo | null {
-    const spec = this.effectiveModelSpec();
-    if (this._catalogModel?.spec !== spec) {
-      this._catalogModel = { spec, info: null };
-      void this.lookupCatalogModel(spec);
-    }
-    return this._catalogModel.info;
-  }
+  /** The shared catalog view of the resolved model (core model-catalog —
+   *  the DO's exact block): one cached, non-blocking lookup per spec; the
+   *  static fallbacks answer until it lands. Feeds BOTH the context-window
+   *  budget and the attachment policy. */
+  private readonly modelCatalog = new ModelCatalogSession({
+    effectiveSpec: () => this.effectiveModelSpec(),
+    lookup: (spec) => this.modelResolver ? this.modelResolver.modelInfo(spec) : Promise.resolve(null),
+  });
 
-  /** The resolved model's context window: catalog-reported when the async
-   *  lookup has landed, else the static fallback table. Feeds the compaction
-   *  extension, the step-prune budget, and overflow recovery — the same number
-   *  the DO's sessionContextWindow supplies for the same model. */
   private sessionContextWindow(): number {
-    return this.catalogInfoForSession()?.contextWindow ?? contextWindowForModel(this.effectiveModelSpec());
+    return this.modelCatalog.contextWindow();
   }
 
-  /** Media the active model request can carry — the attachment sanitizer's
-   *  policy input: the provider-class ceiling answers immediately
-   *  (conservative — errs toward sanitizing, never toward a rejected request)
-   *  and the catalog's per-model input modalities narrow it once the lookup
-   *  lands. */
   private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
-    const info = this.catalogInfoForSession();
-    const spec = this.effectiveModelSpec();
-    let provider: string | undefined;
-    try { provider = parseModelSpec(spec).provider; } catch { /* bare fallback spec */ }
-    return acceptedMediaForModel({
-      ...(provider !== undefined ? { provider } : {}),
-      ...(info?.inputModalities ? { catalogInputModalities: info.inputModalities } : {}),
-    });
-  }
-
-  private async lookupCatalogModel(spec: string): Promise<void> {
-    if (!this.modelResolver) return;
-    try {
-      const info = await this.modelResolver.modelInfo(spec);
-      if (info && this._catalogModel?.spec === spec) this._catalogModel.info = info;
-    } catch { /* catalog unavailable — the static fallbacks stay */ }
+    return this.modelCatalog.acceptedMedia();
   }
 
   private ensureModelState(): LanguageModel {
@@ -1887,7 +1764,7 @@ export class LocalAgentSession implements BackendHost {
     // only starts when the first turn assembles would never land in time and
     // that turn would budget against the static table. Still non-blocking:
     // whatever has not landed falls back exactly as before.
-    this.catalogInfoForSession();
+    this.modelCatalog.info();
     this.rebuildModelBoundState(model);
     return model;
   }
@@ -1912,12 +1789,23 @@ export class LocalAgentSession implements BackendHost {
     const rawTools = buildBuiltinTools({
       rt: this.rt,
       shellApprovalMode: this.config.getShellApprovalMode(),
+      // The turn's cumulative bulk budget — held on the accumulator so this
+      // toolset (rebuilt only on model change) reads the live turn's state.
+      contextBudget: this.orch.acc.context,
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
-        extraProviders: [createLocalAgentSelfProvider(this), createWebCodemodeProvider(this.getWebSearchProvider())],
+        extraProviders: [
+          createLocalAgentSelfProvider(this),
+          createWebCodemodeProvider(this.getWebSearchProvider()),
+          // llm.query (RLM) — CLI parity with the cf backend. Needs a real
+          // resolver to spawn sub-calls; static-model sessions have none.
+          ...(this.modelResolver
+            ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
+            : []),
+        ],
       }),
       codemodeLoader: { __cli: true },
-      thinkTool: this.buildThinkTool(),
+      agents: { fork: this.buildAgentsForkDeps() },
       facts: this.factsStore,
       skills: {
         vfs: this.getSkillsVfs(),
@@ -1925,11 +1813,12 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
-      // deps.team is deliberately NOT wired: the `team` peer-messaging tool
-      // needs a cross-agent transport, and local agents are one-per-process
-      // SQLite sessions with no daemon to route between them. Absent deps →
-      // the tool is not registered and the prompt (derived from the built
-      // toolset) never advertises it. Hosted agents get the full team surface.
+      // agents.team / agents.peers are deliberately NOT wired: staffing and
+      // peer messaging need a cross-agent transport, and local agents are
+      // one-per-process SQLite sessions with no daemon to route between them.
+      // Absent deps → those ACTIONS are structurally missing from the agents
+      // tool and the prompt ladder never advertises them. Hosted agents get
+      // the full surface.
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;
@@ -1952,19 +1841,7 @@ function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: Readonl
   };
 }
 
-/** Serialize message content for head inheritance. File-part payloads (data
- *  URLs from attachments) are reduced to their filename/mediaType reference so
- *  spawned heads never inherit megabytes of base64. */
-export function serializeContentForHeads(content: ModelMessage['content']): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return JSON.stringify(content.map((part) =>
-      part && typeof part === 'object' && 'type' in part && part.type === 'file'
-        ? { type: 'file', mediaType: part.mediaType, filename: part.filename }
-        : part));
-  }
-  return JSON.stringify(content);
-}
+export { serializeContentForHeads } from '@proteus/core';
 
 /** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */
 function makeHubSql(db: LocalSessionDb): {

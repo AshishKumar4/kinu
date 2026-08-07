@@ -8,7 +8,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
 import { createCompactionExtension, createModelSummarizer } from '../src/index.js';
 import type { CompactionProfile } from '../src/index.js';
-import { history, memoryPorts } from './helpers.js';
+import { history, memoryArchive, memoryPorts } from './helpers.js';
 
 /** A model whose generate call NEVER resolves on its own — it settles only
  *  when the request's abortSignal fires (exactly how a hung provider fetch
@@ -42,6 +42,7 @@ describe('createModelSummarizer', () => {
     };
     const extension = createCompactionExtension({
       ports: memoryPorts(),
+      archive: memoryArchive(),
       summarize: createModelSummarizer(hangingModel, 25),
       profile,
     });

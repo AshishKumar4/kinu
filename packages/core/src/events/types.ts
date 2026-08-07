@@ -9,6 +9,8 @@
  * Consumers may filter by `type` and slice by index.
  */
 
+import type { ContextBudgetSnapshot } from '../context-budget.js';
+
 export type RunEventType =
   | 'run_start'
   | 'turn_start'
@@ -21,6 +23,7 @@ export type RunEventType =
   | 'scaffold_promotion'
   | 'scaffold_rollback'
   | 'memory_write'
+  | 'context_budget'
   | 'fiber_recovered'
   | 'error'
   | 'turn_end'
@@ -54,6 +57,11 @@ export type RunEvent =
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
+  /** The turn's bulk-ingestion ledger — how much tool output the root actually
+   *  admitted, what every producer spilled instead, and whether the agent read
+   *  any of it back. Written once per turn by the settle spine (M1 trip
+   *  counters); `turn_end` is the denominator. */
+  | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
   | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number; cached?: number } })

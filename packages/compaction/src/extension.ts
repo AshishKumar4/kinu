@@ -16,10 +16,17 @@
  *    spec the old single-shot path used, wrapped in the [CONTEXT CHECKPOINT]
  *    preamble; published core rolls that checkpoint across later deltas.
  *
- * Everything is injected ports (transcripts/plans/logger/summarize), so the
- * engine runs identically off-backend under test fakes; 2B binds the real
- * workspace-VFS transcript store, durable plan store, and LLM callback, and
- * registers the extension as the default compaction path.
+ * The checkpoint message the model actually reads carries one more thing: the
+ * archive manifest (manifest.ts), appended deterministically to the ladder's
+ * synthesized turn so the compacted mass is navigable at a glance rather than
+ * only greppable. It is rendered from the durable archive index, never from a
+ * model call, and never stored in the plan — so a rolled or degraded summary
+ * cannot lose it.
+ *
+ * Everything is injected ports (transcripts/plans/logger/summarize/archive),
+ * so the engine runs identically off-backend under test fakes; 2B binds the
+ * real workspace-VFS transcript store, durable plan store, archive index and
+ * LLM callback, and registers the extension as the default compaction path.
  */
 
 import type { ModelMessage, TextPart } from 'ai';
@@ -50,6 +57,12 @@ import {
   type Turn,
 } from '@better-compact/core';
 import { proteusCodec, proteusSpec } from './codec.js';
+import {
+  deriveArchiveRange,
+  renderArchiveManifest,
+  withArchiveManifest,
+  type ArchiveIndexStore,
+} from './manifest.js';
 
 export interface CompactionOutcomeEvent {
   sessionKey: string;
@@ -68,6 +81,9 @@ export interface CompactionExtensionDeps {
   /** Engine ports: transcript store (citablePath must be a path the agent's
    *  own file tool can read back), plan store, logger. */
   ports: EnginePorts;
+  /** Durable index of this session's archived ranges — the source the
+   *  checkpoint's navigation manifest renders from. */
+  archive: ArchiveIndexStore;
   /** One LLM call — prompt in, completion text out. Serves both summary
    *  kinds; failures degrade to deterministic previews, never break a turn. */
   summarize: (prompt: string) => Promise<string>;
@@ -209,6 +225,23 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     return { outcome: 'planned', turns: transformed, plan: upgraded };
   }
 
+  /** Index the range this plan just archived. The compacted prefix always
+   *  starts at turn 0, so the index records what THIS compaction added and
+   *  cites the archive that holds it; a plan whose prefix no longer contains
+   *  the last indexed anchor describes a rewritten history, and the index
+   *  restarts from it. */
+  function indexArchivedRange(ctx: TransformContext, turns: Turn[], plan: BoundaryContextPlan): void {
+    const derived = deriveArchiveRange(
+      compactedTurnsForPlan(turns, plan),
+      plan.rangeHash,
+      plan.transcript.relativePath,
+      deps.archive.list(ctx.sessionKey),
+    );
+    if (!derived) return;
+    if (derived.reset) deps.archive.clear(ctx.sessionKey);
+    deps.archive.append(ctx.sessionKey, derived.range);
+  }
+
   return {
     name: 'compaction',
 
@@ -260,12 +293,18 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
             )) ?? processed)
           : processed;
 
+      if (applied.outcome === 'planned') indexArchivedRange(ctx, turns, applied.plan);
+
       deps.onOutcome?.({
         sessionKey: ctx.sessionKey,
         outcome: applied.outcome,
         plan: applied.outcome === 'planned' ? applied.plan : undefined,
       });
-      return proteusCodec.decode(applied.turns, messages);
+      // The manifest is a pure function of the durable index, which only grows
+      // when a NEW range is archived — so a replayed plan re-renders it
+      // byte-identically and the provider's prefix cache survives.
+      const manifest = renderArchiveManifest(deps.archive.list(ctx.sessionKey));
+      return proteusCodec.decode(withArchiveManifest(applied.turns, manifest), messages);
     },
   };
 }

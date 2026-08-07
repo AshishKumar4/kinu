@@ -44,6 +44,10 @@ export interface BenchCaseScore {
   durationMsB: number;
   tokensA: number;
   tokensB: number;
+  /** Largest working set either variant reached on this task — the number the
+   *  context-discipline candidates are supposed to move. */
+  peakPromptTokensA: number;
+  peakPromptTokensB: number;
   /** First breach seen across the repeats, or null when none breached. */
   breachA: BudgetBreach | null;
   breachB: BudgetBreach | null;
@@ -135,7 +139,7 @@ export interface BuildBenchReportInput {
  *  cost fields, so a k=3 row is read against the same per-attempt budget a k=1
  *  row is. */
 function foldRepeats(attempts: readonly AttemptOutcome[]): {
-  passes: number; durationMs: number; tokens: number;
+  passes: number; durationMs: number; tokens: number; peakPromptTokens: number;
   breach: BudgetBreach | null; error?: string; breachCount: number;
 } {
   const n = attempts.length;
@@ -144,6 +148,9 @@ function foldRepeats(attempts: readonly AttemptOutcome[]): {
     passes: attempts.filter((x) => x.passed).length,
     durationMs: Math.round(attempts.reduce((s, x) => s + x.durationMs, 0) / n),
     tokens: Math.round(attempts.reduce((s, x) => s + x.tokens, 0) / n),
+    // A peak is a maximum, not a mean: averaging peaks across repeats would
+    // report a working set no attempt ever actually reached.
+    peakPromptTokens: attempts.reduce((m, x) => Math.max(m, x.peakPromptTokens), 0),
     breach: attempts.find((x) => x.budgetBreach)?.budgetBreach ?? null,
     breachCount: attempts.filter((x) => x.budgetBreach).length,
     ...(error === undefined ? {} : { error }),
@@ -182,6 +189,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
       passesA: foldA.passes, passesB: foldB.passes,
       durationMsA: foldA.durationMs, durationMsB: foldB.durationMs,
       tokensA: foldA.tokens, tokensB: foldB.tokens,
+      peakPromptTokensA: foldA.peakPromptTokens, peakPromptTokensB: foldB.peakPromptTokens,
       breachA: foldA.breach, breachB: foldB.breach,
       ...(foldA.error ? { errorA: foldA.error } : {}),
       ...(foldB.error ? { errorB: foldB.error } : {}),
@@ -221,6 +229,7 @@ export function renderBenchSummary(report: BenchReport): string {
   lines.push('');
   lines.push(`DEV split (${dev.tasks} paired tasks) — adaptation may see this`);
   lines.push(renderPairedStats(dev.stats));
+  lines.push(renderCost(dev.cases));
   for (const c of dev.cases) lines.push(`  ${renderCase(c)}`);
   lines.push('');
   const unstable = dev.cases.filter(caseIsUnstable);
@@ -254,6 +263,23 @@ function renderCase(c: BenchCaseScore): string {
   };
   return `${c.taskId.padEnd(28)} A=${mark(c.passesA, c.breachA).padEnd(14)} B=${mark(c.passesB, c.breachB)}` +
     (caseIsUnstable(c) ? '  ~unstable' : '');
+}
+
+/** Cost next to the effect, because a variant that wins by spending twice as
+ *  much has not won the same thing. Two different numbers on purpose: mean
+ *  tokens per task is what an attempt costs, peak prompt tokens is how big its
+ *  working set got — and a context-discipline change is supposed to move the
+ *  second without moving the first. The peak is a maximum over tasks; averaging
+ *  peaks would report a working set nothing ever reached. Both read 0 for the
+ *  deterministic controls, which make no model calls. */
+function renderCost(cases: readonly BenchCaseScore[]): string {
+  if (cases.length === 0) return '  cost: no attempts';
+  const mean = (of: (c: BenchCaseScore) => number) =>
+    Math.round(cases.reduce((sum, c) => sum + of(c), 0) / cases.length);
+  const peak = (of: (c: BenchCaseScore) => number) =>
+    cases.reduce((max, c) => Math.max(max, of(c)), 0);
+  return `  tokens/task A=${mean((c) => c.tokensA)}  B=${mean((c) => c.tokensB)}` +
+    `   peak prompt tokens A=${peak((c) => c.peakPromptTokensA)}  B=${peak((c) => c.peakPromptTokensB)}`;
 }
 
 function renderPairedStats(s: PairedBinaryStats): string {

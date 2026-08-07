@@ -1,6 +1,7 @@
 /** The real ports over shared storage primitives: the VFS transcript store's
- *  citable-path/write contract and the durable SQL compaction state (plan
- *  snapshot + prompt-token signal sharing one row without clobbering). */
+ *  citable-path/write contract, the durable SQL compaction state (plan
+ *  snapshot + prompt-token signal sharing one row without clobbering) and the
+ *  archived-range index behind the navigation manifest. */
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -10,6 +11,7 @@ import {
   createCompactionStateStore,
   createVfsTranscriptStore,
   initCompactionStateTable,
+  type ArchiveRange,
   type PlanSnapshot,
 } from '../src/index.js';
 
@@ -207,5 +209,50 @@ describe('createCompactionStateStore', () => {
     expect(store.takeForceCompaction('legacy')).toBe(false);
     store.armForceCompaction('legacy');
     expect(store.takeForceCompaction('legacy')).toBe(true);
+  });
+});
+
+describe('archive index', () => {
+  const range = (overrides: Partial<ArchiveRange> = {}): ArchiveRange => ({
+    rangeHash: 'h1',
+    path: compactionTranscriptPath('s1', 'h1'),
+    startTurn: 1,
+    endTurn: 12,
+    userTurns: 6,
+    assistantTurns: 6,
+    firstUserAsk: 'port the auth refresh',
+    ...overrides,
+  });
+
+  test('ranges round-trip in turn order, per session', () => {
+    const { store } = stateRig();
+    expect(store.archive.list('s1')).toEqual([]);
+    const second = range({ rangeHash: 'h2', startTurn: 13, endTurn: 18, userTurns: 3, assistantTurns: 3 });
+    // Appended out of order — the index reads back by span, not by insertion.
+    store.archive.append('s1', second);
+    store.archive.append('s1', range());
+    store.archive.append('s2', range({ firstUserAsk: 'another session' }));
+    expect(store.archive.list('s1')).toEqual([range(), second]);
+    expect(store.archive.list('s2')[0].firstUserAsk).toBe('another session');
+  });
+
+  test('re-appending the same range is a no-op, and clearing is per session', () => {
+    const { store } = stateRig();
+    store.archive.append('s1', range());
+    store.archive.append('s1', range({ firstUserAsk: 'a later rewrite of the same hash' }));
+    expect(store.archive.list('s1')).toEqual([range()]);
+
+    store.archive.append('s2', range());
+    store.archive.clear('s1');
+    expect(store.archive.list('s1')).toEqual([]);
+    expect(store.archive.list('s2')).toHaveLength(1);
+  });
+
+  test('the index survives a session whose plan and token signal were cleared', () => {
+    const { store } = stateRig();
+    store.archive.append('s1', range());
+    store.plans.save('s1', snapshot('s1'));
+    store.plans.save('s1', null);
+    expect(store.archive.list('s1')).toEqual([range()]);
   });
 });

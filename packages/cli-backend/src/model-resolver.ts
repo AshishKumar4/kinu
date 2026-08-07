@@ -8,6 +8,7 @@ import {
   createCodexOAuthClient,
   createAnthropicProvider,
   createCodexProvider,
+  availableJudgeSpecs,
   catalogModelInfo,
   createOpenAICompatProvider,
   createOpenAIProvider,
@@ -74,6 +75,10 @@ export interface LocalModelResolver {
    *  metadata like input modalities for the attachment sanitizer. Null when
    *  the provider/model is unknown or the catalog is unreachable. */
   modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
+  /** One spec per available provider, in registry preference order — what
+   *  judge/panel selection walks (core's `availableJudgeSpecs`, the same rule
+   *  the DO backend uses). */
+  judgeCandidates(): Promise<string[]>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -255,6 +260,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     listProviders() {
       return registry.listProviders(deps);
+    },
+    judgeCandidates() {
+      return availableJudgeSpecs(registry, deps);
     },
     listModels() {
       return registry.listAllModels(deps);

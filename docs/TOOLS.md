@@ -27,6 +27,7 @@ flagged, and it is how a subordinate gets `report` and never gets `team`.
 | `team` | Staff this workspace with persistent subordinate agents — `list \| spawn \| assign \| status \| message \| dismiss` |
 | `peers` | Reach the owner's *other* workspaces — `list \| ask \| send \| reply \| spawn_workspace` |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
+| `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
 | `product_change` | Governed lane for changing the Proteus product/UI itself |
 
 ## think, team, peers, report — the delegation surface
@@ -186,6 +187,37 @@ the agent, each running its own multi-step tool loop over a fork of the parent
 workspace, merged back into the turn. `strategy=mcts` keeps the same fork
 primitive but settles branches by scoring them against each other by execution.
 See [MCTS.md](./MCTS.md) for the search algorithm.
+
+## experience — cross-workspace transfer
+
+The owner's workspaces each earn their own crafted tools, lessons and facts, and
+`experience` is the one path between them: `publish` offers what THIS workspace
+proved, `search` retrieves what the owner's others proved, `import` stages one
+entry here. The library itself is owner-level state in the UserDO
+(`core/src/experience/library.ts`), reached through the capability gate — the
+two `experience.*` capabilities are `full`-tier, so a shared workspace keeps
+everything inside itself and reaches neither.
+
+Nothing crosses on assertion. Publishing is gated on local evidence, which
+travels with the entry: a crafted tool needs real uses and a time-decayed score
+at or above the same bar its own injection filter uses, a lesson must be
+CORROBORATED (a provisional one is already kept out of this workspace's
+MEMORY.md), a fact must clear its confidence bar
+(`core/src/experience/publishable.ts`).
+
+Importing reuses the two mechanisms the agent already trusts
+(`core/src/experience/imports.ts`):
+
+1. **The misevolution gate** runs on every import of every kind, not just code —
+   an imported lesson lands in MEMORY.md and an imported fact lands in the
+   per-turn facts block, which is the paper's memory pathway. A veto is recorded
+   in `evolution_events` like any other.
+2. **Provisional until corroborated.** What survives the gate is STAGED in
+   `imported_experience`, not adopted: the tool hands the payload back inline so
+   the agent can use it in the very turn it imported it, and that turn's own
+   outcome decides. Accepted promotes it into the CraftStore / MEMORY.md /
+   `agent_facts`; corrected or frustrated discards it; an ungraded turn leaves it
+   waiting. `EvolutionEngine.reviewTurn` is the only place this happens.
 
 ## CraftStore Lifecycle
 

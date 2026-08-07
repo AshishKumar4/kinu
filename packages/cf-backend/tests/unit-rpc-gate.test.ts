@@ -7,7 +7,7 @@
 // pre-unification drift where the REST router and the websocket gate kept two
 // mirrored copies of the scope policy.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AGENT_RPC_ACCESS,
@@ -200,5 +200,58 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(CLI_SCOPES_HEADER).toBe('x-proteus-cli-scopes');
     expect(source('src/server.ts')).not.toContain("'x-proteus-cli-scopes'");
     expect(source('src/orchestrator.ts')).not.toContain("'x-proteus-cli-scopes'");
+  });
+});
+
+describe('the table is the CLI dispatch allowlist, not documentation', () => {
+  // cli/routes.ts dispatches ONLY the keys of AGENT_RPC_ACCESS, so an
+  // orchestrator @callable the CLI calls but the table omits is a command that
+  // fails against every cloud workspace while passing every local test. Found
+  // exactly that way once, for the outcome-calibration RPCs.
+  const CLI_SRC = join(root, '../cli/src');
+
+  /** Method names the CLI passes to an `…Rpc(…)` call, anywhere in its source. */
+  function cliInvokedNames(): string[] {
+    const files = readdirSync(CLI_SRC, { recursive: true, encoding: 'utf8' })
+      .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'));
+    const names = new Set<string>();
+    for (const file of files) {
+      const src = readFileSync(join(CLI_SRC, file), 'utf8');
+      for (const call of src.matchAll(/\b\w*[Rr]pc\w*\s*(?:<[^>]*>)?\s*\(([^()]*?)\)/gs)) {
+        for (const literal of call[1].matchAll(/'([A-Za-z][A-Za-z0-9_]*)'/g)) names.add(literal[1]);
+      }
+    }
+    return [...names];
+  }
+
+  /** Every @callable on the orchestrator — the only names that are RPCs at all. */
+  function orchestratorCallables(): Set<string> {
+    return new Set([...source('src/orchestrator.ts')
+      .matchAll(/@callable\([^)]*\)\s*(?:async\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
+      .map((match) => match[1]));
+  }
+
+  test('every orchestrator RPC the CLI invokes is in the table', () => {
+    const callables = orchestratorCallables();
+    const invoked = cliInvokedNames().filter((name) => callables.has(name));
+    expect(invoked.length).toBeGreaterThan(20);
+    expect(invoked.filter((name) => !(name in AGENT_RPC_ACCESS)).sort()).toEqual([]);
+  });
+
+  test('the calibration flow is reachable at the class each step needs', () => {
+    // Reads of turn text and of the report; the write is an owner action and
+    // stays interactive, like every other mutation here.
+    expect(AGENT_RPC_ACCESS.getOutcomeCalibration).toBe('workspace.read');
+    expect(AGENT_RPC_ACCESS.sampleOutcomeLabeling).toBe('workspace.read');
+    expect(AGENT_RPC_ACCESS.recordOutcomeLabeling).toBe('interactive');
+    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('recordOutcomeLabeling'))).not.toBeNull();
+  });
+
+  test('reading the judge panel is a read; running it is not', () => {
+    // Running it spends the owner's model budget across two providers and
+    // writes verdicts, so it sits with the mutations rather than the reports.
+    expect(AGENT_RPC_ACCESS.getOutcomeEnsemble).toBe('workspace.read');
+    expect(AGENT_RPC_ACCESS.runOutcomeEnsemble).toBe('interactive');
+    expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame('runOutcomeEnsemble'))).not.toBeNull();
   });
 });

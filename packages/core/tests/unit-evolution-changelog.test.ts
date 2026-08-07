@@ -24,6 +24,7 @@ import {
   EvolutionEngine,
   type AgentRuntime, type EvolutionEvent,
 } from '../src/index.ts';
+import { describePathology } from '../src/evolution/pathology.ts';
 import { createTestRuntime } from './helpers.ts';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
@@ -79,6 +80,20 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(scaffold!.scaffoldVersion).toBe(version);
     // The v0 bootstrap is not a self-change — no entry for it.
     expect(entries.filter((e) => e.kind === 'scaffold')).toHaveLength(1);
+    // Nothing named a pathology, so the line claims none.
+    expect(scaffold!.evidence).not.toContain('targets');
+  });
+
+  test('a scaffold entry says which failure the version was written for', async () => {
+    const { rt } = setup();
+    await rt.identity.scaffold.write(V0_CODE);
+    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+                   VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
+    const result = await modifyScaffold(rt, RATIONALE, `// pathology: no_action/prose\n${V1_CODE}`);
+    expect(result.ok).toBe(true);
+
+    const scaffold = buildChangelog(rt.storage.sql).find((e) => e.kind === 'scaffold');
+    expect(scaffold!.evidence).toContain(`targets ${describePathology('no_action/prose')}`);
   });
 
   test('crafted tool entry shows the EMA score and is revertable', () => {

@@ -7,7 +7,7 @@
  * job store remain the source of truth.
  */
 
-import type { NodeCodemodeProvider } from './execute-tools-factory.js';
+import type { CodemodeProvider } from '@proteus/core';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
@@ -28,6 +28,9 @@ export interface LocalAgentSelfHost {
   jobResult(jobId: string): Promise<unknown>;
   listBackgroundJobs(limit?: number): Promise<unknown>;
   getReplayEvals(limit?: number): Promise<unknown>;
+  /** Arm the compaction ladder's forced rebuild for this session's NEXT turn
+   *  assembly — the same one-shot flag overflow recovery uses. */
+  armCompactNow(): void;
 }
 
 const TYPES = `export declare const agent: {
@@ -62,6 +65,14 @@ const TYPES = `export declare const agent: {
   jobResult(jobId: string): Promise<unknown>;
   /** List recent background jobs (newest first). */
   backgroundJobs(limit?: number): Promise<unknown>;
+  /** Fold the conversation NOW: arm the compaction ladder so your next turn is
+   *  assembled from a fresh handoff checkpoint instead of waiting for the
+   *  token trigger. Call it at a phase boundary — a piece of work finished and
+   *  its tool traffic is no longer worth carrying. Nothing is lost: the folded
+   *  range is archived verbatim and listed in the checkpoint's Compaction
+   *  Archive manifest, so exact prior wording stays one workspace.readFile
+   *  away. One fold per call, applied at the next turn assembly. */
+  compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' }>;
   /** Read-only loss curve: replay-eval entries (newest first) — outcome-
    *  labeled past turns re-run against your CURRENT config and scored
    *  against how they originally landed. loss = 1 − mean score, and every
@@ -71,7 +82,7 @@ const TYPES = `export declare const agent: {
 };
 `;
 
-export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): NodeCodemodeProvider {
+export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): CodemodeProvider {
   return {
     name: 'agent',
     types: TYPES,
@@ -167,6 +178,15 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): NodeCode
           const limit = typeof args[0] === 'number' ? args[0] : undefined;
           try { return await host.listBackgroundJobs(limit); }
           catch (err) { return { error: `agent.backgroundJobs: ${(err as Error).message}` }; }
+        },
+      },
+      compactNow: {
+        description: 'Fold the conversation now: arm the compaction ladder so your NEXT turn is assembled from a fresh handoff checkpoint instead of waiting for the token trigger. Use it at a phase boundary. The folded range is archived verbatim and listed in the checkpoint\'s Compaction Archive manifest, so nothing is lost.',
+        execute: async () => {
+          try {
+            host.armCompactNow();
+            return { armed: true, appliesAt: 'next-turn-assembly' };
+          } catch (err) { return { error: `agent.compactNow: ${(err as Error).message}` }; }
         },
       },
       replayEvals: {

@@ -20,6 +20,7 @@ import { rollbackScaffold } from '../scaffold/rollback.js';
 import { listGepaRuns } from './gepa/persistence.js';
 import { listReplayEvals } from './replay.js';
 import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
+import { describePathology } from './pathology.js';
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 
 export type ChangelogEntryKind = 'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes';
@@ -98,6 +99,11 @@ function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
       ? `shadow ${e.wins}W-${e.losses}L-${e.ties}T${e.winRate != null ? ` · win-rate ${pct(e.winRate)}` : ''}`
       : 'shadow untried';
     const trial = e.status === 'pending' ? ' (shadow trial in progress)' : '';
+    // What problem the version was FOR — the line the operator audits a
+    // self-change by. Re-derived from the stamped cell id, no label store.
+    const targeting = e.pathology !== null
+      ? ` · targets ${describePathology(e.pathology)}`
+      : '';
     const revertable = e.status === 'current' || e.status === 'pending';
     const summary =
       e.status === 'current'
@@ -112,7 +118,7 @@ function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
       kind: 'scaffold' as const,
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
       summary,
-      evidence: `${verb} v${e.version}${trial} — ${e.rationale} · ${record}`,
+      evidence: `${verb} v${e.version}${trial} — ${e.rationale} · ${record}${targeting}`,
       ...(revertable ? { revert: { type: 'scaffold_rollback' as const, target: String(e.version) } } : {}),
       scaffoldVersion: e.version,
     };

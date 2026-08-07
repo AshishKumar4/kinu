@@ -211,6 +211,39 @@ new loop is the evolution pipeline: propose, pass the 4 gates and the
 misevolution veto, survive shadow evaluation, get promoted. See
 [EVOLUTION.md](./EVOLUTION.md).
 
+### Reading the conversation — `host.history()`
+
+A scaffold used to receive one string (`task`) and a prepared default stream.
+That is enough to *wrap* the default loop and not enough to *manage context*:
+an inference loop that cannot see its own conversation cannot reshape,
+reweight, or navigate it, and a scaffold whose whole idea is context discipline
+had nothing to be disciplined about.
+
+`host.history(query)` closes that, read-only and budgeted
+(`core/src/orchestrator/scaffold-host.ts`, one implementation both backends
+wire — the CLI session's message array, the DO's prepared turn options):
+
+```js
+const page = await host.history({ offset: -40, limit: 40, maxChars: 2000 });
+// { total, offset, clipped, entries: [{ index, role, chars, text, truncated }] }
+```
+
+`offset` counts back from the end when negative and defaults to the tail.
+`total` and each entry's `chars` report what you are **not** being shown, so a
+scaffold that wants more pages for it rather than asking for everything — which
+is the point. The bounds are structural, not advisory: at most 100 messages and
+8,000 characters each, and a page stops at 40,000 characters however it was
+asked for. Prose comes back verbatim; tool traffic comes back named
+(`[tool-call run {...}]`) rather than dumped.
+
+Read-only is also structural: the bridge returns plain data and no writer is
+exposed. A scaffold that wants to *shrink* its context still goes through the
+compaction ladder, which remains the single owner of the model-visible stream.
+
+The bridge is passed to the shadow-eval run too, for the same reason `callTool`
+is: a pending judged without a capability the live turn had is judged on a
+handicap, and a context-discipline scaffold would lose every trial.
+
 ## Reasoning-effort budgets
 
 `low | medium | high` is the one dial, and it is user-settable per workspace

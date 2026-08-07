@@ -5,16 +5,22 @@ import { join } from 'node:path';
 import {
   buildDrainBatch,
   EventLog,
+  eventContentPath,
   initEventsHubTables,
+  renderForLLM,
+  spillEventContent,
   type SerializedMessage,
+  type SubordinateReportPayload,
   type SubordinateRosterEntry,
 } from '@proteus/core';
+import { createMemoryVfs } from '@proteus/test-utils';
 import {
   SubordinateIdentityStore,
   SubordinateRosterStore,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
+  normalizeReportContent,
   readSubordinateLiveStatus,
   type SubordinateRuntime,
 } from '../src/subordinate-support.js';
@@ -137,6 +143,14 @@ describe('subordinate identity', () => {
     expect(profile).not.toContain('team:');
     expect(profile).not.toContain('peers:');
     expect(profile).not.toContain('productChanges:');
+    // Cross-workspace experience transfer is reach beyond the workspace, so it
+    // rides the orchestrator's profile for the same reason peers does.
+    expect(profile).not.toContain('experience:');
+    expect(source('orchestrator.ts')).toContain('experience: this.getExperienceToolDeps(),');
+    // …and absence is structural: a deps-gated name is dropped from the
+    // advertised surface too, not just from the ToolSet.
+    expect(source('actor-agent.ts'))
+      .toContain("const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;");
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {
@@ -469,6 +483,42 @@ describe('team action routing', () => {
       liveError: 'status failed',
     }]);
   });
+
+  test('EVICTION FIX: a completed subordinate stays in the roster and answers a follow-up task', async () => {
+    // The reported bug: subordinates disappeared after completing their task.
+    // Completion must land the subordinate at idle — still listed, still
+    // addressable — and a follow-up assignment must run on the SAME facet
+    // with its context intact (no respawn, no deletion anywhere).
+    const h = makeTeamHarness();
+    await h.team.spawn({ role: 'researcher', mission: 'Map the market.' });
+
+    h.roster.applyReport('researcher-a1b2c3', 'completed');
+    const afterCompletion = await h.team.list();
+    expect(afterCompletion).toHaveLength(1);
+    expect(afterCompletion[0]).toMatchObject({ name: 'researcher-a1b2c3', status: 'idle', currentTask: null });
+
+    await h.team.assign({ name: 'researcher-a1b2c3', task: 'One more comparison' });
+    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
+      status: 'working', currentTask: 'One more comparison',
+    });
+    // The follow-up reached the existing facet — no dismiss, no fresh spawn.
+    expect(h.calls).toEqual([
+      'spawn:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:One more comparison',
+    ]);
+  });
+
+  test('EVICTION FIX: dismissal archives by default — storage wipe only on explicit keepHistory=false', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ role: 'researcher', mission: 'Mission' });
+
+    expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
+      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });
+    // The runtime seam receives keepHistory=true → the orchestrator's
+    // deleteSubAgent branch (the storage wipe) is not taken.
+    expect(h.calls.at(-1)).toBe('dismiss:researcher-a1b2c3:true');
+  });
 });
 
 describe('subordinate event admission', () => {
@@ -517,5 +567,69 @@ describe('subordinate event admission', () => {
       fromSubordinate: 'researcher', status: 'progress', content: ' ', now: 1,
     })).toThrow('content');
     expect(log.pending()).toEqual([]);
+  });
+});
+
+describe('oversize subordinate reports stay reachable', () => {
+  /** The parent's ingress, in the order orchestrator.receiveSubordinateEvent
+   *  runs it: normalize → spill (async, outside the storage transaction) →
+   *  admit with the citation. */
+  async function admitFromSubordinate(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
+    const content = normalizeReportContent(raw);
+    const contentPath = await spillEventContent(vfs, content);
+    return admitSubordinateReport(log, {
+      fromSubordinate: 'researcher', status: 'completed', content,
+      task: 'Survey auth', ...(contentPath ? { contentPath } : {}), now: 11,
+    });
+  }
+
+  function freshLog(): EventLog {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    return new EventLog(sql);
+  }
+
+  test('a report past the brief budget spills whole and the parent brief cites it', async () => {
+    const log = freshLog();
+    const { vfs } = createMemoryVfs();
+    const content = 'seam found in the auth module; '.repeat(60).trim();
+
+    // The wire text carries the trailing newline a model's report usually has.
+    expect((await admitFromSubordinate(log, vfs, `${content}\n`)).admitted).toBe(true);
+
+    const event = log.pending({ variant: 'subordinate_report' })[0];
+    const path = (event.payload as SubordinateReportPayload).content_path;
+    // Normalized before spilling: the cited file is byte-for-byte the content
+    // the brief truncates, never the untrimmed wire text.
+    expect(path).toBe(eventContentPath(content));
+    expect(await vfs.readFile(path!)).toBe(content);
+
+    expect(renderForLLM(event).brief).toEndWith(` — full report: ${path}`);
+    expect(buildDrainBatch([event])!.text).toContain(path!);
+  });
+
+  test('a report within the brief budget writes nothing and renders exactly as before', async () => {
+    const log = freshLog();
+    const { vfs, files } = createMemoryVfs();
+
+    await admitFromSubordinate(log, vfs, 'Survey done — three seams found; note written.');
+
+    const event = log.pending({ variant: 'subordinate_report' })[0];
+    expect((event.payload as SubordinateReportPayload).content_path).toBeUndefined();
+    expect(files.size).toBe(0);
+    expect(renderForLLM(event).brief)
+      .toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
+  });
+
+  test('the parent ingress spills before opening its storage transaction', () => {
+    const orchestrator = source('orchestrator.ts');
+    const ingress = orchestrator.slice(
+      orchestrator.indexOf('async receiveSubordinateEvent('),
+      orchestrator.indexOf('// ── Mission Inbox'),
+    );
+    expect(ingress.indexOf('await spillEventContent(this.rt.storage.vfs, content)'))
+      .toBeLessThan(ingress.indexOf('transactionSync'));
+    expect(ingress).toContain('const content = normalizeReportContent(input.content);');
+    expect(ingress).toContain('...(contentPath ? { contentPath } : {}),');
   });
 });

@@ -63,8 +63,11 @@ export interface CreateSandboxOptions {
   repoRoot: string;
   runRoot: string;
   attemptId: string;
-  /** Applied forward to seed the defect. */
-  defect: string;
+  /** Puts the task's starting state into the fresh copy: the defect family
+   *  applies its patch, the long-horizon family materializes its corpus. One
+   *  callback rather than one option per family — the sandbox owns isolation,
+   *  not what a task is made of. */
+  prepare: (dir: string) => void;
 }
 
 /**
@@ -129,7 +132,7 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
 
   linkNodeModules(repo, dir);
 
-  applyPatch(dir, opts.defect, { reverse: false });
+  opts.prepare(dir);
 
   return { dir, proteusHome, dispose: () => rmSync(base, { recursive: true, force: true }) };
 }

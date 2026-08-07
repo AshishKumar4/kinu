@@ -10,6 +10,7 @@ import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
 } from './types.js';
 import { stripMarkdownFences, truncate } from './text.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window.js';
 
 export { stripMarkdownFences } from './text.js';
 
@@ -64,9 +65,12 @@ export function renderReflectionPrompt<I, E>(opts: {
     const inputStr = typeof inst.input === 'string' ? inst.input : JSON.stringify(inst.input);
     traceLines.push(
       `--- instance ${inst.id} (score ${o.score.toFixed(2)}) ---`,
-      `input: ${truncate(inputStr, 400)}`,
-      ...(inst.evidence ? [`evidence: ${truncate(inst.evidence, 800)}`] : []),
-      `feedback: ${truncate(o.feedback, 800)}`,
+      // Windows, not head truncations: a rollout's decisive step is usually
+      // its last, and 400 characters of a twelve-step trajectory is a reflector
+      // reasoning about the opening move.
+      `input: ${evidenceWindow(inputStr, EVIDENCE_BUDGETS.gepaInstanceInput)}`,
+      ...(inst.evidence ? [`evidence: ${evidenceWindow(inst.evidence, EVIDENCE_BUDGETS.gepaInstanceEvidence)}`] : []),
+      `feedback: ${evidenceWindow(o.feedback, EVIDENCE_BUDGETS.gepaInstanceFeedback)}`,
       '',
     );
   }
@@ -77,7 +81,7 @@ Read each instance's input + evidence + feedback. Identify a SPECIFIC defect tha
 
 Current ${desc}:
 \`\`\`
-${truncate(opts.parent.source, 4000)}
+${truncate(opts.parent.source, EVIDENCE_BUDGETS.gepaParentSource)}
 \`\`\`
 
 Aggregate score on the full eval set: ${opts.parent.aggregateScore.toFixed(3)}

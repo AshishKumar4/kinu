@@ -906,6 +906,28 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(received?.atMs).toBeGreaterThan(Date.now());
   });
 
+  test('Node execute fallback exposes agent.compactNow, arming the ladder for the next turn', async () => {
+    let arms = 0;
+    const executeTool = createNodeExecuteToolFactory({
+      extraProviders: [createLocalAgentSelfProvider({
+        proposeCurriculumTasks: async () => [],
+        listCurriculumTasks: async () => [],
+        setCurriculumTaskStatus: async () => ({ ok: true }),
+        createTimerTrigger: () => ({ id: 'trg-local', kind: 'timer_oneshot', nextFireAt: 1 }),
+        cancelTrigger: async () => ({ ok: true }),
+        jobResult: async () => null,
+        listBackgroundJobs: async () => [],
+        armCompactNow: () => { arms++; },
+      })],
+    })({ tools: {}, providers: [], loader: {} });
+
+    const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
+      code: 'return await agent.compactNow();',
+    });
+    expect(result).toMatchObject({ result: { armed: true, appliesAt: 'next-turn-assembly' } });
+    expect(arms).toBe(1);
+  });
+
   test('a /skill activation filters the turn toolset to allowed_tools (+ skills)', async () => {
     let captured: string[] = [];
     const { rt, session } = setup('ok', capturingModel('ok', (t) => { captured = t; }));
@@ -953,6 +975,18 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(jobResult(db, 'bgjob-t')).toContain('resumed answer');
   });
 
+  test('recoverBackgroundJobs re-drives an orphaned agents fork job (the post-unification kind)', async () => {
+    const { db, session } = setup('resumed fork answer');
+    const input = JSON.stringify({ action: 'fork', settle: 'single-shot', task: 'finish the interrupted exploration' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-a', 'agents', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+
+    await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
+    expect(jobResult(db, 'bgjob-a')).toContain('resumed fork answer');
+  });
+
   test('end() waits for a detached job to settle instead of closing the database under it', async () => {
     // The resume runs in a fiber detached from any turn, so a session that
     // ends while it is in flight would pull SQLite out from under its settle
@@ -977,11 +1011,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
   });
 
-  test('toolNames exposes the full surface (think/fact parity); end() resolves', async () => {
+  test('toolNames exposes the full surface (agents/fact parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    // Full parity with the DO surface: execution + memory + reasoning + facts + skills.
-    for (const t of ['run', 'execute_tools', 'memory', 'think', 'fact', 'skills']) expect(names).toContain(t);
+    // Full parity with the DO surface: execution + memory + delegation + facts + skills.
+    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'fact', 'skills']) expect(names).toContain(t);
     await session.send('hi');
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
   });

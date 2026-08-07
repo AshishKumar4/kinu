@@ -15,7 +15,11 @@
  *     byte-stably without re-summarizing;
  *  4. the ledger resets on every non-replayed outcome — before the weave —
  *     so the fresh block lands at the compacted tail, while replay keeps it
- *     frozen.
+ *     frozen;
+ *  5. every archived range is indexed durably and rendered into the checkpoint
+ *     as the navigation manifest, and agent.compactNow's machinery (the
+ *     one-shot force flag) folds a finished phase early — extending the
+ *     manifest once, then idempotently.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -132,6 +136,7 @@ describe('default compaction over the real storage plane', () => {
         plans: state.plans,
         logger: silentLogger,
       },
+      archive: state.archive,
       summarize: async () => {
         summarizeCalls++;
         return [
@@ -156,7 +161,7 @@ describe('default compaction over the real storage plane', () => {
     });
 
     const { model, prompts } = capturingModel();
-    const drive = async (messages: ModelMessage[]) => {
+    const drive = async (messages: ModelMessage[], transformTrigger?: 'force') => {
       for await (const _ of runChat({
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
@@ -167,8 +172,12 @@ describe('default compaction over the real storage plane', () => {
         maxSteps: 1,
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
+        ...(transformTrigger ? { transformTrigger } : {}),
       })) { /* drain */ }
     };
+    // What a turn assembly does with the armed one-shot flag.
+    const driveForced = (messages: ModelMessage[]) =>
+      drive(messages, state.takeForceCompaction(SESSION) ? 'force' : undefined);
 
     // ── Turn 0: small history, no compaction — the ledger freezes one block.
     const small = history(2, 100);
@@ -221,13 +230,58 @@ describe('default compaction over the real storage plane', () => {
     expect(plannedBlocks).toHaveLength(1);
     expect(plannedBlocks[0]).toBe(plannedPrompt.length - 1);
 
+    // ── Navigation manifest: the archived range is indexed durably and the
+    // model-visible checkpoint carries its line, citing the same path that
+    // just read back losslessly above.
+    const indexed = state.archive.list(SESSION);
+    expect(indexed).toHaveLength(1);
+    expect(indexed[0]).toMatchObject({
+      rangeHash: snapshot.rangeHash,
+      path: snapshot.transcriptRelativePath,
+      startTurn: 1,
+    });
+    expect(indexed[0].firstUserAsk).toStartWith('Task 0: please run step 0');
+    expect(plannedJson).toContain('## Compaction Archive');
+    expect(plannedJson).toContain(`- turns 1-${indexed[0].endTurn} `);
+    expect(rt.storage.sql`SELECT range_hash FROM compaction_archive WHERE session_key = ${SESSION}`)
+      .toHaveLength(1);
+
     // ── Turn 2: identical history → deterministic cache-warm replay. No new
-    // summaries, no reset, byte-identical model-visible context.
+    // summaries, no reset, byte-identical model-visible context — including
+    // the manifest, which only moves when a new range is archived.
     const callsAfterPlan = summarizeCalls;
     await drive(overflowing);
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
     expect(summarizeCalls).toBe(callsAfterPlan);
     expect(ledger.size).toBe(1);
     expect(JSON.stringify(prompts[2])).toBe(JSON.stringify(prompts[1]));
+    expect(state.archive.list(SESSION)).toHaveLength(1);
+
+    // ── Turn 3: agent.compactNow at a phase boundary. Arming the one-shot
+    // force flag is all the tool does; the turn assembly consumes it and the
+    // ladder folds the finished phase EARLY, without waiting for the trigger.
+    const grown = [...overflowing, ...history(8, 3_000)];
+    state.armForceCompaction(SESSION);
+    await driveForced(grown);
+    expect(outcomes.at(-1)?.outcome).toBe('planned');
+    // Consumed exactly once — a repeat assembly can never loop the ladder.
+    expect(state.takeForceCompaction(SESSION)).toBe(false);
+
+    // The second archived range indexes only what the fold ADDED.
+    const ranges = state.archive.list(SESSION);
+    expect(ranges).toHaveLength(2);
+    expect(ranges[1].startTurn).toBe(ranges[0].endTurn + 1);
+    expect(ranges[1].path).not.toBe(ranges[0].path);
+    const foldedJson = JSON.stringify(prompts.at(-1));
+    expect(foldedJson).toContain(`- turns 1-${ranges[0].endTurn} `);
+    expect(foldedJson).toContain(`- turns ${ranges[1].startTurn}-${ranges[1].endTurn} `);
+    expect(foldedJson).toContain(ranges[1].path);
+
+    // ── Turn 4: folding again with nothing new to fold rebuilds over the SAME
+    // range, so the index is idempotent — no phantom entry, no duplicate line.
+    state.armForceCompaction(SESSION);
+    await driveForced(grown);
+    expect(state.archive.list(SESSION)).toEqual(ranges);
+    expect(JSON.stringify(prompts.at(-1))).toBe(foldedJson);
   });
 });

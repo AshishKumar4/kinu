@@ -1,6 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { createRLMProvider } from '../src/rlm.ts';
-import type { AgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import { createRLMProvider, type RLMModelResolver } from '../src/rlm.ts';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 
@@ -10,30 +9,27 @@ import { MockLanguageModelV3 } from 'ai/test';
 // registry's resolveModel with the right spec, (c) call generateText
 // with the right options, (d) surface errors as `{error}` not thrown.
 
-function stubRegistry(opts: {
+function stubResolver(opts: {
   resolveModel?: (spec: string) => LanguageModel;
   normalizeSpecSync?: (spec: string | null) => string;
-} = {}): AgentProviderRegistry {
+} = {}): RLMModelResolver {
   return {
     resolveModel: opts.resolveModel ?? (() => ({
       specificationVersion: 'v2', provider: 'stub',
     } as unknown as LanguageModel)),
     normalizeSpecSync: opts.normalizeSpecSync ?? ((spec) => spec ?? 'workers-ai/x'),
-    resolveSpec: async (spec) => spec ?? 'workers-ai/x',
-    registry: {} as never,
-    deps: {} as never,
   };
 }
 
 describe('llm provider (Recursive Language Models)', () => {
   test('exposes a single `query` tool', () => {
-    const p = createRLMProvider(stubRegistry(), () => 'workers-ai/x');
+    const p = createRLMProvider(stubResolver(), () => 'workers-ai/x');
     expect(p.name).toBe('llm');
     expect(Object.keys(p.tools)).toEqual(['query']);
   });
 
   test('query rejects empty/non-string input', async () => {
-    const p = createRLMProvider(stubRegistry(), () => 'workers-ai/x');
+    const p = createRLMProvider(stubResolver(), () => 'workers-ai/x');
     const r1 = await p.tools.query.execute('', {}) as { error: string };
     expect(r1.error).toMatch(/non-empty string/);
 
@@ -42,7 +38,7 @@ describe('llm provider (Recursive Language Models)', () => {
   });
 
   test('query rejects an invalid reasoning effort at the tool boundary', async () => {
-    const p = createRLMProvider(stubRegistry(), () => 'workers-ai/x');
+    const p = createRLMProvider(stubResolver(), () => 'workers-ai/x');
     const result = await p.tools.query.execute('hi', { reasoning_effort: 'extreme' }) as { error: string };
     expect(result.error).toContain('must be low, medium, or high');
   });
@@ -50,7 +46,7 @@ describe('llm provider (Recursive Language Models)', () => {
   test('query passes opts.model override through normalizeSpecSync', async () => {
     let resolvedSpec: string | undefined;
     const p = createRLMProvider(
-      stubRegistry({
+      stubResolver({
         resolveModel: () => ({ specificationVersion: 'v2' } as unknown as LanguageModel),
         normalizeSpecSync: (s) => { resolvedSpec = s as string; return s ?? 'd'; },
       }),
@@ -65,7 +61,7 @@ describe('llm provider (Recursive Language Models)', () => {
   test('query falls back to currentSpec() when no model opt', async () => {
     let currentSpecCalled = false;
     const p = createRLMProvider(
-      stubRegistry({}),
+      stubResolver({}),
       () => { currentSpecCalled = true; return 'workers-ai/x'; },
     );
     await p.tools.query.execute('hi', {});
@@ -89,7 +85,7 @@ describe('llm provider (Recursive Language Models)', () => {
       },
     });
     const p = createRLMProvider(
-      stubRegistry({ resolveModel: () => model }),
+      stubResolver({ resolveModel: () => model }),
       () => 'openai/gpt-5.5',
     );
 
@@ -104,7 +100,7 @@ describe('llm provider (Recursive Language Models)', () => {
 
   test('query surfaces model-resolution errors as {error}, not throws', async () => {
     const p = createRLMProvider(
-      stubRegistry({
+      stubResolver({
         resolveModel: () => { throw new Error('boom'); },
       }),
       () => 'workers-ai/x',

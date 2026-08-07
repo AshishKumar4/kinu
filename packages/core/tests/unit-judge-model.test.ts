@@ -6,7 +6,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { modelVendorFamily, selectJudgeModel } from '../src/index.js';
+import { modelVendorFamily, selectEnsembleJudges, selectJudgeModel } from '../src/index.js';
 
 const noCandidates = async () => [];
 
@@ -98,5 +98,63 @@ describe('selectJudgeModel', () => {
     });
     expect(selection.source).toBe('same-family-fallback');
     expect(selection.spec).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+  });
+});
+
+describe('selectEnsembleJudges', () => {
+  test('takes one judge per vendor family, in registry order', async () => {
+    const selection = await selectEnsembleJudges({
+      specs: null,
+      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
+      candidates: async () => [
+        'anthropic/claude-fable-5',
+        'openrouter/anthropic/claude-fable-5', // same vendor by another route
+        'codex/gpt-5.6-sol',
+        'openai/gpt-5.5',
+      ],
+    });
+    expect(selection).toEqual({
+      specs: ['anthropic/claude-fable-5', 'codex/gpt-5.6-sol'],
+      source: 'cross-family',
+    });
+  });
+
+  test('never draws a judge from the family the classifier runs on', async () => {
+    // The chat model IS the classifier's model, so a judge from its family
+    // would inherit the blind spots the panel exists to measure.
+    const selection = await selectEnsembleJudges({
+      specs: null,
+      chatSpec: 'openai/gpt-5.5',
+      candidates: async () => ['codex/gpt-5.6-sol', 'anthropic/claude-fable-5', 'workers-ai/@cf/moonshotai/kimi-k3'],
+    });
+    expect(selection.specs).toEqual(['anthropic/claude-fable-5', 'workers-ai/@cf/moonshotai/kimi-k3']);
+  });
+
+  test('named judges win outright, without an availability query', async () => {
+    let queried = false;
+    const selection = await selectEnsembleJudges({
+      specs: ['anthropic/claude-fable-5', ' codex/gpt-5.6-sol ', '  '],
+      chatSpec: 'openai/gpt-5.5',
+      candidates: async () => { queried = true; return []; },
+    });
+    expect(selection).toEqual({
+      specs: ['anthropic/claude-fable-5', 'codex/gpt-5.6-sol'],
+      source: 'configured',
+    });
+    expect(queried).toBe(false);
+  });
+
+  test('comes back short rather than inventing a second judge', async () => {
+    // No same-family fallback: a panel of one is not a weaker panel, and two
+    // models from one vendor agree for reasons that are not the turn.
+    const selection = await selectEnsembleJudges({
+      specs: null,
+      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
+      candidates: async () => ['openai/gpt-5.5', 'codex/gpt-5.4'],
+    });
+    expect(selection.specs).toEqual(['openai/gpt-5.5']);
+    expect((await selectEnsembleJudges({
+      specs: [], chatSpec: 'openai/gpt-5.5', candidates: noCandidates,
+    })).specs).toEqual([]);
   });
 });

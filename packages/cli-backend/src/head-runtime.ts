@@ -1,5 +1,5 @@
-// createCLIHeadRuntime — the local HeadRuntime backing the `think` tool's heads
-// strategy. The cf backend runs heads as ExplorationAgent Facets; locally each
+// createCLIHeadRuntime — the local HeadRuntime backing the `agents` tool's fork
+// action. The cf backend runs heads as ExplorationAgent Facets; locally each
 // head runs IN-PROCESS over its own ephemeral SqliteFS + virtual shell (an
 // isolated :memory: DB — siblings can't see each other's PRIVATE sandbox),
 // driven by the SAME core head loop (runHeadInference) the Facet uses. Heads are

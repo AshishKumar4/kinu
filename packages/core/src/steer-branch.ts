@@ -7,7 +7,7 @@
  * comparison + pick→outcome-ledger flow takes over unchanged.
  *
  * This module owns the single-head run (over the SAME HeadRuntime seam the
- * think tool's heads strategy uses, journaled like any head run) and the
+ * agents fork uses, journaled like any head run) and the
  * settle step. Both backends drive it: LocalAgentSession.branch() in-process,
  * OrchestratorAgent.branchTurn() over ExplorationAgent Facets.
  */
@@ -20,7 +20,7 @@ import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes.js';
 import { nanoid } from './utils/nanoid.js';
 
 /** A branch is one head answering one redirect — no recursive splits, and a
- *  tighter budget than a full think({strategy:'heads'}) run. */
+ *  tighter budget than a full agents fork run. */
 export const BRANCH_HEAD_BUDGET = {
   maxDepth: 1,
   maxTokens: 16_000,

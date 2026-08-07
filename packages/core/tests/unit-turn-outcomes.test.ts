@@ -246,7 +246,7 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
     expect(rates.get(1)).toEqual({ accepted: 3, negative: 1 }); // abandoned is not decisive
 
     const entry: ScaffoldArchiveEntry = {
-      version: 1, parentVersion: 0, status: 'historical', rationale: 'r', writtenAt: 0,
+      version: 1, parentVersion: 0, status: 'historical', rationale: 'r', pathology: null, writtenAt: 0,
       trials: 2, wins: 1, losses: 1, ties: 0, winRate: 0.5,
     };
     const untouched: ScaffoldArchiveEntry = { ...entry, version: 2 };
@@ -356,7 +356,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     const instance = buildOutcomeEvalSplit(sql, 2).train[0];
     expect(instance.evidence).toContain('Outcome: corrected');
     expect(instance.evidence).toContain(
-      'Turn process: 2 sequential steps, 1 team, 0 think, 0 peers, 1 execute_tools',
+      'Turn process: 2 sequential steps, 1 staffing, 0 fork, 0 messaging, 1 execute_tools',
     );
   });
 

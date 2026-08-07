@@ -18,8 +18,9 @@
  */
 
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
-import { listTurnOutcomes, type TurnOutcomeRow } from './outcomes.js';
+import { isNegativeOutcome, listTurnOutcomes, type TurnOutcomeRow } from './outcomes.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats.js';
@@ -93,8 +94,8 @@ export interface RunReplayEvalOpts {
 function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
   const head =
     `You are scoring a NEW response to a task the agent has answered before.\n\n` +
-    `Task:\n${row.userMessage.slice(0, 1500)}\n\n` +
-    `New response:\n${fresh.slice(0, 3000)}\n\n`;
+    `Task:\n${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.replayTask)}\n\n` +
+    `New response:\n${evidenceWindow(fresh, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n`;
   const tail =
     `\nJSON shape: {"score": <number 0..1>, "note": "<one sentence>"}\n` +
     jsonObjectOnlyInstruction();
@@ -102,14 +103,14 @@ function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
     return head +
       `The ORIGINAL response below was ACCEPTED by the user — it is a known-good reference. ` +
       `Score 1.0 when the new response is clearly at least as good, 0.0 when it is a regression.\n\n` +
-      `Reference (accepted) response:\n${row.assistantResponse.slice(0, 3000)}\n` + tail;
+      `Reference (accepted) response:\n${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}\n` + tail;
   }
   return head +
     `The ORIGINAL response below FAILED — the user followed up with a correction. ` +
     `Score 1.0 when the new response already addresses what the user had to correct, ` +
     `0.0 when it repeats the original failure.\n\n` +
-    `Original (failed) response:\n${row.assistantResponse.slice(0, 2000)}\n\n` +
-    `User's correction:\n${(row.followup ?? '(no follow-up text recorded)').slice(0, 1000)}\n` + tail;
+    `Original (failed) response:\n${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
+    `User's correction:\n${evidenceWindow(row.followup ?? '(no follow-up text recorded)', EVIDENCE_BUDGETS.replayCorrection)}\n` + tail;
 }
 
 async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string }> {
@@ -161,7 +162,7 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     ranAt: opts.now ?? nowMs(),
     sampleSize: results.length,
     acceptedCount: results.filter((r) => r.outcome === 'accepted').length,
-    negativeCount: results.filter((r) => r.outcome === 'corrected' || r.outcome === 'frustrated').length,
+    negativeCount: results.filter((r) => isNegativeOutcome(r.outcome)).length,
     meanScore: interval.mean,
     loss: 1 - interval.mean,
     interval,

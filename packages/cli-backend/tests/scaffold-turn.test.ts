@@ -20,6 +20,7 @@ import type { AgentRuntime, LLM, LLMProviderConfig } from '@proteus/core';
 import {
   initScaffoldTables, createAgentConfigStore, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
+  INITIAL_SCAFFOLD_SOURCE,
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
@@ -54,7 +55,7 @@ function fakeModel(answer: string): LanguageModel {
   } as unknown as LanguageModel;
 }
 
-function setup(defaultAnswer: string) {
+async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
@@ -63,11 +64,18 @@ function setup(defaultAnswer: string) {
   const rt = createCLIRuntime(db as never, {
     dbPath: `/tmp/proteus-scaffold-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
   });
-  // What `proteus create` provisions. The shadow-rollout ledger is
-  // deliberately NOT created here — LocalAgentSession must provision it, the
-  // way the DO does, or no trial can ever be recorded.
+  // What `proteus create` provisions (identity/create.ts): the scaffold
+  // tables, agent_config, and the v0 scaffold file + archive row — so the
+  // session's cold-start heal is a deterministic no-op here. The
+  // shadow-rollout ledger is deliberately NOT created — LocalAgentSession
+  // must provision it, the way the DO does, or no trial can ever be recorded.
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
+  if (opts.provisionScaffold !== false) {
+    await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
+    rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
+      VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
+  }
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
     rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => events.push(e), noAutoEvolve: true,
@@ -83,7 +91,7 @@ async function installScaffold(
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${opts.version}`, opts.code);
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
   rt.storage.sql`
-    INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
 }
 
@@ -94,7 +102,7 @@ describe('a promoted scaffold drives a local turn', () => {
   // Fails before the fix: processTurn drove runChat directly, so this streamed
   // "the default loop answered" no matter what the scaffold said.
   test('the scaffold answers, not the default loop', async () => {
-    const { db, rt, session, events } = setup('the default loop answered');
+    const { db, rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function* run(rt, task) {
@@ -113,7 +121,7 @@ describe('a promoted scaffold drives a local turn', () => {
   });
 
   test('a delegating scaffold still runs the default loop, faithfully', async () => {
-    const { rt, session, events } = setup('the default loop answered');
+    const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function run({ task }) { await host.defaultInference(); }`,
@@ -125,7 +133,7 @@ describe('a promoted scaffold drives a local turn', () => {
   });
 
   test('an un-evolved agent (bootstrap v0) is untouched by the seam', async () => {
-    const { rt, session, events } = setup('the default loop answered');
+    const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
       version: 0, status: 'current',
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v0 must not run' }; }`,
@@ -137,7 +145,7 @@ describe('a promoted scaffold drives a local turn', () => {
   });
 
   test('a scaffold can reach the agent tool surface through host.callTool', async () => {
-    const { rt, session, events } = setup('unused');
+    const { rt, session, events } = await setup('unused');
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function run({ task }) {
@@ -181,7 +189,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
   // pending stayed pending forever and maybeEvolveScaffold's
   // "skip while a pending exists" guard blocked every future proposal.
   test('sampled shadow eval promotes a winning pending, unblocking the next proposal', async () => {
-    const { rt, session, events } = setup('the default loop answered');
+    const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
@@ -214,7 +222,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
   }, 30_000);
 
   test('a losing pending is rolled back, which also clears the block', async () => {
-    const { rt, session } = setup('the default loop answered');
+    const { rt, session } = await setup('the default loop answered');
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
@@ -238,8 +246,26 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(listScaffoldArchive(rt.storage.sql, 10).find((e) => e.version === 2)?.status).toBe('rolled_back');
   }, 30_000);
 
+  test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
+    // A workspace created before scaffold bootstrap landed has no
+    // scaffold/agent.js — engine.maybeEvolveScaffold returns early when it is
+    // absent, silently disabling the whole scaffold-evolution loop. The DO
+    // heals in onStart; the local session must heal identically.
+    const { rt, session } = await setup('unused', { provisionScaffold: false });
+    expect(await rt.identity.scaffold.exists()).toBe(false);
+
+    // end() joins the tracked bootstrap (orch.settleEvolution).
+    await session.end();
+
+    expect(await rt.identity.scaffold.exists()).toBe(true);
+    expect((await rt.identity.scaffold.read()).length).toBeGreaterThan(0);
+    // The v0 archive row exists, and the agent is still un-evolved: the live
+    // version is 0, so the turn seam stays a pass-through.
+    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(0);
+  });
+
   test('applyScaffoldDecision resolves a pending by hand', async () => {
-    const { rt, session } = setup('unused');
+    const { rt, session } = await setup('unused');
     await installScaffold(rt, {
       version: 1, status: 'current', code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v1' }; }`,
     });

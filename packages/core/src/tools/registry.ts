@@ -13,13 +13,12 @@ export const BUILTIN_TOOLS = [
   'execute_tools',
   'run',
   'skills',
-  'think',
+  'agents',
   'memory',
   'fact',
+  'experience',
   'web_search',
   'web_fetch',
-  'team',
-  'peers',
   'report',
   'product_change',
 ] as const;
@@ -39,6 +38,47 @@ export interface BuiltinToolSpec {
   whenNotToUse: string;
   result: string;
 }
+
+// ── Delegation doctrine (single source) ─────────────────────────────────────
+// The `agents` tool is ONE ladder keyed on LIFETIME: fork = an ephemeral fork
+// that merges back this turn, staff = a persistent subordinate that outlives
+// it, ask/send = talking to what already exists. Both the tool docstring and
+// the system prompt's Delegation section render these rungs verbatim, so
+// editing them here is the only place delegation doctrine changes. mcts is a
+// settle policy inside the fork rung — reachable and fully functional, never
+// a third rung.
+
+/** Every action the `agents` tool can expose. Which ones a given actor
+ *  actually gets is decided by the deps its backend wires — see
+ *  agentsActionsFor in tools/agents-tool.ts. */
+export const AGENTS_TOOL_ACTIONS = [
+  'fork', 'staff', 'ask', 'send', 'reply', 'list', 'dismiss',
+] as const;
+
+export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
+
+/** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
+export const DELEGATION_FRAME =
+  'One delegation ladder keyed on how long the helper needs to live.';
+
+/** The two spawn rungs of the delegation ladder, rendered verbatim in both
+ *  the `agents` docstring and the prompt's Delegation section. */
+export const DELEGATION_RUNGS = {
+  fork:
+    'Fork (action=fork) whenever work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
+    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web_search/web_fetch/exec), then merging back and disappearing; takes minutes, may auto-background. ' +
+    'Leave settle unset to merge the forks back into this turn; set settle=mcts only to change how they are settled — scored against each other by execution instead of merged, for competing approaches where the right path is genuinely unclear. mcts branches score TEXT/code and do NOT run your tool loop, but proposed code is executed when scored.',
+  staff:
+    'Staff a subordinate (action=staff) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
+    'A subordinate keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
+    'A finished subordinate reports and STAYS, resumable with its context intact — dismiss only a subordinate whose role is permanently over.',
+} as const;
+
+/** How ask/send/reply address existing agents — the converse half of the
+ *  `agents` docstring. */
+export const DELEGATION_CONVERSE =
+  'ask/send message any agent by name — a subordinate in this workspace or one of the owner\'s other workspace agents (ask expects the answer back, send is fire-and-forget); ' +
+  'reply answers an incoming agent message event by its event_id; staff scope=workspace creates a specialist workspace of its own.';
 
 /**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
@@ -78,26 +118,20 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse: 'Do not load broad skills speculatively; they consume context and can over-constrain unrelated work.',
     result: 'Returns skill metadata, skill content, or mutation status.',
   },
-  // The think + team specs below are the SINGLE SOURCE of delegation doctrine —
-  // both tool docstrings, the UI, AND the system prompt's Delegation section
-  // render `whenToUse` from here (think's docstring appends only the live
-  // advertised-strategy ids; the prompt prefixes the ladder frame).
-  //
-  // They are ONE ladder keyed on LIFETIME, not two surfaces on different axes:
-  // think = an ephemeral fork that merges back this turn, team = a persistent
-  // subordinate that outlives it. Keep them phrased as two rungs of the same
-  // decision. mcts is a scoring policy inside the fork rung — reachable and
-  // fully functional, never a third rung.
-  think: {
-    name: 'think',
-    summary: 'Fork yourself into 2–6 parallel copies that share this workspace, run their own tool loops, and merge their findings back into this turn.',
+  // The agents spec is the SINGLE SOURCE of delegation doctrine: it composes
+  // the DELEGATION_RUNGS + DELEGATION_CONVERSE constants above, which the
+  // system prompt's Delegation section also renders verbatim (the tool
+  // docstring appends only the live action list per backend).
+  agents: {
+    name: 'agents',
+    summary:
+      "Spawn and talk to helper agents: ephemeral forks of yourself, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      'Fork whenever work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
-      'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web_search/web_fetch/exec), then merging back and disappearing; takes minutes, may auto-background. ' +
-      'Forks are the short-lived rung of one delegation ladder: fork when the work merges back this turn, staff a team subordinate when it must outlive the turn. ' +
-      'Leave strategy unset to fork; set strategy=mcts only to change how branches are settled — scored against each other by execution instead of merged, for competing approaches where the right path is genuinely unclear. mcts branches score TEXT/code and do NOT run your tool loop, but proposed code is executed when scored.',
-    whenNotToUse: 'Do not fork linear work you can simply do directly, or branches that would race on the same mutable resource.',
-    result: 'Returns the merged answer with per-fork outputs, scores, and the selected work.',
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.fork} ${DELEGATION_RUNGS.staff} ${DELEGATION_CONVERSE}`,
+    whenNotToUse:
+      'Do not delegate a single short coherent change you can simply do directly, or forks that would race on the same mutable resource. Caution: every subordinate or peer message wakes that agent for a full turn, so send purposeful work.',
+    result:
+      'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/ask/send/dismiss return roster or delivery state — subordinate reports and peer replies arrive as events that wake you.',
   },
   memory: {
     name: 'memory',
@@ -115,6 +149,18 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse: 'Do not use for long prose notes; use memory for those.',
     result: 'Returns fact mutation status or recalled fact values.',
   },
+  experience: {
+    name: 'experience',
+    summary:
+      "Share and reuse proven experience — crafted tools, corroborated lessons, and confident facts — across the owner's workspaces.",
+    whenToUse:
+      'Search it before grinding out something another of the owner\'s workspaces has already solved, and import what fits — an import comes back inline, ready to use in this same turn. '
+      + 'Publish back what THIS workspace has proven, so the owner\'s other agents inherit it.',
+    whenNotToUse:
+      'Do not publish unproven work — a craft with no real uses, a provisional lesson, or a low-confidence fact is refused. Do not import speculatively: an import that does not survive this turn\'s outcome is discarded.',
+    result:
+      'search returns hits with their source workspace and the evidence that earned them; import returns the payload inline, staged provisional until this turn is accepted; publish returns what was shared, or what qualifies.',
+  },
   web_search: {
     name: 'web_search',
     summary: 'Search the live web and return ranked results (title, url, snippet, date).',
@@ -128,25 +174,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     summary: 'Fetch one URL and return its content as clean, citation-ready markdown.',
     whenToUse: 'Use to read a specific page (a web_search hit, a doc, an article) after you have its URL.',
     whenNotToUse: 'Do not use to discover pages — that is web_search. Do not fetch private/internal addresses; they are blocked.',
-    result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head you can re-read.',
-  },
-  team: {
-    name: 'team',
-    summary: "Staff this workspace with persistent subordinate agents that keep their own context across turns and stay in your roster.",
-    whenToUse:
-      'Staff subordinates whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
-      'Subordinates are the long-lived rung of one delegation ladder: same decision as a think fork, kept alive across turns instead of merged back. ' +
-      'Create each with a role and mission (action=spawn), hand it further tasks (action=assign), steer it (action=message), check progress (action=status), and retire it when done (action=dismiss).',
-    whenNotToUse: 'Do not use for a single short coherent change, for breadth-first work that merges back this turn — fork with think instead — or for agents in the owner\'s OTHER workspaces, which is the peers tool. Caution: every subordinate turn is a full agent turn.',
-    result: 'Returns the subordinate roster, spawn/assign/message/dismiss confirmations, or a status snapshot. Subordinates report progress back as events that wake you.',
-  },
-  peers: {
-    name: 'peers',
-    summary: "Collaborate or hand work off across the owner's other workspaces and specialist agents.",
-    whenToUse:
-      'Use for cross-workspace collaboration or handoff — delegate to a better-suited peer agent, consult one and await its answer (action=ask), hand off work without waiting (action=send), create a specialist workspace (action=spawn_workspace), or answer a peer message event (action=reply with its event_id).',
-    whenNotToUse: 'Do not use for a single short coherent change or for helpers inside THIS workspace — fork with think or staff a subordinate with team instead. Caution: every peer message wakes that agent for a full agent turn, so send purposeful handoffs.',
-    result: "Returns the peer roster, delivery status, the peer's reply, or a timeout notice — a late reply still arrives as an event that wakes you.",
+    result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file, or slice it and llm.query each slice inside execute_tools.',
   },
   report: {
     name: 'report',

@@ -44,12 +44,16 @@ import { updateCraftScores } from '../craft/ema.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
-  initTurnOutcomeTables, isTrivialTurn, classifyTurnOutcome,
+  initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
+  listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   recordLesson, corroborateLessonsForTurn, type LessonRow,
 } from './outcomes.js';
+import {
+  bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
+} from '../experience/imports.js';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay.js';
 import {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
@@ -57,6 +61,12 @@ import {
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 import { buildChangelog } from './changelog.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
+import { renderScaffoldHandbook } from './scaffold-handbook.js';
+import {
+  clusterPathologies, labelPathologyClusters, renderPathologyBlock,
+  describePathology, parsePathologyTag, PATHOLOGY_TAG_EXAMPLE,
+  type PathologyCluster,
+} from './pathology.js';
 
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
@@ -70,7 +80,7 @@ import { modifyScaffold } from '../scaffold/modify.js';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
 import {
-  listScaffoldArchive, selectEvolutionBase,
+  listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive.js';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
@@ -85,6 +95,10 @@ export interface ProposalArchiveContext {
   /** Real user-outcome record per version (accepted/negative counts) — shown
    *  alongside the shadow record when present. */
   realRates?: ReadonlyMap<number, { accepted: number; negative: number }>;
+  /** Why each refused version was refused (scaffold/archive.ts
+   *  listRejectedProposals) — Weng's negative-result preservation, so a
+   *  proposal can see what has already failed to work and why. */
+  rejections?: ReadonlyMap<number, string>;
 }
 
 function renderArchiveBlock(archive: ProposalArchiveContext): string {
@@ -95,7 +109,10 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
     const realNote = real && real.accepted + real.negative > 0
       ? `, real ${real.accepted}✓/${real.negative}✗`
       : '';
-    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}] — ${e.rationale.slice(0, 80)}`;
+    const targeted = e.pathology !== null ? `, for ${e.pathology}` : '';
+    const rejection = archive.rejections?.get(e.version);
+    const why = rejection ? `\n    refused: ${rejection}` : '';
+    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}] — ${e.rationale.slice(0, 80)}${why}`;
   });
   const baseNote = archive.base.mode === 'explore'
     ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current) — its code is shown above.`
@@ -115,16 +132,28 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
  * tests can assert a proposal written against these instructions survives
  * the executor's smoke path. When archive context is given, the prompt shows
  * the variant archive so proposals can cite stepping stones (DGM-style).
+ *
+ * The handbook (evolution/scaffold-handbook.ts) is prepended beside the host
+ * d.ts: the Harness Handbook result is that an agent editing its own harness
+ * plans better and cheaper from a behaviour→site map than from raw source.
+ *
+ * When mined pathologies are supplied, the prompt shows them and requires the
+ * proposal to name the one it targets — Self-Harness's mine-weaknesses step,
+ * typed. With none mined there is nothing to name, so the requirement is
+ * absent rather than answered with a guess.
  */
 export function buildScaffoldProposalPrompt(
   baseScaffold: string,
   reflection: string,
   archive?: ProposalArchiveContext,
+  pathologies: ReadonlyArray<PathologyCluster> = [],
 ): string {
   return (
+    `${renderScaffoldHandbook(baseScaffold)}\n` +
     `Current agent scaffold (your agentic loop — it runs inside a sandboxed worker):\n` +
     `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
     (archive ? renderArchiveBlock(archive) : '') +
+    (pathologies.length > 0 ? renderPathologyBlock(pathologies) : '') +
     `Based on these session patterns:\n${reflection.slice(0, 500)}\n\n` +
     `Propose an improved scaffold. The scaffold MUST:\n` +
     `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
@@ -138,8 +167,14 @@ export function buildScaffoldProposalPrompt(
     `(fetch/WebSocket — use host.callTool for I/O), the scaffold version files/tables, ` +
     `promotion/rollout config keys, or shell-approval/consent settings — any of these is a hard ` +
     `misevolution veto.\n` +
-    `5. Be a self-contained agentic loop.\n\n` +
-    `Return ONLY the JavaScript code, no explanation.`
+    `5. Be a self-contained agentic loop.\n` +
+    (pathologies.length > 0
+      ? `6. Name the failure pathology it targets, as a tag line in the code: ` +
+        `\`${PATHOLOGY_TAG_EXAMPLE}\`, using one of the ids listed above. The archive is ` +
+        `read by pathology — a version that names none cannot be compared with the ones ` +
+        `that do, and cannot show whether that failure ever went away.\n`
+      : '') +
+    `\nReturn ONLY the JavaScript code, no explanation.`
   );
 }
 
@@ -291,15 +326,20 @@ export class EvolutionEngine {
     }
 
     // A real negative outcome corroborates any provisional lessons waiting on
-    // this turn (e.g. an earlier error reflection or a session reflection).
-    if (outcome === 'corrected' || outcome === 'frustrated') {
+    // this turn (e.g. an earlier error reflection or a session reflection),
+    // and is the same signal that warrants a reflection below.
+    const corroborated = isNegativeOutcome(outcome);
+    if (corroborated) {
       await this.corroborateLessons(turn.turnId);
     }
+
+    // Imported experience rides this turn's verdict: accepted adopts it into
+    // this workspace's own stores, anything else discards it.
+    await this.settleImports(turn.turnId, outcome);
 
     // Reflection is warranted by real negative signal — or by an error on a
     // turn nobody graded, which stays provisional until an outcome
     // corroborates it.
-    const corroborated = outcome === 'corrected' || outcome === 'frustrated';
     if (corroborated || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
       const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
       recordLesson(this.rt.storage.sql, {
@@ -403,6 +443,43 @@ export class EvolutionEngine {
       await this.rt.memory.append('memory/MEMORY.md', `\n${header}\n${lesson.text}\n`);
     }
     if (upgraded.length > 0) await this.rt.memory.index('memory/MEMORY.md');
+  }
+
+  /**
+   * Settle the experience this workspace imported from the owner's other
+   * workspaces against the verdict of a turn it has just graded.
+   *
+   * Imports are staged, never adopted, so this is the only path by which
+   * another workspace's craft, lesson or fact becomes part of THIS one — and it
+   * runs on the same real-outcome signal that corroborates a lesson. An
+   * ungraded turn settles nothing: the imports keep waiting for a turn that
+   * carries a verdict.
+   */
+  private async settleImports(turnId: string | undefined, outcome: TurnOutcome | null): Promise<void> {
+    if (!turnId || outcome === null || outcome === 'abandoned') return;
+    try {
+      bindPendingImports(this.rt.storage.sql, turnId);
+      const settled = await settleImportsForTurn(
+        this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
+      );
+      if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
+      const describe = (rows: ImportedExperienceRow[]) =>
+        rows.map((r) => `${r.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
+      this.emit({
+        type: 'experience_import',
+        message: settled.corroborated.length > 0
+          ? `Adopted imported experience after an accepted turn: ${describe(settled.corroborated)}`
+          : `Discarded imported experience after a ${outcome} turn: ${describe(settled.discarded)}`,
+        data: {
+          outcome,
+          corroborated: settled.corroborated.map((r) => r.libraryId),
+          discarded: settled.discarded.map((r) => r.libraryId),
+        },
+      });
+    } catch {
+      // The imports ledger may not exist in minimal runtimes — settling is not
+      // allowed to fail the turn review that produced the verdict.
+    }
   }
 
   // ── Timescale 2: Session-level (end of conversation or every N turns) ──
@@ -546,11 +623,23 @@ export class EvolutionEngine {
         ? (base.mode === 'current' ? currentScaffold : await readScaffoldVersion(this.rt, base.version))
         : null;
 
+      // What keeps going wrong, as named cells the proposal can target. The
+      // cells are deterministic (evolution/pathology.ts); the model only gets
+      // to phrase their titles, and only after they exist.
+      const pathologies = await labelPathologyClusters(this.rt.llm, clusterPathologies(
+        listTurnOutcomes(this.rt.storage.sql, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
+      ));
+      const rejections = new Map(
+        listRejectedProposals(this.rt.storage.sql, 12)
+          .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
+      );
+
       const proposed = await this.rt.llm.complete(
         buildScaffoldProposalPrompt(
           baseCode ?? currentScaffold,
           reflection,
-          base && baseCode ? { base, entries: archive, realRates } : undefined,
+          base && baseCode ? { base, entries: archive, realRates, rejections } : undefined,
+          pathologies,
         ),
       );
 
@@ -569,7 +658,14 @@ export class EvolutionEngine {
         base && baseCode ? { baseVersion: base.version } : undefined,
       );
       if (result.ok) {
-        this.emit({ type: 'scaffold_proposed', message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` });
+        // The same parse modifyScaffold stamped the row with, over the same
+        // code — the event and the row cannot disagree about what was targeted.
+        const targeted = parsePathologyTag(code);
+        this.emit({
+          type: 'scaffold_proposed',
+          message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
+            (targeted ? ` — targets ${describePathology(targeted)}` : ''),
+        });
       }
     } catch {
       // Scaffold mutation failed validation — that's fine, skip silently
@@ -703,7 +799,7 @@ export class EvolutionEngine {
       `Response: "${summary}"\n` +
       `${toolSummary}\n` +
       `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
-      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero team/think a lesson to decompose and staff subordinates or fan out heads; credit effective team/think on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
+      `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and staff subordinates or fork; credit effective staffing/forking on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
       `${turn.hadError ? 'An error occurred.\n' : ''}` +
       `${followup ? `The user then replied: "${followup.slice(0, 300)}"\n` : ''}\n` +
       `In one sentence, what specifically should be done differently next time?`,

@@ -165,15 +165,29 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
   };
 }
 
+/** The unified `agents` tool folds the old think/team/peers surfaces into one
+ *  name; the delegation evidence still separates fork / staffing / messaging
+ *  by ACTION — and keeps counting the legacy tool names so stored turns from
+ *  before the unification report the same signal. */
+function agentsAction(call: ToolCallRecord): string | null {
+  if (call.name !== 'agents') return null;
+  const action = (call.args as { action?: unknown }).action;
+  return typeof action === 'string' ? action : null;
+}
+
+const STAFFING_ACTIONS = new Set(['staff', 'list', 'dismiss']);
+const MESSAGING_ACTIONS = new Set(['ask', 'send', 'reply']);
+
 /** Deterministic process evidence derived from an existing completed turn. */
 export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures {
-  const count = (name: string): number => turn.toolCalls.filter((call) => call.name === name).length;
+  const count = (predicate: (call: ToolCallRecord) => boolean): number =>
+    turn.toolCalls.filter(predicate).length;
   return {
     stepCount: turn.steps,
-    teamCalls: count('team'),
-    thinkCalls: count('think'),
-    peerCalls: count('peers'),
-    executeToolsCalls: count('execute_tools'),
+    teamCalls: count((call) => call.name === 'team' || STAFFING_ACTIONS.has(agentsAction(call) ?? '')),
+    thinkCalls: count((call) => call.name === 'think' || agentsAction(call) === 'fork'),
+    peerCalls: count((call) => call.name === 'peers' || MESSAGING_ACTIONS.has(agentsAction(call) ?? '')),
+    executeToolsCalls: count((call) => call.name === 'execute_tools'),
     wallClockMs: turn.durationMs,
     ...executionPathSignals(turn.toolCalls),
   };
@@ -192,8 +206,8 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
     features.redundantCalls > 0 ? `${features.redundantCalls} redundant` : null,
     features.backtrackCalls > 0 ? `${features.backtrackCalls} backtracking` : null,
   ].filter((part): part is string => part !== null);
-  return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} team, ` +
-    `${features.thinkCalls} think, ${features.peerCalls} peers, ` +
+  return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} staffing, ` +
+    `${features.thinkCalls} fork, ${features.peerCalls} messaging, ` +
     `${features.executeToolsCalls} execute_tools, ${compactDuration(features.wallClockMs)} wall clock` +
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');
 }

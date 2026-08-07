@@ -12,13 +12,15 @@
  * — inside the agent's own file plane, so the reference message's citation is
  * directly readable back through the agent's normal file tools
  * (workspace.readFile / the shell). That read-back IS the lossless-recall
- * guarantee.
+ * guarantee; the archive index kept alongside the plan snapshot is what makes
+ * it navigable (manifest.ts).
  */
 
-import type { RawSqlExec, SqlExecutor, VFS } from '@proteus/core';
+import { SPILL_DIRS, type RawSqlExec, type SqlExecutor, type VFS } from '@proteus/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
+import type { ArchiveIndexStore, ArchiveRange } from './manifest.js';
 
-const COMPACTION_DIR = '/local/.proteus/compaction';
+const COMPACTION_DIR = SPILL_DIRS.compaction;
 
 /** Path components come from session keys (agent names, `affinity:sessionId`
  *  pairs) and hex range hashes — collapse anything path-hostile. */
@@ -68,6 +70,19 @@ export function initCompactionStateTable(execRaw: RawSqlExec): void {
   try {
     execRaw(`ALTER TABLE compaction_state ADD COLUMN force_compaction INTEGER`);
   } catch { /* column already exists */ }
+  execRaw(`
+    CREATE TABLE IF NOT EXISTS compaction_archive (
+      session_key     TEXT NOT NULL,
+      range_hash      TEXT NOT NULL,
+      path            TEXT NOT NULL,
+      start_turn      INTEGER NOT NULL,
+      end_turn        INTEGER NOT NULL,
+      user_turns      INTEGER NOT NULL,
+      assistant_turns INTEGER NOT NULL,
+      first_user_ask  TEXT NOT NULL,
+      PRIMARY KEY (session_key, range_hash)
+    )
+  `);
 }
 
 /**
@@ -85,6 +100,8 @@ export function initCompactionStateTable(execRaw: RawSqlExec): void {
  */
 export interface CompactionStateStore {
   plans: PlanStore;
+  /** The archived-range index behind the checkpoint's navigation manifest. */
+  archive: ArchiveIndexStore;
   /** Provider-reported prompt tokens of the session's last completed turn,
    *  or null when no turn has reported yet — or when `historyLength` is
    *  shorter than the length the measurement was taken against. */
@@ -96,6 +113,28 @@ export interface CompactionStateStore {
   /** Consume the force-compaction flag — true at most once per arm, so a
    *  forced rebuild can never loop. */
   takeForceCompaction(sessionKey: string): boolean;
+}
+
+interface ArchiveRangeRow {
+  range_hash: string;
+  path: string;
+  start_turn: number;
+  end_turn: number;
+  user_turns: number;
+  assistant_turns: number;
+  first_user_ask: string;
+}
+
+function toArchiveRange(row: ArchiveRangeRow): ArchiveRange {
+  return {
+    rangeHash: row.range_hash,
+    path: row.path,
+    startTurn: row.start_turn,
+    endTurn: row.end_turn,
+    userTurns: row.user_turns,
+    assistantTurns: row.assistant_turns,
+    firstUserAsk: row.first_user_ask,
+  };
 }
 
 export function createCompactionStateStore(sql: SqlExecutor): CompactionStateStore {
@@ -116,6 +155,24 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
         const json = snapshot === null ? null : JSON.stringify(snapshot);
         sql`INSERT INTO compaction_state (session_key, plan_json) VALUES (${sessionKey}, ${json})
             ON CONFLICT(session_key) DO UPDATE SET plan_json = excluded.plan_json`;
+      },
+    },
+    archive: {
+      list: (sessionKey) => sql<ArchiveRangeRow>`
+        SELECT range_hash, path, start_turn, end_turn, user_turns, assistant_turns, first_user_ask
+        FROM compaction_archive WHERE session_key = ${sessionKey} ORDER BY start_turn ASC`
+        .map(toArchiveRange),
+      append: (sessionKey, range) => {
+        sql`INSERT INTO compaction_archive
+              (session_key, range_hash, path, start_turn, end_turn,
+               user_turns, assistant_turns, first_user_ask)
+            VALUES (${sessionKey}, ${range.rangeHash}, ${range.path}, ${range.startTurn},
+                    ${range.endTurn}, ${range.userTurns}, ${range.assistantTurns},
+                    ${range.firstUserAsk})
+            ON CONFLICT(session_key, range_hash) DO NOTHING`;
+      },
+      clear: (sessionKey) => {
+        sql`DELETE FROM compaction_archive WHERE session_key = ${sessionKey}`;
       },
     },
     loadPromptTokens(sessionKey, historyLength) {

@@ -8,6 +8,7 @@
 // (activity log, durable run-event recorder) inject as optional sinks.
 
 import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
+import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
 
 /** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
  *  StepResult, minus the fields we don't use). */
@@ -54,6 +55,10 @@ export class TurnAccumulator {
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
+  /** The turn's bulk-ingestion budget + trip counters. Handed to the toolset
+   *  so the clamp tightens as the turn gets heavy, and read at turn end for
+   *  the durable `context_budget` row. Reset with the rest of the turn. */
+  readonly context = new TurnContextBudget();
 
   constructor(private readonly sinks: TurnSinks = {}) {}
 
@@ -66,6 +71,7 @@ export class TurnAccumulator {
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
+    this.context.reset();
   }
 
   /** What the turn spent, or undefined when no step reported usage — so a
@@ -89,6 +95,10 @@ export class TurnAccumulator {
       ? { error: c.error instanceof Error ? c.error.message : String(c.error) }
       : c.output;
     if (c.success === false) this.hadError = true;
+    // A call that names a spill address is the drop-content-keep-the-path
+    // recipe being followed — the counter that says the references are read,
+    // not just emitted.
+    if (citesSpillAddress(c.input)) this.context.noteFollowUp();
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
     this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
     this.toolCalls.push({ name: c.toolName, args: (c.input ?? {}) as Record<string, unknown>, result: recorded });

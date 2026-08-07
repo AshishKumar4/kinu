@@ -15,9 +15,8 @@
 
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import type { SqlExecutor } from "@proteus/core";
-import { createWebCodemodeProvider, type WebSearchProvider } from "@proteus/core";
+import { createWebCodemodeProvider, createRLMProvider, type WebSearchProvider, type CodemodeProvider } from "@proteus/core";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
-import { createRLMProvider, type CodemodeProvider } from "./rlm.js";
 import type { AgentProviderRegistry } from "./providers/agent-registry.js";
 import type { CFRuntime } from "./runtime.js";
 

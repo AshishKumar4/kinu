@@ -5,8 +5,8 @@
  * selection). Always-on (no extra deps): execute_tools, run, memory.
  * Conditional (needs a specific dep in BuiltinToolDeps):
  *   - skills           ← skills (SkillsToolDeps — vfs + invoke tracker)
- *   - think            ← thinkTool (StrategyRegistry; subsumes the old bare
- *                        `explore` + `split_heads` tools via strategy ids)
+ *   - agents           ← agents (fork substrate and/or team + peers deps;
+ *                        the ONE delegation tool, actions gated per group)
  *   - fact             ← facts (FactsStore; remember/recall/forget actions)
  *   - product_change   ← productChanges (source bindings + approvals store)
  *
@@ -72,14 +72,14 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-// skills, think, fact, and product_change are conditional on their deps. Base = everything
+// skills, agents, fact, and product_change are conditional on their deps. Base = everything
 // else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'think', 'fact', 'web_search', 'web_fetch', 'team', 'peers', 'report', 'product_change'] as const;
+const CONDITIONAL_TOOLS = ['skills', 'agents', 'fact', 'experience', 'web_search', 'web_fetch', 'report', 'product_change'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
 
-describe('Agent tools (canonical surface — skills/think/fact conditional)', () => {
+describe('Agent tools (canonical surface — skills/agents/fact conditional)', () => {
   test('without conditional deps: base tools only', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
@@ -92,14 +92,6 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
 
   test('with all conditional deps: full canonical surface present', () => {
     const { rt } = createTestRuntime();
-    const stubThink = tool({
-      description: 'stub think',
-      inputSchema: jsonSchema<{ strategy: string; task: string }>({
-        type: 'object', properties: { strategy: { type: 'string' }, task: { type: 'string' } },
-        required: ['strategy', 'task'],
-      }),
-      execute: async () => 'stub',
-    });
     const stubFacts = {
       upsert: () => {}, recall: () => null, forget: () => {},
       recentTopK: () => [], all: () => [],
@@ -186,19 +178,27 @@ describe('Agent tools (canonical surface — skills/think/fact conditional)', ()
     const stubReport = {
       report: async () => ({ delivered: true }),
     };
+    const stubExperience = {
+      rt,
+      facts: stubFacts,
+      library: {
+        publish: async () => { throw new Error('stub'); },
+        search: async () => [],
+        get: async () => null,
+      },
+    };
     const t = buildBuiltinTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
       createExecuteTool: nodeExecFactory as never,
       codemodeLoader: { __test: true } as unknown,
-      thinkTool: stubThink,
       facts: stubFacts,
       skills: stubSkillsDeps,
       productChanges: stubProductChanges,
       webSearch: stubWebSearch,
-      team: stubTeam,
-      peers: stubPeers,
+      agents: { team: stubTeam, peers: stubPeers },
       report: stubReport,
+      experience: stubExperience,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);

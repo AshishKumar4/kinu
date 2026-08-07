@@ -2,14 +2,17 @@
 // peer_outbox over in-memory SQLite) wired back-to-back through PeerHub, the
 // same seams the orchestrator wires to DO RPC. Covers the peers-tool paths:
 // fire-and-forget, send-and-await round-trip, trust-grant enforcement,
-// timeout + late reply, crash redelivery dedupe, per-receiver ordering, and
-// the spawn-a-specialist round-trip (fresh peer joins the network mid-flight).
+// timeout + late reply, crash redelivery dedupe, per-receiver ordering, the
+// spawn-a-specialist round-trip (fresh peer joins the network mid-flight), and
+// the reference-plus-digest spill for bodies past the brief budget.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch, nextAlarmTime,
+  eventContentPath, renderForLLM,
   type ReplyDispatcher, type ReplyChannelKind, type PeerAgentPayload,
 } from '@proteus/core';
+import { createMemoryVfs } from '@proteus/test-utils';
 import { PeerHub, type PeerMessage, type ReceiveResult } from '../src/events/ingress/peer.js';
 
 interface SqlExec {
@@ -38,6 +41,8 @@ interface TestAgent {
   log: EventLog;
   replyChannels: ReplyChannelStore;
   hub: PeerHub;
+  /** The agent's own file plane — oversize peer bodies spill here. */
+  files: Map<string, string>;
   /** onAdmitted() fires — the drain→programmatic-turn wake. */
   wakes: number;
   /** scheduleDispatch timestamps — the DO alarm arms. */
@@ -57,13 +62,15 @@ function makeNetwork() {
     const log = new EventLog(sql);
     const dispatchers: Partial<Record<ReplyChannelKind, ReplyDispatcher>> = {};
     const replyChannels = new ReplyChannelStore(sql, dispatchers);
+    const { vfs, files } = createMemoryVfs();
     const agent: TestAgent = {
-      name, userId, sql, log, replyChannels,
+      name, userId, sql, log, replyChannels, files,
       hub: null as unknown as PeerHub,
       wakes: 0, retries: [], grants: new Set(), online: true,
     };
     agent.hub = new PeerHub({
       sql, log, replyChannels,
+      vfs: () => vfs,
       selfAgentName: () => name,
       selfUserId: () => userId,
       deliver: async (receiverName: string, msg: PeerMessage): Promise<ReceiveResult> => {
@@ -372,5 +379,56 @@ describe('spawn a specialist (fresh peer joins mid-flight)', () => {
     expect(await askPromise).toEqual({
       status: 'replied', from: 'paper-summarizer', reply: 'Summaries: …',
     });
+  });
+});
+
+describe('oversize peer bodies stay reachable', () => {
+  const userA = 'a'.repeat(32);
+  const userB = 'b'.repeat(32);
+
+  test('a body past the brief budget spills to the receiver file plane and the brief cites it', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+
+    const message = 'upstream diff hunk; '.repeat(400);
+    await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'handoff', message });
+
+    const events = pendingPeerEvents(bob);
+    const payload = events[0].payload as PeerAgentPayload;
+    const path = payload.body_path;
+    expect(path).toBe(eventContentPath(JSON.stringify(message)));
+
+    // The reference resolves, losslessly, on the receiver's own file plane.
+    expect(bob.files.get(path!)).toBe(JSON.stringify(message));
+    // …and the drained turn is told where to look.
+    expect(renderForLLM(events[0]).brief).toEndWith(` — full message: ${path}`);
+    expect(buildDrainBatch(events)!.text).toContain(path!);
+  });
+
+  test('a body within the brief budget writes nothing and renders exactly as before', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+
+    await alice.hub.send({ agent: 'bob', userId: bob.userId, topic: 'status', message: 'shipping today' });
+
+    const events = pendingPeerEvents(bob);
+    expect((events[0].payload as PeerAgentPayload).body_path).toBeUndefined();
+    expect(bob.files.size).toBe(0);
+    expect(renderForLLM(events[0]).brief).toBe('status: "shipping today"');
+  });
+
+  test('a refused cross-owner message spills nothing — no unadmitted writes', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', userA);
+    const mallory = addAgent('mallory', userB);
+
+    await mallory.hub.send({
+      agent: 'alice', userId: userA, topic: 'probe', message: 'let me in; '.repeat(200),
+    });
+
+    expect(pendingPeerEvents(alice)).toHaveLength(0);
+    expect(alice.files.size).toBe(0);
   });
 });

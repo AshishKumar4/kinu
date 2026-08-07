@@ -26,6 +26,7 @@
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
 import type { VFS } from '../types/primitives.js';
 import type { ModelInputModality } from '../providers/types.js';
+import { SPILL_DIRS, type TurnContextBudget } from '../context-budget.js';
 import { fnv1a64Bytes } from './volatile-context.js';
 
 /** Media kinds an attachment can be — the input-modality vocabulary minus
@@ -38,6 +39,9 @@ export interface AttachmentPolicy {
   readonly accepts: ReadonlySet<MediaModality>;
   /** The workspace file plane (Storage.vfs) — replaced payloads land here. */
   readonly vfs: VFS;
+  /** The turn's bulk ledger. Every offload here is one message-borne spill
+   *  trip; the counters answer how often real traffic crosses the threshold. */
+  readonly budget?: TurnContextBudget;
 }
 
 /** Providers whose native SDK transport can carry PDF document parts.
@@ -71,10 +75,32 @@ export function acceptedMediaForModel(opts: {
   return accepted;
 }
 
-/** Inline threshold for text/* attachments. */
+/**
+ * The message-borne bulk threshold — ONE number for every text payload that
+ * arrives in a message, whether it came as a text/* attachment or as raw
+ * pasted prose. Below it the text inlines verbatim: the root must not starve
+ * on ordinary material (a stack trace, a config file), which is exactly where
+ * reference-only context management loses to plain inlining. Above it the
+ * payload spills and the message keeps a bounded head plus the address.
+ */
 const INLINE_TEXT_MAX_BYTES = 8 * 1024;
 
-const ATTACHMENTS_DIR = '/local/attachments';
+/** Head of a spilled paste the message keeps inline — enough for the model to
+ *  know what it is holding the address of, never enough to be the payload. */
+const PASTED_TEXT_PREVIEW_CHARS = 2_000;
+
+/**
+ * Ceiling above which a document the model CAN natively accept is spilled
+ * anyway. An inline document part is re-uploaded and re-priced on every
+ * single turn for the rest of the session, so a 300-page PDF is a permanent
+ * per-turn tax; past this size the workspace copy plus a read-back recipe is
+ * the better trade. Documents only — an image has no read-back recipe (the
+ * agent cannot see a file it reads as bytes), so accepted images always stay
+ * inline regardless of size.
+ */
+const OVERSIZE_ACCEPTED_DOC_MAX_BYTES = 1024 * 1024;
+
+const ATTACHMENTS_DIR = SPILL_DIRS.attachments;
 
 /**
  * Replace every file/image part the model cannot accept across the whole
@@ -87,7 +113,10 @@ export async function sanitizeAttachmentsForModel(
 ): Promise<ModelMessage[]> {
   const out: ModelMessage[] = [];
   for (const message of messages) {
-    if (message.role === 'user' && typeof message.content !== 'string') {
+    if (message.role === 'user' && typeof message.content === 'string') {
+      const replacement = await sanitizeUserText(message.content, policy);
+      out.push(replacement === null ? message : { ...message, content: replacement });
+    } else if (message.role === 'user' && typeof message.content !== 'string') {
       out.push(await sanitizeUserMessage(message, message.content, policy));
     } else if (message.role === 'assistant' && typeof message.content !== 'string') {
       out.push(await sanitizeAssistantMessage(message, message.content, policy));
@@ -112,6 +141,7 @@ async function sanitizeUserMessage(
     const replacement =
       part.type === 'image' ? await sanitizeImagePart(part, policy)
       : part.type === 'file' ? await sanitizeFilePart(part, policy)
+      : part.type === 'text' ? await sanitizeTextPart(part, policy)
       : null;
     if (replacement) changed = true;
     parts.push(replacement ?? part);
@@ -137,15 +167,63 @@ async function sanitizeAssistantMessage(
 /** The replacement TextPart for an image part, or null to pass it through. */
 async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   if (policy.accepts.has('image')) return null;
-  return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy.vfs);
+  return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
 }
 
 /** The replacement TextPart for a file part, or null to pass it through. */
 async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   const modality = mediaModalityFor(part.mediaType);
-  if (modality !== null && policy.accepts.has(modality)) return null;
-  if (isTextMediaType(part.mediaType)) return inlineOrStoreText(part, policy.vfs);
-  return replaceMedia(part.data, part.mediaType, part.filename, policy.vfs);
+  if (modality !== null && policy.accepts.has(modality)) {
+    return modality !== 'image' && oversizeForInlineDocument(part.data)
+      ? replaceMedia(part.data, part.mediaType, part.filename, policy)
+      : null;
+  }
+  if (isTextMediaType(part.mediaType)) return inlineOrStoreText(part, policy);
+  return replaceMedia(part.data, part.mediaType, part.filename, policy);
+}
+
+/** A text part carrying more than the message-borne budget — the giant paste.
+ *  Returns the replacement part, or null to pass it through. */
+async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  const replacement = await sanitizeUserText(part.text, policy);
+  return replacement === null ? null : { ...part, text: replacement };
+}
+
+/**
+ * The replacement for one oversize user text payload: the full text lands
+ * content-addressed on the file plane and the message keeps a bounded head
+ * plus the path. Byte-stable — same bytes, same path, same replacement — so a
+ * pasted document does not move the prompt-cache prefix every turn. Returns
+ * null when the text is within budget (the overwhelming majority).
+ */
+async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise<string | null> {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
+  const path = await storeContentAddressed(bytes, 'text/plain', policy);
+  const head = text.slice(0, PASTED_TEXT_PREVIEW_CHARS);
+  policy.budget?.recordSpill({
+    producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
+  });
+  return `[Pasted text (${bytes.length} bytes) saved to ${path} — read or slice it with your file tools ` +
+    `(oversize: slice + llm.query each slice, aggregate). The first ${head.length} chars follow.]\n\n${head}`;
+}
+
+/** True when a natively-acceptable document is large enough that carrying it
+ *  inline costs more than the read-back hop. Sized without decoding: base64
+ *  payloads are ~4/3 of their bytes, and a remote URL has no local payload. */
+function oversizeForInlineDocument(data: FilePart['data']): boolean {
+  const bytes = estimatePayloadBytes(data);
+  return bytes !== null && bytes > OVERSIZE_ACCEPTED_DOC_MAX_BYTES;
+}
+
+function estimatePayloadBytes(data: FilePart['data'] | ImagePart['image']): number | null {
+  if (data instanceof URL) return null;
+  if (data instanceof Uint8Array) return data.byteLength;
+  if (data instanceof ArrayBuffer) return data.byteLength;
+  if (typeof data !== 'string') return null;
+  if (/^https?:\/\//.test(data)) return null;
+  const comma = data.startsWith('data:') ? data.indexOf(',') : -1;
+  return Math.floor(((comma === -1 ? data.length : data.length - comma - 1) * 3) / 4);
 }
 
 /** The media kind of a file part, or null when no model transport accepts it
@@ -165,7 +243,7 @@ function isTextMediaType(mediaType: string): boolean {
 
 /** text/* attachments: small ones inline verbatim (no VFS round-trip needed
  *  to read them), larger ones get the standard VFS treatment. */
-async function inlineOrStoreText(file: FilePart, vfs: VFS): Promise<TextPart> {
+async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
   const payload = decodePayload(file.data);
   if (payload.kind === 'remote') return remoteReference(file.data, file.mediaType, file.filename);
   if (payload.bytes.length < INLINE_TEXT_MAX_BYTES) {
@@ -176,18 +254,18 @@ async function inlineOrStoreText(file: FilePart, vfs: VFS): Promise<TextPart> {
       text: `[Attachment ${name} (${file.mediaType}, ${payload.bytes.length} bytes) inlined below]\n\n${text}`,
     };
   }
-  return storeAndReference(payload.bytes, file.mediaType, file.filename, vfs);
+  return storeAndReference(payload.bytes, file.mediaType, file.filename, policy);
 }
 
 async function replaceMedia(
   data: FilePart['data'] | ImagePart['image'],
   mediaType: string,
   filename: string | undefined,
-  vfs: VFS,
+  policy: AttachmentPolicy,
 ): Promise<TextPart> {
   const payload = decodePayload(data);
   if (payload.kind === 'remote') return remoteReference(data, mediaType, filename);
-  return storeAndReference(payload.bytes, mediaType, filename, vfs);
+  return storeAndReference(payload.bytes, mediaType, filename, policy);
 }
 
 /** Content-addressed VFS write (skipped when the path already exists) + the
@@ -196,24 +274,36 @@ async function storeAndReference(
   bytes: Uint8Array,
   mediaType: string,
   filename: string | undefined,
-  vfs: VFS,
+  policy: AttachmentPolicy,
 ): Promise<TextPart> {
-  const basename = `${fnv1a64Bytes(bytes)}.${extensionFor(mediaType)}`;
-  const path = `${ATTACHMENTS_DIR}/${basename}`;
-  if (!(await vfs.exists(path))) {
-    try {
-      await vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message.toLowerCase() : '';
-      if (!msg.includes('exist')) throw err;
-    }
-    await vfs.writeFile(path, bytes);
-  }
+  const path = await storeContentAddressed(bytes, mediaType, policy);
+  const basename = path.slice(ATTACHMENTS_DIR.length + 1);
+  policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
   const name = filename ?? basename;
   return {
     type: 'text',
     text: `[Attachment ${name} (${mediaType}, ${bytes.length} bytes) saved to ${path} — read it with your file tools]`,
   };
+}
+
+/** Content-addressed VFS write (skipped when the path already exists), the one
+ *  offload every message-borne producer here shares. */
+async function storeContentAddressed(
+  bytes: Uint8Array,
+  mediaType: string,
+  policy: AttachmentPolicy,
+): Promise<string> {
+  const path = `${ATTACHMENTS_DIR}/${fnv1a64Bytes(bytes)}.${extensionFor(mediaType)}`;
+  if (!(await policy.vfs.exists(path))) {
+    try {
+      await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (!msg.includes('exist')) throw err;
+    }
+    await policy.vfs.writeFile(path, bytes);
+  }
+  return path;
 }
 
 /** A part whose data is a remote URL carries no payload to store — reference

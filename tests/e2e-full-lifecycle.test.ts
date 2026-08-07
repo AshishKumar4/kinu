@@ -184,15 +184,15 @@ describe('E2E Full Lifecycle', () => {
   // ── Step 2: Verify tools ─────────────────────────────────────
 
   // buildBuiltinTools is dep-gated: a tool appears only when the backend
-  // supplied what it needs (skills store, facts store, think tool, team
-  // roster...). This runtime wires only `rt` + `engine`, so the assertion is
+  // supplied what it needs (skills store, facts store, agents fork/team/peer
+  // deps...). This runtime wires only `rt` + `engine`, so the assertion is
   // that the surface is exactly what those deps earn — never a stray name,
   // and never a tool whose backend is absent.
   test('2. buildBuiltinTools returns the dep-gated subset, all of it canonical', () => {
     const names = Object.keys(tools);
     for (const name of names) expect(BUILTIN_TOOLS).toContain(name);
     for (const core of ['execute_tools', 'run', 'memory']) expect(names).toContain(core);
-    for (const ungated of ['skills', 'think', 'team', 'peers', 'product_change']) {
+    for (const ungated of ['skills', 'agents', 'product_change']) {
       expect(names).not.toContain(ungated);
     }
     console.log(`  Tools: ${names.join(', ')}`);

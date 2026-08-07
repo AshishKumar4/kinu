@@ -45,9 +45,13 @@ import {
   NO_DEVICE_CONNECTED,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
+  createExperienceLibrary,
   createProductChangeStore,
   productChangeSqlFromExec,
   type Credential,
+  type ExperienceEntry,
+  type ExperienceKind,
+  type PublishableCandidate,
   type ProductChangeBoard,
   type ProductChangeApproval,
   type ProductChangeCheck,
@@ -1087,6 +1091,45 @@ export class UserDO extends Agent<Env> {
   async getProductChangeDetail(caller: UserCaller, changeId: string): Promise<ProductChangeDetail> {
     await this.requireTier(caller, 'product_change');
     return this.productChanges().detail(changeId);
+  }
+
+  // ── Experience library (cross-workspace transfer) ───────────────────
+
+  private experienceLibrary() {
+    this.ensureInit();
+    return createExperienceLibrary(this.ctx.storage.sql);
+  }
+
+  /**
+   * Publish one artifact this workspace has proven. The source workspace is
+   * taken from the PROVEN caller, never from the argument — a workspace can
+   * only ever publish under its own name, and an owner session (which is not
+   * any workspace) cannot publish at all.
+   */
+  async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
+    const resolved = await this.requireTier(caller, 'experience.write');
+    if (resolved.kind !== 'workspace') {
+      throw new Error('Only a workspace can publish experience; it publishes under its own name.');
+    }
+    return this.experienceLibrary().publish(candidate, resolved.workspace);
+  }
+
+  /** Search the owner's library. The calling workspace's own entries are
+   *  excluded — re-importing what you already have is noise, not transfer. */
+  async searchExperience(
+    caller: UserCaller,
+    options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
+  ): Promise<ExperienceEntry[]> {
+    const resolved = await this.requireTier(caller, 'experience.read');
+    return this.experienceLibrary().search({
+      ...options,
+      ...(resolved.kind === 'workspace' ? { excludeWorkspace: resolved.workspace } : {}),
+    });
+  }
+
+  async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
+    await this.requireTier(caller, 'experience.read');
+    return this.experienceLibrary().get(id);
   }
 
   // ── Credentials ────────────────────────────────────────────────────

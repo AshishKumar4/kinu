@@ -3,7 +3,6 @@ export * from './single-shot.js';
 export * from './effort.js';
 export * from './mcts.js';
 export * from './heads.js';
-export * from './think-tool.js';
 
 import { createStrategyRegistry, type StrategyRegistry } from './types.js';
 import { createSingleShotStrategy } from './single-shot.js';

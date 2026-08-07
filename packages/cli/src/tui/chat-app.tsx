@@ -562,9 +562,9 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         }
         runInputEffects(dispatchInput({ type: 'turn-settled' }));
         if (machineRef.current.activeTurns === 0) setTurnPhase(null);
-        // A think run may have converged on near-tied approaches — hint once
+        // A fork run may have converged on near-tied approaches — hint once
         // per new take set so the comparison is one /takes away.
-        if (event.turn.toolCalls.some((call) => call.name === 'think')) {
+        if (event.turn.toolCalls.some((call) => call.name === 'agents')) {
           void client.latestTakes().then((set) => {
             if (!set || set.candidates.length < 2 || set.chosenNodeId) return;
             if (hintedTakesRef.current === set.id) return;

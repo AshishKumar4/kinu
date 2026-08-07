@@ -7,6 +7,7 @@
 import type { AgentRuntime } from './types/agent-runtime.js';
 import {
   BUILTIN_TOOL_SPECS,
+  DELEGATION_RUNGS,
   type BuiltinToolName,
 } from './tools/registry.js';
 import { renderActiveSkillsSection } from './skills/render.js';
@@ -82,7 +83,7 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
   ];
 
-  if (hasTool(surface.builtinTools, 'think') || hasTool(surface.builtinTools, 'team')) {
+  if (hasTool(surface.builtinTools, 'agents')) {
     lines.push('- For multi-part or long-running work, pick a rung of the delegation ladder below instead of grinding through it inline.');
   }
 
@@ -244,9 +245,8 @@ function hasTool(tools: readonly BuiltinToolName[], name: BuiltinToolName): bool
 
 function renderAgentStateSection(surface: PromptSurface): string {
   const tools = surface.builtinTools;
-  // The RLM provider (llm.query) and the mutable scaffold live on the CF
-  // backend only — never advertise them where they would throw.
-  const isCf = surface.backend === 'cf';
+  // llm.query gates on surface.rlmAvailable (wired by both backends); the
+  // scaffold self-provider ships on both since the shared-spine parity.
   const parts: string[] = [];
 
   parts.push([
@@ -273,45 +273,58 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '- `execute_tools` runs JavaScript against the active executor/codemode namespaces.',
       '- Before building from scratch, check `workspace.listTools()` and `memory` search for existing tools and prior lessons.',
       '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
-      ...(isCf ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs; handle either a string result or `{ error }`.'] : []),
+      ...(surface.rlmAvailable ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, `llm.query` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or `{ error }`. For slices that themselves need decomposition, fork (`agents` action=fork) — forks run full tool loops with llm.query in scope.'] : []),
       '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
-      ...(isCf ? ['- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.'] : []),
+      '- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.',
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder.',
       '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
+      '- `agent.compactNow()` folds the conversation at a phase boundary instead of waiting for the token trigger: the finished range is archived verbatim and stays listed in the checkpoint\'s Compaction Archive manifest, so you can still read it back.',
     ].join('\n'));
   }
 
-  if (hasTool(tools, 'think') || hasTool(tools, 'team') || hasTool(tools, 'peers') || hasTool(tools, 'report')) {
-    // ONE ladder, keyed on lifetime — the only axis the model has to decide on.
-    // Both rung triggers render from the registry specs (single source); the
-    // frame, the fork artifact trail and the coordination loop are the
-    // prompt-only operational doctrine no per-tool schema can carry.
-    const lines = [
-      '## Delegation',
-      'Delegation is one ladder with one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.',
-      '- Do it yourself — a single short coherent change.',
-    ];
-    if (hasTool(tools, 'think')) {
+  if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
+    // ONE ladder, keyed on lifetime, behind ONE tool — the only axis the
+    // model has to decide on. Both rung triggers render from the registry's
+    // DELEGATION_RUNGS (single source); the frame, the fork artifact trail
+    // and the coordination loop are the prompt-only operational doctrine no
+    // tool schema can carry. Rungs gate on the actions this actor's deps
+    // actually wire (surface.agentsActions), exactly like the tool's enum.
+    const actions = surface.agentsActions;
+    const has = (action: (typeof actions)[number]) => actions.includes(action);
+    const lines = ['## Delegation'];
+    if (actions.length > 0) {
       lines.push(
-        `- Ephemeral fork (\`think\`) — ${BUILTIN_TOOL_SPECS.think.whenToUse}`,
+        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.'
+        // The zeroth rung is not an agent at all: flat map-reduce sub-calls.
+        // Weight-ordered, it sits between doing it yourself and forking, and
+        // it renders only where the llm provider is actually wired.
+        + (surface.rlmAvailable
+          ? ' The cheapest helper is not an agent: for bulk text that needs no tools, slice it and `llm.query` each slice inside execute_tools — reach for the ladder only when the work needs tool loops.'
+          : ''),
+        // The turn-cumulative clamp is mechanical, so say so: a model that
+        // knows WHY the ninth heavy read came back short reaches for a rung
+        // instead of re-running the command (context-budget.ts).
+        'Tool output is budgeted per turn, not just per call: the first heavy reads come back whole, and once a turn has pulled in a lot of output the rest arrive as a head plus a workspace path — read that as the signal to hand the bulk to a helper instead of pulling more of it into this turn.',
+        '- Do it yourself — a single short coherent change.',
       );
     }
-    if (hasTool(tools, 'team')) {
-      lines.push(
-        `- Persistent subordinate (\`team\`) — ${BUILTIN_TOOL_SPECS.team.whenToUse}`,
-      );
+    if (has('fork')) {
+      lines.push(`- Ephemeral fork — ${DELEGATION_RUNGS.fork}`);
     }
-    if (hasTool(tools, 'think')) {
+    if (has('staff')) {
+      lines.push(`- Persistent subordinate — ${DELEGATION_RUNGS.staff}`);
+    }
+    if (has('fork')) {
       lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.');
     }
-    if (hasTool(tools, 'team')) {
+    if (has('staff')) {
       lines.push(
-        'Run the coordination loop: spawn the needed roles → assign several independent workstreams → poll team status / await reports → integrate the results yourself. A subordinate is cheap to create and dismiss.',
-        "Subordinates share this workspace's files and sandbox; their reports arrive as events that wake you.",
+        'Run the coordination loop: staff the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you. A finished subordinate stays in your roster with its context — re-engage it with ask/send; dismiss only when its role is permanently over.',
+        "Subordinates share this workspace's files and sandbox.",
       );
     }
-    if (hasTool(tools, 'peers')) {
-      lines.push("Beyond this workspace, `peers` reaches the owner's other agents: delegate a subtask (ask waits for the answer, send does not), spawn a specialist workspace, or answer a peer message event via reply with its event_id.");
+    if (has('reply')) {
+      lines.push("The same ask/send reach the owner's OTHER workspace agents by name (a peer ask waits for the reply, send does not); staff scope=workspace creates a specialist workspace; reply answers an agent message event via its event_id.");
     }
     if (hasTool(tools, 'report')) {
       lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` sends it progress/completed/blocked updates at meaningful milestones. Your turn-end answer to an assigned task is relayed automatically.');
@@ -319,10 +332,10 @@ function renderAgentStateSection(surface: PromptSurface): string {
     parts.push(lines.join('\n'));
   }
 
-  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'think')) {
+  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
     parts.push([
       '## Background work',
-      'Long `think`, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
+      'Long fork, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
     ].join('\n'));
   }
 

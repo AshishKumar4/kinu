@@ -14,6 +14,7 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
     createTimerTrigger: (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
     cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
     getReplayEvals: async (limit) => { calls.push(`replay:${limit ?? 'all'}`); return [{ id: "rpl-1", loss: 0.25 }]; },
+    armCompactNow: () => { calls.push("compactNow"); },
     ...over,
   };
 }
@@ -24,7 +25,7 @@ describe("createAgentSelfProvider — shape", () => {
     expect(p.name).toBe("agent");
     expect(p.positionalArgs).toBe(true);
     expect(p.types).toContain("agent.schedule".replace("agent.", "")); // declares schedule
-    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule"]) {
+    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       expect(typeof p.tools[name]?.execute).toBe("function");
       expect(p.tools[name]?.description.length).toBeGreaterThan(0);
     }
@@ -110,6 +111,24 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const ok = await p.tools.schedule.execute({ cron: "0 12 * * *", label: "daily" });
     expect(ok).toMatchObject({ id: "trg1", kind: "timer_cron" });
     expect(host.calls).toContain("timer:0 12 * * *");
+  });
+
+  test("compactNow arms the ladder's forced rebuild and says where the fold lands", async () => {
+    const host = fakeHost();
+    const p = createAgentSelfProvider(host);
+    expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
+    // Idempotent from the caller's side: the flag itself is one-shot.
+    expect(await p.tools.compactNow.execute()).toEqual({ armed: true, appliesAt: "next-turn-assembly" });
+    expect(host.calls).toEqual(["compactNow", "compactNow"]);
+    expect(p.types).toContain("compactNow");
+  });
+
+  test("compactNow surfaces a host failure as an envelope, not a throw", async () => {
+    const p = createAgentSelfProvider(fakeHost({
+      armCompactNow: () => { throw new Error("no compaction state"); },
+    }));
+    expect(await p.tools.compactNow.execute()).toEqual(
+      { error: expect.stringContaining("no compaction state") });
   });
 
   test("error from the host surfaces as an envelope, not a throw", async () => {

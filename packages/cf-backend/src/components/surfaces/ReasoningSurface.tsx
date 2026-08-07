@@ -9,8 +9,9 @@ import { Link, useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon, ArrowsOutIcon } from "@phosphor-icons/react";
 import {
-  DEFAULT_QUALITY_THRESHOLD, lossInterval, scoreInterval,
-  type AlignmentConvergence, type HeadRunHeadView, type HeadRunView, type HeadStep, type ScoreInterval,
+  DEFAULT_QUALITY_THRESHOLD, describeCalibrationGap, lossInterval, scoreInterval,
+  type AlignmentConvergence, type CalibrationReport, type HeadRunHeadView, type HeadRunView,
+  type HeadStep, type ScoreInterval,
 } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
@@ -715,11 +716,12 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
 // flashing an empty state while the second call is still in flight.
 function QualityView({ rpc }: { rpc: Rpc }) {
   const load = useCallback(async () => {
-    const [rows, align] = await Promise.all([
+    const [rows, align, calibration] = await Promise.all([
       rpc<ReplayEvalRow[]>("getReplayEvals", [50]),
       rpc<AlignmentConvergence>("getAlignmentConvergence"),
+      rpc<CalibrationReport>("getOutcomeCalibration"),
     ]);
-    return { rows, align };
+    return { rows, align, calibration };
   }, [rpc]);
   const { resource, reload } = useAsyncResource(load);
 
@@ -728,13 +730,13 @@ function QualityView({ rpc }: { rpc: Rpc }) {
     if (resource.status === "error") return <LoadFailure what="the quality history" message={resource.message} onRetry={reload} />;
     return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   }
-  const { rows, align } = data;
+  const { rows, align, calibration } = data;
   const hasAlignment = align.overall.turns > 0;
   if (rows.length === 0 && !hasAlignment) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
 
   return (
     <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
-      {hasAlignment && <AlignmentPanel k={align} />}
+      {hasAlignment && <AlignmentPanel k={align} calibration={calibration} />}
       {rows.length > 0 && <ReplayEvalPanel rows={rows} />}
     </div>
   );
@@ -802,7 +804,7 @@ const TREND_STYLE: Record<AlignmentConvergence["trend"], { label: string; classN
   insufficient: { label: "not enough data", className: "p-text-3" },
 };
 
-function AlignmentPanel({ k }: { k: AlignmentConvergence }) {
+function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibration: CalibrationReport }) {
   const trend = TREND_STYLE[k.trend];
   // One shared scale so segment intervals are visually comparable; the floor
   // keeps a near-zero rate from filling the whole track.
@@ -839,7 +841,35 @@ function AlignmentPanel({ k }: { k: AlignmentConvergence }) {
         ))}
       </div>
       <div className="text-[10px] p-text-3">{k.note}</div>
+      <CalibrationNote report={calibration} />
     </section>
+  );
+}
+
+// The rate above is the CLASSIFIER's count of corrections. How far that is from
+// the real one is measurable, and until it has been measured this says so
+// rather than letting the number read as ground truth.
+function CalibrationNote({ report }: { report: CalibrationReport }) {
+  if (report.accuracy === null || report.overall === null) {
+    return (
+      <div className="text-[10px] p-text-3">
+        <span className="p-warning">Uncalibrated</span>{" — this is the classifier's count of corrections, not a measured one. "}
+        {report.gap === null ? "" : `${describeCalibrationGap(report.gap)}. `}
+        Check ~100 turns by hand with <span className="font-mono">proteus label export</span>.
+      </div>
+    );
+  }
+  const per100 = (value: number): string => (value * 100).toFixed(1);
+  const { corrected, bias } = report.overall;
+  return (
+    <div className="text-[10px] p-text-3">
+      Corrected: <span className="font-mono p-text tabular-nums">{per100(corrected.mean)}</span>
+      {` per 100 (95% CI ${per100(corrected.lo)}–${per100(corrected.hi)}), `}
+      {`${bias >= 0 ? "+" : ""}${per100(bias)} off what the classifier said · `}
+      {`sensitivity ${report.accuracy.sensitivity.mean.toFixed(2)}, specificity ${report.accuracy.specificity.mean.toFixed(2)}`}
+      {report.kappa === null ? "" : `, κ ${report.kappa.value.toFixed(2)}`}
+      {` · ${report.labeled} hand labels`}
+    </div>
   );
 }
 

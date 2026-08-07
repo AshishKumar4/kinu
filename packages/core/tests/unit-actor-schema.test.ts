@@ -45,7 +45,7 @@ describe('actor schema', () => {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl));
       expect(columnNames(db, 'scaffold_versions')).toEqual(
-        ['version', 'written_at', 'rationale', 'canary_score', 'baseline_score', 'status', 'parent_version'],
+        ['version', 'written_at', 'rationale', 'canary_score', 'baseline_score', 'status', 'parent_version', 'pathology'],
       );
       db.close();
     }
@@ -62,6 +62,7 @@ describe('actor schema', () => {
 
     expect(columnNames(db, 'scaffold_versions')).toContain('status');
     expect(columnNames(db, 'scaffold_versions')).toContain('parent_version');
+    expect(columnNames(db, 'scaffold_versions')).toContain('pathology');
     expect(db.query<{ version: number; status: string }, []>(
       `SELECT version, status FROM scaffold_versions`).all(),
     ).toEqual([{ version: 1, status: 'current' }]);
