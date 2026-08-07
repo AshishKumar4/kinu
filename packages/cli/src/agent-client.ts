@@ -13,6 +13,7 @@ import type {
   AlternateTakeSet, TakePickOutcome,
   ReasoningEffort, TurnUsage,
 } from '@proteus/core';
+import type { ShellApprovalHandler } from '@proteus/cli-backend';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelEntry } from './model-catalog.js';
 
@@ -50,8 +51,8 @@ export interface AgentTurnResult {
 export type AgentClientEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
-  | { type: 'tool-result'; toolName: string; result: string }
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
   | { type: 'step-finish'; stepIndex: number }
   | { type: 'turn-end'; turn: AgentTurnResult }
   | { type: 'evolution'; event: string; message: string }
@@ -212,6 +213,10 @@ export interface LocalSessionControls {
   setAlwaysActiveSkills(names: string[]): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): ShellApprovalMode;
+  /** Install the interactive approval channel for gated shell commands (ACP's
+   *  session/request_permission). Returns a disposer. Local only: a cloud turn
+   *  runs in the DO, which has no synchronous path back to this process. */
+  setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void;
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
 }
 

@@ -533,10 +533,11 @@ export class CloudAgentClient implements AgentClient {
       }
       case 'tool-input-available': {
         const toolName = typeof chunk.toolName === 'string' ? chunk.toolName : 'tool';
+        const toolCallId = typeof chunk.toolCallId === 'string' ? chunk.toolCallId : '';
         const call = { name: toolName, args: chunk.input, result: undefined };
         active.toolCalls.push(call);
-        if (typeof chunk.toolCallId === 'string') active.toolById.set(chunk.toolCallId, call);
-        this.emit({ type: 'tool-call', toolName, args: asRecord(chunk.input) });
+        if (toolCallId) active.toolById.set(toolCallId, call);
+        this.emit({ type: 'tool-call', toolName, toolCallId, args: asRecord(chunk.input) });
         return;
       }
       case 'tool-output-available':
@@ -547,7 +548,10 @@ export class CloudAgentClient implements AgentClient {
           ? String(chunk.errorText ?? 'tool error')
           : stringifyToolOutput(chunk.output);
         if (call) call.result = result;
-        this.emit({ type: 'tool-result', toolName: call?.name ?? 'tool', result });
+        this.emit({
+          type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result,
+          success: chunk.type !== 'tool-output-error',
+        });
         return;
       }
       case 'finish-step': {

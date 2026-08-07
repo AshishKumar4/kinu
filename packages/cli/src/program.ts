@@ -7,6 +7,7 @@
 
 import { Command, Option } from 'commander';
 import { createCommand } from './commands/create.js';
+import { acpCommand } from './commands/acp.js';
 import { chatCommand } from './commands/chat.js';
 import { execCommand, runCommand } from './commands/run.js';
 import { authCommand, logoutCommand, whoamiCommand } from './commands/auth.js';
@@ -217,6 +218,15 @@ export function buildProgram(): Command {
       .option('--session-dir <dir>', 'Override CLI session storage directory')
       .option('--no-session', 'Do not record this CLI chat'),
   ).action(wrapAction(chatCommand));
+
+  llmOpts(
+    program
+      .command('acp <name>')
+      .helpGroup(RUNNING)
+      .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim)')
+      .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
+      .option('--session-dir <dir>', 'Override CLI session storage directory'),
+  ).action(wrapAction(acpCommand));
 
   llmOpts(
     program

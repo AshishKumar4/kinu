@@ -15,6 +15,7 @@ export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from '.
 export {
   LocalAgentSession, resolveChatModel,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
+  type ShellApprovalHandler,
 } from './local-session.js';
 export {
   createLocalModelResolver, cloudProxyBaseURL,

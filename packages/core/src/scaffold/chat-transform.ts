@@ -102,12 +102,13 @@ async function* scaffoldTurn(
         break;
       case 'tool_call':
         toolNames.set(ev.toolCallId, ev.name);
-        yield { type: 'tool-call', toolName: ev.name, args: ev.args };
+        yield { type: 'tool-call', toolName: ev.name, toolCallId: ev.toolCallId, args: ev.args };
         break;
       case 'tool_result':
         yield {
           type: 'tool-result',
           toolName: toolNames.get(ev.toolCallId) ?? 'unknown',
+          toolCallId: ev.toolCallId,
           ...toolOutcome(ev.result),
         };
         break;

@@ -6,6 +6,7 @@
     "proteus": "./bin/cli.ts"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.3.0",
     "@opentui/core": "^0.1.99",
     "@opentui/react": "^0.1.99",
     "@proteus/cli-backend": "workspace:*",

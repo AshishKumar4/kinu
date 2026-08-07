@@ -23,6 +23,7 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
+  ShellApprovalRequest, ShellApprovalOutcome,
   AgentsForkDeps,
   IngressDescriptor, ProteusEvent, EventVariant,
   RunEvent, RunEventInput, RunEventQuery,
@@ -118,12 +119,17 @@ export interface LocalSessionDb {
 export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
-  | { type: 'tool-result'; toolName: string; result: string }
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent };
+
+/** An interactive answer to a gated shell command. Resolving null declines to
+ *  decide, leaving the standing approval mode's own answer in force. */
+export type ShellApprovalHandler =
+  (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
 export interface LocalPublishEventInput {
   descriptor: IngressDescriptor;
@@ -235,6 +241,7 @@ export class LocalAgentSession implements BackendHost {
   private _headRuntime: HeadRuntime;
   private headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
+  private shellApprovalHandler: ShellApprovalHandler | null = null;
   private readonly sessionId: string;
   private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
@@ -477,6 +484,15 @@ export class LocalAgentSession implements BackendHost {
     this.invalidateModelState();
     this.ensureModelState();
     return { ok: true, mode };
+  }
+
+  /** Install the interactive approval channel for gated shell commands, or
+   *  null to remove it. Surfaces that own a live user (ACP) set this; without
+   *  one, 'strict' keeps rejecting gate hits with its explanatory message.
+   *  Returns a disposer so a surface can detach on disconnect. */
+  setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
+    this.shellApprovalHandler = handler;
+    return () => { if (this.shellApprovalHandler === handler) this.shellApprovalHandler = null; };
   }
 
   /** Stored model spec, or null when unset (parity with DO getStoredModelSpec). */
@@ -1126,7 +1142,7 @@ export class LocalAgentSession implements BackendHost {
     };
     const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
 
-    const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+    const pendingCalls: Array<{ toolName: string; toolCallId: string; args: Record<string, unknown> }> = [];
     let fullText = '';
     /** The turn's terminal failure text, persisted on run_end so a post-hoc
      *  read of the log carries the same evidence the cf run_end does. */
@@ -1224,11 +1240,13 @@ export class LocalAgentSession implements BackendHost {
             this.emit({ type: 'text-delta', delta: ev.delta });
             break;
           case 'tool-call':
-            pendingCalls.push({ toolName: ev.toolName, args: ev.args });
-            this.emit({ type: 'tool-call', toolName: ev.toolName, args: ev.args });
+            pendingCalls.push({ toolName: ev.toolName, toolCallId: ev.toolCallId, args: ev.args });
+            this.emit({ type: 'tool-call', toolName: ev.toolName, toolCallId: ev.toolCallId, args: ev.args });
             break;
           case 'tool-result': {
-            const idx = findLastIndexBy(pendingCalls, (c) => c.toolName === ev.toolName);
+            // Pair on the provider's call id — concurrent calls to the same
+            // tool make name matching ambiguous.
+            const idx = findLastIndexBy(pendingCalls, (c) => c.toolCallId === ev.toolCallId);
             const call = idx >= 0 ? pendingCalls.splice(idx, 1)[0] : undefined;
             // Real success/error into the accumulator — the outcome signal
             // (hadError, turn-outcome review) reads it, matching the cf
@@ -1236,7 +1254,7 @@ export class LocalAgentSession implements BackendHost {
             this.orch.acc.recordToolCall(ev.success
               ? { toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result }
               : { toolName: ev.toolName, input: call?.args ?? {}, success: false, error: ev.error ?? ev.result });
-            this.emit({ type: 'tool-result', toolName: ev.toolName, result: ev.result });
+            this.emit({ type: 'tool-result', toolName: ev.toolName, toolCallId: ev.toolCallId, result: ev.result, success: ev.success });
             break;
           }
           case 'step-finish':
@@ -1789,6 +1807,15 @@ export class LocalAgentSession implements BackendHost {
     const rawTools = buildBuiltinTools({
       rt: this.rt,
       shellApprovalMode: this.config.getShellApprovalMode(),
+      // Stable indirection: the toolset is rebuilt only on model change, so it
+      // must read the handler live rather than capture whichever was installed
+      // when the model was resolved.
+      requestShellApproval: async (req) => {
+        const outcome = await this.shellApprovalHandler?.(req) ?? null;
+        if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
+        else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
+        return outcome;
+      },
       // The turn's cumulative bulk budget — held on the accumulator so this
       // toolset (rebuilt only on model change) reads the live turn's state.
       contextBudget: this.orch.acc.context,

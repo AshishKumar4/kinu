@@ -51,7 +51,10 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
 import { SessionSearchStore } from '../memory/session-search.js';
-import { reviewCommand, formatApproval } from '../safety/approval-gate.js';
+import {
+  reviewCommand, formatApproval, approvalGrants,
+  type ShellApprovalRequest, type ShellApprovalOutcome,
+} from '../safety/approval-gate.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createExperienceTool, type ExperienceToolDeps } from './experience-tool.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
@@ -126,13 +129,21 @@ export interface BuiltinToolDeps {
   vectorStore?: import('../memory/vector-store.js').VectorStore;
   /**
    * How to handle 'gate' decisions from the approval-gate review.
-   *   'strict'    — reject gate commands until an approval-channel is wired (default)
+   *   'strict'    — ask `requestShellApproval`; reject when no channel is wired (default)
    *   'allow_all' — treat gate as warn (logged but executed). Use for trusted
    *                 dev environments only. Set per-agent via the
    *                 setShellApprovalMode RPC.
    *   'deny_all'  — reject everything that isn't 'allow' (max safety)
    */
   shellApprovalMode?: 'strict' | 'allow_all' | 'deny_all';
+  /**
+   * The interactive approval channel consulted for a 'gate' decision under
+   * 'strict'. Resolves 'allow'/'deny' when a surface can ask the user, or null
+   * when none is connected — the caller then gets the same message it has
+   * always got. Surfaces that own a user (ACP's session/request_permission)
+   * install one; headless runs leave it unset.
+   */
+  requestShellApproval?: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
   /** agent_facts world model. When provided, exposes the `fact` tool
    *  (remember / recall / forget actions). */
   facts?: import('../memory/facts.js').FactsStore;
@@ -420,10 +431,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         if (mode === 'allow_all') {
           console.warn(`[proteus] approval-gate gate→allow (allow_all mode): ${formatApproval(review)}`);
         } else {
-          // Actionable for the MODEL: setShellApprovalMode is a backend RPC
-          // it cannot call — the user changes the mode in agent settings.
-          return `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
-                 `or change the shell approval mode in agent settings.\n${formatApproval(review)}`;
+          // 'deny_all' never asks. Under 'strict' a connected surface gets to
+          // put the decision to the user; null means nobody is listening.
+          const outcome = mode === 'strict' && deps.requestShellApproval
+            ? await deps.requestShellApproval({ command: args.command, review })
+            : null;
+          if (outcome === null) {
+            // Actionable for the MODEL: setShellApprovalMode is a backend RPC
+            // it cannot call — the user changes the mode in agent settings.
+            return `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
+                   `or change the shell approval mode in agent settings.\n${formatApproval(review)}`;
+          }
+          if (!approvalGrants(outcome)) {
+            return `Denied by the user.\n${formatApproval(review)}`;
+          }
         }
       }
       if (review.decision === 'warn') {

@@ -24,12 +24,16 @@ import { mergeProviderOptions } from './strategy/effort.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
+  /** `toolCallId` is the provider's own id for the call — the key that pairs
+   *  this event with its 'tool-result'. Surfaces that report calls out of band
+   *  (ACP's tool_call/tool_call_update) need it; name alone cannot pair
+   *  concurrent calls to the same tool. */
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
   /** A tool call settled. `result` is the stringified output on success or the
    *  error text on failure; `success`/`error` carry the discriminator the
    *  evolution signal reads (hadError, outcome review) — matching the cf
    *  backend's afterToolCall. */
-  | { type: 'tool-result'; toolName: string; result: string; success: boolean; error?: string }
+  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean; error?: string }
   /** `inputTokens`/`outputTokens`/`cachedInputTokens` = the step request's
    *  provider-reported totals, when reported — inputTokens doubles as the
    *  caller's measured compaction signal, cachedInputTokens feeds cache
@@ -209,14 +213,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       case 'tool-call': {
         const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
         await extensions?.emitToolCall({ toolName: chunk.toolName, args });
-        yield { type: 'tool-call', toolName: chunk.toolName, args };
+        yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
         break;
       }
       case 'tool-result': {
         const raw = (chunk as any).output ?? (chunk as any).result ?? '';
         const result = String(raw).slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
-        yield { type: 'tool-result', toolName: chunk.toolName, result, success: true };
+        yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
         break;
       }
       case 'tool-error': {
@@ -226,7 +230,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         const error = errorText((chunk as any).error);
         const result = error.slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
-        yield { type: 'tool-result', toolName: chunk.toolName, result, success: false, error };
+        yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
         break;
       }
       case 'error': {
