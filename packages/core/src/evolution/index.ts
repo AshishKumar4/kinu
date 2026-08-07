@@ -57,6 +57,16 @@ export {
   type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
   type EnsembleReport, type EnsembleMember, type StandInCondition,
 } from './ensemble.js';
+// Behavioural weak labels — turns judged by what the user DID (interrupts,
+// refusals, re-asks, approvals), and the harness that scores the classifier and
+// the panel against them. Complements the on-distribution calibration above; it
+// never replaces it.
+export {
+  BEHAVIOR_RULES, weakLabel, corpusStats, runCorpusEval, renderCorpusReport,
+  type BehaviorRule, type CorpusTurn, type TurnSignals, type WeakLabel,
+  type CorpusStats, type CorpusEvalInput, type CorpusEvalReport, type RaterScore,
+  type RaterCost,
+} from './behavior-labels.js';
 export {
   renderScaffoldHandbook, indexScaffoldSites, type ScaffoldSite,
 } from './scaffold-handbook.js';

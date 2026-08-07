@@ -23,11 +23,15 @@ import {
   loadGepaCandidates,
   nextCronFire,
   productChangeSqlFromExec,
+  runCorpusEval,
   runEnsemble,
   sampleForLabeling,
   selectEnsembleJudges,
   type AlignmentConvergence,
   type CalibrationReport,
+  type CorpusEvalReport,
+  type CorpusTurn,
+  type WeakLabel,
   type EnsembleReport,
   type EnsembleRunResult,
   type LabelIngestResult,
@@ -421,6 +425,45 @@ export async function runLocalOutcomeEnsemble(
   } finally {
     db.close();
   }
+}
+
+/**
+ * Score the classifier and the judge panel over a mined behavioural corpus.
+ *
+ * The panel is chosen exactly as `runLocalOutcomeEnsemble` chooses it, and the
+ * classifier runs on the agent's own chat model — the model production would
+ * have classified those turns with. Nothing is written to the agent's ledger:
+ * the corpus is not this agent's history, and a row claiming otherwise would
+ * corrupt the very calibration this is meant to complement.
+ */
+export async function runLocalCorpusEval(name: string, input: {
+  turns: ReadonlyArray<CorpusTurn>;
+  labels: ReadonlyArray<WeakLabel>;
+  specs: string[] | null;
+}): Promise<CorpusEvalReport> {
+  ensureLocalAgent(name);
+  const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+  const chatSpec = resolver.normalizeSpecSync(
+    withLocalDb(name, (db) => createAgentConfigStore(makeSql(db)).getModel()),
+  );
+  const selection = await selectEnsembleJudges({
+    specs: input.specs,
+    chatSpec,
+    candidates: () => resolver.judgeCandidates(),
+  });
+  const judges = selection.specs.map((named) => {
+    const spec = resolver.normalizeSpecSync(named);
+    return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
+  });
+  return runCorpusEval({
+    turns: input.turns,
+    labels: input.labels,
+    classifier: {
+      name: `${chatSpec} (turn-outcome classifier)`,
+      llm: createCompletionLLM({ model: resolver.resolveModel(chatSpec), spec: chatSpec, stage: 'chat' }),
+    },
+    judges,
+  });
 }
 
 export function getLocalGepaRun(name: string, runId: string): unknown {

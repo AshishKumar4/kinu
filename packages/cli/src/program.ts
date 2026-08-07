@@ -383,13 +383,17 @@ export function buildProgram(): Command {
     .action(wrapAction(alignmentCommand));
 
   program
-    .command('label [action] <name> [file]')
+    .command('label [action] [name] [file]')
     .helpGroup(INSPECT)
-    .description('Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the classifier')
-    .option('--out <file>', 'Where to write the labeling file (export)')
+    .description('Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the ' +
+      'classifier; mine | score for the free behavioural corpus')
+    .option('--out <file>', 'Where to write the labeling file (export) or the corpus report (mine, score)')
     .option('--size <n>', 'Turns to draw (export)')
     .option('--labeler <name>', 'Who is labeling (ingest)')
-    .option('--models <a,b>', 'Judges to run, comma-separated (ensemble; default: one per connected vendor)')
+    .option('--models <a,b>', 'Judges to run, comma-separated (ensemble, score; default: one per connected vendor)')
+    .option('--root <dir>', 'Claude Code transcript root (mine, score; default: ~/.claude/projects)')
+    .option('--projects <a,b>', 'Only projects whose directory name contains one of these (mine, score)')
+    .option('--limit <n>', 'Labeled turns to put to the raters (score; default: 25)')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(labelCommand));
 

@@ -275,7 +275,7 @@ export async function runEnsemble(
     let stored = 0;
     let failed = 0;
     for (const item of todo) {
-      const label = await askJudge(judge, item);
+      const label = await askEnsembleJudge(judge, item);
       if (label === null) {
         failed++;
         continue;
@@ -292,7 +292,15 @@ export async function runEnsemble(
   return { run: { judged, turns: items.length, alreadyJudged }, gap: null };
 }
 
-async function askJudge(judge: EnsembleJudge, item: LabelingItem): Promise<OutcomeLabel | null> {
+/** One judge's blind verdict on one turn, or null when it errored or answered
+ *  unusably. Exported because the behavioural corpus (behavior-labels.ts)
+ *  scores the same panel over different turns, and a second copy of "ask,
+ *  parse, swallow" would be a second place for the prompt and the parse to
+ *  drift apart. */
+export async function askEnsembleJudge(
+  judge: EnsembleJudge,
+  item: LabelingItem,
+): Promise<OutcomeLabel | null> {
   try {
     return parseVerdict(await judge.llm.complete(buildEnsembleJudgePrompt(item)));
   } catch {
@@ -373,8 +381,9 @@ export interface EnsembleReport {
 /** A panel label counts as the event when it is one of the negative outcomes.
  *  `unclear` therefore counts as "did not flag it" — the conservative reading,
  *  and the right one: a stand-in labeler that abstains on a bad turn has failed
- *  to catch it, exactly as if it had called the turn fine. */
-function flagsNegative(label: OutcomeLabel): boolean {
+ *  to catch it, exactly as if it had called the turn fine. Exported so the
+ *  behavioural corpus scores its raters on the same convention. */
+export function flagsNegative(label: OutcomeLabel): boolean {
   return label !== 'unclear' && isNegativeOutcome(label);
 }
 

@@ -108,6 +108,63 @@ export function createCompletionLLM(opts: {
   };
 }
 
+// ── Metering the seam ────────────────────────────────────────────
+
+/** What passed through one metered `LLM`, counted at the seam. Characters
+ *  rather than tokens because that is what the seam actually sees — the
+ *  `LLM` interface returns text, not usage. */
+export interface LLMUsage {
+  calls: number;
+  promptChars: number;
+  responseChars: number;
+}
+
+/** Characters per token, for sizing a run before paying for it. A blunt
+ *  average over English prose and code; the true ratio is model-specific and
+ *  the seam cannot see it. Only ever used to ESTIMATE, and every caller says
+ *  so where it prints. */
+const CHARS_PER_TOKEN = 4;
+
+/** Rough blended USD per 1k tokens. A deliberately conservative mid-range
+ *  blend (≈ $3 / 1M tokens) so anything sized with it errs toward
+ *  over-estimating spend. models.dev ships per-model `cost`, but it is not
+ *  surfaced through `ModelInfo` (providers/types.ts), so no caller here has a
+ *  model-specific rate to use instead; thread one through when it lands. */
+export const BLENDED_USD_PER_1K_TOKENS = 0.003;
+
+export function estimateTokens(chars: number): number {
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+export function estimateUsdCost(tokens: number): number {
+  return (tokens / 1000) * BLENDED_USD_PER_1K_TOKENS;
+}
+
+/**
+ * An `LLM` that counts what goes through it.
+ *
+ * The returned `usage` is the live counter — read it after the pass, not
+ * before. Wrapping rather than threading a counter through every caller keeps
+ * the seam itself unchanged, which is what lets a test script an `LLM` and
+ * still get telemetry out of the harness that used it.
+ */
+export function meterLLM(llm: LLM): { llm: LLM; usage: LLMUsage } {
+  const usage: LLMUsage = { calls: 0, promptChars: 0, responseChars: 0 };
+  return {
+    usage,
+    llm: {
+      stream: (opts) => llm.stream(opts),
+      async complete(prompt) {
+        usage.calls++;
+        usage.promptChars += prompt.length;
+        const text = await llm.complete(prompt);
+        usage.responseChars += text.length;
+        return text;
+      },
+    },
+  };
+}
+
 /**
  * Collect text from a generateText result.
  *

@@ -91,6 +91,16 @@ export {
   type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
   type EnsembleReport, type EnsembleMember, type StandInCondition,
 } from './evolution/ensemble.js';
+// Behavioural weak labels — turns judged by what the user DID (interrupts,
+// refusals, re-asks, approvals), and the harness that scores the classifier and
+// the panel against them. Complements the on-distribution calibration above; it
+// never replaces it.
+export {
+  BEHAVIOR_RULES, weakLabel, corpusStats, runCorpusEval, renderCorpusReport,
+  type BehaviorRule, type CorpusTurn, type TurnSignals, type WeakLabel,
+  type CorpusStats, type CorpusEvalInput, type CorpusEvalReport, type RaterScore,
+  type RaterCost,
+} from './evolution/behavior-labels.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
 // config; the persisted loss curve.
 export {
@@ -247,7 +257,7 @@ export {
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM } from './llm.js';
-export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
+export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm.js';
 export { contextWindowForModel } from './context-window.js';
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
