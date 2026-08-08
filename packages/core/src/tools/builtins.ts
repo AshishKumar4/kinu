@@ -196,6 +196,7 @@ export {
   PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './agents-tool.js';

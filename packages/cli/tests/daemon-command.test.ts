@@ -4,7 +4,7 @@
  * daemon's own and it unlinks it on exit, which is exactly what restart has to
  * sequence correctly.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -55,6 +55,16 @@ function isAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/** `daemon start` returns as soon as the child is spawned, so anything the
+ *  daemon itself does lands a moment later. */
+async function waitFor(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for the daemon');
+    await Bun.sleep(25);
+  }
+}
+
 describe('proteus daemon restart', () => {
   test('replaces a running daemon and waits for the old process to exit', () => {
     const home = makeHome();
@@ -94,6 +104,26 @@ describe('proteus daemon restart', () => {
 
     expect(proc.exitCode).toBe(1);
     expect(proc.stderr).toContain('start|stop|restart|status|logs|run');
+  });
+});
+
+describe('proteus daemon logs', () => {
+  test('caps an oversized log at startup and still shows the history', async () => {
+    const home = makeHome();
+    const logPath = join(home, 'daemon.log');
+    writeFileSync(logPath, `${'padding line to grow the log past the cap\n'.repeat(30_000)}last line before the roll\n`);
+    expect(statSync(logPath).size).toBeGreaterThan(1024 * 1024);
+
+    expect(runDaemon(home, 'start').exitCode).toBe(0);
+    // The daemon's first act is to log that it started, which is what rolls it.
+    await waitFor(() => existsSync(`${logPath}.1`));
+
+    expect(statSync(logPath).size).toBeLessThan(1024 * 1024);
+    expect(statSync(`${logPath}.1`).size).toBeGreaterThan(1024 * 1024);
+    const logs = runDaemon(home, 'logs');
+    expect(logs.exitCode).toBe(0);
+    expect(logs.stdout).toContain('last line before the roll');
+    expect(logs.stdout).toContain('local scheduler daemon started');
   });
 });
 

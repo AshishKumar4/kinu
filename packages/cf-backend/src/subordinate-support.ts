@@ -3,6 +3,7 @@ import {
   type PublishResult,
   type SerializedMessage,
   type SubordinateReportStatus,
+  type SubordinateHandoff,
   type SubordinateRosterEntry,
   type SubordinateStatus,
   type TeamToolDeps,
@@ -459,6 +460,33 @@ export function admitSubordinateTask(log: EventLog, input: {
   });
 }
 
+/**
+ * The sender-visible half of an admission.
+ *
+ * `turnInFlight` is the subordinate's live-turn flag read at admission time: a
+ * drain batch bound while a turn is live splices into that turn's next step
+ * (BackendHost.injectIntoActiveTurn) instead of queueing behind it, so a busy
+ * subordinate is steered rather than blocked. A duplicate admission scheduled
+ * no drain of its own — it lands with the backlog that is already waiting.
+ */
+export function describeSubordinateHandoff(input: {
+  admission: PublishResult;
+  turnInFlight: boolean;
+  live: SubordinateLiveStatus;
+}): SubordinateHandoff {
+  return {
+    eventId: input.admission.id,
+    delivery: !input.admission.admitted
+      ? 'queued'
+      : input.turnInFlight ? 'steering_live_turn' : 'starts_now',
+    phase: {
+      busy: input.turnInFlight,
+      lastActivityAt: input.live.lastActivity,
+      workingOn: input.live.recentSteps[0]?.summary ?? null,
+    },
+  };
+}
+
 /** The exact report text admission stores. Producers normalize with this
  *  before spilling, so a cited spill file can never disagree with the brief
  *  it completes. */
@@ -511,9 +539,9 @@ export interface SubordinateRuntime {
     deliverable?: string;
     deadlineHint?: string;
     inheritedContext?: string;
-  }): Promise<void>;
+  }): Promise<SubordinateHandoff>;
   status(name: string): Promise<unknown>;
-  message(name: string, content: string): Promise<void>;
+  message(name: string, content: string): Promise<SubordinateHandoff>;
   dismiss(name: string, keepHistory: boolean): Promise<void>;
 }
 
@@ -658,11 +686,12 @@ export function createTeamToolDeps(deps: {
       const task = requiredText(input.task, 'task');
       const before = deps.roster.requireActive(input.name);
       deps.roster.assign(input.name, task);
+      let handoff: SubordinateHandoff;
       try {
         const deliverable = optionalText(input.deliverable);
         const deadlineHint = optionalText(input.deadlineHint);
         const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
-        await deps.runtime.assign(input.name, {
+        handoff = await deps.runtime.assign(input.name, {
           body: task,
           ...(deliverable ? { deliverable } : {}),
           ...(deadlineHint ? { deadlineHint } : {}),
@@ -673,7 +702,7 @@ export function createTeamToolDeps(deps: {
       }
       changed({ name: input.name, task });
       deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
-      return { ok: true, name: input.name };
+      return { ok: true, name: input.name, ...handoff };
     },
 
     status: async (input) => {
@@ -685,13 +714,14 @@ export function createTeamToolDeps(deps: {
       const content = requiredText(input.content, 'content');
       const before = deps.roster.requireActive(input.name);
       deps.roster.resumeAfterMessage(input.name);
+      let handoff: SubordinateHandoff;
       try {
-        await deps.runtime.message(input.name, content);
+        handoff = await deps.runtime.message(input.name, content);
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate message');
       }
       changed();
-      return { ok: true, name: input.name };
+      return { ok: true, name: input.name, ...handoff };
     },
 
     dismiss: async (input) => {

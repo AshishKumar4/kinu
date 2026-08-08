@@ -24,6 +24,7 @@ import {
   snapshotCompletedTurn,
   type CompletedTurn,
   type ParentRpcFileHandle,
+  type SubordinateHandoff,
   type SubordinateReportStatus,
 } from '@proteus/core';
 import {
@@ -34,6 +35,7 @@ import { OrchestratorAgent } from './orchestrator.js';
 import {
   SubordinateIdentityStore,
   admitSubordinateTask,
+  describeSubordinateHandoff,
   readSubordinateLiveStatus,
   type SubordinateLiveStatus,
 } from './subordinate-support.js';
@@ -199,14 +201,24 @@ export class SubordinateAgent extends ActorAgent {
     }
   }
 
+  /**
+   * Admit work from the parent and tell it what happened to it.
+   *
+   * The delivery branch is decided here and not guessed by the caller: this DO
+   * is the only place that knows whether a turn is live right now, and the
+   * drain it schedules will splice into that turn rather than queue behind it
+   * (BackendHost.injectIntoActiveTurn). Reading `_inFlight` before admission
+   * keeps the answer about the turn the batch will actually reach.
+   */
   async enqueueSubordinateTask(input: {
     kind: 'task' | 'message';
     body: string;
     deliverable?: string;
     deadlineHint?: string;
     inheritedContext?: string;
-  }): Promise<{ id: string; admitted: boolean }> {
+  }): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
     this.ensureSchema();
+    const busy = this._inFlight;
     const result = admitSubordinateTask(this.eventLog, {
       fromWorkspace: this.workspaceName(),
       kind: input.kind,
@@ -217,7 +229,14 @@ export class SubordinateAgent extends ActorAgent {
       now: Date.now(),
     });
     if (result.admitted) this.orch.scheduleDrain();
-    return result;
+    return {
+      ...result,
+      ...describeSubordinateHandoff({
+        admission: result,
+        turnInFlight: busy,
+        live: readSubordinateLiveStatus(this.ctx.storage.sql),
+      }),
+    };
   }
 
   async getSubordinateStatus(): Promise<SubordinateLiveStatus> {

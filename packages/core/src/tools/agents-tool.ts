@@ -60,6 +60,40 @@ export interface SubordinateRosterEntry {
   dismissedAt: number | null;
 }
 
+/**
+ * How a handoff reaches a subordinate's model context.
+ *
+ * This is NOT a mode the caller picks — there is one delivery policy (the
+ * subordinate's own drain decides), and this reports which branch it took.
+ *
+ * - `steering_live_turn` — the subordinate was mid-turn, so the event splices
+ *   into the next step of the turn it is already running.
+ * - `starts_now` — the subordinate was idle; the drain turns the event into a
+ *   turn immediately.
+ * - `queued` — admission deduped against work already waiting; it lands with
+ *   that backlog.
+ */
+export type SubordinateDelivery = 'steering_live_turn' | 'starts_now' | 'queued';
+
+/** What the subordinate was doing when the handoff landed. */
+export interface SubordinatePhase {
+  busy: boolean;
+  lastActivityAt: number | null;
+  /** The most recent activity line, or null when it has done nothing yet. */
+  workingOn: string | null;
+}
+
+/**
+ * The sender's half of a handoff. `eventId` is the id the eventual
+ * `subordinate_report` cites, which is what lets a caller correlate an answer
+ * arriving turns later with the thing it asked for.
+ */
+export interface SubordinateHandoff {
+  eventId: string;
+  delivery: SubordinateDelivery;
+  phase: SubordinatePhase;
+}
+
 export interface TeamToolDeps {
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
@@ -76,13 +110,15 @@ export interface TeamToolDeps {
     name: string; displayName: string;
   }>;
   /** Enqueue a task on the subordinate (drained as its next turn). */
-  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<{
-    ok: true; name: string;
-  }>;
+  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<
+    { ok: true; name: string } & SubordinateHandoff
+  >;
   /** Roster row + live snapshot for one subordinate, or the whole roster. */
   status(input: { name?: string }): Promise<unknown>;
   /** Conversational injection into the subordinate's next turn. */
-  message(input: { name: string; content: string }): Promise<{ ok: true; name: string }>;
+  message(input: { name: string; content: string }): Promise<
+    { ok: true; name: string } & SubordinateHandoff
+  >;
   /** Retire a subordinate. Default is ARCHIVE (facet + context kept, no
    *  longer addressed); storage is wiped only on explicit keepHistory=false. */
   dismiss(input: { name: string; keepHistory?: boolean }): Promise<{
@@ -132,6 +168,25 @@ function askTimeoutMs(timeoutSeconds: number | undefined): number {
   if (timeoutSeconds === undefined || !Number.isFinite(timeoutSeconds)) return ASK_TIMEOUT_DEFAULT_MS;
   return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
 }
+
+/** What the sender is told about a handoff, in the tool's snake_case shape. */
+function renderHandoff(handoff: SubordinateHandoff): {
+  event_id: string;
+  delivery: SubordinateDelivery;
+  subordinate_phase: SubordinatePhase;
+} {
+  return {
+    event_id: handoff.eventId,
+    delivery: handoff.delivery,
+    subordinate_phase: handoff.phase,
+  };
+}
+
+const ASSIGN_NOTES: Record<SubordinateDelivery, string> = {
+  steering_live_turn: 'Assigned. The subordinate is mid-turn, so this steers it at its next step rather than waiting for it to go idle.',
+  starts_now: 'Assigned. The subordinate was idle and starts on it now.',
+  queued: 'Already waiting for the subordinate — it picks this up with the work it has queued.',
+};
 
 // ── Fork (exploration strategy) deps contract ───────────────────────────────
 
@@ -579,7 +634,7 @@ export async function dispatchAgentsAction(
       case 'ask': {
         if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
         if (team && await isSubordinate(input.agent)) {
-          await team.assign({
+          const handoff = await team.assign({
             name: input.agent,
             task: input.message,
             ...(input.deliverable ? { deliverable: input.deliverable } : {}),
@@ -588,7 +643,8 @@ export async function dispatchAgentsAction(
           return {
             status: 'working',
             agent: input.agent,
-            note: 'Assigned. The subordinate\'s report arrives as an event that wakes you.',
+            ...renderHandoff(handoff),
+            note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
           };
         }
         if (peers) {
@@ -603,8 +659,15 @@ export async function dispatchAgentsAction(
       case 'send': {
         if (!input.agent || !input.message) return { error: 'send requires agent and message' };
         if (team && await isSubordinate(input.agent)) {
-          await team.message({ name: input.agent, content: input.message });
-          return { status: 'delivered', agent: input.agent };
+          const handoff = await team.message({ name: input.agent, content: input.message });
+          // Same delivered/queued vocabulary the peer transport already uses:
+          // delivered = it reached the target's context, queued = it waits
+          // behind work already admitted.
+          return {
+            status: handoff.delivery === 'queued' ? 'queued' : 'delivered',
+            agent: input.agent,
+            ...renderHandoff(handoff),
+          };
         }
         if (peers) {
           return await peers.send({ agent: input.agent, topic, message: input.message });

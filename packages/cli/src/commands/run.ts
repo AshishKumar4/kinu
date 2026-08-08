@@ -9,7 +9,8 @@ import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
 import { resolvePromptAttachments } from '../attachments.js';
 import { watchHeadlessConsents, watchTerminalConsents } from '../consent-watch.js';
-import { ERR, printToolCall, printToolResult } from '../display.js';
+import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display.js';
+import { guideFailure } from '../provider-guidance.js';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -169,9 +170,8 @@ async function runOneShot(
     const alreadyReported = failed;
     failed = true;
     if (!alreadyReported) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', message })}\n`);
-      else console.error(`${ERR('error')} ${message}`);
+      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', ...guideFailure(err) })}\n`);
+      else printFailure(err);
     }
   } finally {
     consentWatch?.stop();
@@ -471,7 +471,7 @@ function renderRunEvent(event: AgentClientEvent): void {
       printToolResult(event.result);
       break;
     case 'error':
-      console.log(`\n${ERR('error')} ${event.message}`);
+      console.log(`\n${formatFailure(event.message)}`);
       break;
     case 'turn-end':
       console.log('');
@@ -520,7 +520,7 @@ function jsonEvents(event: AgentClientEvent): unknown[] {
     case 'step-finish':
       return [];
     case 'error':
-      return [{ type: 'error', message: event.message }];
+      return [{ type: 'error', ...guideFailure(event.message) }];
     case 'evolution':
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'broadcast':

@@ -698,7 +698,7 @@ export class OrchestratorAgent extends ActorAgent {
         },
         async assign(name, input) {
           const stub = await orchestrator.subAgent(SubordinateAgent, name);
-          await stub.enqueueSubordinateTask({
+          return stub.enqueueSubordinateTask({
             kind: 'task',
             body: input.body,
             ...(input.deliverable ? { deliverable: input.deliverable } : {}),
@@ -710,7 +710,7 @@ export class OrchestratorAgent extends ActorAgent {
           return (await orchestrator.subAgent(SubordinateAgent, name)).getSubordinateStatus();
         },
         async message(name, content) {
-          await (await orchestrator.subAgent(SubordinateAgent, name))
+          return (await orchestrator.subAgent(SubordinateAgent, name))
             .enqueueSubordinateTask({ kind: 'message', body: content });
         },
         async dismiss(name, keepHistory) {

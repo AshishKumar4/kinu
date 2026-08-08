@@ -78,7 +78,10 @@ export const DELEGATION_RUNGS = {
  *  `agents` docstring. */
 export const DELEGATION_CONVERSE =
   'ask/send message any agent by name — a subordinate in this workspace or one of the owner\'s other workspace agents (ask expects the answer back, send is fire-and-forget); ' +
-  'reply answers an incoming agent message event by its event_id; staff scope=workspace creates a specialist workspace of its own.';
+  'reply answers an incoming agent message event by its event_id; staff scope=workspace creates a specialist workspace of its own. ' +
+  // The delivery contract, stated because it changes how to delegate: there is
+  // no waiting for a helper to free up, and no reason to hold work back.
+  'A busy agent is never blocked on — your message is spliced into the turn it is already running, so send follow-ups as soon as you have them.';
 
 /**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
@@ -134,7 +137,9 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse:
       'Do not delegate a single short coherent change you can simply do directly, or forks that would race on the same mutable resource. Caution: every subordinate or peer message wakes that agent for a full turn, so send purposeful work.',
     result:
-      'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/ask/send/dismiss return roster or delivery state — subordinate reports and peer replies arrive as events that wake you.',
+      'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/dismiss return roster state. '
+      + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
+      + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
   },
   memory: {
     name: 'memory',

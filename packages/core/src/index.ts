@@ -322,6 +322,7 @@ export {
   type AgentsToolDeps, type AgentsForkDeps,
   type BuiltinToolDeps, type ProductChangeToolDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps, type ReportToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './tools/builtins.js';

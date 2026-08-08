@@ -29,6 +29,7 @@ import {
   type StrategyContext,
   type SubordinateRosterEntry,
   type TeamToolDeps,
+  type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index.ts';
 
 interface Call { action: string; input: unknown }
@@ -58,6 +59,12 @@ const rosterEntry: SubordinateRosterEntry = {
   createdAt: 1000, dismissedAt: null,
 };
 
+const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
+  eventId: `evt-${delivery}`,
+  delivery,
+  phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
+});
+
 function makeTeam(): { deps: TeamToolDeps; calls: Call[] } {
   const calls: Call[] = [];
   return {
@@ -68,9 +75,9 @@ function makeTeam(): { deps: TeamToolDeps; calls: Call[] } {
         calls.push({ action: 'spawn', input });
         return { name: input.name ?? 'researcher', displayName: 'Researcher' };
       },
-      assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name }; },
+      assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name, ...handoff('steering_live_turn', true) }; },
       status: async (input) => { calls.push({ action: 'status', input }); return { roster: [rosterEntry] }; },
-      message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name }; },
+      message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
       dismiss: async (input) => {
         calls.push({ action: 'dismiss', input });
         return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
@@ -192,7 +199,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(await ns.ask({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
       .toMatchObject({ status: 'working', agent: 'researcher' });
     expect(await ns.send({ agent: 'researcher', message: 'also check the CLI' }))
-      .toEqual({ status: 'delivered', agent: 'researcher' });
+      .toMatchObject({ status: 'delivered', agent: 'researcher', delivery: 'starts_now', event_id: 'evt-starts_now' });
     expect(await ns.reply({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
     expect(await ns.list()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
     expect(await ns.dismiss({ agent: 'researcher' }))

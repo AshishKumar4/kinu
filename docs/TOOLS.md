@@ -2,7 +2,7 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 12 names). All filesystem operations are available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
+The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 11 names). All filesystem operations are available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@proteus/core/tools`. The registry and descriptions
@@ -10,27 +10,30 @@ live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, and
 `memory` are unconditional; every other tool is registered when — and only
 when — the backend wires its deps. That gating is structural rather than
-flagged, and it is how a subordinate gets `report` and never gets `team`.
+flagged, and it is how a subordinate gets `report` and never gets the `staff`
+action of `agents`.
 
 ## Top-Level Tools
 
 | Tool | Purpose |
 |------|---------|
-| `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, and `tools.<name>` crafted-tool APIs |
+| `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
 | `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
-| `think` | Fork into 2–6 parallel copies that share the workspace, run their own tool loops, and merge back into the turn |
+| `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | Save/search durable prose memory; recall past session transcripts (`action=sessions`) |
 | `fact` | Remember/recall/forget typed keyed facts (preferences, project state, URLs) |
+| `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
 | `web_search` | Search the live web; ranked results (title, url, snippet, date). Key-less via DuckDuckGo; a stored `tavily` credential upgrades to ranked Tavily results |
 | `web_fetch` | Fetch one URL as clean, citation-ready markdown (Cloudflare markdown service, with a local HTML→markdown fallback) |
-| `team` | Staff this workspace with persistent subordinate agents — `list \| spawn \| assign \| status \| message \| dismiss` |
-| `peers` | Reach the owner's *other* workspaces — `list \| ask \| send \| reply \| spawn_workspace` |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
-| `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
 | `product_change` | Governed lane for changing the Proteus product/UI itself |
 
-## think, team, peers, report — the delegation surface
+## agents — the delegation surface
+
+There is **one** delegation tool. `think`, `team` and `peers` were three tools
+for one decision; they are now three groups of actions on `agents`, gated by
+the deps a backend wires (`agentsActionsFor`).
 
 Delegation is **one ladder keyed on lifetime**, because lifetime is the only
 axis the model actually has to decide on. The system prompt's `## Delegation`
@@ -38,41 +41,70 @@ section (`packages/core/src/prompt.ts`) renders it, with both rung triggers
 pulled verbatim from `BUILTIN_TOOL_SPECS` so `registry.ts` stays the single
 source:
 
-1. **Do it yourself** — a single short coherent change.
-2. **Ephemeral fork** (`think`) — spawns 2–6 copies of you on the same
+0. **Do it yourself** — a single short coherent change. Naming the zeroth rung
+   is what makes "delegate" a decision rather than a reflex.
+1. **No agent at all** — for bulk text that needs no tools, slice it and
+   `llm.query` each slice inside `execute_tools`. Rendered only where the RLM
+   provider is actually wired, and weight-ordered here because it is the
+   cheapest helper there is.
+2. **Ephemeral fork** (`fork`) — spawns 2–6 copies of you on the same
    workspace, sandbox and files; each runs its own multi-step tool loop
    concurrently; findings merge back into this turn and the forks disappear.
-3. **Persistent subordinate** (`team`) — long-lived, keeps its own context
+3. **Persistent subordinate** (`staff`) — long-lived, keeps its own context
    across turns, stays in the roster.
 
 `mcts` is **not** a rung. It is a scoring policy over the same fork primitive:
-`think`'s `strategy` defaults to forking (branches merge), and `strategy=mcts`
-switches how branches are settled — scored against each other by execution
-instead of merged. Everything about the search (UCT selection, backprop,
-pruning, convergence, search-store resume, sibling diversity,
-execution-grounded rewards) is unchanged and fully reachable; it is simply no
-longer advertised as a co-equal first choice, which is what kept the model from
-ever reaching for `think` at all.
+`fork`'s `settle` defaults to `merge`, and `settle=mcts` switches how branches
+are settled — scored against each other by execution instead of merged.
+Everything about the search (UCT selection, backprop, pruning, convergence,
+search-store resume, sibling diversity, execution-grounded rewards) is
+unchanged and fully reachable; it is simply no longer advertised as a co-equal
+first choice, which is what kept the model from ever reaching for a fork at
+all.
 
-`peers` is the one axis that is genuinely not lifetime — it crosses *workspace*
-boundaries, which is why it sits outside the ladder.
+Talking to what already exists is not a rung either — `ask`, `send`, `reply`
+and `list` address agents by name, and the name decides the transport:
 
-- **`team`** spawns a `SubordinateAgent` — a Durable Object facet of the same
+- **A subordinate** is a `SubordinateAgent` — a Durable Object facet of the same
   workspace that runs the *full* turn loop on its own workstream. It shares the
   workspace's files through a parent-RPC VFS mount, so a subordinate and the
-  orchestrator are looking at the same tree. `spawn` takes a role plus a mission
-  (the mission runs as its first turn); `assign` hands it further tasks;
-  `message` injects a conversational note into its next turn; `dismiss` retires
-  it, wiping its storage unless `keep_history` is set.
-- **`peers`** crosses workspace boundaries over the EventsHub peer transport:
-  `ask` waits for the reply (default 120 s, max 600 — a late reply still arrives
-  as an event), `send` does not wait, `reply` answers a peer message event by its
-  `event_id`, and `spawn_workspace` creates or reuses a whole specialist
+  orchestrator are looking at the same tree. `staff` takes a role plus a mission
+  (the mission runs as its first turn); `ask` hands it further work; `send`
+  injects a conversational note; `dismiss` retires it, keeping its context
+  archived unless `keep_history: false` is passed.
+- **A peer** is one of the owner's *other* workspaces, reached over the
+  EventsHub peer transport. This is the one axis that is genuinely not
+  lifetime, which is why it sits outside the ladder. `ask` waits for the reply
+  (default 120 s, max 600 — a late reply still arrives as an event), `send`
+  does not wait, `reply` answers an agent message event by its `event_id`, and
+  `staff` with `scope: workspace` creates or reuses a whole specialist
   workspace.
-- **`report`** is registered only on subordinates. It is how a subordinate's
-  findings reach the orchestrator between turns; the answer of an assigned turn
-  is relayed automatically at turn end, so `report` is for milestones, not
-  per-step noise.
+- **`report`** is a separate tool, registered only on subordinates. It is how a
+  subordinate's findings reach the orchestrator between turns; the answer of an
+  assigned turn is relayed automatically at turn end, so `report` is for
+  milestones, not per-step noise.
+
+### The delivery contract
+
+A busy agent is **never blocked on**, and both `ask` and `send` say so in their
+return rather than leaving the sender to guess:
+
+| Field | Meaning |
+|-------|---------|
+| `event_id` | The admitted event's id — the same id the eventual `subordinate_report` cites, which is what correlates an answer arriving turns later with the thing that was asked |
+| `delivery` | `steering_live_turn` (the target was mid-turn, so the message splices into that turn's next agentic step), `starts_now` (it was idle; the drain turns the message into a turn), or `queued` (the log had already admitted this, so it rides that backlog) |
+| `subordinate_phase` | `{busy, lastActivityAt, workingOn}` — what the target was doing when the message landed |
+
+`send` additionally reports `status: delivered | queued`, the same vocabulary
+the peer transport uses: *delivered* means it reached the target's context,
+*queued* means it waits behind work already admitted.
+
+The mechanism behind `steering_live_turn` is the reactor drain
+(`core/src/orchestrator/agent-orchestrator.ts`) plus
+`BackendHost.injectIntoActiveTurn`: a batch bound while a turn is live is
+spliced by the `proteus.event-injection` extension instead of queueing behind
+the turn. This is why there is no delivery *mode* to choose — there is one
+policy, and the return reports which branch it took.
 
 ## execute_tools — Codemode Sandbox
 
@@ -215,14 +247,15 @@ unless the workspace's shell approval mode is `allow_all`.
 (`node`, `npm`, `git`, `python`, `docker`, …) exit 127 with a message pointing at
 a real runtime instead.
 
-## think — the ephemeral-fork rung
+## agents fork — the ephemeral-fork rung
 
-`think` dispatches through the strategy registry (`core/src/strategy/`). With
-`strategy` omitted it runs `FORK_STRATEGY_ID` (`heads`): independent forks of
-the agent, each running its own multi-step tool loop over a fork of the parent
-workspace, merged back into the turn. `strategy=mcts` keeps the same fork
-primitive but settles branches by scoring them against each other by execution.
-See [MCTS.md](./MCTS.md) for the search algorithm.
+`agents` with `action: fork` dispatches through the strategy registry
+(`core/src/strategy/`). With `settle` omitted (or `settle: merge`) it runs
+`FORK_STRATEGY_ID` (`heads`): independent forks of the agent, each running its
+own multi-step tool loop over a fork of the parent workspace, merged back into
+the turn. `settle: mcts` keeps the same fork primitive but settles branches by
+scoring them against each other by execution. See [MCTS.md](./MCTS.md) for the
+search algorithm.
 
 ## experience — cross-workspace transfer
 
@@ -269,8 +302,9 @@ Crafted tools are discovered, scored, and retired automatically:
 
 The tool roster is deliberately small: filesystem work folds into the
 `execute_tools` codemode sandbox rather than living as a dozen flat
-per-operation tools. The whole schema surface the model sees is the 12 names
-plus their docstrings — roughly 1.7k tokens of description text
+per-operation tools, and delegation folds into `agents` rather than one tool
+per delegation shape. The whole schema surface the model sees is the 11 names
+plus their docstrings — roughly 1.9k tokens of description text
 (`BUILTIN_TOOL_DESCRIPTIONS`), and that stays flat as the CraftStore grows,
 because crafted tools live inside the sandbox namespace instead of the top-level
 schema.

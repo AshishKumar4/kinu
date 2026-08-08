@@ -22,6 +22,7 @@ import { contextWindowForModel } from './context-window.js';
 import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
+import { describeProviderError } from './providers/util.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -160,6 +161,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
+  // streamText routes provider failures into the stream as an in-band error
+  // chunk instead of throwing — captured here and rethrown VERBATIM after the
+  // loop, so callers' failure handling (the overflow-recovery classifier)
+  // sees the provider's actual error text, never the opaque
+  // AI_NoOutputGeneratedError that awaiting result.response would raise.
+  let streamError: unknown;
+
   const result = streamText({
     model: opts.model,
     system: cache.system,
@@ -167,6 +175,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
+    // The SDK's default onError is `console.error(error)`, which dumped the
+    // raw provider payload to the terminal alongside our own rendering of it.
+    // Capture instead: the error still reaches callers through the rethrow
+    // below, so there is exactly one place that decides how a failure reads.
+    onError: ({ error }) => { streamError = error; },
     ...(providerOptions ? { providerOptions } : {}),
     // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
     // first, then step-boundary tool-output pruning against the window budget,
@@ -198,12 +211,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   });
 
   let allText = '';
-  // streamText routes provider failures into the stream as an in-band error
-  // chunk instead of throwing — captured here and rethrown VERBATIM after the
-  // loop, so callers' failure handling (the overflow-recovery classifier)
-  // sees the provider's actual error text, never the opaque
-  // AI_NoOutputGeneratedError that awaiting result.response would raise.
-  let streamError: unknown;
 
   for await (const chunk of result.fullStream) {
     if (opts.signal?.aborted) break;
@@ -234,7 +241,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         // A tool threw: the error is the durable outcome the evolution signal
         // reads. The extension seam sees the error text as the result (same as
         // the cf afterToolCall), and the discriminator rides success/error.
-        const error = errorText((chunk as any).error);
+        const error = describeProviderError((chunk as any).error);
         const result = error.slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
         yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
@@ -254,7 +261,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
 
   if (streamError !== undefined) {
-    throw streamError instanceof Error ? streamError : new Error(String(streamError));
+    throw streamError instanceof Error ? streamError : new Error(describeProviderError(streamError));
   }
 
   // Await the full result to get response messages
@@ -283,9 +290,4 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
   yield { type: 'done', text: allText, responseMessages };
-}
-
-/** The message of a thrown tool error, from whatever shape the SDK carries. */
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

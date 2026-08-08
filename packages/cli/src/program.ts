@@ -40,7 +40,7 @@ import { labelCommand } from './commands/label.js';
 import { exportCommand, importCommand } from './commands/export-import.js';
 import { tokensCommand } from './commands/tokens.js';
 import { workspaceDeleteCommand } from './commands/workspace.js';
-import { printError, VERSION } from './display.js';
+import { printFailure, VERSION } from './display.js';
 
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */
@@ -464,8 +464,8 @@ export function buildProgram(): Command {
 /** Wrap async actions with consistent error handling. */
 function wrapAction(fn: (...args: any[]) => Promise<void>) {
   return (...args: any[]) => {
-    fn(...args).catch((err: Error) => {
-      printError(err.message);
+    fn(...args).catch((err: unknown) => {
+      printFailure(err);
       process.exit(1);
     });
   };

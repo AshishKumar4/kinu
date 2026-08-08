@@ -28,7 +28,7 @@ import {
 import { requireAuthConfig } from './config.js';
 import { renderSessionBrowser, selectSession } from './tui/session-browser.js';
 import {
-  printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator,
+  printToolCall, printToolResult, printEvolutionEvent, createTypingIndicator, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN,
 } from './display.js';
 
@@ -199,7 +199,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       await waitForTurnsToSettle();
     } catch (err) {
       typing.stop();
-      console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
+      console.log(`\n${formatFailure(err)}\n`);
     } finally {
       consentWatch?.stop();
       turnInFlight = false;
@@ -291,7 +291,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         const done = await applySlashOutcome(client, rl, outcome);
         if (done === 'exit') { await onExit(); return; }
       } catch (err) {
-        console.log(`\n${ERR('error')} ${err instanceof Error ? err.message : String(err)}\n`);
+        console.log(`\n${formatFailure(err)}\n`);
       }
       continue;
     }
@@ -511,7 +511,7 @@ function renderClientEvent(
       break;
     case 'error':
       typing.stop();
-      console.log(`\n${ERR('error')} ${event.message}\n`);
+      console.log(`\n${formatFailure(event.message)}\n`);
       break;
     case 'broadcast':
       if (isBranchStatusEvent(event.event)) {

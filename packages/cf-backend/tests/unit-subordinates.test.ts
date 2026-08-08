@@ -10,6 +10,8 @@ import {
   renderForLLM,
   spillEventContent,
   type SerializedMessage,
+  type SubordinateDelivery,
+  type SubordinateHandoff,
   type SubordinateReportPayload,
   type SubordinateRosterEntry,
 } from '@proteus/core';
@@ -20,6 +22,7 @@ import {
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
+  describeSubordinateHandoff,
   normalizeReportContent,
   readSubordinateLiveStatus,
   type SubordinateRuntime,
@@ -253,6 +256,12 @@ describe('subordinate live status', () => {
   });
 });
 
+const fakeHandoff = (delivery: SubordinateDelivery): SubordinateHandoff => ({
+  eventId: `evt-${delivery}`,
+  delivery,
+  phase: { busy: delivery === 'steering_live_turn', lastActivityAt: null, workingOn: null },
+});
+
 interface TeamHarness {
   roster: SubordinateRosterStore;
   team: ReturnType<typeof createTeamToolDeps>;
@@ -280,6 +289,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
       calls.push(`assign:${name}:${input.body}`);
       assignments.push(input);
       fail('assign');
+      return fakeHandoff('starts_now');
     },
     async status(name) {
       fail('status');
@@ -288,7 +298,11 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
         recentSteps: [{ event: 'beforeturn', summary: 'streamText() called next', elapsedMs: 12, createdAt: 34 }],
       };
     },
-    async message(name, content) { calls.push(`message:${name}:${content}`); fail('message'); },
+    async message(name, content) {
+      calls.push(`message:${name}:${content}`);
+      fail('message');
+      return fakeHandoff('steering_live_turn');
+    },
     async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss'); },
   };
   const team = createTeamToolDeps({
@@ -443,9 +457,15 @@ describe('team action routing', () => {
     const observed: Array<{ operation: string; roster: SubordinateRosterEntry | null }> = [];
     const runtime: SubordinateRuntime = {
       async spawn() {},
-      async assign(name) { observed.push({ operation: 'assign', roster: roster.get(name) }); },
+      async assign(name) {
+        observed.push({ operation: 'assign', roster: roster.get(name) });
+        return fakeHandoff('starts_now');
+      },
       async status() { return null; },
-      async message(name) { observed.push({ operation: 'message', roster: roster.get(name) }); },
+      async message(name) {
+        observed.push({ operation: 'message', roster: roster.get(name) });
+        return fakeHandoff('starts_now');
+      },
       async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
     };
     const team = createTeamToolDeps({
@@ -550,6 +570,60 @@ describe('subordinate event admission', () => {
         from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
       },
     });
+  });
+
+  // The sender used to be handed a fixed sentence and told nothing about what
+  // happened to the work. Everything below was already known at admission.
+  test('the sender is told the event id its report will cite', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const admission = admitSubordinateTask(log, {
+      fromWorkspace: 'proteus-main', kind: 'task', body: 'Investigate', now: 10,
+    });
+
+    const handoff = describeSubordinateHandoff({
+      admission,
+      turnInFlight: false,
+      live: { lastActivity: null, recentSteps: [] },
+    });
+
+    expect(handoff.eventId).toBe(admission.id);
+  });
+
+  test('a busy subordinate is steered, an idle one starts now', () => {
+    const live = { lastActivity: 34, recentSteps: [{ event: 'beforeturn', summary: 'reading src/auth.ts', elapsedMs: 12, createdAt: 34 }] };
+    const admission = { id: 'evt-1', admitted: true };
+
+    expect(describeSubordinateHandoff({ admission, turnInFlight: true, live })).toEqual({
+      eventId: 'evt-1',
+      delivery: 'steering_live_turn',
+      phase: { busy: true, lastActivityAt: 34, workingOn: 'reading src/auth.ts' },
+    });
+    expect(describeSubordinateHandoff({ admission, turnInFlight: false, live }).delivery).toBe('starts_now');
+  });
+
+  test('an admission the log rejected as a duplicate is queued, not claimed as a fresh start', () => {
+    // `admitted: false` means the event was already in the log, so this
+    // publish scheduled no drain of its own — it rides whatever is waiting.
+    // Busy or idle is irrelevant to that, hence both.
+    for (const turnInFlight of [true, false]) {
+      expect(describeSubordinateHandoff({
+        admission: { id: 'evt-existing', admitted: false },
+        turnInFlight,
+        live: { lastActivity: null, recentSteps: [] },
+      })).toMatchObject({ eventId: 'evt-existing', delivery: 'queued' });
+    }
+  });
+
+  test('a subordinate that has done nothing yet reports no work in progress', () => {
+    const handoff = describeSubordinateHandoff({
+      admission: { id: 'evt-1', admitted: true },
+      turnInFlight: false,
+      live: { lastActivity: null, recentSteps: [] },
+    });
+
+    expect(handoff.phase).toEqual({ busy: false, lastActivityAt: null, workingOn: null });
   });
 
   test('empty actor identities and bodies are rejected before EventLog admission', () => {

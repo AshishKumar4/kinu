@@ -20,6 +20,7 @@ import {
   FORK_STRATEGY_ID, PEER_REPLY_TOPIC,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
   type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
+  type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index.ts';
 
 interface Call { action: string; input: unknown }
@@ -53,6 +54,12 @@ const rosterEntry: SubordinateRosterEntry = {
   createdAt: 1000, dismissedAt: null,
 };
 
+const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
+  eventId: `evt-${delivery}`,
+  delivery,
+  phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
+});
+
 function makeTeam(overrides: Partial<TeamToolDeps> = {}): { deps: TeamToolDeps; calls: Call[] } {
   const calls: Call[] = [];
   const deps: TeamToolDeps = {
@@ -61,9 +68,9 @@ function makeTeam(overrides: Partial<TeamToolDeps> = {}): { deps: TeamToolDeps; 
       calls.push({ action: 'spawn', input });
       return { name: input.name ?? 'researcher', displayName: 'Researcher' };
     },
-    assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name }; },
+    assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name, ...handoff('steering_live_turn', true) }; },
     status: async (input) => { calls.push({ action: 'status', input }); return { roster: [rosterEntry] }; },
-    message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name }; },
+    message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
     dismiss: async (input) => {
       calls.push({ action: 'dismiss', input });
       return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
@@ -305,14 +312,79 @@ describe('agents tool — subordinate actions', () => {
     });
   });
 
+  // The sender used to be told a fixed sentence and nothing else: no id to
+  // correlate the eventual report with, and no way to know whether the
+  // subordinate was mid-work. Both are things admission already knew.
+  test('ask reports the event id, how the work lands, and what the subordinate was doing', async () => {
+    const { deps } = makeTeam();
+    const t = agentsTool({ team: deps });
+
+    const result = await t.execute({ action: 'ask', agent: 'researcher', message: 'Survey auth' }) as {
+      event_id: string; delivery: string; subordinate_phase: { busy: boolean; workingOn: string | null }; note: string;
+    };
+
+    expect(result.event_id).toBe('evt-steering_live_turn');
+    expect(result.delivery).toBe('steering_live_turn');
+    expect(result.subordinate_phase).toEqual({ busy: true, lastActivityAt: 1234, workingOn: 'reading src/auth.ts' });
+    // The note has to teach the model that a busy subordinate is steered, not
+    // blocked — that is what changes how it delegates.
+    expect(result.note).toContain('mid-turn');
+    expect(result.note).toContain('evt-steering_live_turn');
+  });
+
+  test('ask against an idle subordinate says the work starts now', async () => {
+    const { deps } = makeTeam({
+      assign: async (input) => ({ ok: true, name: input.name, ...handoff('starts_now', false) }),
+    });
+    const t = agentsTool({ team: deps });
+
+    const result = await t.execute({ action: 'ask', agent: 'researcher', message: 'x' }) as { delivery: string; note: string };
+
+    expect(result.delivery).toBe('starts_now');
+    expect(result.note).toContain('idle');
+  });
+
+  test('ask deduped against work already waiting says so instead of claiming a fresh start', async () => {
+    const { deps } = makeTeam({
+      assign: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
+    });
+    const t = agentsTool({ team: deps });
+
+    const result = await t.execute({ action: 'ask', agent: 'researcher', message: 'x' }) as { delivery: string; note: string };
+
+    expect(result.delivery).toBe('queued');
+    expect(result.note).toContain('Already waiting');
+  });
+
   test('send to a roster name injects a conversational note', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
     const result = await t.execute({ action: 'send', agent: 'researcher', message: 'also check the CLI' });
-    expect(result).toEqual({ status: 'delivered', agent: 'researcher' });
+    expect(result).toEqual({
+      status: 'delivered',
+      agent: 'researcher',
+      event_id: 'evt-starts_now',
+      delivery: 'starts_now',
+      subordinate_phase: { busy: false, lastActivityAt: 1234, workingOn: null },
+    });
     expect(calls[0]).toEqual({
       action: 'message', input: { name: 'researcher', content: 'also check the CLI' },
     });
+  });
+
+  test('send uses the same delivered/queued vocabulary as the peer transport', async () => {
+    const steered = agentsTool({ team: makeTeam({
+      message: async (input) => ({ ok: true, name: input.name, ...handoff('steering_live_turn', true) }),
+    }).deps });
+    const backlogged = agentsTool({ team: makeTeam({
+      message: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
+    }).deps });
+
+    // Spliced into the live turn IS reaching the target's context.
+    expect(await steered.execute({ action: 'send', agent: 'researcher', message: 'x' }))
+      .toMatchObject({ status: 'delivered', delivery: 'steering_live_turn' });
+    expect(await backlogged.execute({ action: 'send', agent: 'researcher', message: 'x' }))
+      .toMatchObject({ status: 'queued', delivery: 'queued' });
   });
 
   test('a COMPLETED (idle) subordinate still answers a follow-up ask — persistence is the semantic', async () => {

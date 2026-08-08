@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS } from '@proteus/core';
 import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
+import { guideFailure } from './provider-guidance.js';
 import cliPackage from '../package.json' with { type: 'json' };
 
 // ── Brand ────────────────────────────────────────────────────────
@@ -277,6 +278,22 @@ export function printError(message: string, hint?: string): void {
   console.error(`\n${ERR('error')} ${message}`);
   if (hint) console.error(`${DIM('hint:')} ${hint}`);
   console.error('');
+}
+
+/** A command that could not complete: the failure in the provider's words,
+ *  plus the next command when the failure class implies one. Every command
+ *  action funnels here, so no thrown value can reach a user unrendered. */
+export function printFailure(error: unknown): void {
+  const { message, hint } = guideFailure(error);
+  printError(message, hint);
+}
+
+/** The same block for surfaces that own their output stream — the run/chat
+ *  transcripts, where an error is one entry among the streamed events rather
+ *  than the end of the process. */
+export function formatFailure(error: unknown): string {
+  const { message, hint } = guideFailure(error);
+  return hint ? `${ERR('error')} ${message}\n${DIM('hint:')} ${hint}` : `${ERR('error')} ${message}`;
 }
 
 // ── Help screen ──────────────────────────────────────────────────
