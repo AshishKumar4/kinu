@@ -211,9 +211,16 @@ fi
 
 # One GET that answers "did my deploy land?". /api/health reads its build stamp
 # out of the deployed asset bundle, so a mismatch here also means the CLI
-# download assets are stale or missing.
-HEALTH_JSON=$(curl -s --max-time 15 "${PROTEUS_URL}api/health" 2>/dev/null)
-HEALTH_SHA=$(printf '%s' "$HEALTH_JSON" | json_field build.sha)
+# download assets are stale or missing. Edge rollout takes up to ~2 minutes,
+# so the stamp check retries with backoff before calling the deploy bad —
+# a stamp that NEVER converges is the real failure this guards.
+HEALTH_SHA=""
+for _try in 1 2 3 4 5 6 7 8; do
+  HEALTH_JSON=$(curl -s --max-time 15 "${PROTEUS_URL}api/health?smoke=$_try" 2>/dev/null)
+  HEALTH_SHA=$(printf '%s' "$HEALTH_JSON" | json_field build.sha)
+  [ "$HEALTH_SHA" = "$PROTEUS_SHA" ] && break
+  sleep 15
+done
 if [ "$HEALTH_SHA" = "$PROTEUS_SHA" ]; then
   echo -e "${GREEN}✅ /api/health reports the deployed build ($PROTEUS_SHA)${NC}"
 else
@@ -224,7 +231,12 @@ fi
 
 # The §0 regression: this asset once came back as the SPA shell wearing an
 # application/json content-type, so `proteus update` could never see a version.
-VERSION_SHA=$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-version.json" 2>/dev/null | json_field sha)
+VERSION_SHA=""
+for _try in 1 2 3 4 5 6 7 8; do
+  VERSION_SHA=$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-version.json?smoke=$_try" 2>/dev/null | json_field sha)
+  [ "$VERSION_SHA" = "$PROTEUS_SHA" ] && break
+  sleep 15
+done
 if [ "$VERSION_SHA" = "$PROTEUS_SHA" ]; then
   echo -e "${GREEN}✅ Published proteus-version.json is real JSON for this build${NC}"
 else
