@@ -52,6 +52,38 @@ describe('resolvePromptCacheStrategy', () => {
     expect(resolvePromptCacheStrategy('something-new')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy(undefined)).toEqual({ kind: 'none' });
   });
+
+  test("retention 'long' carries each provider's own extended-TTL wire value", () => {
+    expect(resolvePromptCacheStrategy('anthropic', 'claude-opus-4-7', 'long'))
+      .toEqual({ kind: 'anthropic', ttl: '1h' });
+    expect(resolvePromptCacheStrategy('openai', 'gpt-5.5', 'long'))
+      .toEqual({ kind: 'openai-cache-key', ttl: '24h' });
+    expect(resolvePromptCacheStrategy('openrouter', 'anthropic/claude-sonnet-4.6', 'long'))
+      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true, ttl: '1h' });
+    // No marker dialect ⇒ no TTL to send; the key-only strategies stay bare.
+    expect(resolvePromptCacheStrategy('openrouter', 'meta-llama/llama-4-maverick', 'long'))
+      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: false });
+    expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5', 'long'))
+      .toEqual({ kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false });
+  });
+
+  test("retention 'short' is the default and is byte-identical to no opinion", () => {
+    for (const provider of ['anthropic', 'openai', 'openrouter', 'my-gateway', 'workers-ai']) {
+      expect(resolvePromptCacheStrategy(provider, 'anthropic/claude-sonnet-4.6', 'short'))
+        .toEqual(resolvePromptCacheStrategy(provider, 'anthropic/claude-sonnet-4.6'));
+    }
+  });
+
+  test("retention 'none' opts every provider out of the cache entirely", () => {
+    for (const provider of ['anthropic', 'openai', 'codex', 'openrouter', 'my-gateway', 'openai-compat:groq']) {
+      expect(resolvePromptCacheStrategy(provider, 'anthropic/claude-sonnet-4.6', 'none'))
+        .toEqual({ kind: 'none' });
+    }
+    // …which means no markers AND no cache key — not just a shorter TTL.
+    const off = resolvePromptCacheStrategy('anthropic', 'claude-opus-4-7', 'none');
+    expect(hasCacheMarkers(off)).toBe(false);
+    expect(promptCacheOptions(off, 'agent-1')).toBeUndefined();
+  });
 });
 
 describe('cacheableSystem', () => {
@@ -248,5 +280,16 @@ describe('markLastToolForAnthropicCache', () => {
   test('empty tool set is a no-op', () => {
     const tools = {} as ToolSet;
     expect(() => markLastToolForAnthropicCache(tools)).not.toThrow();
+  });
+
+  test('retention drives the tool-surface breakpoint: long extends it, none omits it', () => {
+    const long = { a: tool('a'), b: tool('b') } as unknown as ToolSet;
+    markLastToolForAnthropicCache(long, 'long');
+    expect((long.b as { providerOptions?: Record<string, unknown> }).providerOptions)
+      .toEqual({ anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } });
+
+    const off = { a: tool('a'), b: tool('b') } as unknown as ToolSet;
+    markLastToolForAnthropicCache(off, 'none');
+    expect((off.b as { providerOptions?: Record<string, unknown> }).providerOptions).toBeUndefined();
   });
 });

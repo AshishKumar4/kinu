@@ -13,11 +13,28 @@ import type { LanguageModel } from 'ai';
 /** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
 
+/**
+ * What one model charges, in USD per 1M tokens — the models.dev `cost` block
+ * verbatim (its own units, so nothing is rescaled on the way in and a reader
+ * can check a number against the catalog page).
+ *
+ * `cacheRead`/`cacheWrite` are absent for providers with no prompt cache.
+ */
+export interface ModelPricing {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export interface ModelInfo {
   id: string;
   label?: string;
   capabilities?: ModelCapability[];
   contextWindow?: number;
+  /** Per-1M-token USD rates, when the catalog publishes them. Absent means
+   *  unknown — never zero (a free model is `input: 0`). */
+  cost?: ModelPricing;
   /** Input modalities the model itself accepts (models.dev vocabulary).
    *  Absent when the catalog doesn't know — consumers fall back to a
    *  conservative provider-class default (attachment-sanitizer.ts). */

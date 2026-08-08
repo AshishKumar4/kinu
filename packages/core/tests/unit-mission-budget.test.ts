@@ -15,13 +15,20 @@ import {
 } from '../src/mission-budget.js';
 import { estimateUsdCost } from '../src/llm.js';
 import type { LLM } from '../src/types/primitives.js';
+import type { ModelPricing } from '../src/providers/types.js';
 
-function makeGovernor(opts: { onExhausted?: (r: MissionBudgetRefusal) => void } = {}) {
+function makeGovernor(opts: {
+  onExhausted?: (r: MissionBudgetRefusal) => void;
+  pricing?: () => ModelPricing | null;
+} = {}) {
   const db = new Database(':memory:');
   const storage = { sql: makeSql(db), execRaw: makeExecRaw(db) };
   const governor = new MissionGovernor({ storage, ...opts, now: () => 1_000 });
   return { governor, storage, db };
 }
+
+/** Claude Sonnet's published models.dev rates, USD per 1M tokens. */
+const SONNET: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 
 /** A scripted LLM whose completions are fixed-length, so the char estimate is
  *  deterministic. No network, no model. */
@@ -197,6 +204,99 @@ describe('mission budget — the governed model-call seam', () => {
     const err = await llm.complete('x').then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(MissionBudgetExhausted);
     expect((err as MissionBudgetExhausted).refusal.seam).toBe('model_call');
+  });
+});
+
+describe('mission budget — USD at catalog prices', () => {
+  test('a reported call is priced from the model catalog, cache reads discounted', () => {
+    const { governor } = makeGovernor({ pricing: () => SONNET });
+    governor.declare('mission', {});
+    governor.activate(['mission']);
+    // 10k input of which 8k came from the cache, 2k output.
+    governor.debit(12_000, { calls: 1, usage: { input: 10_000, output: 2_000, cached: 8_000 } });
+
+    const [row] = governor.snapshot();
+    // (2k × $3 + 8k × $0.30 + 2k × $15) / 1M
+    const expected = (2_000 * 3 + 8_000 * 0.3 + 2_000 * 15) / 1_000_000;
+    expect(row!.spent.usd).toBeCloseTo(expected, 10);
+    expect(row!.spent.tokens).toBe(12_000);
+    expect(row!.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });
+    // The blended rate would have been wrong by more than 2x here.
+    expect(row!.spent.usd).not.toBeCloseTo(estimateUsdCost(12_000), 4);
+  });
+
+  test('no cache-read rate published: cached input is charged at the input rate', () => {
+    const { governor } = makeGovernor({ pricing: () => ({ input: 3, output: 15 }) });
+    governor.declare('m', {});
+    governor.activate(['m']);
+    governor.debit(1_500, { usage: { input: 1_000, output: 500, cached: 900 } });
+    expect(governor.snapshot()[0]!.spent.usd).toBeCloseTo((1_000 * 3 + 500 * 15) / 1_000_000, 10);
+  });
+
+  test('spend the catalog cannot price falls back to the blended rate AND says so', () => {
+    const { governor } = makeGovernor({ pricing: () => SONNET });
+    governor.declare('m', {});
+    governor.activate(['m']);
+    // A fork reporting one total across its sub-agents' models — no split.
+    governor.debit(4_000, { spawns: 1 });
+
+    const [row] = governor.snapshot();
+    expect(row!.spent.usd).toBeCloseTo(estimateUsdCost(4_000), 10);
+    expect(row!.pricing).toEqual({ blendedTokens: 4_000, source: 'blended' });
+  });
+
+  test('a catalog that has not landed yet blends, and the ledger reads mixed once it does', () => {
+    let pricing: ModelPricing | null = null;
+    const { governor } = makeGovernor({ pricing: () => pricing });
+    governor.declare('m', {});
+    governor.activate(['m']);
+    governor.debit(1_000, { usage: { input: 800, output: 200 } });
+    expect(governor.snapshot()[0]!.pricing).toEqual({ blendedTokens: 1_000, source: 'blended' });
+
+    pricing = SONNET;
+    governor.debit(1_000, { usage: { input: 800, output: 200 } });
+    const [row] = governor.snapshot();
+    expect(row!.pricing).toEqual({ blendedTokens: 1_000, source: 'mixed' });
+    expect(row!.spent.usd).toBeCloseTo(
+      estimateUsdCost(1_000) + (800 * 3 + 200 * 15) / 1_000_000, 10);
+  });
+
+  test('a USD cap now refuses on what the model actually costs', () => {
+    // 200k output tokens on Sonnet is $3.00; the blended rate would have called
+    // the same spend $0.60 and let the run continue.
+    const { governor } = makeGovernor({ pricing: () => SONNET });
+    governor.declare('expensive', { usd: 2 });
+    governor.activate(['expensive']);
+    expect(governor.guard('model_call')).toBeNull();
+
+    governor.debit(200_000, { calls: 1, usage: { input: 0, output: 200_000 } });
+    const refusal = governor.guard('model_call');
+    expect(refusal?.error).toBe('budget_exhausted');
+    expect(refusal?.spent.usd).toBeCloseTo(3, 10);
+    // Catalog-priced spend is stated as a measurement, not an approximation.
+    expect(refusal?.note).toContain('= $3.0000');
+    expect(governor.snapshot()[0]!.remaining.usd).toBe(0);
+  });
+
+  test('a ledger written before pricing existed migrates as blended, not as unspent', () => {
+    const db = new Database(':memory:');
+    const storage = { sql: makeSql(db), execRaw: makeExecRaw(db) };
+    // The pre-pricing table, verbatim.
+    storage.execRaw(`CREATE TABLE mission_budget (
+      label TEXT PRIMARY KEY, parent_label TEXT, limit_usd REAL, limit_tokens INTEGER,
+      spent_tokens INTEGER NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0,
+      spawns INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, exhausted_at INTEGER)`);
+    storage.execRaw(`INSERT INTO mission_budget
+      (label, parent_label, limit_usd, limit_tokens, spent_tokens, calls, spawns, created_at, exhausted_at)
+      VALUES ('legacy', NULL, 1.0, NULL, 400000, 12, 0, 1, NULL)`);
+
+    const governor = new MissionGovernor({ storage, now: () => 1_000 });
+    const [row] = governor.snapshot('legacy');
+    expect(row!.spent.tokens).toBe(400_000);
+    expect(row!.spent.usd).toBeCloseTo(estimateUsdCost(400_000), 10);
+    expect(row!.pricing).toEqual({ blendedTokens: 400_000, source: 'blended' });
+    // $1.20 blended against a $1 cap — still exhausted, as it was before.
+    expect(row!.exhausted).toBe(true);
   });
 });
 

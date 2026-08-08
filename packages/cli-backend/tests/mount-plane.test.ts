@@ -84,4 +84,23 @@ describe('the local mount table', () => {
     expect(await vfs.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('durable');
     expect(readFileSync(join(dir, 'notes.md'), 'utf8')).toBe('host');
   });
+
+  // The codemode write path end-to-end: workspace.writeFile creates parent
+  // directories first, and mkdir of a top-level non-mount name used to be
+  // refused as a mount-table entry — EROFS on a path whose write works.
+  test('REGRESSION: codemode workspace.writeFile survives its own parent mkdir', async () => {
+    const rt = freshRuntime();
+    const workspace = rt.executionRouter?.getProvider('workspace');
+    expect(workspace).toBeDefined();
+
+    const written = await workspace!.tools.writeFile.execute('/workspace/x.md', 'from codemode');
+    expect(String(written)).toContain('Written');
+    expect(await rt.storage.vfs.readFile('/local/workspace/x.md', { encoding: 'utf8' })).toBe('from codemode');
+
+    // The host plane (/pc) is a live mount, so its root needs no mkdir either.
+    const dir = scratch();
+    expect(String(await workspace!.tools.writeFile.execute(`/pc${join(dir, 'y.md')}`, 'on the host')))
+      .toContain('Written');
+    expect(readFileSync(join(dir, 'y.md'), 'utf8')).toBe('on the host');
+  });
 });

@@ -10,6 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
+import { CompositeVFS } from '../src/vfs/index.js';
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return createInlineExecutor({
@@ -150,4 +151,73 @@ describe('workspace provider (InlineExecutor)', () => {
   // v2.1(E): invokeCrafted removed. Same-turn codemode.<name>() access is
   // unsupported by design — the LLM must use two turns (createTool, then
   // codemode.<name>). Tests for createTool alone remain above.
+});
+
+/**
+ * workspace.writeFile over the REAL file plane. Both backends register this
+ * executor with the CompositeVFS (cf/cli runtime.ts), and the tool creates
+ * parent directories before writing — so every path shape the agent can name
+ * has to survive that mkdir, not just the write.
+ */
+describe('workspace.writeFile over the CompositeVFS — the file plane both backends register', () => {
+  function buildPlane() {
+    const { rt } = createTestRuntime();
+    const sandbox = {
+      files: new Map<string, string>(),
+      dirs: [] as string[],
+    };
+    const sandboxVfs = {
+      async readFile(path: string) { return sandbox.files.get(path) ?? ''; },
+      async writeFile(path: string, data: string | Uint8Array) { sandbox.files.set(path, String(data)); },
+      async readdir() { return [...sandbox.files.keys()]; },
+      async stat() { return { size: 0, mtimeMs: 0, isDir: false }; },
+      async unlink(path: string) { sandbox.files.delete(path); },
+      async mkdir(path: string) { sandbox.dirs.push(path); },
+      async exists(path: string) { return sandbox.files.has(path); },
+    };
+    const vfs = new CompositeVFS({ local: rt.storage.vfs });
+    // The cf backend's sandbox mount: the container's REAL root.
+    vfs.mount('sandbox', {
+      vfs: sandboxVfs,
+      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true },
+      workingDir: '/workspace',
+    });
+    const exec = createInlineExecutor({
+      vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      sql: rt.storage.sql,
+    });
+    return { vfs, exec, sandbox };
+  }
+
+  test('REGRESSION: an absolute non-mount path writes instead of failing EROFS', async () => {
+    // `/workspace/x` has always COMPAT-routed to /local — but ensureDir's
+    // mkdir of its parent was refused as a mount-table entry, so the whole
+    // call died with EROFS on a path whose write would have succeeded.
+    const { vfs, exec } = buildPlane();
+    const result = await exec.tools.writeFile.execute('/workspace/notes.md', 'from codemode');
+    expect(String(result)).toContain('Written');
+    expect(await vfs.readFile('/local/workspace/notes.md', { encoding: 'utf8' })).toBe('from codemode');
+  });
+
+  test('writing at a mount root does not require creating the root', async () => {
+    const { exec, sandbox } = buildPlane();
+    expect(String(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top'))).toContain('Written');
+    expect(sandbox.files.get('/app.ts')).toBe('top');
+    // The composite absorbed mkdir('/sandbox') — the environment was never asked.
+    expect(sandbox.dirs).toEqual([]);
+
+    // A deeper sandbox path DOES create its parent, inside the environment.
+    expect(String(await exec.tools.writeFile.execute('/sandbox/workspace/app.ts', 'deep'))).toContain('Written');
+    expect(sandbox.files.get('/workspace/app.ts')).toBe('deep');
+    expect(sandbox.dirs).toEqual(['/workspace']);
+  });
+
+  test('the /local base and relative paths keep working unchanged', async () => {
+    const { vfs, exec } = buildPlane();
+    await exec.tools.writeFile.execute('/local/src/main.ts', 'a');
+    await exec.tools.writeFile.execute('notes/todo.md', 'b');
+    expect(await vfs.readFile('/local/src/main.ts', { encoding: 'utf8' })).toBe('a');
+    expect(await vfs.readFile('/local/notes/todo.md', { encoding: 'utf8' })).toBe('b');
+  });
 });

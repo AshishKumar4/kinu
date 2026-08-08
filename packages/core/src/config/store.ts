@@ -9,6 +9,9 @@
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { DirectoryBackup } from '../execution/sandbox.js';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
+import {
+  DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
+} from '../prompting/cache-breakpoints.js';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -17,6 +20,9 @@ export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
   reasoningEffort: 'reasoning_effort',
+  /** How long providers should keep this agent's prompt-cache prefix
+   *  (prompting/cache-breakpoints.ts). Unset = the provider default TTL. */
+  cacheRetention: 'cache_retention',
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
@@ -90,6 +96,11 @@ export interface AgentConfigStore {
   setModel(spec: string): void;
   getReasoningEffort(): ReasoningEffort | null;
   setReasoningEffort(effort: ReasoningEffort): void;
+  /** Prompt-cache retention for this agent's turns. Always answers — an unset
+   *  or malformed row reads as the `short` default, so the caching seam never
+   *  has to decide what a missing value means. */
+  getCacheRetention(): CacheRetention;
+  setCacheRetention(retention: CacheRetention): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
   getNameOrigin(): 'user' | 'auto' | null;
@@ -238,6 +249,14 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setReasoningEffort(effort) {
       if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
       set(AGENT_CONFIG_KEYS.reasoningEffort, effort);
+    },
+    getCacheRetention() {
+      const value = get(AGENT_CONFIG_KEYS.cacheRetention);
+      return isCacheRetention(value) ? value : DEFAULT_CACHE_RETENTION;
+    },
+    setCacheRetention(retention) {
+      if (!isCacheRetention(retention)) throw new Error(`Invalid cache retention: ${String(retention)}`);
+      set(AGENT_CONFIG_KEYS.cacheRetention, retention);
     },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },

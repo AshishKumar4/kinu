@@ -137,8 +137,12 @@ export class TurnAccumulator {
     this.usage.cached += cached;
     // The model-call debit, taken from the provider's own report of the step
     // just paid for. `cached` is a subset of `inputTokens` (ai v6 reports the
-    // cache-inclusive total), so it is not added again.
-    this.budget?.debit(inTok + outTok, { calls: 1 });
+    // cache-inclusive total), so it is not added again — but it IS handed over
+    // so the ledger can charge it at the model's cache-read rate.
+    this.budget?.debit(inTok + outTok, {
+      calls: 1,
+      usage: { input: inTok, output: outTok, ...(cached > 0 ? { cached } : {}) },
+    });
     // Each step is one request, so the newest reporting step carries the
     // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
     // total). Keep the last non-zero report: a trailing step with absent

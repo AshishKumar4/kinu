@@ -198,6 +198,12 @@ export class CompositeVFS implements VFS {
     }
     if (rest === '') return { kind: 'rootEntry', name: seg0 };
     // COMPAT: bare and deeper-absolute non-mount paths belong to /local.
+    return this.localCompat(abs);
+  }
+
+  /** The COMPAT routing itself: an absolute non-mount path read as its /local
+   *  alias. `/src/main.ts` IS `/local/src/main.ts`. */
+  private localCompat(abs: string): Extract<ResolvedPath, { kind: 'mount' }> {
     const local = this.rows.get('local') as Extract<MountRow, { kind: 'mount' }>;
     return {
       kind: 'mount', name: 'local', vfs: local.vfs, policy: local.policy,
@@ -262,11 +268,18 @@ export class CompositeVFS implements VFS {
   async mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
     const r = this.demandResolved(path, 'mkdir');
     if (r.kind === 'root') return; // '/' always exists
-    if (r.kind === 'rootEntry') throw this.rootTableError(path);
-    if (r.isMountRoot) return; // the mount root always exists as a directory
-    this.assertWritable(r, path);
-    this.assertNameNotReserved(r, 'mkdir', path);
-    return r.vfs.mkdir(r.sub, opts);
+    // A top-level non-mount name is the HEAD of the COMPAT namespace, not an
+    // entry of the mount table: writeFile('/workspace/x') already lands in
+    // /local/workspace, so mkdir('/workspace') has to be that same /local
+    // mkdir. Refusing it broke every writer that creates parent directories
+    // first (ensureDir → workspace.writeFile) on a path whose write would
+    // then have succeeded. Creating a FILE at the root stays refused — that
+    // one really would be a mount-table entry with no mount to live in.
+    const target = r.kind === 'rootEntry' ? this.localCompat(`/${r.name}`) : r;
+    if (target.isMountRoot) return; // the mount root always exists as a directory
+    this.assertWritable(target, path);
+    this.assertNameNotReserved(target, 'mkdir', path);
+    return target.vfs.mkdir(target.sub, opts);
   }
 
   async exists(path: string): Promise<boolean> {

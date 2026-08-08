@@ -77,7 +77,7 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
   isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort,
+  type ReasoningEffort, type CacheRetention,
 } from '@proteus/core';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -411,6 +411,9 @@ export class LocalAgentSession implements BackendHost {
     // means no cap, which is every ordinary session.
     this.budget = new MissionGovernor({
       storage: this.rt.storage,
+      // Real USD: the catalog rates for whatever model the next turn resolves
+      // to. Null until the lookup lands — the ledger then blends, and says so.
+      pricing: () => this.modelCatalog.pricing(),
       onExhausted: ({ error: _error, ...refusal }) =>
         this.recordRunEvent({ type: 'budget_exhausted', ...refusal }),
     });
@@ -1441,17 +1444,19 @@ export class LocalAgentSession implements BackendHost {
     this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
   }
 
-  /** Prompt-cache identity for runChat: the resolved provider/model plus a
-   *  stable per-conversation key (the agent's affinity key + session id —
-   *  same `proteus-<name>` scheme Workers AI affinity pins with). */
-  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string } {
+  /** Prompt-cache identity for runChat: the resolved provider/model, a stable
+   *  per-conversation key (the agent's affinity key + session id — same
+   *  `proteus-<name>` scheme Workers AI affinity pins with), and the agent's
+   *  configured retention. */
+  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string; retention: CacheRetention } {
     const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
+    const retention = this.config.getCacheRetention();
     const spec = this.effectiveModelSpec();
     try {
       const { provider, modelId } = parseModelSpec(spec);
-      return { providerId: provider, modelId, sessionKey };
+      return { providerId: provider, modelId, sessionKey, retention };
     } catch {
-      return { sessionKey };
+      return { sessionKey, retention };
     }
   }
 

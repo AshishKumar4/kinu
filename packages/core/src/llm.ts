@@ -127,9 +127,13 @@ const CHARS_PER_TOKEN = 4;
 
 /** Rough blended USD per 1k tokens. A deliberately conservative mid-range
  *  blend (≈ $3 / 1M tokens) so anything sized with it errs toward
- *  over-estimating spend. models.dev ships per-model `cost`, but it is not
- *  surfaced through `ModelInfo` (providers/types.ts), so no caller here has a
- *  model-specific rate to use instead; thread one through when it lands. */
+ *  over-estimating spend.
+ *
+ *  The FALLBACK, not the rate: `ModelInfo.cost` now carries models.dev's real
+ *  per-model prices, and the mission-budget ledger prices every call it can
+ *  attribute to the actor's model from them (recording the tokens it could
+ *  not). This stays for the seams that see characters rather than usage — the
+ *  `LLM` primitive here, and MCTS's pre-run size estimate. */
 export const BLENDED_USD_PER_1K_TOKENS = 0.003;
 
 export function estimateTokens(chars: number): number {

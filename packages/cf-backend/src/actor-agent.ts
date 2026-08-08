@@ -638,6 +638,9 @@ export abstract class ActorAgent extends Think<Env> {
   get budget(): MissionGovernor {
     this._budget ??= new MissionGovernor({
       storage: this.rt.storage,
+      // Real USD: the catalog rates for whatever model the next turn resolves
+      // to. Null until the lookup lands — the ledger then blends, and says so.
+      pricing: () => this.modelCatalog.pricing(),
       onExhausted: ({ error: _error, ...refusal }) => {
         try {
           if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'budget_exhausted', ...refusal });
@@ -1503,7 +1506,7 @@ export abstract class ActorAgent extends Think<Env> {
       // Anthropic prompt-caching: one breakpoint on the last tool caches the
       // whole stable tool surface (tools precede system+messages in Anthropic's
       // cache hierarchy). Namespaced → inert for non-Anthropic providers.
-      markLastToolForAnthropicCache(tools);
+      markLastToolForAnthropicCache(tools, this.config.getCacheRetention());
 
       this._cachedTools = tools;
       this._cachedToolsKey = cacheKey;
@@ -1969,7 +1972,7 @@ export abstract class ActorAgent extends Think<Env> {
     // tail breakpoints for marker providers (Anthropic) ride beforeStep —
     // PrepareStepResult carries typed system/messages overrides for every
     // step's request, whereas TurnConfig.system is string-typed.
-    const cacheStrategy = resolvePromptCacheStrategy(model.provider, model.id);
+    const cacheStrategy = resolvePromptCacheStrategy(model.provider, model.id, this.config.getCacheRetention());
     this._turnCachePlan = hasCacheMarkers(cacheStrategy)
       ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
       : null;

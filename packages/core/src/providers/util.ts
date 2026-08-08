@@ -69,6 +69,7 @@ export function cloneModelInfos(models: readonly ModelInfo[] | undefined): Model
   return (models ?? []).map((model) => ({
     ...model,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
+    ...(model.cost ? { cost: { ...model.cost } } : {}),
     ...(model.inputModalities ? { inputModalities: [...model.inputModalities] } : {}),
   }));
 }

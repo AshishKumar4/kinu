@@ -18,7 +18,7 @@ import {
   createAnthropicProvider, createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
   markLastToolForAnthropicCache,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
-  type ProviderDeps, type AuthResolution,
+  type ProviderDeps, type AuthResolution, type CacheRetention,
 } from '../src/index.ts';
 import { createMockFetch, type MockFetchHandle } from '@proteus/test-utils';
 
@@ -32,7 +32,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   };
 }
 
-function chatTools(): ToolSet {
+function chatTools(retention?: CacheRetention): ToolSet {
   const tools: ToolSet = {
     echo: tool({
       description: 'echo back',
@@ -41,7 +41,7 @@ function chatTools(): ToolSet {
     }),
   };
   // Both backends mark the tool surface at build time; mirror that here.
-  markLastToolForAnthropicCache(tools);
+  markLastToolForAnthropicCache(tools, retention);
   return tools;
 }
 
@@ -116,7 +116,7 @@ const ANTHROPIC_TEXT_SSE = [
 ].join('\n');
 
 describe('Anthropic cache breakpoints on the wire', () => {
-  async function runAnthropicTurn(): Promise<MockFetchHandle> {
+  async function runAnthropicTurn(retention?: CacheRetention): Promise<MockFetchHandle> {
     const mock = createMockFetch([{
       match: 'api.anthropic.com',
       respond: (_req, callIndex) => ({
@@ -133,9 +133,12 @@ describe('Anthropic cache breakpoints on the wire', () => {
       model,
       system: 'You are Proteus.',
       history: [...HISTORY],
-      tools: chatTools(),
+      tools: chatTools(retention),
       maxSteps: 3,
-      cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'proteus-test' },
+      cache: {
+        providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'proteus-test',
+        ...(retention ? { retention } : {}),
+      },
     });
     return mock;
   }
@@ -181,6 +184,31 @@ describe('Anthropic cache breakpoints on the wire', () => {
     expect(markedMessages).toBe(2);
     expect(countCacheControl(step2)).toBeLessThanOrEqual(4);
   });
+
+  test("retention 'long' puts ttl:1h on EVERY breakpoint — tools, system and tail", async () => {
+    const mock = await runAnthropicTurn('long');
+    const body = bodyOf(mock, 0);
+    const long = { type: 'ephemeral', ttl: '1h' };
+
+    const system = body.system as Array<{ cache_control?: unknown }>;
+    expect(system[system.length - 1].cache_control).toEqual(long);
+    const tools = body.tools as Array<{ cache_control?: unknown }>;
+    expect(tools[tools.length - 1].cache_control).toEqual(long);
+    const messages = body.messages as Array<{ content: Array<{ cache_control?: unknown }> }>;
+    const last = messages[messages.length - 1].content;
+    expect(last[last.length - 1].cache_control).toEqual(long);
+    // A longer TTL must not buy more breakpoints.
+    expect(countCacheControl(body)).toBeLessThanOrEqual(4);
+  });
+
+  test("retention 'none' writes no cache_control at all", async () => {
+    const mock = await runAnthropicTurn('none');
+    const body = bodyOf(mock, 0);
+    expect(countCacheControl(body)).toBe(0);
+    // The system prompt falls back to the plain (uncached) block.
+    const system = body.system as Array<{ text: string; cache_control?: unknown }>;
+    expect(system.every((b) => b.cache_control === undefined)).toBe(true);
+  });
 });
 
 // ── OpenAI family: prompt_cache_key routing ───────────────────────────────
@@ -198,7 +226,36 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     });
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBe('proteus-agent:default');
+    expect(body.prompt_cache_retention).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
+  });
+
+  test("retention 'long' asks OpenAI for the 24h prompt cache", async () => {
+    const mock = createMockFetch([
+      { match: 'api.openai.com', respond: { status: 400, body: {} } },
+    ]);
+    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
+    const model = createOpenAIProvider().createModel('gpt-5.5', deps);
+    await drive({
+      model, system: 'sys', history: [...HISTORY], tools: {},
+      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'long' },
+    });
+    expect(bodyOf(mock, 0).prompt_cache_retention).toBe('24h');
+  });
+
+  test("retention 'none' routes no cache key at all", async () => {
+    const mock = createMockFetch([
+      { match: 'api.openai.com', respond: { status: 400, body: {} } },
+    ]);
+    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
+    const model = createOpenAIProvider().createModel('gpt-5.5', deps);
+    await drive({
+      model, system: 'sys', history: [...HISTORY], tools: {},
+      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'none' },
+    });
+    const body = bodyOf(mock, 0);
+    expect(body.prompt_cache_key).toBeUndefined();
+    expect(body.prompt_cache_retention).toBeUndefined();
   });
 });
 

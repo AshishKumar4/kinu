@@ -13,7 +13,7 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile.js';
-import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
+import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints.js';
 import { composePrepareStep } from './prompting/prepare-step.js';
 import type { MissionGovernor } from './mission-budget.js';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
@@ -90,8 +90,9 @@ export interface ChatOptions {
    *  through + a stable per-conversation key. When present, provider-native
    *  cache markers land on the wire — Anthropic breakpoints (end-of-system +
    *  a tail rolled forward every step) or prompt_cache_key routing for the
-   *  OpenAI-compatible family. See prompting/cache-breakpoints.ts. */
-  cache?: { providerId?: string; modelId?: string; sessionKey: string };
+   *  OpenAI-compatible family. `retention` sets how long the provider keeps
+   *  the prefix (default `short`). See prompting/cache-breakpoints.ts. */
+  cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
   /** Request-level provider options contributed by the caller. They are
    *  merged by provider namespace with the cache options assembled here. */
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
@@ -154,6 +155,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     system: opts.system,
     messages: turnMessages,
     sessionKey: opts.cache?.sessionKey ?? '',
+    ...(opts.cache?.retention ? { retention: opts.cache.retention } : {}),
   });
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);

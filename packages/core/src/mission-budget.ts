@@ -21,12 +21,19 @@
  * don't cap" is the standing rule, and a governor that capped by default would
  * break it.
  *
- * Accounting reuses what already counts. Tokens are the single stored quantity:
- * provider-reported input+output where the turn accumulator sees them, and the
- * `llm.ts` character estimate at the `LLM` seam, which returns text rather than
- * usage. USD is derived on read through the same blended rate the rest of the
- * system sizes runs with (llm.ts BLENDED_USD_PER_1K_TOKENS) — never stored, so
- * there is one source of truth for spend and no second telemetry system.
+ * Accounting reuses what already counts: provider-reported input/output where
+ * the turn accumulator sees them, and the `llm.ts` character estimate at the
+ * `LLM` seam, which returns text rather than usage.
+ *
+ * USD is PRICED AT DEBIT TIME, from the catalog rates the model-catalog session
+ * already resolves for the actor's model (input, output, and cache-read where
+ * the catalog publishes it) — a token count cannot be re-priced later, because
+ * the ledger is cumulative across turns that may each have run on a different
+ * model. Spend the governor cannot attribute to that model — a judge behind the
+ * `LLM` primitive, a fork's sub-agents reporting one blended total — falls back
+ * to `llm.ts` BLENDED_USD_PER_1K_TOKENS, and the ledger records exactly how many
+ * of its tokens were priced that way, so `agent.budget()` never presents an
+ * estimate as a measurement.
  *
  * Exhaustion is an honest structured refusal AT THE SEAM, never a silent stall:
  * the model-call seam declines with {@link MissionBudgetRefusal}, the spawn seam
@@ -36,14 +43,43 @@
  */
 
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives.js';
-import { estimateTokens, estimateUsdCost } from './llm.js';
+import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './llm.js';
+import type { ModelPricing } from './providers/types.js';
 
 /** A cap on a label. Either dimension may be omitted; a label with neither is a
  *  pure accounting scope (it meters, it never refuses). */
 export interface MissionBudgetLimits {
-  /** Blended USD, converted to tokens on read through the llm.ts rate. */
+  /** Checked against the ledger's PRICED spend (catalog rates where the model
+   *  is known, the blended fallback otherwise). */
   usd?: number;
   tokens?: number;
+}
+
+/** One priced model call, as the provider reported it. `cached` is the subset
+ *  of `input` that was served from the prompt cache (ai v6 reports the
+ *  cache-INCLUSIVE input total), so it is discounted, never added. */
+export interface MissionCallUsage {
+  input: number;
+  output: number;
+  cached?: number;
+}
+
+/** Where a label's USD figure came from. */
+export interface MissionSpendProvenance {
+  /** Tokens priced at the blended fallback rather than catalog rates. */
+  blendedTokens: number;
+  /** `catalog` = every token priced from the catalog; `blended` = none were;
+   *  `mixed` = both (e.g. turns priced, a judge's calls estimated). */
+  source: 'catalog' | 'blended' | 'mixed';
+}
+
+/** USD for one call at catalog rates (USD per 1M tokens). Cache reads are
+ *  charged at the cache-read rate when the catalog publishes one. */
+function priceCall(usage: MissionCallUsage, pricing: ModelPricing): number {
+  const cached = Math.min(Math.max(0, usage.cached ?? 0), usage.input);
+  const fresh = usage.input - cached;
+  const cachedRate = pricing.cacheRead ?? pricing.input;
+  return (fresh * pricing.input + cached * cachedRate + usage.output * pricing.output) / 1_000_000;
 }
 
 /** Which host seam turned the work away. */
@@ -70,18 +106,23 @@ export interface MissionBudgetSnapshot {
   readonly spent: { tokens: number; usd: number };
   /** Absent dimensions are uncapped. Never negative. */
   readonly remaining: { tokens?: number; usd?: number };
+  /** How honest the USD figure is. */
+  readonly pricing: MissionSpendProvenance;
   readonly calls: number;
   readonly spawns: number;
   readonly exhausted: boolean;
 }
 
-/** One ledger row, before USD is derived. */
+/** One ledger row. */
 interface MissionRow {
   label: string;
   parent: string | null;
   limitUsd: number | null;
   limitTokens: number | null;
   tokens: number;
+  usd: number;
+  /** Of `tokens`, how many were priced at the blended fallback. */
+  blendedTokens: number;
   calls: number;
   spawns: number;
   exhaustedAt: number | null;
@@ -91,12 +132,23 @@ interface MissionRow {
  *  check somehow admitted), and walking it forever would hang a debit. */
 const MAX_CHAIN_DEPTH = 32;
 
+/** One already-priced increment, ready to roll up a label chain. */
+interface MissionDebit {
+  tokens: number;
+  usd: number;
+  blendedTokens: number;
+  calls: number;
+  spawns: number;
+}
+
 const DDL = `CREATE TABLE IF NOT EXISTS mission_budget (
   label TEXT PRIMARY KEY,
   parent_label TEXT,
   limit_usd REAL,
   limit_tokens INTEGER,
   spent_tokens INTEGER NOT NULL DEFAULT 0,
+  spent_usd REAL NOT NULL DEFAULT 0,
+  blended_tokens INTEGER NOT NULL DEFAULT 0,
   calls INTEGER NOT NULL DEFAULT 0,
   spawns INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
@@ -110,6 +162,22 @@ export class MissionBudgetLedger {
     execRaw: RawSqlExec,
   ) {
     execRaw(DDL);
+    // Ledgers written before USD was priced carry tokens and no dollars. The
+    // ALTER only succeeds on those, and everything they spent WAS blended —
+    // so the backfill states exactly that rather than reading as $0 spent and
+    // silently reopening a USD cap that was already met.
+    const added = [
+      ['spent_usd', 'REAL NOT NULL DEFAULT 0'],
+      ['blended_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+    ].map(([column, type]) => {
+      try { execRaw(`ALTER TABLE mission_budget ADD COLUMN ${column} ${type}`); return true; }
+      catch { return false; /* already present */ }
+    });
+    if (added.includes(true)) {
+      execRaw(`UPDATE mission_budget
+        SET spent_usd = spent_tokens * ${BLENDED_USD_PER_1K_TOKENS / 1000},
+            blended_tokens = spent_tokens`);
+    }
   }
 
   /**
@@ -123,16 +191,18 @@ export class MissionBudgetLedger {
     if (existing) return existing;
     const effectiveParent = parent !== null && parent !== label && this.get(parent) !== null ? parent : null;
     this.sql`INSERT INTO mission_budget
-        (label, parent_label, limit_usd, limit_tokens, spent_tokens, calls, spawns, created_at, exhausted_at)
-      VALUES (${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, ${now}, NULL)`;
+        (label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
+      VALUES (${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
     return this.get(label)!;
   }
 
   get(label: string): MissionRow | null {
     const rows = this.sql<{
       label: string; parent_label: string | null; limit_usd: number | null; limit_tokens: number | null;
-      spent_tokens: number; calls: number; spawns: number; exhausted_at: number | null;
-    }>`SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, calls, spawns, exhausted_at
+      spent_tokens: number; spent_usd: number; blended_tokens: number;
+      calls: number; spawns: number; exhausted_at: number | null;
+    }>`SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
+              calls, spawns, exhausted_at
        FROM mission_budget WHERE label = ${label}`;
     const row = rows[0];
     if (!row) return null;
@@ -142,6 +212,8 @@ export class MissionBudgetLedger {
       limitUsd: row.limit_usd,
       limitTokens: row.limit_tokens,
       tokens: row.spent_tokens,
+      usd: row.spent_usd,
+      blendedTokens: row.blended_tokens,
       calls: row.calls,
       spawns: row.spawns,
       exhaustedAt: row.exhausted_at,
@@ -164,10 +236,12 @@ export class MissionBudgetLedger {
   }
 
   /** Add spend to a label AND every ancestor — the transitive debit. */
-  debit(label: string, delta: { tokens: number; calls: number; spawns: number }): void {
+  debit(label: string, delta: MissionDebit): void {
     for (const row of this.chain(label)) {
       this.sql`UPDATE mission_budget
         SET spent_tokens = spent_tokens + ${delta.tokens},
+            spent_usd = spent_usd + ${delta.usd},
+            blended_tokens = blended_tokens + ${delta.blendedTokens},
             calls = calls + ${delta.calls},
             spawns = spawns + ${delta.spawns}
         WHERE label = ${row.label}`;
@@ -184,11 +258,17 @@ export class MissionBudgetLedger {
 /** True when the row is at or over either of its caps. */
 function isOverBudget(row: MissionRow): boolean {
   if (row.limitTokens !== null && row.tokens >= row.limitTokens) return true;
-  return row.limitUsd !== null && estimateUsdCost(row.tokens) >= row.limitUsd;
+  return row.limitUsd !== null && row.usd >= row.limitUsd;
+}
+
+function provenanceOf(row: MissionRow): MissionSpendProvenance {
+  const source = row.blendedTokens === 0
+    ? 'catalog'
+    : row.blendedTokens >= row.tokens ? 'blended' : 'mixed';
+  return { blendedTokens: row.blendedTokens, source };
 }
 
 function toSnapshot(row: MissionRow): MissionBudgetSnapshot {
-  const usd = estimateUsdCost(row.tokens);
   return {
     label: row.label,
     parent: row.parent,
@@ -196,11 +276,12 @@ function toSnapshot(row: MissionRow): MissionBudgetSnapshot {
       ...(row.limitUsd !== null ? { usd: row.limitUsd } : {}),
       ...(row.limitTokens !== null ? { tokens: row.limitTokens } : {}),
     },
-    spent: { tokens: row.tokens, usd },
+    spent: { tokens: row.tokens, usd: row.usd },
     remaining: {
       ...(row.limitTokens !== null ? { tokens: Math.max(0, row.limitTokens - row.tokens) } : {}),
-      ...(row.limitUsd !== null ? { usd: Math.max(0, row.limitUsd - usd) } : {}),
+      ...(row.limitUsd !== null ? { usd: Math.max(0, row.limitUsd - row.usd) } : {}),
     },
+    pricing: provenanceOf(row),
     calls: row.calls,
     spawns: row.spawns,
     exhausted: isOverBudget(row),
@@ -223,6 +304,11 @@ export interface MissionGovernorDeps {
    *  backend wires its RunEventRecorder here so exhaustion lands in the run's
    *  durable event log alongside `context_budget`. */
   onExhausted?(refusal: MissionBudgetRefusal): void;
+  /** What the actor's CURRENT model charges (the model-catalog session's
+   *  `pricing()`). Read per debit, because the model can change between turns.
+   *  Absent — or null before the catalog lookup lands — means every debit uses
+   *  the blended fallback, and says so. */
+  pricing?(): ModelPricing | null;
   now?(): number;
 }
 
@@ -286,12 +372,30 @@ export class MissionGovernor {
     return null;
   }
 
-  /** Charge spend to the active scope (or to explicit labels). A debit under no
-   *  scope is a no-op that touches no storage. */
-  debit(tokens: number, opts?: { labels?: readonly string[]; calls?: number; spawns?: number }): void {
+  /**
+   * Charge spend to the active scope (or to explicit labels). A debit under no
+   * scope is a no-op that touches no storage.
+   *
+   * `usage` is the provider's own report for a call on the ACTOR'S CURRENT
+   * model — the only spend the catalog can price, since that is the model the
+   * catalog session tracks. Everything else (a judge behind the `LLM`
+   * primitive, a fork reporting one total across its sub-agents' models) passes
+   * tokens alone and is priced at the blended rate, counted in `blendedTokens`.
+   */
+  debit(tokens: number, opts?: {
+    labels?: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+  }): void {
     const labels = opts?.labels ?? this.active;
     if (labels.length === 0) return;
-    const delta = { tokens: Math.max(0, Math.round(tokens)), calls: opts?.calls ?? 0, spawns: opts?.spawns ?? 0 };
+    const total = Math.max(0, Math.round(tokens));
+    const pricing = opts?.usage ? this.deps.pricing?.() ?? null : null;
+    const delta: MissionDebit = {
+      tokens: total,
+      usd: pricing && opts?.usage ? priceCall(opts.usage, pricing) : estimateUsdCost(total),
+      blendedTokens: pricing ? 0 : total,
+      calls: opts?.calls ?? 0,
+      spawns: opts?.spawns ?? 0,
+    };
     if (delta.tokens === 0 && delta.calls === 0 && delta.spawns === 0) return;
     for (const label of new Set(labels)) this.ledger.debit(label, delta);
   }
@@ -312,6 +416,11 @@ export class MissionGovernor {
    * `complete`: the streaming callers are the turn loops, whose spend the turn
    * accumulator already debits from the provider's own usage report. Metering
    * the stream here as well would double-count them.
+   *
+   * The seam sees text, not usage, and the model behind it is frequently NOT
+   * the actor's (selectJudgeModel deliberately picks cross-family) — so this
+   * spend is estimated from characters at the blended rate and lands in
+   * `blendedTokens`, where a reader can see it for what it is.
    */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
@@ -338,6 +447,10 @@ export class MissionGovernor {
     const cap = row.limitTokens !== null
       ? `${row.limitTokens} tokens`
       : `$${(row.limitUsd ?? 0).toFixed(2)}`;
+    // "≈" only where it is earned: a fully catalog-priced ledger is a
+    // measurement, and hedging it would teach the agent to distrust the number.
+    const about = snapshot.pricing.source === 'catalog' ? '=' : '≈';
+    const spent = `${snapshot.spent.tokens} tokens ${about} $${snapshot.spent.usd.toFixed(4)} against ${cap}`;
     return {
       error: 'budget_exhausted',
       seam,
@@ -346,8 +459,8 @@ export class MissionGovernor {
       limit: snapshot.limits,
       spent: snapshot.spent,
       note: seam === 'spawn'
-        ? `Mission budget "${row.label}" is spent (${snapshot.spent.tokens} tokens ≈ $${snapshot.spent.usd.toFixed(4)} against ${cap}); no further agents may be spawned under it. Report what the run achieved, or ask the owner to raise the budget.`
-        : `Mission budget "${row.label}" is spent (${snapshot.spent.tokens} tokens ≈ $${snapshot.spent.usd.toFixed(4)} against ${cap}); the host declined this model call. Report what the run achieved, or ask the owner to raise the budget.`,
+        ? `Mission budget "${row.label}" is spent (${spent}); no further agents may be spawned under it. Report what the run achieved, or ask the owner to raise the budget.`
+        : `Mission budget "${row.label}" is spent (${spent}); the host declined this model call. Report what the run achieved, or ask the owner to raise the budget.`,
     };
   }
 }

@@ -116,6 +116,21 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(() => c.setReasoningEffort('extreme' as never)).toThrow('Invalid reasoning effort');
   });
 
+  test('cache retention: round-trips, and anything unusable reads as the short default', () => {
+    const c = setup();
+    expect(c.getCacheRetention()).toBe('short');
+    c.setCacheRetention('long');
+    expect(c.getCacheRetention()).toBe('long');
+    expect(c.get(AGENT_CONFIG_KEYS.cacheRetention)).toBe('long');
+    c.setCacheRetention('none');
+    expect(c.getCacheRetention()).toBe('none');
+
+    // A garbage row must never leave the caching seam without an answer.
+    c.set(AGENT_CONFIG_KEYS.cacheRetention, 'forever');
+    expect(c.getCacheRetention()).toBe('short');
+    expect(() => c.setCacheRetention('forever' as never)).toThrow('Invalid cache retention');
+  });
+
   test('displayName: default null', () => {
     const c = setup();
     expect(c.getDisplayName()).toBeNull();
@@ -276,6 +291,7 @@ describe('AgentConfigStore — every key has a write path', () => {
   const WRITERS: ReadonlyArray<(c: ReturnType<typeof setup>) => void> = [
     (c) => c.setModel('openai/gpt-5'),
     (c) => c.setReasoningEffort('high'),
+    (c) => c.setCacheRetention('long'),
     (c) => c.setDisplayName('Ada'),
     (c) => c.setNameOrigin('user'),
     (c) => c.setShellApprovalMode('allow_all'),

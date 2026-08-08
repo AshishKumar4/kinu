@@ -281,8 +281,10 @@ export {
   type MissionBudgetLimits,
   type MissionBudgetRefusal,
   type MissionBudgetSnapshot,
+  type MissionCallUsage,
   type MissionGovernorDeps,
   type MissionSeam,
+  type MissionSpendProvenance,
 } from './mission-budget.js';
 export {
   buildCompactionSummaryPrompt,
@@ -406,9 +408,13 @@ export {
   markLastToolForAnthropicCache,
   promptCacheOptions,
   resolvePromptCacheStrategy,
+  isCacheRetention,
   ANTHROPIC_MAX_BREAKPOINTS,
+  CACHE_RETENTIONS,
+  DEFAULT_CACHE_RETENTION,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
+  type CacheRetention,
   type PromptCacheStrategy,
 } from './prompting/cache-breakpoints.js';
 export {

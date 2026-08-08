@@ -222,6 +222,22 @@ describe('model-call seam — the turn accumulator is the meter', () => {
     expect(governor.snapshot()).toEqual([]);
     expect(acc.reportedUsage()).toEqual({ input: 300, output: 100, cached: 250 });
   });
+
+  test("the step's usage split is priced at the resolved model's catalog rates", () => {
+    const db = new Database(':memory:');
+    const governor = new MissionGovernor({
+      storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
+      pricing: () => ({ input: 3, output: 15, cacheRead: 0.3 }),
+    });
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+    new TurnAccumulator({}, governor).recordStep(step);
+
+    // 50 fresh input @ $3 + 250 cached @ $0.30 + 100 output @ $15, per 1M.
+    const [row] = governor.snapshot('nightly');
+    expect(row?.spent.usd).toBeCloseTo((50 * 3 + 250 * 0.3 + 100 * 15) / 1_000_000, 12);
+    expect(row?.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });
+  });
 });
 
 describe('mission scope reaches the woken turn', () => {
