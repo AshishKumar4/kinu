@@ -287,6 +287,9 @@ export class LocalAgentSession implements BackendHost {
    *  wake), drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
   private pumping = false;
+  /** The active pump run's completion, or null when idle — the awaitable
+   *  settleBackgroundWork() joins so a one-shot run can wait for wake turns. */
+  private pumpPromise: Promise<void> | null = null;
   /** The in-flight turn's abort handle — interrupt() aborts it. */
   private currentAbort: AbortController | null = null;
   /** Mid-turn steers awaiting the next step boundary (Hermes steer-drain:
@@ -353,8 +356,12 @@ export class LocalAgentSession implements BackendHost {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
         logger: {
-          info: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
-          debug: (message, data) => console.debug(`[proteus:compaction] ${message}`, data ?? ''),
+          // All diagnostics go to stderr: under `proteus exec --json` stdout IS
+          // the event stream, so an info/debug console.log would corrupt the
+          // JSONL (console.info/debug write to stdout in Node). stderr keeps the
+          // stream clean and is still visible on an interactive terminal.
+          info: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
+          debug: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
           warn: (message, data) => console.warn(`[proteus:compaction] ${message}`, data ?? ''),
           error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
         },
@@ -1030,11 +1037,17 @@ export class LocalAgentSession implements BackendHost {
     return upcoming ?? null;
   }
 
-  /** Single serialized drain of the turn queue — idempotent, so a concurrent
-   *  enqueueTurn just appends and the running pump picks it up. */
-  private async pump(): Promise<void> {
+  /** Kick the serialized turn pump if idle — idempotent, so a concurrent
+   *  enqueueTurn just appends and the running pump picks it up. The active
+   *  run's promise is tracked (pumpPromise) so settleBackgroundWork() can
+   *  await wake turns to completion. */
+  private pump(): void {
     if (this.pumping) return;
     this.pumping = true;
+    this.pumpPromise = this.runPump();
+  }
+
+  private async runPump(): Promise<void> {
     try {
       let item: QueueItem | undefined;
       while ((item = this.queue.shift())) {
@@ -1047,7 +1060,28 @@ export class LocalAgentSession implements BackendHost {
         }
       }
     } finally {
+      // Cleared synchronously as the loop exits — NOT in a .finally() callback,
+      // whose microtask would run after a just-resolved send()'s continuation
+      // and leave `pumping` stale-true, so the next send()'s pump() would no-op
+      // and orphan its queued turn.
       this.pumping = false;
+      this.pumpPromise = null;
+    }
+  }
+
+  /** Drain in-flight background work to quiescence: await detached job fibers,
+   *  run the wake turns their settlement enqueues, and repeat until nothing is
+   *  detached, queued, or pumping. Unlike end() this never marks the session
+   *  ended, so the wakes actually run (enqueueTurn only skips once ended) — and
+   *  because a settled fiber awaits its own wake turn (host.enqueueTurn resolves
+   *  when that turn finishes), awaiting the fibers awaits the wakes too. A
+   *  one-shot `proteus run`/`exec` calls this after its turn and before it stops
+   *  listening/closes, so a turn that backgrounded work streams its second half
+   *  instead of being cut off at process exit. */
+  async settleBackgroundWork(): Promise<void> {
+    while (this.pumping || this.queue.length > 0 || this.backgroundFibers.size > 0) {
+      if (this.pumpPromise) await this.pumpPromise;
+      if (this.backgroundFibers.size > 0) await Promise.allSettled([...this.backgroundFibers]);
     }
   }
 

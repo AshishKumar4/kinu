@@ -164,6 +164,11 @@ async function runOneShot(
       { cwd: process.cwd() },
     );
     if (result.hadError) failed = true;
+    // A tool that auto-detached (>30s) ends the turn early; its result arrives
+    // as a wake turn. This one-shot process exits after send(), so drain those
+    // wake turns to completion HERE — while the subscription is still live, so
+    // their events stream — instead of losing the second half of the work.
+    await client.settleBackgroundWork?.();
   } catch (err) {
     // In-stream failures already surfaced as an error event; only report
     // failures that never reached the stream (connect, ticket, transport).

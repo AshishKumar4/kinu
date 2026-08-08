@@ -90,6 +90,21 @@ describe('ChatEvent tool success/error fidelity', () => {
     expect(seenByExtension.some((r) => r.includes('kaboom'))).toBe(true);
   });
 
+  test('a structured (object) tool result renders as JSON content, not "[object Object]"', async () => {
+    const model = toolThenTextModel({ toolName: 'structured' });
+    const tools = {
+      structured: tool({
+        description: 'returns an object',
+        inputSchema: z.object({}),
+        execute: async () => ({ result: 42, logs: ['printed'] }),
+      }),
+    };
+    const events = await collect(model, tools);
+    const result = events.find((e) => e.type === 'tool-result');
+    expect(result?.type === 'tool-result' && result.result).toBe('{"result":42,"logs":["printed"]}');
+    expect(result?.type === 'tool-result' && result.result).not.toContain('[object Object]');
+  });
+
   test('a succeeding tool yields success:true and no error', async () => {
     const model = toolThenTextModel({ toolName: 'ok' });
     const tools = {

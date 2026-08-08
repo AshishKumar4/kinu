@@ -1051,6 +1051,30 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
   });
 
+  test('settleBackgroundWork drives a detached job\'s wake turn to completion', async () => {
+    // The bug this pins: a one-shot `proteus exec` used to close right after the
+    // user turn, cutting off the wake turn a backgrounded job triggers (its
+    // turn-start streamed, its turn-end never did). settleBackgroundWork drains
+    // the fiber AND the wake turn it enqueues before the caller closes.
+    const { db, session, events } = setup('synthesized the background result');
+    // A non-resumable orphaned job: recover fails it, then wakes the agent.
+    db.exec(`INSERT INTO background_jobs (id, kind, status, created_at) VALUES ('bgjob-w', 'run', 'running', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fw', 'bg:run', '{"phase":"running","jobId":"bgjob-w","kind":"run"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    // Awaiting this must not resolve until the wake turn has run start→end — no
+    // polling, so a truncated wake would leave the turn-end assertion failing.
+    await session.settleBackgroundWork();
+
+    const order = events.filter((e) => e.type === 'turn-start' || e.type === 'turn-end');
+    const wakeStartIdx = order.findIndex((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job');
+    expect(wakeStartIdx).toBeGreaterThanOrEqual(0);
+    // A turn-end follows the wake's turn-start: it completed, not truncated.
+    expect(order.slice(wakeStartIdx + 1).some((e) => e.type === 'turn-end')).toBe(true);
+    // Quiescent: no background work left in flight once settle returned.
+    expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
+  });
+
   test('toolNames exposes the full surface (agents/fact parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();

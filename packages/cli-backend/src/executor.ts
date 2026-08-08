@@ -21,7 +21,7 @@ const TIMEOUT_MS = 30_000;
  * doesn't already start with 'return', prepend 'return ' to it.
  * This makes multi-line LLM code like "const x=7;\nx*2" return a value.
  */
-function addImplicitReturn(code: string): string {
+export function addImplicitReturn(code: string): string {
   const lines = code.split('\n');
   let lastIdx = lines.length - 1;
   while (lastIdx >= 0 && !lines[lastIdx]!.trim()) lastIdx--;

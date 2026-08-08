@@ -232,7 +232,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
       case 'tool-result': {
         const raw = (chunk as any).output ?? (chunk as any).result ?? '';
-        const result = String(raw).slice(0, 1000);
+        const result = renderToolResult(raw).slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
         yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
         break;
@@ -282,7 +282,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     for (const step of steps) {
       for (const tr of step.toolResults) {
         const output = (tr as any).output ?? (tr as any).result ?? '';
-        summaries.push(`[${tr.toolName}] ${String(output).slice(0, 200)}`);
+        summaries.push(`[${tr.toolName}] ${renderToolResult(output).slice(0, 200)}`);
       }
     }
     if (summaries.length > 0) allText = summaries.join('\n');
@@ -290,4 +290,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
   yield { type: 'done', text: allText, responseMessages };
+}
+
+/** Render a tool result for the observability event stream and the no-text
+ *  turn-summary fallback. The model receives the real object through the AI
+ *  SDK's message history; this is the trajectory/human-facing rendering, so a
+ *  structured result must serialize to its content — never `String({...})`'s
+ *  "[object Object]". */
+function renderToolResult(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (raw == null) return '';
+  try { return JSON.stringify(raw); } catch { return String(raw); }
 }
