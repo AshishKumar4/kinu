@@ -22,9 +22,16 @@ bun run dev                              # Vite dev server (cf-backend)
 bun run layergate                        # per-layer regression report (no LLM)
 bun run layergate --matrix               # fault-injection localization matrix
 bun run layergate:lock                   # re-lock after an intended change
+bun run deploy                           # production deploy (scripts/deploy.sh)
 ```
 
 No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
+
+## Deploy Discipline
+
+- `bun run deploy` (`scripts/deploy.sh`) is the only production deploy path. Never deploy production with a bare `wrangler deploy` — it skips the CLI-download asset check and the post-deploy smoke gate, and production has shipped assetless that way (every fresh install died on a checksum mismatch while the site looked fine).
+- One assets directory: `packages/cf-backend/dist/client`. `dist/proteus/assets/` is the Worker's code-split chunk output, not an assets dir — nothing written there is served. See docs/DEPLOYMENT.md § Static assets.
+- `GET /api/health` reports `{version, sha, builtAt}` for the deployed build, read back out of the asset bundle. Check it after any deploy or rollback; `ok: false` means the asset half did not land.
 
 ## Working Style
 

@@ -2,14 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# The deployed asset dir is dist/proteus/assets (wrangler follows the vite
-# plugin's .wrangler/deploy/config.json redirect) — dist/client is NOT what
-# ships. Writing there bricked fresh installs with SPA-fallback 200s.
+# The deployed asset dir is packages/cf-backend/dist/client, from both configs
+# wrangler can pick: the user config (wrangler.jsonc, "dist/client") and the
+# vite plugin's redirect target (dist/proteus/wrangler.json, "../client").
+# dist/proteus/assets/ is NOT an asset dir — it is the worker bundle's
+# code-split chunk output, uploaded as worker modules. See scripts/deploy.sh.
 OUT="${1:-$ROOT/packages/cf-backend/dist/client/downloads/proteus-source.tar.gz}"
-# Which assets dir ships depends on the wrangler invocation: bare `wrangler
-# deploy` reads root wrangler.jsonc (dist/client); a redirect-honoring run
-# reads dist/proteus/assets. Mirror into both so neither path bricks installs.
-MIRROR="$ROOT/packages/cf-backend/dist/proteus/assets/downloads"
 
 tmp="$(mktemp -d)"
 cleanup() {
@@ -66,11 +64,13 @@ node -e "
   require('fs').writeFileSync(process.argv[2], out + '\n');
 " "$sha" "$(dirname "$OUT")/proteus-version.json"
 
+# The shim verifies this checksum on every install and update; failing to
+# write it is a broken publish, not a soft miss.
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")
-fi
-if [ -d "$(dirname "$MIRROR")" ] || mkdir -p "$MIRROR"; then
-  mkdir -p "$MIRROR"; cp "$(dirname "$OUT")"/proteus-source.tar.gz* "$(dirname "$OUT")"/proteus-version.json "$MIRROR"/ 2>/dev/null || true
 elif command -v shasum >/dev/null 2>&1; then
   (cd "$(dirname "$OUT")" && shasum -a 256 "$(basename "$OUT")" > "$(basename "$OUT").sha256")
+else
+  echo "build-cli-source-archive: no sha256sum or shasum — cannot publish the archive checksum" >&2
+  exit 1
 fi

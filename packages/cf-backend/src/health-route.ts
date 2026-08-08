@@ -1,7 +1,16 @@
 // GET /api/health — build-info JSON. Useful for confirming a deploy went out:
-// hit the URL, see the feature list + endpoint map. Public — no auth required.
+// hit the URL, see which build is live plus the feature list + endpoint map.
+// Public — no auth required.
+//
+// `build` is read from the deployed asset bundle's build stamp, so one GET
+// answers both "which commit is live?" and "did the asset half of the deploy
+// land?". A deploy that skipped the CLI archive step has no stamp — its
+// download endpoints are broken — so `ok` is false there rather than
+// cheerfully true. (A `vite dev` server has no stamp either, correctly: it
+// cannot serve the CLI downloads.)
 
 import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import { readBuildStamp } from './lib/deployed-assets.js';
 
 const FEATURES: ReadonlyArray<string> = [
   'd1-oauth-session-auth',
@@ -22,12 +31,14 @@ const FEATURES: ReadonlyArray<string> = [
   'approval-gate',
 ];
 
-export function handleHealthRequest(request: Request): Response | null {
+export async function handleHealthRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== '/api/health') return null;
   if (request.method !== 'GET') return null;
+  const build = await readBuildStamp(env, request.url);
   return Response.json({
-    ok: true,
+    ok: build !== null,
+    build,
     features: FEATURES,
     endpoints: {
       // User-scoped (auth required)

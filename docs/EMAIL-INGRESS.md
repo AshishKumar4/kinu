@@ -105,7 +105,7 @@ pick a different domain.
    - CLI alternative: `npx wrangler email routing rules create` (see
      `npx wrangler email routing rules --help` for the worker action flags).
 4. **Deploy** (the `send_email` binding + `EMAIL_DOMAIN` var are already in
-   wrangler.jsonc): `bun run deploy` from `packages/cf-backend`.
+   wrangler.jsonc): `bun run deploy` from the repo root.
 5. **Verify**: from your login email, send a message to
    `<agent-name>@proteus.ashishkumarsingh.com`. The agent's timeline shows an
    `email` event, a turn runs, and a threaded reply lands back in your inbox.

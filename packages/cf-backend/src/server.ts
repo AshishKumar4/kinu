@@ -196,7 +196,7 @@ export default {
     if (cliResp) return cliResp;
 
     // 6. Public — build-info health.
-    const healthResp = handleHealthRequest(request);
+    const healthResp = await handleHealthRequest(request, env);
     if (healthResp) return healthResp;
 
     // 6b. MCP server — its own auth (CLI bearer token for external MCP

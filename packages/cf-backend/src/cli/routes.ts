@@ -2,6 +2,9 @@ import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
 import type { AuthIdentity } from '../auth/session.js';
 import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
+import {
+  CLI_SOURCE_TARBALL_PATH, CLI_SOURCE_TARBALL_SHA256_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
+} from '../lib/deployed-assets.js';
 import { err, escapeHtml, json, safeJson } from '../lib/http.js';
 import { randomToken, timingSafeEqual } from '../lib/crypto.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
@@ -16,13 +19,6 @@ import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
 import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
 import { OWNER_SESSION } from '../user/workspace-capability.js';
-
-const CLI_SOURCE_TARBALL_PATH = '/downloads/proteus-source.tar.gz';
-const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
-/** `{ version, sha, builtAt }` for the served build — emitted by
- *  scripts/build-cli-source-archive.sh from the same stamped package.json the
- *  archive ships, so an installed CLI can check for updates cheaply. */
-const CLI_VERSION_PATH = '/downloads/proteus-version.json';
 
 export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -868,6 +864,10 @@ fi
   });
 }
 
+/** Serve one published download, or 404 loudly. An incomplete deploy must
+ *  never answer these paths with the SPA shell wearing an `application/gzip`
+ *  content-type: the shim would then "verify" a checksum of an HTML page and
+ *  every install would fail with an unexplained mismatch. */
 async function cliDownloadAssetResponse(
   request: Request,
   env: Env,
@@ -875,13 +875,24 @@ async function cliDownloadAssetResponse(
   contentType: string,
   head = false,
 ): Promise<Response> {
-  const assetUrl = new URL(pathname, request.url);
-  const assetRes = await env.ASSETS.fetch(new Request(assetUrl, { method: 'GET' }));
-  const headers = new Headers(assetRes.headers);
+  const asset = await fetchDeployedAsset(env, request.url, pathname);
+  if (!asset) {
+    const body = `Deployment incomplete: ${pathname} was not published by this deployment.\n`
+      + 'Redeploy through scripts/deploy.sh, or retry shortly if a deploy is in flight.\n';
+    return new Response(head ? null : body, {
+      status: 404,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'no-store',
+      },
+    });
+  }
+  const headers = new Headers(asset.headers);
   headers.set('content-type', contentType);
   headers.set('x-content-type-options', 'nosniff');
   headers.set('cache-control', 'no-store');
-  return new Response(head ? null : assetRes.body, { status: assetRes.status, headers });
+  return new Response(head ? null : asset.body, { status: 200, headers });
 }
 
 function cliShimResponse(origin: string, head = false): Response {
