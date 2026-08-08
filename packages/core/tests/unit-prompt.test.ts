@@ -157,12 +157,47 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('cheap to create and dismiss');
   });
 
-  test('teaches the honest settle doctrine: mcts branches do not run the tool loop, code runs at scoring', () => {
-    // The honest framing (mcts branches score text/code, they don't run your
-    // tool loop; proposed code IS executed at scoring) lives in the single
-    // registry agents spec.
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(/do NOT run your tool loop/);
-    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(/code is executed when scored/);
+  test('the settle doctrine leads with what mcts does, and states its limit honestly after', () => {
+    // The honest framing is unchanged in substance — mcts branches score
+    // text/code and do not run the caller's tool loop; proposed code IS
+    // executed at scoring — but the ORDER is the doctrine. It used to open
+    // "set settle=mcts ONLY … do NOT run your tool loop", three deterrents in
+    // one sentence, and a shell corpus read that as a disqualification (0/10
+    // uses). It now leads with the payoff and names the shape it fits, with
+    // the limitation stated plainly at the end rather than as a gate.
+    const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
+    expect(agents).toMatch(/scored against each other by execution/);
+    expect(agents).toMatch(/rival scripts that must produce a specific artifact/);
+    expect(agents).toMatch(/proposed code IS executed to earn its score/);
+    expect(agents).toMatch(/propose text\/code rather than running your own tool loop/);
+    // The deterrent framing is gone: no "only", no "genuinely unclear".
+    expect(agents).not.toMatch(/set settle=mcts only/);
+    expect(agents).not.toMatch(/genuinely unclear/);
+    // Payoff before limitation, in that order.
+    expect(agents.indexOf('IS executed to earn its score'))
+      .toBeLessThan(agents.indexOf('rather than running your own tool loop'));
+  });
+
+  test('the fork rung triggers on DOUBT, not only on decomposability', () => {
+    // The benchmark finding: the fork trigger was purely a decomposability
+    // test ("work splits into 2+ independent angles"), which a model applies
+    // only to work it already understands. It said nothing about the case a
+    // weak model most needs a helper for — first attempt failed, two
+    // approaches plausible, can't check its own output — so 0/10 tasks ever
+    // reached for a lift lever. Both triggers are now named, in the registry
+    // single source, so the schema and the prompt carry them together.
+    expect(DELEGATION_RUNGS.fork).toMatch(/on two triggers/);
+    expect(DELEGATION_RUNGS.fork).toMatch(/Breadth: work splits into 2\+ independent angles/);
+    expect(DELEGATION_RUNGS.fork).toMatch(/Doubt: your first attempt failed/);
+    expect(DELEGATION_RUNGS.fork).toMatch(/you cannot check your own output/);
+    expect(DELEGATION_RUNGS.fork).toMatch(/being unsure is a reason to fork, not a reason to push on alone/);
+
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toContain('Doubt: your first attempt failed');
+    // The ladder pointer at the top of the prompt routes on doubt too, so the
+    // model meets the uncertainty trigger before it reads the rungs.
+    expect(prompt).toMatch(/when you are unsure which approach is right, pick a rung of the delegation ladder/);
   });
 
   test('tool when-to-use doctrine is schema-only: descriptions carry it, prompt prose does not', () => {
@@ -428,6 +463,52 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('mount table');
   });
 
+  test('verification is doctrine of its own, not a line buried in operating guidance', () => {
+    // Two of five benchmark failures were the same shape: the model solved the
+    // problem and then fumbled the deliverable. One reasoned the causal
+    // structure out exactly right and wrote every row of the CSV transposed.
+    // One built an API to its own convenient signature and reported "all 14
+    // tests pass" — against its own tests. The prompt had one hedged line
+    // ("verify meaningful changes with the narrowest reliable checks") and no
+    // section; it now has a section and no duplicate line.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toContain('## Verification');
+    expect(prompt).toMatch(/Reasoning it out correctly is not evidence that you wrote it down correctly/);
+    // The transposition test: check the artifact's literal shape, not the plan.
+    expect(prompt).toMatch(/Re-read the artifact itself/);
+    expect(prompt).toMatch(/column order, direction, units, filenames/);
+    // The self-graded-signature test.
+    expect(prompt).toMatch(/Build to the interface the task states, not the one that was convenient/);
+    expect(prompt).toMatch(/prove only that it is self-consistent/);
+    // The old buried line is gone — one home for the doctrine, not two.
+    expect(prompt).not.toContain('narrowest reliable checks');
+    // It lands last, right before the answer it governs.
+    expect(prompt.indexOf('## Verification')).toBeGreaterThan(prompt.indexOf('## Delegation'));
+    expect(prompt.indexOf('## Verification')).toBeLessThan(prompt.indexOf('## Output format'));
+  });
+
+  test('the run-the-real-check line is gated on actually having an executor', () => {
+    // Gate to reality: an agent with no way to execute anything cannot run the
+    // task's own checks, so it is not told to. The two artifact-shape lines are
+    // ungated — they apply to any answer.
+    const { rt } = createTestRuntime();
+    const noExec = buildSystemPromptSync(rt, {
+      availableTools: ['memory', 'fact'],
+      registeredExecutors: [],
+    });
+    expect(noExec).toContain('## Verification');
+    expect(noExec).toContain('Re-read the artifact itself');
+    expect(noExec).not.toContain('Run the real check');
+
+    const withRun = buildSystemPromptSync(rt, {
+      availableTools: ['memory', 'run'],
+      registeredExecutors: [],
+    });
+    expect(withRun).toMatch(/Run the real check and report what passed or failed/);
+    expect(withRun).toMatch(/an unexecuted claim is not a result/);
+  });
+
   test('includes output-format guidance', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -552,7 +633,9 @@ describe('buildSystemPromptSync', () => {
     // sizes — raise one ONLY alongside an intentional content change.
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
-      // Static pointer to the load-bearing delegation ladder (2026-07).
+      // Static pointer to the load-bearing delegation ladder (2026-07). 2026-08:
+      // the standalone verify line moved out to its own Verification section
+      // and the ladder pointer picked up the uncertainty trigger — net smaller.
       'Operating guidance': 640,
       // +2 summary lines for the team/peers split + the subordinate report
       // tool (2026-07, Subordinates A2). Real actors advertise a
@@ -580,8 +663,15 @@ describe('buildSystemPromptSync', () => {
       // 2026-08: +1 line for `agents.*` in codemode — the rung ladder is also
       // a sandbox namespace, which is what makes a crafted tool a workflow,
       // and it carries the in-sandbox fork's non-resumable cost.
-      'Delegation': 3250,
+      // 2026-08: +1 sentence giving the fork rung its DOUBT trigger, and the
+      // settle sentence reordered to lead with what mcts does. Both target a
+      // measured 0/10 usage of every lift lever on a benchmark corpus.
+      'Delegation': 3500,
       'Background work': 260,
+      // 2026-08: new section. Two of five benchmark failures were a solved
+      // problem with a fumbled deliverable, and the prompt had no doctrine
+      // that would have caught either.
+      'Verification': 800,
       'Proteus product changes': 290,
       'Output format': 180,
     };
