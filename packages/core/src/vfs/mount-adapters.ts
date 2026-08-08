@@ -21,6 +21,7 @@ import type { NimbusSandboxHandle } from '../execution/nimbus.js';
 import type { DeviceTransport } from '../execution/device-tunnel-executor.js';
 import { makeVfsError, type VfsErrorCode } from './errno.js';
 import { shellQuote } from '../utils/shell.js';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 
@@ -35,22 +36,6 @@ function basename(path: string): string {
 
 function encodeUnlessUtf8(content: string, opts?: { encoding?: string }): Uint8Array | string {
   return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let bin = '';
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(bin);
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
 }
 
 /** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride

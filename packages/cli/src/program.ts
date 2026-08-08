@@ -177,15 +177,15 @@ export function buildProgram(): Command {
   program
     .command('export <name>')
     .helpGroup(WORKSPACES)
-    .description('Export workspace database')
+    .description('Back up a workspace — local or cloud — to a portable archive')
     .option('-o, --output <file>', 'Output file path')
     .action(wrapAction(exportCommand));
 
   program
     .command('import <file>')
     .helpGroup(WORKSPACES)
-    .description('Import workspace database')
-    .option('-n, --name <name>', 'Workspace name (default: derived from filename)')
+    .description('Restore a workspace archive into a local workspace')
+    .option('-n, --name <name>', 'Workspace name (default: the name recorded in the archive)')
     .action(wrapAction(importCommand));
 
   // ── Running ────────────────────────────────────────────────────

@@ -110,6 +110,17 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 ## Documentation
 
+**Using it**
+
+| Document | Description |
+|----------|-------------|
+| [Quick start](QUICKSTART.md) | Install, sign in, first workspace — the two-minute version |
+| [User guide](docs/USER-GUIDE.md) | The path from install to daily use: talking to a workspace, giving it your machine, triggers, backup, troubleshooting |
+| [CLI reference](docs/CLI.md) | Every command and flag, generated from the command registry |
+| [Configuration](docs/CONFIG.md) | `~/.proteus/config.json` fields and environment variables |
+
+**How it works**
+
 | Document | Description |
 |----------|-------------|
 | [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (mounts, identity, sessions), agents = actors inside it |

@@ -14,8 +14,8 @@ export function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
+export async function sha256Hex(input: string | ArrayBuffer): Promise<string> {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }

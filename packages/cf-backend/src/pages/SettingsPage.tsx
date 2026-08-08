@@ -10,9 +10,12 @@ import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, GearSixIcon, CheckIcon, ArrowLeftIcon,
   ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
-  DesktopTowerIcon,
+  DesktopTowerIcon, DownloadSimpleIcon,
 } from "@phosphor-icons/react";
-import { formatScoreInterval, type ScoreInterval } from "@proteus/core";
+import {
+  WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
+  type ArchiveCursor, type ArchivePage, type ScoreInterval,
+} from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import {
   listDevices, listDeviceConsents, setDeviceConsentScope,
@@ -325,6 +328,9 @@ export default function SettingsPage() {
         {/* Always-active skills */}
         <AlwaysActiveSkillsCard rpc={rpc} />
 
+        {/* Backup */}
+        <WorkspaceBackupCard rpc={rpc} workspace={agentId ?? ""} />
+
         {/* GEPA offline scaffold optimisation */}
         <GepaOptimizationCard rpc={rpc} />
       </div>
@@ -406,6 +412,78 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
           </button>
         </div>
       )}
+    </Card>
+  );
+}
+
+// ── Workspace backup ─────────────────────────────────────────────
+
+/** Download this workspace's archive — the same format `proteus export`
+ *  writes and `proteus import` restores. The export RPC answers one bounded
+ *  page at a time, so the browser walks the cursor and assembles the file
+ *  locally; a workspace with a long history takes several pages, and the
+ *  record count is shown while it does. */
+function WorkspaceBackupCard({
+  rpc, workspace,
+}: {
+  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  workspace: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const download = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    setStatus("Exporting…");
+    try {
+      const parts: string[] = [];
+      let cursor: ArchiveCursor | null = null;
+      let records = 0;
+      do {
+        const page = await rpc("exportWorkspaceArchive", [cursor]) as ArchivePage;
+        parts.push(page.lines.map((line) => `${line}\n`).join(""));
+        records += page.lines.length;
+        cursor = page.next;
+        setStatus(`Exporting… ${records} records`);
+      } while (cursor);
+
+      const url = URL.createObjectURL(new Blob(parts, { type: "application/x-ndjson" }));
+      try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${workspace}${WORKSPACE_ARCHIVE_EXTENSION}`;
+        link.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      setStatus(`Downloaded ${records} records.`);
+    } catch (e) {
+      setStatus(null);
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [rpc, workspace]);
+
+  return (
+    <Card title="Backup" icon={DownloadSimpleIcon}>
+      <p className="text-[11px] p-text-3">
+        Download everything this workspace holds — transcripts, memory, files, evolution
+        history — as a portable archive. Restore it on any machine with{" "}
+        <code className="font-mono">proteus import &lt;file&gt;</code>. Take one before you
+        delete a workspace: deletion is permanent. The archive contains your workspace's
+        full contents, so keep it somewhere you'd keep a password.
+      </p>
+      <button
+        type="button"
+        onClick={() => void download()}
+        disabled={busy || !workspace}
+        className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
+      >{busy ? "Exporting…" : "Download archive"}</button>
+      {status && <div className="text-[11px] p-text-2 mt-1">{status}</div>}
+      {err && <div className="text-[11px] p-danger mt-1">Export failed: {err}</div>}
     </Card>
   );
 }

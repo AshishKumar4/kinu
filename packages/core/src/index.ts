@@ -14,6 +14,13 @@ export {
 export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
 export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
+// Workspace archive — one portable backup format for both backends.
+export {
+  WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
+  archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
+  type ArchiveCursor, type ArchiveExportOptions, type ArchivePage,
+  type ArchiveRestoreResult, type ArchiveSql,
+} from './identity/archive.js';
 export {
   WORKSPACE_IDENTITY_SYSTEM_PROMPT,
   workspaceIdentityPrompt,

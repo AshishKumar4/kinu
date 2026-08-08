@@ -11,6 +11,7 @@
     "deploy": "bash scripts/deploy.sh",
     "dev": "bun run --cwd packages/cf-backend start",
     "cli": "bun run packages/cli/bin/cli.ts",
+    "docs:cli": "bun run scripts/gen-cli-docs.ts",
     "layergate": "bun run scripts/layergate.ts",
     "layergate:lock": "bun run scripts/layergate.ts --lock",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",

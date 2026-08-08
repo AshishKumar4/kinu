@@ -304,7 +304,7 @@ const UNGROUPED_HEADING = 'Other commands:';
 
 /** Environment variables that apply to every command. Per-command options are
  *  deliberately not repeated here — `proteus <command> --help` owns those. */
-const ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
+export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
   ['PROTEUS_HOME', 'Workspace + config directory (default ~/.proteus)'],
   ['PROTEUS_ORIGIN', 'Proteus app origin'],
   ['PROTEUS_TOKEN', 'Account access token (CI)'],
@@ -313,7 +313,7 @@ const ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
   ['PROTEUS_AUTH', 'LLM auth header value'],
 ];
 
-const EXAMPLES: ReadonlyArray<string> = [
+export const HELP_EXAMPLES: ReadonlyArray<string> = [
   'proteus setup',
   'proteus provider connect codex',
   'proteus create jarvis --mode cloud --alias jarvis',
@@ -323,7 +323,9 @@ const EXAMPLES: ReadonlyArray<string> = [
   'proteus connect',
 ];
 
-interface HelpEntry {
+export interface HelpEntry {
+  /** The registration itself — what a renderer needs for options/aliases. */
+  command: Command;
   /** Invocation term, e.g. `workspace delete <name>`. */
   term: string;
   description: string;
@@ -331,8 +333,10 @@ interface HelpEntry {
 }
 
 /** Every runnable command in the tree, in registration order, with its heading
- *  inherited from the nearest ancestor that declared one. */
-function helpEntries(program: Command): HelpEntry[] {
+ *  inherited from the nearest ancestor that declared one. The one walk behind
+ *  both the `--help` screen and the generated CLI reference, so neither can
+ *  list a command the other misses. */
+export function commandEntries(program: Command): HelpEntry[] {
   const helper = program.createHelp();
   // visibleCommands() applies the hidden-command policy but also appends
   // Commander's implicit `help` placeholder, which is not a registered command;
@@ -346,7 +350,7 @@ function helpEntries(program: Command): HelpEntry[] {
       const term = `${prefix}${cmd.name()}${argumentSuffix(cmd)}`;
       const heading = cmd.helpGroup() || inherited;
       if (children(cmd).length > 0) walk(cmd, `${term} `, heading);
-      else entries.push({ term, description: cmd.description(), heading });
+      else entries.push({ command: cmd, term, description: cmd.description(), heading });
     }
   };
   walk(program, '', UNGROUPED_HEADING);
@@ -367,7 +371,7 @@ function argumentSuffix(cmd: Command): string {
  * grouping and wording live on the registrations themselves (src/program.ts).
  */
 export function renderHelp(program: Command): string {
-  const entries = helpEntries(program);
+  const entries = commandEntries(program);
   const width = termWidth();
   const termColumn = Math.min(Math.max(0, ...entries.map((e) => e.term.length)) + 2, 34);
   const lines: string[] = [
@@ -391,12 +395,12 @@ export function renderHelp(program: Command): string {
   lines.push(...helpRow(DIM('-h, --help'), 10, 'Show this help; `proteus <command> --help` for one command', termColumn, width));
 
   lines.push('', chalk.bold('Environment:'));
-  for (const [name, description] of ENVIRONMENT) {
+  for (const [name, description] of GLOBAL_ENVIRONMENT) {
     lines.push(...helpRow(DIM(name), name.length, description, termColumn, width));
   }
 
   lines.push('', chalk.bold('Examples:'));
-  for (const example of EXAMPLES) lines.push(`  ${DIM('$')} ${example}`);
+  for (const example of HELP_EXAMPLES) lines.push(`  ${DIM('$')} ${example}`);
   lines.push('');
   return lines.join('\n');
 }

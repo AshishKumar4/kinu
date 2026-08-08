@@ -39,6 +39,10 @@
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by stable Proteus userId assigned by AUTH_DB.
       { "class_name": "UserDO", "name": "UserDO" },
+      // Synthetic monitoring — one instance ("site"), driven by the cron
+      // trigger below. Holds open incidents (so an outage alerts once, not
+      // every tick) and the alert outbox.
+      { "class_name": "MonitorDO", "name": "MonitorDO" },
       // Nimbus SDK session DO. Used directly through Nimbus.fromEnv() — no
       // endpoint/token secrets are required for Proteus's built-in Nimbus
       // executor.
@@ -77,8 +81,17 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["NimbusSession"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["MonitorDO"]
     }
   ],
+  // Synthetic monitoring. Every 15 minutes the worker probes its own public
+  // surface and emails OPS_ALERT_EMAIL when something breaks — the checks
+  // scripts/deploy.sh runs at deploy time, kept running afterwards. No
+  // third-party monitoring service is involved.
+  "triggers": { "crons": ["*/15 * * * *"] },
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
   //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
   // For local dev, add to .dev.vars:
@@ -105,6 +118,9 @@
     // after the one-time Email Routing / Email Sending setup in
     // docs/EMAIL-INGRESS.md is done for this domain.
     "EMAIL_DOMAIN": "proteus.ashishkumarsingh.com",
+    // Where synthetic-monitoring alerts land. Same mail path as the Mission
+    // Inbox, so it works exactly when outbound email does.
+    "OPS_ALERT_EMAIL": "me@ashishkumarsingh.com",
     // OAuth provider visibility is config-driven. A provider appears on
     // /login only when both its CLIENT_ID var and CLIENT_SECRET secret exist.
     // Set ids as vars and secrets via `wrangler secret put`:
@@ -182,6 +198,7 @@
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
           { "class_name": "ExplorationAgent", "name": "ExplorationAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
           { "class_name": "ProteusSandbox", "name": "Sandbox" }
         ]
@@ -198,8 +215,13 @@
         { "tag": "v1", "new_sqlite_classes": ["OrchestratorAgent", "ExplorationAgent"] },
         { "tag": "v2", "new_sqlite_classes": ["ProteusSandbox"] },
         { "tag": "v3", "new_sqlite_classes": ["UserDO"] },
-        { "tag": "v4", "new_sqlite_classes": ["NimbusSession"] }
+        { "tag": "v4", "new_sqlite_classes": ["NimbusSession"] },
+        { "tag": "v5", "new_sqlite_classes": ["MonitorDO"] }
       ],
+      // No cron trigger and no OPS_ALERT_EMAIL here: staging has no OAuth
+      // providers and no mail route, so the probes would report a site that
+      // is missing on purpose. The class is registered so the two environments
+      // stay one shape.
       // Staging has the binding for parity but no EMAIL_DOMAIN — the Mission
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
